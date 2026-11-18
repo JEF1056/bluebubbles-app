@@ -110,7 +110,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   }
 
   Widget _buildBodyContent() {
-    return GradientBackground(
+    final content = GradientBackground(
       controller: controller,
       child: Stack(
         clipBehavior: Clip.none,
@@ -170,13 +170,24 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
           // The body extends behind the header, whose height is in the top padding
           Builder(
             builder: (context) => Positioned(
-              top: MediaQuery.paddingOf(context).top,
+              top: !iOS && !samsung ? 0 : MediaQuery.paddingOf(context).top,
               left: 0,
               right: 0,
               child: SharedContactBanner(chat: chat),
             ),
           ),
         ],
+      ),
+    );
+    if (iOS || samsung) return content;
+    return Builder(
+      builder: (context) => Material(
+        color: SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+            ? Colors.transparent
+            : context.theme.colorScheme.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        clipBehavior: Clip.antiAlias,
+        child: content,
       ),
     );
   }
@@ -292,8 +303,10 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
               return Navigator.of(context).pop();
             },
             child: BBScaffold(
-              backgroundColor: windowEffect != WindowEffect.disabled ? Colors.transparent : colorScheme.surface,
-              extendBodyBehindAppBar: true,
+              backgroundColor: windowEffect != WindowEffect.disabled
+                  ? Colors.transparent
+                  : (iOS || samsung ? colorScheme.surface : colorScheme.surfaceContainer),
+              extendBodyBehindAppBar: iOS || samsung,
               appBar: _appBar,
               body: Actions(
                 actions: _actionsMap,

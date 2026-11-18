@@ -145,16 +145,27 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
       if (reactionType.isEmpty) return const SizedBox.shrink();
 
       if (SettingsSvc.settings.skin.value != Skins.iOS) {
+        final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
         return Container(
-            width: 30,
-            height: 30,
+            width: isMaterial ? null : 30,
+            height: isMaterial ? 26 : 30,
+            constraints: isMaterial ? const BoxConstraints(minWidth: 34) : null,
+            padding: isMaterial ? const EdgeInsets.symmetric(horizontal: 8) : null,
             decoration: BoxDecoration(
               color: reactionIsFromMe
-                  ? context.theme.colorScheme.primary
-                  : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                      context.theme.colorScheme.surfaceContainerHighest),
-              border: Border.all(color: context.theme.colorScheme.surface),
-              shape: BoxShape.circle,
+                  ? (isMaterial
+                      ? context.theme.colorScheme.primaryContainer
+                      : context.theme.colorScheme.primary)
+                  : (isMaterial
+                      ? context.theme.colorScheme.surfaceContainerHighest
+                      : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                          context.theme.colorScheme.surfaceContainerHighest)),
+              border: Border.all(
+                color: context.theme.colorScheme.surface,
+                width: isMaterial ? 1.5 : 1.0,
+              ),
+              shape: isMaterial ? BoxShape.rectangle : BoxShape.circle,
+              borderRadius: isMaterial ? BorderRadius.circular(999) : null,
             ),
             child: GestureDetector(
               onTap: () {
@@ -209,7 +220,11 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
               },
               child: Center(
                 child: Builder(builder: (context) {
-                  if (ReactionTypes.isStickerTapback(reactionType)) return _customGlyph(reaction)!;
+                  if (ReactionTypes.isStickerTapback(reactionType)) {
+                    return isMaterial
+                        ? SizedBox(width: 18, height: 18, child: _customGlyph(reaction)!)
+                        : _customGlyph(reaction)!;
+                  }
                   final text = Text(
                     ReactionTypes.emojiFor(reaction),
                     style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),
@@ -348,16 +363,27 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
     if (rType.isEmpty) return const SizedBox.shrink();
 
     if (SettingsSvc.settings.skin.value != Skins.iOS) {
+      final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
       return Container(
-        width: 30,
-        height: 30,
+        width: isMaterial ? null : 30,
+        height: isMaterial ? 26 : 30,
+        constraints: isMaterial ? const BoxConstraints(minWidth: 34) : null,
+        padding: isMaterial ? const EdgeInsets.symmetric(horizontal: 8) : null,
         decoration: BoxDecoration(
           color: isFromMe
-              ? context.theme.colorScheme.primary
-              : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                  context.theme.colorScheme.surfaceContainerHighest),
-          border: Border.all(color: context.theme.colorScheme.surface),
-          shape: BoxShape.circle,
+              ? (isMaterial
+                  ? context.theme.colorScheme.primaryContainer
+                  : context.theme.colorScheme.primary)
+              : (isMaterial
+                  ? context.theme.colorScheme.surfaceContainerHighest
+                  : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                      context.theme.colorScheme.surfaceContainerHighest)),
+          border: Border.all(
+            color: context.theme.colorScheme.surface,
+            width: isMaterial ? 1.5 : 1.0,
+          ),
+          shape: isMaterial ? BoxShape.rectangle : BoxShape.circle,
+          borderRadius: isMaterial ? BorderRadius.circular(999) : null,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.15),
@@ -369,7 +395,11 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
         ),
         child: Center(
           child: Builder(builder: (ctx) {
-            if (ReactionTypes.isStickerTapback(rType)) return _customGlyph(reaction)!;
+            if (ReactionTypes.isStickerTapback(rType)) {
+              return isMaterial
+                  ? SizedBox(width: 18, height: 18, child: _customGlyph(reaction)!)
+                  : _customGlyph(reaction)!;
+            }
             final text = Text(
               ReactionTypes.emojiFor(reaction),
               style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),

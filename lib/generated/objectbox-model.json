@@ -109,7 +109,7 @@
     },
     {
       "id": "3:9017250848141753702",
-      "lastPropertyId": "41:4875992845906556952",
+      "lastPropertyId": "42:7999446161011430834",
       "name": "Chat",
       "properties": [
         {
@@ -266,6 +266,11 @@
         {
           "id": "41:4875992845906556952",
           "name": "textFieldRuns",
+          "type": 9
+        },
+        {
+          "id": "42:7999446161011430834",
+          "name": "serviceName",
           "type": 9
         }
       ],
@@ -436,7 +441,7 @@
     },
     {
       "id": "13:4148278195232901830",
-      "lastPropertyId": "55:4673117792989945365",
+      "lastPropertyId": "56:754086160495688481",
       "name": "Message",
       "properties": [
         {
@@ -675,6 +680,11 @@
         {
           "id": "55:4673117792989945365",
           "name": "associatedMessageEmoji",
+          "type": 9
+        },
+        {
+          "id": "56:754086160495688481",
+          "name": "service",
           "type": 9
         }
       ],

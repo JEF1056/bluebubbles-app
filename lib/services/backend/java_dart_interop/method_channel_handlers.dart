@@ -37,6 +37,7 @@ class MethodChannelHandlers {
       MethodChannelInboundMethods.scheduledMessageError: _handleScheduledMessageError,
       MethodChannelInboundMethods.replyChat: _handleReplyChat,
       MethodChannelInboundMethods.markChatRead: _handleMarkChatRead,
+      MethodChannelInboundMethods.muteChat: _handleMuteChat,
       MethodChannelInboundMethods.chatReadStatusChanged: _handleChatReadStatusChanged,
       MethodChannelInboundMethods.mediaColors: _handleMediaColors,
       MethodChannelInboundMethods.incomingFacetime: _handleIncomingFacetime,
@@ -302,6 +303,26 @@ class MethodChannelHandlers {
         if (chat != null) {
           await chat.toggleHasUnreadAsync(false, clearLocalNotifications: false);
           ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(false);
+          return await _ok();
+        }
+      }
+    } catch (e, s) {
+      return Future.error(e, s);
+    }
+
+    return _retry();
+  }
+
+  Future<bool> _handleMuteChat(MethodCall _, Map<String, dynamic>? arguments) async {
+    await Database.waitForInit();
+    Logger.info('Received muteChat from Kotlin');
+
+    try {
+      final chatGuid = arguments?['chatGuid'] as String?;
+      if (chatGuid != null && chatGuid.isNotEmpty) {
+        final Chat? chat = Chat.findOne(guid: chatGuid);
+        if (chat != null) {
+          await chat.toggleMuteAsync(true);
           return await _ok();
         }
       }

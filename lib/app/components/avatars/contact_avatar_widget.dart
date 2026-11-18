@@ -7,6 +7,7 @@ import 'package:flex_color_picker/flex_color_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:universal_io/io.dart';
 
 class ContactAvatarWidget extends StatefulWidget {
@@ -53,10 +54,25 @@ class ContactAvatarWidget extends StatefulWidget {
 }
 
 class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHelpers {
-  ContactV2? get contactV2 => widget.contact ?? widget.handle?.contactsV2.firstOrNull;
+  ContactV2? get contactV2 {
+    if (widget.contact != null) return widget.contact;
+    final contacts = widget.handle?.contactsV2;
+    if (contacts != null && contacts.isNotEmpty) {
+      return contacts.firstWhereOrNull((c) => !isNullOrEmpty(c.avatarPath)) ?? contacts.first;
+    }
+    return _resolveTransientContact();
+  }
+
   late final String keyPrefix = widget.handle?.address ?? randomString(8);
 
   HandleState? _handleState;
+
+  ContactV2? _resolveTransientContact() {
+    if (widget.contact != null || widget.handle?.id != null) return null;
+    final addr = widget.handle?.address;
+    if (isNullOrEmpty(addr) || !GetIt.I.isRegistered<ContactServiceV2>()) return null;
+    return ContactsSvcV2.findContactForAddressSync(addr!);
+  }
 
   @override
   void initState() {
@@ -69,7 +85,9 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
   @override
   void didUpdateWidget(ContactAvatarWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.handle?.id != widget.handle?.id) {
+    if (oldWidget.handle?.id != widget.handle?.id ||
+        oldWidget.handle?.address != widget.handle?.address ||
+        oldWidget.contact?.id != widget.contact?.id) {
       _handleState = widget.handle?.id != null ? HandleSvc.getOrCreateHandleState(widget.handle!) : null;
     }
   }
@@ -181,6 +199,12 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
 
     // Build once with all reactive values in outer Obx
     return Obx(() {
+      // Subscribe to contact cache updates for transient (id == null) handles so
+      // widgets like Find My refresh as soon as contacts finish syncing.
+      if (_handleState == null && widget.contact == null && GetIt.I.isRegistered<ContactServiceV2>()) {
+        ContactsSvcV2.cacheVersion.value;
+      }
+      final resolvedContact = contactV2;
       final size =
           ((widget.size ?? 40) * (widget.scaleSize ? SettingsSvc.settings.avatarScale.value : 1)).roundToDouble();
       // Read from HandleState reactively so Obx rebuilds on contact sync.
@@ -188,8 +212,9 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
       final colors = colorStr != null
           ? [HexColor(colorStr).lightenAmount(0.02), HexColor(colorStr)]
           : toColorGradient(widget.handle?.address);
-      final cachedAvatarPath = _handleState?.avatarPath.value ?? contactV2?.avatarPath;
-      final cachedInitials = _handleState?.initials.value ?? contactV2?.initials ?? widget.handle?.initials;
+      final rawAvatarPath = _handleState?.avatarPath.value ?? resolvedContact?.avatarPath;
+      final cachedAvatarPath = isNullOrEmpty(rawAvatarPath) ? null : rawAvatarPath;
+      final cachedInitials = _handleState?.initials.value ?? resolvedContact?.initials ?? widget.handle?.initials;
       final hideContactInfo = SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value;
       final genAvatars = SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.generateFakeAvatars.value;
       final iOS = SettingsSvc.settings.skin.value == Skins.iOS;
@@ -264,12 +289,13 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
                   backgroundImage: ContactAvatarWidget.avatarImage(userAvatarPath),
                   backgroundColor: Colors.transparent,
                 );
-              } else if (!hideContactInfo && !genAvatars && contactV2Avatar != null) {
+              } else if (!hideContactInfo && !genAvatars && !isNullOrEmpty(contactV2Avatar)) {
                 final initials = cachedInitials?.substring(0, iOS ? null : 1);
                 // Use ContactV2 avatar (from file path)
                 return SizedBox.expand(
                   child: Image(
-                    image: ContactAvatarWidget.avatarImage(contactV2Avatar),
+                    key: ValueKey(contactV2Avatar),
+                    image: ContactAvatarWidget.avatarImage(contactV2Avatar!),
                     // Bilinear so the decode (at most 256px a side) downscales cleanly
                     // to the small on-screen sizes (nearest-neighbor aliases).
                     filterQuality: FilterQuality.low,

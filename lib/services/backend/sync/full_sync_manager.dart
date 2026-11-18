@@ -144,6 +144,7 @@ class FullSyncManager extends SyncManager {
               if (syncGroupChatIcons && chat.isGroup) {
                 await Chat.getIcon(chat).catchError((_) {});
               }
+              await Chat.syncBackground(chat).catchError((_) {});
 
               // Increment how many chats we've synced, then set the progress
               completedChats += 1;

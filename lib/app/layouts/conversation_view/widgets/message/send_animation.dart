@@ -377,8 +377,8 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
                       ),
                       color: !message!.isBigEmoji ? context.theme.colorScheme.primary.darkenAmount(0.2) : null,
                       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15).add(EdgeInsets.only(
-                          left: message!.isFromMe! || message!.isBigEmoji ? 0 : 10,
-                          right: message!.isFromMe! && !message!.isBigEmoji ? 10 : 0)),
+                          left: !CurrentSkin.iOS || message!.isFromMe! || message!.isBigEmoji ? 0 : 10,
+                          right: CurrentSkin.iOS && message!.isFromMe! && !message!.isBigEmoji ? 10 : 0)),
                       child: Align(
                         alignment: Alignment.centerLeft,
                         widthFactor: 1,

@@ -402,26 +402,44 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                                   children: [
                                     Padding(
                                       padding: const EdgeInsets.only(left: 5),
-                                      child: CupertinoButton(
-                                        padding: const EdgeInsets.symmetric(horizontal: 5),
-                                        onPressed: () => Navigator.of(context).pop(),
-                                        child: const Icon(
-                                          Icons.close,
-                                          color: Colors.white,
-                                        ),
-                                      ),
+                                      child: iOS
+                                          ? CupertinoButton(
+                                              padding: const EdgeInsets.symmetric(horizontal: 5),
+                                              onPressed: () => Navigator.of(context).pop(),
+                                              child: const Icon(
+                                                Icons.close,
+                                                color: Colors.white,
+                                              ),
+                                            )
+                                          : IconButton(
+                                              padding: const EdgeInsets.symmetric(horizontal: 5),
+                                              onPressed: () => Navigator.of(context).pop(),
+                                              icon: const Icon(
+                                                Icons.close,
+                                                color: Colors.white,
+                                              ),
+                                            ),
                                     ),
                                     if (widget.showInteractions && widget.onOpenCollectionGallery != null)
                                       Padding(
                                         padding: const EdgeInsets.only(right: 5),
-                                        child: CupertinoButton(
-                                          padding: const EdgeInsets.symmetric(horizontal: 5),
-                                          onPressed: widget.onOpenCollectionGallery,
-                                          child: Icon(
-                                            iOS ? CupertinoIcons.square_grid_2x2 : Icons.grid_view_outlined,
-                                            color: Colors.white,
-                                          ),
-                                        ),
+                                        child: iOS
+                                            ? CupertinoButton(
+                                                padding: const EdgeInsets.symmetric(horizontal: 5),
+                                                onPressed: widget.onOpenCollectionGallery,
+                                                child: Icon(
+                                                  iOS ? CupertinoIcons.square_grid_2x2 : Icons.grid_view_outlined,
+                                                  color: Colors.white,
+                                                ),
+                                              )
+                                            : IconButton(
+                                                padding: const EdgeInsets.symmetric(horizontal: 5),
+                                                onPressed: widget.onOpenCollectionGallery,
+                                                icon: const Icon(
+                                                  Icons.grid_view_outlined,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
                                       ),
                                   ],
                                 ),

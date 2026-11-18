@@ -149,7 +149,7 @@ class MethodChannelActions {
     });
   }
 
-  Future<void> createIncomingFaceTimeNotification({
+  Future<bool> createIncomingFaceTimeNotification({
     required String channelId,
     required int notificationId,
     required String title,
@@ -157,8 +157,10 @@ class MethodChannelActions {
     required Uint8List callerAvatar,
     required String caller,
     String? callUuid,
+    bool isVideo = true,
+    String? callerAddress,
   }) async {
-    await service.invokeMethod('create-incoming-facetime-notification', {
+    final res = await service.invokeMethod('create-incoming-facetime-notification', {
       'channel_id': channelId,
       'notification_id': notificationId,
       'title': title,
@@ -166,7 +168,39 @@ class MethodChannelActions {
       'caller_avatar': callerAvatar,
       'caller': caller,
       'call_uuid': callUuid,
+      'is_video': isVideo,
+      'caller_address': callerAddress,
     });
+    return res == true;
+  }
+
+  Future<bool> placeFaceTimeCall({
+    required String address,
+    String? callerName,
+    bool isTelephony = false,
+  }) async {
+    final res = await service.invokeMethod('place-facetime-call', {
+      'address': address,
+      'caller_name': callerName,
+      'is_telephony': isTelephony,
+    });
+    return res == true;
+  }
+
+  Future<bool> endFaceTimeCall({required String callUuid}) async {
+    final res = await service.invokeMethod('end-facetime-call', {
+      'call_uuid': callUuid,
+    });
+    return res == true;
+  }
+
+  Future<bool> isTelecomEnabled() async {
+    final res = await service.invokeMethod('is-telecom-enabled');
+    return res == true;
+  }
+
+  Future<void> openCallingAccounts() async {
+    await service.invokeMethod('open-calling-accounts');
   }
 
   Future<String> getContentUriPath({required String uri}) async {

@@ -83,6 +83,7 @@ class Chat {
   String? lastReadMessageGuid;
   String? customThemeLight;
   String? customThemeDark;
+  String? serviceName;
 
   final RxnString _customAvatarPath = RxnString();
   String? get customAvatarPath => _customAvatarPath.value;
@@ -128,6 +129,7 @@ class Chat {
     this.lastReadMessageGuid,
     this.customThemeLight,
     this.customThemeDark,
+    this.serviceName,
     String? customBackground,
   }) {
     customAvatarPath = customAvatar;
@@ -153,11 +155,12 @@ class Chat {
       displayName: json["displayName"],
       customAvatar: json['_customAvatarPath'],
       customBackground: json['_customBackgroundPath'],
-      pinnedIndex: json['_pinIndex'],
+      pinnedIndex: json['_pinIndex'] ?? json['pinIndex'],
       participants: (json['participants'] as List? ?? []).map((e) => Handle.fromMap(e)).toList(),
       autoSendReadReceipts: json["autoSendReadReceipts"],
       autoSendTypingIndicators: json["autoSendTypingIndicators"],
       dateDeleted: parseDate(json["dateDeleted"]),
+      serviceName: json["serviceName"],
       style: json["style"],
       lockChatName: json["lockChatName"] ?? false,
       lockChatIcon: json["lockChatIcon"] ?? false,
@@ -503,11 +506,20 @@ class Chat {
     return;
   }
 
-  bool get isTextForwarding => guid.startsWith("SMS");
+  ChatServiceType get service =>
+      ChatServiceType.fromServiceName(serviceName) ??
+      ChatServiceType.fromServiceName(_latestMessage?.service) ??
+      ChatServiceType.fromServiceName(handles.firstOrNull?.service) ??
+      ChatServiceType.fromServiceName(participants.firstOrNull?.service) ??
+      ChatServiceType.fromGuid(guid);
 
-  bool get isSMS => false;
+  bool get isTextForwarding => service == ChatServiceType.sms;
 
-  bool get isIMessage => !isTextForwarding && !isSMS;
+  bool get isSMS => service == ChatServiceType.sms;
+
+  bool get isRCS => service == ChatServiceType.rcs;
+
+  bool get isIMessage => service == ChatServiceType.iMessage;
 
   bool get isGroup => participants.length > 1 || style == 43;
 
@@ -540,6 +552,7 @@ class Chat {
     title ??= other.title;
     dateDeleted ??= other.dateDeleted;
     style ??= other.style;
+    serviceName ??= other.serviceName;
     return this;
   }
 
@@ -565,6 +578,8 @@ class Chat {
 
   static Future<void> getIcon(Chat c, {bool force = false}) async {}
 
+  static Future<void> syncBackground(Chat c, {Chat? targetChat}) async {}
+
   Map<String, dynamic> toMap() => {
         "ROWID": id,
         "guid": guid,
@@ -588,5 +603,6 @@ class Chat {
         "lastReadMessageGuid": lastReadMessageGuid,
         "customThemeLight": customThemeLight,
         "customThemeDark": customThemeDark,
+        "serviceName": serviceName,
       };
 }

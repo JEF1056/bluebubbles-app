@@ -129,6 +129,39 @@ class _ReactionHolderState extends State<ReactionHolder> {
     }
 
     final isFromMe = MessageStateScope.of(context).isFromMe.value;
+    if (CurrentSkin.material) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: _cachedReactions.asMap().entries.map((entry) {
+          final i = entry.key;
+          final e = entry.value;
+          final sender = e.isFromMe! ? 0 : e.handleId ?? 0;
+          final stableKey = '${e.associatedMessageGuid}-${e.associatedMessageType}-$sender';
+          final shouldAnimate = !_seenReactionKeys.contains(stableKey);
+          if (shouldAnimate) {
+            _seenReactionKeys.add(stableKey);
+          }
+          return Padding(
+            key: ValueKey(stableKey),
+            padding: EdgeInsets.only(left: i == 0 ? 0 : 2),
+            child: DeferPointer(
+              child: _ReactionAnimator(
+                key: ValueKey(stableKey),
+                stableKey: stableKey,
+                shouldAnimate: shouldAnimate,
+                child: ReactionWidget(
+                  reaction: e,
+                  reactions: _cachedReactions,
+                  tailType: widget.tailType,
+                  tailDirection: widget.tailDirection,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      );
+    }
+
     // Explicit tailDirection stacks along that edge (e.g. collection trailing).
     final stackFromEnd = widget.tailDirection != null
         ? widget.tailDirection == ReactionTailDirection.left

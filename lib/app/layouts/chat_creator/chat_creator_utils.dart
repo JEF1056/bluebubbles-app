@@ -22,7 +22,7 @@ class ChatCreatorUtils {
     return chats
         .where(
           (chat) =>
-              (selectedService.isIMessageService == chat.isIMessage) &&
+              (selectedService == chat.service) &&
               (chat.getTitle().toLowerCase().contains(query) ||
                   chat.handles.firstWhereOrNull((handle) =>
                           handle.address.contains(query) || handle.displayName.toLowerCase().contains(query)) !=

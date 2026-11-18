@@ -208,7 +208,7 @@ List<Widget> buildSettingItemList({
                 Text(
                   "${SettingsSvc.settings.skin.value.toString().split(".").last}  |  ${AdaptiveTheme.of(context).mode.toString().split(".").last.capitalizeFirst!}",
                   style: context.theme.textTheme.bodyMedium!.apply(
-                    color: context.theme.colorScheme.outline.withValues(alpha: 0.85),
+                    color: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.85),
                   ),
                 ),
                 const SizedBox(width: 5),

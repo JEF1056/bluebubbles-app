@@ -114,8 +114,10 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
           final showRecording = widget.controller!.showRecording.value && widget.recorderController != null;
           final canSend = alwaysShowSend || hasText || hasSubject || hasAttachments;
 
+          final isMaterial = SettingsSvc.settings.skin.value == Skins.Material && !isChatCreator;
+
           return Padding(
-            padding: const EdgeInsets.all(3.0),
+            padding: EdgeInsets.all(isMaterial ? 0.0 : 3.0),
             child: AnimatedCrossFade(
               crossFadeState: canSend && !showRecording ? CrossFadeState.showSecond : CrossFadeState.showFirst,
               duration: const Duration(milliseconds: 150),
@@ -197,35 +199,50 @@ class _RecordingButton extends StatelessWidget {
 
     return Obx(() {
       final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
+      final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
 
       return TextButton(
         style: TextButton.styleFrom(
-          backgroundColor: !isIOS || (isIOS && !isChatCreator && !showRecording)
-              ? null
-              : !isChatCreator && !showRecording
-                  ? context.theme.colorScheme.outline
-                  : context.theme.colorScheme.primary.withValues(alpha: 0.4),
+          backgroundColor: isMaterial && !isChatCreator
+              ? (showRecording
+                  ? context.theme.colorScheme.errorContainer
+                  : context.theme.colorScheme.primaryContainer)
+              : !isIOS || (isIOS && !isChatCreator && !showRecording)
+                  ? null
+                  : !isChatCreator && !showRecording
+                      ? context.theme.colorScheme.outline
+                      : context.theme.colorScheme.primary.withValues(alpha: 0.4),
           shape: const CircleBorder(),
           padding: const EdgeInsets.all(0),
-          maximumSize: isDesktop ? const Size(40, 40) : const Size(32, 32),
-          minimumSize: isDesktop ? const Size(40, 40) : const Size(32, 32),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          maximumSize: isIOS ? (isDesktop ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
+          minimumSize: isIOS ? (isDesktop ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
+          tapTargetSize: isIOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
         ),
         child: !isChatCreator && !showRecording
             ? CupertinoIconWrapper(
                 icon: Icon(
-                  isIOS ? CupertinoIcons.mic_fill : Icons.mic_none,
+                  isIOS
+                      ? CupertinoIcons.mic_fill
+                      : isMaterial
+                          ? Icons.graphic_eq
+                          : Icons.mic_none,
                   color: isIOS
                       ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
-                      : context.theme.colorScheme.onSurfaceVariant,
-                  size: 20,
+                      : isMaterial
+                          ? context.theme.colorScheme.onPrimaryContainer
+                          : context.theme.colorScheme.onSurfaceVariant,
+                  size: isIOS ? 20 : 24,
                 ),
               )
             : CupertinoIconWrapper(
                 icon: Icon(
                   isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
-                  color: isIOS ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant,
-                  size: 15,
+                  color: isIOS
+                      ? context.theme.colorScheme.primary
+                      : isMaterial
+                          ? context.theme.colorScheme.onErrorContainer
+                          : context.theme.colorScheme.onSurfaceVariant,
+                  size: isIOS ? 15 : 22,
                 ),
               ),
         onPressed: () async {

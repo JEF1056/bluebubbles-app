@@ -10,6 +10,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 
 /// Displays a group of contact avatars for a chat.
 ///
@@ -60,13 +61,25 @@ class ContactAvatarGroupWidget extends StatelessWidget {
     ],
   };
 
+  bool _handleHasAvatar(Handle h) {
+    if (h.id != null) {
+      return !isNullOrEmpty(HandleSvc.getOrCreateHandleState(h).avatarPath.value);
+    }
+    if (h.contactsV2.any((c) => !isNullOrEmpty(c.avatarPath))) return true;
+    if (GetIt.I.isRegistered<ContactServiceV2>()) {
+      ContactsSvcV2.cacheVersion.value;
+      return !isNullOrEmpty(ContactsSvcV2.findContactForAddressSync(h.address)?.avatarPath);
+    }
+    return false;
+  }
+
   List<Handle> _sortedHandles(List<Handle> handles) {
     final sorted = List<Handle>.from(handles);
     // Sort by the reactive HandleState avatar path — reading contactsV2 here
     // would run a lazy ToMany DB query per handle on every rebuild, and the
     // registry value is also what the child ContactAvatarWidgets display.
     final hasAvatar = {
-      for (final h in handles) h: HandleSvc.getOrCreateHandleState(h).avatarPath.value != null,
+      for (final h in handles) h: _handleHasAvatar(h),
     };
     sorted.sort((a, b) {
       final avatarA = hasAvatar[a] ?? false;

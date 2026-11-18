@@ -26,7 +26,7 @@ class StorageProgressSection extends StatelessWidget with StorageAnalyzerHelpers
           const SizedBox(height: 4),
           Text(
             formatBytes(progress.bytesSoFar),
-            style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.outline),
+            style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
           ),
           const SizedBox(height: 16),
           ClipRRect(

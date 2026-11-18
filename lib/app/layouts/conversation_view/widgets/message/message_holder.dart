@@ -19,6 +19,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/s
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/text/text_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/message_timestamp.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/timestamp_separator.dart';
@@ -27,6 +28,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -65,14 +67,19 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
 
   Message? get newerMessage => controller.newMessage;
 
-  // Computed reactive replyTo getter
-  Message? get replyTo => message.threadOriginatorGuid == null
-      ? null
-      : SettingsSvc.settings.repliesToPrevious.value
-          ? (service.struct
-                  .getPreviousReply(message.threadOriginatorGuid!, message.normalizedThreadPart, message.guid!) ??
-              service.struct.getThreadOriginator(message.threadOriginatorGuid!))
-          : service.struct.getThreadOriginator(message.threadOriginatorGuid!);
+  // Computed reactive replyTo getter (resolves root originator across reply chains/off-screen origins)
+  Message? get replyTo {
+    if (message.threadOriginatorGuid == null) return null;
+    if (SettingsSvc.settings.repliesToPrevious.value && message.guid != null) {
+      final prev = service.struct.getPreviousReply(
+        message.threadOriginatorGuid!,
+        message.normalizedThreadPart,
+        message.guid!,
+      );
+      if (prev != null) return prev;
+    }
+    return resolveRootReplyTarget(message, message.normalizedThreadPart, service: service).message;
+  }
 
   Chat get chat => widget.cvController.chat;
 
@@ -88,7 +95,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
   bool get canSwipeToReply =>
       SettingsSvc.settings.enablePrivateAPI.value &&
       SettingsSvc.serverDetails.isMinBigSur &&
-      chat.isIMessage &&
+      (chat.isIMessage || chat.isRCS) &&
       !widget.isReplyThread &&
       !controller.isSending.value &&
       !controller.hasError.value;
@@ -142,7 +149,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
     controller.built = true;
 
     // Cache settings values to avoid repeated observable reads
-    final alwaysShowAvatars = SettingsSvc.settings.alwaysShowAvatars.value;
+    final alwaysShowAvatars = material ? false : SettingsSvc.settings.alwaysShowAvatars.value;
     final avatarScale = SettingsSvc.settings.avatarScale.value;
 
     /// Layout tree
@@ -167,10 +174,17 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
     return MessageStateScope(
       messageState: messageState,
       child: Obx(() {
-        // Ensure this Obx always has direct reactive dependencies from MessageState.
+        // Ensure this Obx always has direct reactive dependencies from MessageState & MessagesService.
         // Some render paths can avoid touching other Rx fields.
         // ignore: unused_local_variable
-        final _rxGuard = (controller.isSending.value, controller.hasError.value, controller.parts.length);
+        final _rxGuard = (
+          controller.isSending.value,
+          controller.hasError.value,
+          controller.parts.length,
+          controller.threadReplyCount.value,
+          message.guid != null ? service.messageUpdateTrigger[message.guid!] : null,
+          service.messageUpdateTrigger.length,
+        );
 
         // Read controller.parts reactively so Obx rebuilds when parts change.
         // replyPart is a message-part id, not a list index. A miss must not fall
@@ -223,6 +237,8 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
         return AnimatedPadding(
           duration: const Duration(milliseconds: 100),
           padding: EdgeInsets.only(
+            left: material ? 12.0 : 0.0,
+            right: material ? 12.0 : 0.0,
             top: olderMessage != null && !message.sameSender(olderMessage!) ? 5.0 : 0,
             bottom: newerMessage != null && !message.sameSender(newerMessage!) ? 5.0 : 0,
           ),
@@ -241,7 +257,22 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                       crossAxisAlignment: isFromMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       children: [
                         // message column
-                        ...messageParts.mapIndexed((index, e) => Padding(
+                        ...messageParts.mapIndexed((index, e) {
+                          final canShowReplyPill = !widget.isReplyThread &&
+                              !message.isGroupEvent &&
+                              !e.isUnsent &&
+                              message.guid != null &&
+                              message.threadOriginatorGuid == null;
+                          final threadReplies = canShowReplyPill
+                              ? collectThreadMessages(
+                                  message,
+                                  e.coveredPartIds,
+                                  service,
+                                  includeOriginator: false,
+                                  useDb: false,
+                                )
+                              : const <Message>[];
+                          return Padding(
                               padding: e.isMediaCollection
                                   ? const EdgeInsets.only(top: 2.0, bottom: 4.0)
                                   : const EdgeInsets.symmetric(vertical: 2.0),
@@ -261,11 +292,10 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                   if (iOS &&
                                       index == 0 &&
                                       !widget.isReplyThread &&
-                                      olderMessage != null &&
                                       message.threadOriginatorGuid != null &&
-                                      message.showUpperMessage(olderMessage!) &&
+                                      (olderMessage == null || message.showUpperMessage(olderMessage!)) &&
                                       replyTo != null &&
-                                      service.getMessageStateIfExists(replyTo!.guid!) != null)
+                                      replyTo!.guid != null)
                                     Padding(
                                       padding: EdgeInsets.only(
                                           left: (showAvatar || alwaysShowAvatars) && replyTo!.isFromMe! ? 35 : 0),
@@ -363,10 +393,9 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                   if (!iOS &&
                                       index == 0 &&
                                       !widget.isReplyThread &&
-                                      olderMessage != null &&
                                       message.threadOriginatorGuid != null &&
                                       replyTo != null &&
-                                      service.getMessageStateIfExists(replyTo!.guid!) != null)
+                                      replyTo!.guid != null)
                                     ReplyBubbleSection(
                                       replyTo: replyTo!,
                                       cvController: widget.cvController,
@@ -382,7 +411,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                       // avatar, if needed
                                       if (message.showTail(newerMessage) &&
                                           controller.isTrailingMessagePart(e) &&
-                                          (showAvatar || SettingsSvc.settings.alwaysShowAvatars.value) &&
+                                          (showAvatar || alwaysShowAvatars) &&
                                           !message.isFromMe! &&
                                           !message.isGroupEvent)
                                         Padding(
@@ -406,13 +435,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                           message.threadOriginatorGuid != null &&
                                                           olderMessage != null) ||
                                                       (index == messageParts.length - 1 &&
-                                                          service.struct
-                                                              .threadsForParts(
-                                                                message.guid!,
-                                                                e.coveredPartIds,
-                                                                returnOriginator: false,
-                                                              )
-                                                              .isNotEmpty &&
+                                                          threadReplies.isNotEmpty &&
                                                           newerMessage != null))
                                               ? ReplyLineDecoration(
                                                   isFromMe: message.isFromMe!,
@@ -621,17 +644,23 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                       ),
                                     ],
                                   ),
-                                  // message properties (replies, edits, effect)
-                                  Padding(
-                                    padding: showAvatar || alwaysShowAvatars
-                                        ? EdgeInsets.only(left: 35.0 * avatarScale)
-                                        : EdgeInsets.zero,
-                                    child:
-                                        MessageProperties(globalKey: keys.length > index ? keys[index] : null, part: e),
+                                  // message properties (edits, effect) & tappable multi-response reply count pill
+                                  ..._buildThreadAndPropertiesSection(
+                                    context,
+                                    index,
+                                    e,
+                                    keys,
+                                    showAvatar,
+                                    alwaysShowAvatars,
+                                    avatarScale,
+                                    isFromMe,
+                                    canShowReplyPill,
+                                    threadReplies,
                                   ),
                                 ],
                               ),
-                            )),
+                            );
+                        }),
                         // delivered / read receipt
                         DeliveredIndicatorObserver(tapped: tapped),
                       ],
@@ -648,6 +677,124 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
         );
       }),
     );
+  }
+
+  List<Widget> _buildThreadAndPropertiesSection(
+    BuildContext context,
+    int index,
+    MessagePart e,
+    List<GlobalKey> keys,
+    bool showAvatar,
+    bool alwaysShowAvatars,
+    double avatarScale,
+    bool isFromMe,
+    bool canShowReplyPill,
+    List<Message> threadReplies,
+  ) {
+    final avatarPad =
+        !isFromMe && (showAvatar || alwaysShowAvatars) ? EdgeInsets.only(left: 35.0 * avatarScale) : EdgeInsets.zero;
+
+    final propsShowsReplies = canShowReplyPill &&
+        !e.isMediaCollection &&
+        service.struct.threads(message.guid!, e.part, returnOriginator: false).isNotEmpty;
+    final hasNonReplyProperties = e.isEdited || message.expressiveSendStyleId != null;
+
+    final widgets = <Widget>[];
+    if (hasNonReplyProperties || (!widget.isReplyThread && threadReplies.isEmpty)) {
+      widgets.add(
+        Padding(
+          padding: avatarPad,
+          child: MessageProperties(globalKey: keys.length > index ? keys[index] : null, part: e),
+        ),
+      );
+    }
+
+    if (threadReplies.isNotEmpty && (!hasNonReplyProperties || !propsShowsReplies)) {
+      final label = formatReplyCountLabel(threadReplies.length);
+      final theme = context.theme;
+      final pill = iOS
+          ? GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => showReplyThread(context, message, e, service, widget.cvController),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHigh.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      label,
+                      textHeightBehavior: const TextHeightBehavior(
+                        applyHeightToFirstAscent: true,
+                        applyHeightToLastDescent: true,
+                        leadingDistribution: TextLeadingDistribution.even,
+                      ),
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      CupertinoIcons.chevron_right,
+                      size: 12,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : Material(
+              color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.8),
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => showReplyThread(context, message, e, service, widget.cvController),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.reply_rounded,
+                        size: 13,
+                        color: theme.colorScheme.onSecondaryContainer,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        label,
+                        textHeightBehavior: const TextHeightBehavior(
+                          applyHeightToFirstAscent: true,
+                          applyHeightToLastDescent: true,
+                          leadingDistribution: TextLeadingDistribution.even,
+                        ),
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: theme.colorScheme.onSecondaryContainer,
+                          fontWeight: FontWeight.w600,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+
+      widgets.add(
+        Padding(
+          padding: avatarPad.add(const EdgeInsets.symmetric(horizontal: 15).add(const EdgeInsets.only(top: 4))),
+          child: pill,
+        ),
+      );
+    }
+    return widgets;
   }
 }
 

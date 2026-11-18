@@ -134,7 +134,7 @@ class PageContent extends StatelessWidget {
                 style: context.theme.textTheme.bodyLarge!
                     .apply(
                       fontSizeDelta: 1.5,
-                      color: context.theme.colorScheme.outline,
+                      color: context.theme.colorScheme.onSurfaceVariant,
                     )
                     .copyWith(height: 2)),
           ),
@@ -186,10 +186,10 @@ class PageButtons extends StatelessWidget {
                       borderRadius: BorderRadius.circular(25),
                       gradient: LinearGradient(
                         begin: AlignmentDirectional.topStart,
-                        colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                        colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                       ),
                     ),
-                    height: 40,
+                    height: 48,
                     padding: const EdgeInsets.all(2),
                     child: ElevatedButton(
                       style: ButtonStyle(
@@ -200,8 +200,8 @@ class PageButtons extends StatelessWidget {
                         ),
                         backgroundColor: WidgetStateProperty.all(context.theme.colorScheme.surface),
                         shadowColor: WidgetStateProperty.all(context.theme.colorScheme.surface),
-                        maximumSize: WidgetStateProperty.all(const Size(200, 36)),
-                        minimumSize: WidgetStateProperty.all(const Size(30, 30)),
+                        maximumSize: WidgetStateProperty.all(const Size(200, 44)),
+                        minimumSize: WidgetStateProperty.all(const Size(30, 44)),
                       ),
                       onPressed: () async {
                         previousPage();
@@ -223,10 +223,10 @@ class PageButtons extends StatelessWidget {
                 borderRadius: BorderRadius.circular(25),
                 gradient: LinearGradient(
                   begin: AlignmentDirectional.topStart,
-                  colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                  colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                 ),
               ),
-              height: 40,
+              height: 48,
               child: ElevatedButton(
                 style: ButtonStyle(
                   shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -236,8 +236,8 @@ class PageButtons extends StatelessWidget {
                   ),
                   backgroundColor: WidgetStateProperty.all(Colors.transparent),
                   shadowColor: WidgetStateProperty.all(Colors.transparent),
-                  maximumSize: WidgetStateProperty.all(const Size(200, 36)),
-                  minimumSize: WidgetStateProperty.all(const Size(30, 30)),
+                  maximumSize: WidgetStateProperty.all(const Size(200, 44)),
+                  minimumSize: WidgetStateProperty.all(const Size(30, 44)),
                 ),
                 onPressed: () async {
                   final proceed = (await onNextPressed?.call()) ?? true;

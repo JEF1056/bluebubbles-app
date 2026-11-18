@@ -25,13 +25,13 @@ class StorageExpressiveProgressSection extends StatelessWidget with StorageAnaly
           const SizedBox(height: 4),
           Text(
             formatBytes(progress.bytesSoFar),
-            style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.outline),
+            style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
           ),
           if (progress.total > 0) ...[
             const SizedBox(height: 2),
             Text(
               '${progress.processed} / ${progress.total}',
-              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.outline),
+              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
             ),
           ],
           const SizedBox(height: 16),

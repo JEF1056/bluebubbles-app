@@ -4,10 +4,12 @@ import 'package:bluebubbles/models/facetime.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// Whether the details page offers to FaceTime this chat through the server's Mac: a 1:1 iMessage chat, on a v2
-/// server, with the Private API on. Groups aren't offered: the server dials every address as one 1:1 request.
+/// Whether the details page offers to FaceTime this chat through the server's Mac: a 1:1 iMessage chat, on a
+/// supported server, with the Private API on. Groups aren't offered: the server dials every address as one 1:1 request.
 bool canFaceTime(Chat chat) =>
     SettingsSvc.getServerDetails().supportsFaceTimeCalls &&
     SettingsSvc.settings.enablePrivateAPI.value &&
@@ -16,9 +18,15 @@ bool canFaceTime(Chat chat) =>
     chat.handles.isNotEmpty &&
     !(chat.chatIdentifier?.startsWith("urn:biz") ?? false);
 
-/// Asks video or audio, has the server's Mac ring the chat's handle, then opens the link to join the call.
-Future<void> startFaceTimeCall(BuildContext context, Chat chat) async {
-  final video = await showBBListSelector<bool>(
+/// Starts a FaceTime call: Video opens the server's web link; Audio on Android places a native Telecom call
+/// through [FaceTimeConnectionService] when enabled.
+Future<void> startFaceTimeCall(
+  BuildContext context,
+  Chat chat, {
+  bool? video,
+  bool isTelephony = false,
+}) async {
+  video ??= await showBBListSelector<bool>(
     context: context,
     title: "FaceTime",
     options: const [
@@ -27,6 +35,52 @@ Future<void> startFaceTimeCall(BuildContext context, Chat chat) async {
     ],
   );
   if (video == null || !context.mounted) return;
+
+  final address = chat.handles.first.address;
+
+  if (!video && Platform.isAndroid) {
+    final permissions = await [
+      Permission.microphone,
+      Permission.phone,
+      Permission.bluetoothConnect,
+    ].request();
+    if (permissions[Permission.microphone] != PermissionStatus.granted ||
+        permissions[Permission.phone] != PermissionStatus.granted) {
+      showSnackbar("FaceTime Audio", "Microphone and Phone permissions are required for calls", type: SnackbarType.error);
+      return;
+    }
+
+    if (!await MethodChannelSvc.actions.isTelecomEnabled()) {
+      if (!context.mounted) return;
+      showBBDialog(
+        context: context,
+        title: "Enable Calling Account",
+        body: "Turn on BlueBubbles FaceTime in Android Calling Accounts to place native FaceTime Audio calls.",
+        actions: [
+          BBDialogAction(text: "Cancel", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
+          BBDialogAction(
+            text: "Open Settings",
+            isDefault: true,
+            onPressed: () {
+              Navigator.of(context, rootNavigator: true).pop();
+              MethodChannelSvc.actions.openCallingAccounts();
+            },
+          ),
+        ],
+      );
+      return;
+    }
+
+    final placedNative = await MethodChannelSvc.actions.placeFaceTimeCall(
+      address: address,
+      callerName: chat.getTitle(),
+      isTelephony: isTelephony,
+    );
+    if (!placedNative) {
+      showSnackbar("FaceTime Audio", "Couldn't start native call", type: SnackbarType.error);
+    }
+    return;
+  }
 
   // The root navigator, not this page's context: the page may close while the Mac dials, and the progress dialog
   // and whatever follows it still need somewhere to go.
@@ -41,7 +95,7 @@ Future<void> startFaceTimeCall(BuildContext context, Chat chat) async {
   PlacedFaceTimeCall? placed;
   FaceTimeException? refusal;
   try {
-    placed = await HttpSvc.faceTime.call(chat.handles.first.address, video: video);
+    placed = await HttpSvc.faceTime.call(address, video: video, isTelephony: isTelephony);
   } on FaceTimeException catch (e) {
     refusal = e;
   } catch (e, s) {
@@ -52,7 +106,12 @@ Future<void> startFaceTimeCall(BuildContext context, Chat chat) async {
   }
 
   if (placed != null) {
-    final opened = await launchUrl(Uri.parse(placed.link), mode: LaunchMode.externalApplication);
+    final link = placed.link;
+    if (link == null || link.isEmpty) {
+      showSnackbar("FaceTime", "Couldn't get a call link", type: SnackbarType.error);
+      return;
+    }
+    final opened = await launchUrl(Uri.parse(link), mode: LaunchMode.externalApplication);
     if (!opened) showSnackbar("FaceTime", "Couldn't open the call link", type: SnackbarType.error);
     return;
   }

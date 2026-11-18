@@ -117,7 +117,7 @@ class _PinnedOrderPanelState extends State<PinnedOrderPanel> {
                     padding: const EdgeInsets.fromLTRB(15, 5, 15, 8),
                     child: Text(
                       "Set the order of pinned chats by dragging the handle next to each chat tile.",
-                      style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
+                      style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                     ),
                   ),
                   itemBuilder: (context, index) {

@@ -177,7 +177,7 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                     if (_canReply)
                       IconButton(
                         onPressed: triggerReply,
-                        icon: const Icon(CupertinoIcons.reply),
+                        icon: Icon(iOS ? CupertinoIcons.reply : Icons.reply),
                       ),
                   ],
                   backgroundColor: context.theme.colorScheme.surfaceContainerHighest,

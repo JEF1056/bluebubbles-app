@@ -1,3 +1,5 @@
+import 'package:bluebubbles/database/global/findmy_friend.dart';
+
 class FindMyDevice {
   FindMyDevice({
     required this.deviceModel,
@@ -98,6 +100,26 @@ class FindMyDevice {
   final dynamic crowdSourcedLocation;
   final Map<String, dynamic>? role;
   final Map<String, dynamic>? lostModeMetadata;
+
+  DateTime? get lastUpdated =>
+      (location?.timeStamp ?? 0) == 0 ? null : DateTime.fromMillisecondsSinceEpoch(location!.timeStamp!);
+  bool get isOld => location?.isOld ?? false;
+  bool get isInaccurate => location?.isInaccurate ?? false;
+  bool get locationFinished => location?.locationFinished ?? true;
+  bool get isLocatingInProgress => location?.isLocatingInProgress ?? false;
+
+  bool isLiveFresh([DateTime? now]) {
+    if (location?.positionType?.toLowerCase() != 'live' || isOld || lastUpdated == null) return false;
+    return (now ?? DateTime.now()).difference(lastUpdated!) < const Duration(seconds: 60);
+  }
+
+  String displayFreshness([DateTime? now]) => formatFindMyFreshness(
+        isLiveFresh: isLiveFresh(now),
+        locatingInProgress: isLocatingInProgress,
+        isOld: isOld,
+        lastUpdated: lastUpdated,
+        now: now,
+      );
 
   factory FindMyDevice.fromJson(Map<String, dynamic> json) => FindMyDevice(
         deviceModel: json["deviceModel"],
@@ -282,10 +304,12 @@ class Location {
     required this.timeStamp,
     required this.altitude,
     required this.locationFinished,
+    this.speed,
+    this.isLocatingInProgress = false,
   });
 
   final String? positionType;
-  final int? verticalAccuracy;
+  final double? verticalAccuracy;
   final double? longitude;
   final int? floorLevel;
   final bool? isInaccurate;
@@ -293,21 +317,25 @@ class Location {
   final double? horizontalAccuracy;
   final double? latitude;
   final int? timeStamp;
-  final int? altitude;
+  final double? altitude;
   final bool? locationFinished;
+  final double? speed;
+  final bool isLocatingInProgress;
 
   factory Location.fromJson(Map<String, dynamic> json) => Location(
         positionType: json["positionType"],
-        verticalAccuracy: json["verticalAccuracy"],
-        longitude: json["longitude"]?.toDouble(),
-        floorLevel: json["floorLevel"],
+        verticalAccuracy: (json["verticalAccuracy"] as num?)?.toDouble(),
+        longitude: (json["longitude"] as num?)?.toDouble(),
+        floorLevel: (json["floorLevel"] as num?)?.toInt(),
         isInaccurate: json["isInaccurate"],
         isOld: json["isOld"],
-        horizontalAccuracy: json["horizontalAccuracy"]?.toDouble(),
-        latitude: json["latitude"]?.toDouble(),
-        timeStamp: json["timeStamp"],
-        altitude: json["altitude"],
+        horizontalAccuracy: (json["horizontalAccuracy"] as num?)?.toDouble(),
+        latitude: (json["latitude"] as num?)?.toDouble(),
+        timeStamp: (json["timeStamp"] as num?)?.toInt(),
+        altitude: (json["altitude"] as num?)?.toDouble(),
         locationFinished: json["locationFinished"],
+        speed: (json["speed"] as num?)?.toDouble(),
+        isLocatingInProgress: json["isLocatingInProgress"] ?? json["is_locating_in_progress"] ?? false,
       );
 
   Map<String, dynamic> toJson() => {
@@ -322,6 +350,8 @@ class Location {
         "timeStamp": timeStamp,
         "altitude": altitude,
         "locationFinished": locationFinished,
+        "speed": speed,
+        "isLocatingInProgress": isLocatingInProgress,
       };
 }
 

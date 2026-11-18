@@ -1,6 +1,8 @@
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/models/message_reply_context.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -25,22 +27,46 @@ class _ReplyHolderState extends State<ReplyHolder> with ThemeHelpers {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final message = widget.controller.replyToMessage?.message;
-      final partIndex = widget.controller.replyToMessage?.partIndex ?? 0;
+      final rawMessage = widget.controller.replyToMessage?.message;
+      final rawPartIndex = widget.controller.replyToMessage?.partIndex ?? 0;
       final attachmentGuid = widget.controller.replyToMessage?.attachmentGuid;
-      final chatGuid = message?.chat.target?.guid ?? ChatStateScope.maybeChatOf(context)?.guid;
+      final chatGuid =
+          rawMessage?.chat.target?.guid ?? ChatStateScope.maybeChatOf(context)?.guid ?? widget.controller.chat.guid;
+      final svc = maybeFindMessagesSvc(chatGuid);
+
+      Message? message = rawMessage;
+      int partIndex = rawPartIndex;
+      if (rawMessage != null && rawMessage.threadOriginatorGuid != null) {
+        final root = resolveRootReplyTarget(rawMessage, rawPartIndex, service: svc);
+        if (root.message != null && (root.message!.guid != rawMessage.guid || root.part != rawPartIndex)) {
+          message = root.message!;
+          partIndex = root.part;
+          final normalizedContext = MessageReplyContext(
+            message,
+            partIndex,
+            attachmentGuid: partIndex == rawPartIndex ? attachmentGuid : null,
+          );
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (widget.controller.replyToMessage?.message.guid == rawMessage.guid) {
+              widget.controller.replyToMessage = normalizedContext;
+            }
+          });
+        }
+      }
+
       MessagePart? matched;
-      if (message?.guid != null && chatGuid != null) {
-        final state = maybeFindMessagesSvc(chatGuid)?.getMessageStateIfExists(message!.guid!);
+      if (message?.guid != null) {
+        final state = svc?.getMessageStateIfExists(message!.guid!);
         if (state != null) {
-          if (attachmentGuid != null) {
+          if (attachmentGuid != null && partIndex == rawPartIndex) {
             matched = state.parts.firstWhereOrNull((p) => p.attachments.any((a) => a.guid == attachmentGuid));
           }
           matched ??= state.partById(partIndex);
         }
       }
       final resolvedReply = matched ?? message;
-      final reply = matched != null && attachmentGuid != null
+      final reply = matched != null && attachmentGuid != null && partIndex == rawPartIndex
           ? MessagePart(
               part: matched.part,
               text: matched.text,
@@ -95,8 +121,9 @@ class _ReplyContent extends StatelessWidget {
 
       return Container(
         color: context.theme.colorScheme.surfaceContainerHighest,
-        padding: EdgeInsets.only(left: !isIOS ? 20.0 : 0, right: isIOS ? 8.0 : 0),
+        padding: EdgeInsets.only(left: !isIOS ? 20.0 : 0, right: isIOS ? 8.0 : 0, top: 4, bottom: 4),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             if (isIOS)
               _CloseButton(
@@ -240,6 +267,11 @@ class _ReplyText extends StatelessWidget {
                   .apply(fontSizeFactor: isIOS ? 1 : 1.15),
             )),
         ]),
+        textHeightBehavior: const TextHeightBehavior(
+          applyHeightToFirstAscent: true,
+          applyHeightToLastDescent: true,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
         style: context.textTheme.labelLarge!.copyWith(
           color: context.theme.colorScheme.onSurfaceVariant,
         ),

@@ -14,6 +14,7 @@ import 'package:get/get.dart' hide Response;
 // (needed when generating objectbox model code)
 // ignore: unnecessary_import
 import 'package:objectbox/objectbox.dart';
+import 'package:path/path.dart' as p;
 import 'package:universal_io/io.dart';
 
 @Entity()
@@ -87,6 +88,18 @@ class Chat {
   /// with [knownGroupPhotoGuid] while the message that came with it is handled.
   @Transient()
   String? serverGroupPhotoGuid;
+
+  /// The chat wallpaper GUID (`trabaid` / `backgroundChannelGUID`) from server `properties`.
+  @Transient()
+  String? serverBackgroundGuid;
+
+  /// True when this [Chat] came from a server payload that included `properties`.
+  @Transient()
+  bool hasServerProperties = false;
+
+  /// The service name reported by the server (e.g. `"iMessage"`, `"SMS"`, `"RCS"`),
+  /// needed when macOS 15+/26 unified chats use an `any;-;...` GUID prefix.
+  String? serviceName;
 
   final RxnString _customAvatarPath = RxnString();
   String? get customAvatarPath => _customAvatarPath.value;
@@ -177,6 +190,9 @@ class Chat {
     this.dynamicWallpaperConfig,
     this.knownGroupPhotoGuid,
     this.serverGroupPhotoGuid,
+    this.serverBackgroundGuid,
+    this.hasServerProperties = false,
+    this.serviceName,
   }) {
     customAvatarPath = customAvatar;
     customBackgroundPath = customBackground;
@@ -185,25 +201,64 @@ class Chat {
     if (latestMessage != null) dbOnlyLatestMessageDate ??= latestMessage.dateCreated;
   }
 
+  /// Returns true when the server marks this chat as filtered by iOS message
+  /// filters (Unknown Senders, Transactions, Promotions, or Spam).
+  static bool isFilteredByServer(Map<String, dynamic> json) {
+    return json['isFiltered'] == true || json['isFilteredAsSpam'] == true;
+  }
+
+  /// Extracts Apple's per-chat `EnableReadReceiptForChat` override from a
+  /// server `properties` payload (list of plist dicts or single map), or `null`
+  /// when the chat follows the global Read Receipts setting.
+  static bool? readReceiptsOverrideInProperties(dynamic properties) {
+    bool? parseScalar(dynamic v) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final s = v.trim().toLowerCase();
+        if (s == 'true' || s == '1') return true;
+        if (s == 'false' || s == '0') return false;
+      }
+      return null;
+    }
+
+    if (properties is List) {
+      for (final item in properties) {
+        if (item is Map && item.containsKey('EnableReadReceiptForChat')) {
+          final parsed = parseScalar(item['EnableReadReceiptForChat']);
+          if (parsed != null) return parsed;
+        }
+      }
+    } else if (properties is Map && properties.containsKey('EnableReadReceiptForChat')) {
+      return parseScalar(properties['EnableReadReceiptForChat']);
+    }
+    return null;
+  }
+
   factory Chat.fromMap(Map<String, dynamic> json) {
     final message = json['lastMessage'] != null ? Message.fromMap(json['lastMessage']!.cast<String, dynamic>()) : null;
+    final pinned = json["isPinned"] == true;
+    final archived = (json['isArchived'] == true) || (isFilteredByServer(json) && !pinned);
+    final readReceipts = json["autoSendReadReceipts"] is bool
+        ? json["autoSendReadReceipts"] as bool
+        : readReceiptsOverrideInProperties(json["properties"]);
     return Chat(
       id: json["ROWID"] ?? json["id"],
       guid: json["guid"],
       chatIdentifier: json["chatIdentifier"],
       participants:
           (json['participants'] as List? ?? []).map((e) => Handle.fromMap(e!.cast<String, dynamic>())).toList(),
-      isArchived: json['isArchived'] ?? false,
+      isArchived: archived,
       muteType: json["muteType"],
       muteArgs: json["muteArgs"],
-      isPinned: json["isPinned"] ?? false,
+      isPinned: pinned,
       hasUnreadMessage: json["hasUnreadMessage"] ?? false,
       latestMessage: message,
       displayName: json["displayName"],
       customAvatar: json['_customAvatarPath'],
       customBackground: json['_customBackgroundPath'],
-      pinnedIndex: json['_pinIndex'],
-      autoSendReadReceipts: json["autoSendReadReceipts"],
+      pinnedIndex: json['_pinIndex'] ?? json['pinIndex'],
+      autoSendReadReceipts: readReceipts,
       autoSendTypingIndicators: json["autoSendTypingIndicators"],
       dateDeleted: parseDate(json["dateDeleted"]),
       style: json["style"],
@@ -218,6 +273,9 @@ class Chat {
       knownGroupPhotoGuid: json["knownGroupPhotoGuid"],
       // `serverGroupPhotoGuid` when the map is our own `toMap`, `properties` when it came from the server.
       serverGroupPhotoGuid: json["serverGroupPhotoGuid"] ?? groupPhotoGuidInProperties(json["properties"]),
+      serverBackgroundGuid: json["serverBackgroundGuid"] ?? backgroundGuidInProperties(json["properties"]),
+      hasServerProperties: json["hasServerProperties"] == true || json.containsKey("properties"),
+      serviceName: json["serviceName"],
       textFieldText: json["textFieldText"],
       textFieldRuns: json["textFieldRuns"],
       textFieldAttachments: (json["textFieldAttachments"] as List?)?.cast<String>() ?? const [],
@@ -836,12 +894,19 @@ class Chat {
     );
   }
 
-  /// The messaging service this chat belongs to, derived from the GUID prefix.
-  ChatServiceType get service => ChatServiceType.fromGuid(guid);
+  /// The messaging service this chat belongs to.
+  ChatServiceType get service =>
+      ChatServiceType.fromServiceName(serviceName) ??
+      ChatServiceType.fromServiceName(dbLatestMessage.target?.service) ??
+      ChatServiceType.fromServiceName(handles.firstOrNull?.service) ??
+      ChatServiceType.fromServiceName(participants.firstOrNull?.service) ??
+      ChatServiceType.fromGuid(guid);
 
   bool get isTextForwarding => service == ChatServiceType.sms;
 
   bool get isSMS => service == ChatServiceType.sms;
+
+  bool get isRCS => service == ChatServiceType.rcs;
 
   bool get isIMessage => service == ChatServiceType.iMessage;
 
@@ -882,6 +947,7 @@ class Chat {
     dynamicWallpaperId ??= other.dynamicWallpaperId;
     dynamicWallpaperConfig ??= other.dynamicWallpaperConfig;
     knownGroupPhotoGuid ??= other.knownGroupPhotoGuid;
+    serviceName ??= other.serviceName;
     return this;
   }
 
@@ -936,6 +1002,52 @@ class Chat {
     }
   }
 
+  /// Syncs this chat's iOS/macOS wallpaper (`serverBackgroundGuid`) from the server
+  /// without clobbering locally-picked image or dynamic wallpapers.
+  static Future<void> syncBackground(Chat c, {Chat? targetChat}) async {
+    final serverGuid = c.serverBackgroundGuid;
+    final existingPath = FilesystemSvc.getExistingChatBackgroundPath(c.guid);
+    final target = targetChat ?? c;
+    final currentWallpaperType = ChatsSvc.getChatState(target.guid)?.wallpaperType.value.name ?? target.wallpaperType;
+
+    if (!shouldSyncServerBackground(
+      serverGuid: serverGuid,
+      hasServerProperties: c.hasServerProperties,
+      existingPath: existingPath,
+      wallpaperType: currentWallpaperType,
+    )) {
+      return;
+    }
+
+    if (serverGuid == null) {
+      await ChatsSvc.clearChatWallpaper(target);
+      return;
+    }
+
+    final response = await HttpSvc.chat.getBackground(c.guid).catchError((err, stack) {
+      Logger.debug("Failed to fetch chat background for ${c.guid}: $err");
+      return Response(statusCode: 500, requestOptions: RequestOptions(path: ""));
+    });
+    if (response.statusCode != 200 || isNullOrEmpty(response.data)) return;
+
+    final contentType = response.headers.value('content-type')?.toLowerCase() ?? '';
+    final ext = contentType.contains('png') ? 'png' : 'jpg';
+    final bgDir = Directory(p.join(FilesystemSvc.customBackgroundsPath, FilesystemService.sanitizeGuid(c.guid)));
+    if (await bgDir.exists()) {
+      for (final entity in bgDir.listSync().whereType<File>()) {
+        if (p.basename(entity.path).startsWith('background')) {
+          ThemesService.clearAdaptiveThemeCache(entity.path);
+          await entity.delete();
+        }
+      }
+    }
+
+    final file = File(p.join(bgDir.path, serverBackgroundFilename(serverGuid, ext: ext)));
+    await file.create(recursive: true);
+    await file.writeAsBytes(response.data);
+    await ChatsSvc.setChatCustomBackgroundPath(target, file.path);
+  }
+
   Map<String, dynamic> toMap() {
     final participants = handles.isEmpty ? this.participants : handles.toList();
     return {
@@ -966,6 +1078,9 @@ class Chat {
       "dynamicWallpaperConfig": dynamicWallpaperConfig,
       "knownGroupPhotoGuid": knownGroupPhotoGuid,
       "serverGroupPhotoGuid": serverGroupPhotoGuid,
+      "serverBackgroundGuid": serverBackgroundGuid,
+      "hasServerProperties": hasServerProperties,
+      "serviceName": serviceName,
       "textFieldText": textFieldText,
       "textFieldRuns": textFieldRuns,
       "textFieldAttachments": textFieldAttachments,

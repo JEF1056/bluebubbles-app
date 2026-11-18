@@ -17,12 +17,12 @@ class FaceTimeCall {
   );
 }
 
-/// What `POST facetime/call` answers with: the call now ringing, and the link to join it.
+/// What `POST facetime/call` answers with: the call now ringing, and the link to join it (for video calls).
 class PlacedFaceTimeCall {
-  final String link;
+  final String? link;
   final FaceTimeCall call;
 
-  const PlacedFaceTimeCall({required this.link, required this.call});
+  const PlacedFaceTimeCall({this.link, required this.call});
 }
 
 /// A refusal from the server's FaceTime routes, carrying its sentence for the user.

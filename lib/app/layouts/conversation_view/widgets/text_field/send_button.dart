@@ -51,11 +51,10 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
   void didChangeDependencies() {
     super.didChangeDependencies();
     _iosBaseColor = context.theme.colorScheme.primary;
-    _materialBaseColor = context.theme.colorScheme.surfaceContainerHighest;
+    _materialBaseColor = context.theme.colorScheme.primaryContainer;
     _errorColor = context.theme.colorScheme.error;
     _iosOnPrimary = context.theme.colorScheme.onPrimary;
-    _materialIconColor =
-        ThemeSvc.isAnyMaterialYouSelected ? context.theme.colorScheme.onPrimary : context.theme.colorScheme.secondary;
+    _materialIconColor = context.theme.colorScheme.onPrimaryContainer;
     _onError = context.theme.colorScheme.onError;
   }
 
@@ -74,9 +73,9 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
           backgroundColor: iOS ? _iosBaseColor : null,
           shape: const CircleBorder(),
           padding: const EdgeInsets.all(0),
-          maximumSize: const Size(32, 32),
-          minimumSize: const Size(32, 32),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          maximumSize: iOS ? const Size(32, 32) : const Size(48, 48),
+          minimumSize: iOS ? const Size(32, 32) : const Size(48, 48),
+          tapTargetSize: iOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
         ),
         child: AnimatedBuilder(
           animation: controller,
@@ -138,10 +137,12 @@ class _SendButtonIcon extends StatelessWidget {
       final isAnimating = animationValue != 0;
 
       return Container(
-        constraints: const BoxConstraints(minHeight: 32, minWidth: 32),
+        width: isIOS ? null : 48,
+        height: isIOS ? null : 48,
+        constraints: isIOS ? const BoxConstraints(minHeight: 32, minWidth: 32) : null,
         decoration: BoxDecoration(
-          shape: isIOS ? BoxShape.circle : BoxShape.rectangle,
-          borderRadius: isIOS ? null : BorderRadius.circular(10),
+          shape: BoxShape.circle,
+          color: (!isIOS && !isAnimating) ? baseColor : null,
           gradient: isIOS || isAnimating
               ? LinearGradient(
                   begin: Alignment.bottomCenter,
@@ -154,10 +155,10 @@ class _SendButtonIcon extends StatelessWidget {
         alignment: Alignment.center,
         child: Icon(
           animationValue == 0
-              ? (isIOS ? CupertinoIcons.arrow_up : Icons.send_outlined)
+              ? (isIOS ? CupertinoIcons.arrow_up : Icons.send_rounded)
               : (isIOS ? CupertinoIcons.xmark : Icons.close),
           color: animationValue == 0 ? (isIOS ? iosOnPrimary : materialSecondary) : onError,
-          size: isIOS || isAnimating ? 20 : 28,
+          size: isIOS ? 20 : 22,
         ),
       );
     });

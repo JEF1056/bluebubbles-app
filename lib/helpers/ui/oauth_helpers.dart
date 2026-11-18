@@ -1,3 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' as io;
+import 'dart:math';
+
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -8,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:universal_io/io.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 typedef GoogleOAuthStageCallback = void Function(String status);
@@ -153,34 +159,26 @@ Future<String?> googleOAuth(
 
     // initialize gsi
     final gsi = GoogleSignIn.instance;
-    reportStage("Initializing Google Sign-In");
-    await gsi.initialize(
-      clientId: kIsWeb ? fdb.getClientId() : null,
-      serverClientId: !kIsWeb && Platform.isAndroid ? fdb.getServerClientId() : null,
-    );
-    GoogleSignInAccount? account;
-    if (!forceAccountPicker) {
-      reportStage("Checking for an existing Google session");
-      account = await gsi.attemptLightweightAuthentication();
-    }
-    if (account == null) {
-      try {
+    try {
+      reportStage("Initializing Google Sign-In");
+      await gsi.initialize(
+        clientId: kIsWeb ? fdb.getClientId() : null,
+        serverClientId: !kIsWeb && Platform.isAndroid ? fdb.getServerClientId() : null,
+      );
+      GoogleSignInAccount? account;
+      if (!forceAccountPicker) {
+        reportStage("Checking for an existing Google session");
+        account = await gsi.attemptLightweightAuthentication();
+      }
+      if (account == null) {
         // Reset the cached SDK session before interactive auth so the account
         // chooser can appear when the user explicitly requests a different account.
         reportStage(forceAccountPicker ? "Resetting Google session" : "Preparing Google account chooser");
         await gsi.signOut();
         reportStage("Opening Google sign-in popup");
         account = await gsi.authenticate(scopeHint: defaultScopes);
-      } catch (e, stack) {
-        Logger.error("Failed to sign in with Google (Android/Web)", error: e, trace: stack);
-        throw const GoogleOAuthException(
-          userMessage: "Google sign-in was canceled or could not be started. Please try again.",
-          technicalMessage: "Failed to start interactive Google sign-in.",
-        );
       }
-    }
 
-    try {
       reportStage("Authorizing Google API scopes");
       GoogleSignInClientAuthorization? authorization =
           await account.authorizationClient.authorizationForScopes(defaultScopes);
@@ -191,11 +189,21 @@ Future<String?> googleOAuth(
         throw Exception("No access token!");
       }
     } catch (e, stack) {
-      Logger.error("Failed to authorize Google API access (Android/Web)", error: e, trace: stack);
-      throw const GoogleOAuthException(
-        userMessage: "Google sign-in succeeded, but required Google permissions were not granted.",
-        technicalMessage: "Failed to authorize Google API scopes after sign-in.",
-      );
+      // Self-signed Android forks fail Play Services SHA-1 verification; fall back to browser loopback OAuth.
+      if (!kIsWeb && Platform.isAndroid && shouldFallbackToLoopbackOAuth(e)) {
+        Logger.warn("Native Android Google Sign-In failed ($e); falling back to browser OAuth", tag: 'Google OAuth');
+        reportStage("Opening browser Google sign-in");
+        token = await _androidLoopbackGoogleOAuth(
+          scopes: defaultScopes,
+          forceAccountPicker: forceAccountPicker,
+        );
+      } else {
+        Logger.error("Failed to sign in with Google (Android/Web)", error: e, trace: stack);
+        throw const GoogleOAuthException(
+          userMessage: "Google sign-in was canceled or could not be started. Please try again.",
+          technicalMessage: "Failed to start interactive Google sign-in.",
+        );
+      }
     }
     // desktop implementation
   } else {
@@ -242,6 +250,206 @@ Future<void> forgetGoogleOAuthSession() async {
       await gsi.signOut();
     } catch (e, stack) {
       Logger.error("Failed to forget Google session", error: e, trace: stack);
+    }
+  }
+}
+
+@visibleForTesting
+bool shouldFallbackToLoopbackOAuth(Object error) {
+  // Android Credential Manager surfaces Play Services SHA-1 errors (28444) as
+  // GetCredentialCancellationException, so fall back even on canceled.
+  return true;
+}
+
+@visibleForTesting
+String parseLoopbackOAuthCallback(String rawQuery, String expectedState) {
+  final params = Uri.splitQueryString(rawQuery);
+  final error = params['error'];
+  if (error != null && error.isNotEmpty) {
+    throw GoogleOAuthException(
+      userMessage: error == 'access_denied'
+          ? "Google sign-in was canceled."
+          : "Google sign-in failed ($error). Please try again.",
+      technicalMessage: "Loopback Google OAuth error: $error",
+    );
+  }
+  if (params['state'] != expectedState) {
+    throw const GoogleOAuthException(
+      userMessage: "Google sign-in state verification failed. Please try again.",
+      technicalMessage: "Loopback Google OAuth state mismatch.",
+    );
+  }
+  final accessToken = params['access_token'];
+  if (accessToken == null || accessToken.isEmpty) {
+    throw const GoogleOAuthException(
+      userMessage: "Google sign-in did not return an access token. Please try again.",
+      technicalMessage: "Loopback Google OAuth missing access_token.",
+    );
+  }
+  return accessToken;
+}
+
+String _randomOAuthToken() {
+  final rng = Random.secure();
+  final bytes = List<int>.generate(18, (_) => rng.nextInt(256));
+  return base64UrlEncode(bytes).replaceAll('=', '');
+}
+
+const _oauthBridgeHtml = '''<!doctype html><html><body style="font-family:sans-serif;text-align:center;padding:48px">
+<p id="s">Completing sign-in...</p>
+<script>
+const p = location.hash ? location.hash.slice(1) : location.search.slice(1);
+fetch('/oauth/token', { method: 'POST', body: p })
+  .then((r) => {
+    document.getElementById('s').textContent = r.ok
+      ? 'Signed in! You can return to BlueBubbles.'
+      : 'Google sign-in was not completed. You can return to BlueBubbles.';
+    if (r.ok) window.close();
+  })
+  .catch(() => { document.getElementById('s').textContent = 'Could not reach BlueBubbles. Please try again.'; });
+</script></body></html>''';
+
+class _ResumeCancelObserver with WidgetsBindingObserver {
+  _ResumeCancelObserver(this.onAbandoned);
+
+  final VoidCallback onAbandoned;
+  bool _sawBackground = false;
+  Timer? _graceTimer;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _sawBackground = true;
+      _graceTimer?.cancel();
+    } else if (state == AppLifecycleState.resumed && _sawBackground) {
+      _graceTimer?.cancel();
+      _graceTimer = Timer(const Duration(milliseconds: 1500), onAbandoned);
+    }
+  }
+
+  void dispose() {
+    _graceTimer?.cancel();
+  }
+}
+
+@visibleForTesting
+Uri buildLoopbackGoogleOAuthUri({
+  required String clientId,
+  required int port,
+  required List<String> scopes,
+  required String state,
+  bool forceAccountPicker = false,
+}) {
+  // Include userinfo.profile for HttpSvc.firebase.getGoogleInfo, and omit nonce
+  // (Google rejects nonce for response_type=token with invalid_request).
+  final loopbackScopes = {
+    ...scopes,
+    'https://www.googleapis.com/auth/userinfo.profile',
+  };
+  return Uri.https('accounts.google.com', '/o/oauth2/v2/auth', {
+    'client_id': clientId,
+    'redirect_uri': 'http://localhost:$port/oauth/callback',
+    'response_type': 'token',
+    'scope': loopbackScopes.join(' '),
+    'state': state,
+    if (forceAccountPicker) 'prompt': 'select_account',
+  });
+}
+
+/// Browser loopback OAuth fallback for self-signed Android builds whose signing
+/// SHA-1 is not registered with upstream BlueBubbles' Play Services OAuth client.
+/// shortcut: listens on fixed port 8641 (registered redirect URI); fails if another app holds 8641.
+Future<String> _androidLoopbackGoogleOAuth({
+  required List<String> scopes,
+  bool forceAccountPicker = false,
+}) async {
+  const port = 8641;
+  final state = _randomOAuthToken();
+  final completer = Completer<String>();
+  final servers = <io.HttpServer>[];
+  final lifecycleObserver = _ResumeCancelObserver(() {
+    if (!completer.isCompleted) {
+      completer.completeError(const GoogleOAuthException(
+        userMessage: "Google sign-in was canceled.",
+        technicalMessage: "Loopback Google OAuth abandoned after returning to app.",
+      ));
+    }
+  });
+  WidgetsBinding.instance.addObserver(lifecycleObserver);
+
+  Future<void> handleRequest(io.HttpRequest req) async {
+    if (req.uri.path == '/oauth/callback') {
+      req.response
+        ..statusCode = io.HttpStatus.ok
+        ..headers.contentType = io.ContentType.html
+        ..write(_oauthBridgeHtml);
+      await req.response.close();
+      return;
+    }
+    if (req.uri.path == '/oauth/token' && req.method == 'POST') {
+      final body = await utf8.decoder.bind(req).join();
+      String? token;
+      Object? parseError;
+      try {
+        token = parseLoopbackOAuthCallback(body, state);
+      } catch (e) {
+        parseError = e;
+      }
+      req.response
+        ..statusCode = parseError == null ? io.HttpStatus.ok : io.HttpStatus.badRequest
+        ..write(parseError == null ? 'ok' : 'error');
+      await req.response.close();
+      if (!completer.isCompleted) {
+        if (token != null) {
+          completer.complete(token);
+        } else {
+          completer.completeError(parseError!);
+        }
+      }
+      return;
+    }
+    req.response.statusCode = io.HttpStatus.notFound;
+    await req.response.close();
+  }
+
+  try {
+    final v4 = await io.HttpServer.bind(io.InternetAddress.loopbackIPv4, port);
+    servers.add(v4);
+    v4.listen(handleRequest);
+    try {
+      final v6 = await io.HttpServer.bind(io.InternetAddress.loopbackIPv6, port);
+      servers.add(v6);
+      v6.listen(handleRequest);
+    } catch (_) {}
+
+    final authUri = buildLoopbackGoogleOAuthUri(
+      clientId: fdb.getLoopbackOAuthClientId(),
+      port: port,
+      scopes: scopes,
+      state: state,
+      forceAccountPicker: forceAccountPicker,
+    );
+
+    final launched = await launchUrl(authUri, mode: LaunchMode.inAppBrowserView);
+    if (!launched) {
+      throw const GoogleOAuthException(
+        userMessage: "Could not open browser for Google sign-in.",
+        technicalMessage: "launchUrl returned false for loopback Google OAuth.",
+      );
+    }
+
+    return await completer.future.timeout(
+      const Duration(minutes: 3),
+      onTimeout: () => throw const GoogleOAuthException(
+        userMessage: "Google sign-in timed out. Please try again.",
+        technicalMessage: "Loopback Google OAuth timed out.",
+      ),
+    );
+  } finally {
+    WidgetsBinding.instance.removeObserver(lifecycleObserver);
+    lifecycleObserver.dispose();
+    for (final s in servers) {
+      await s.close(force: true);
     }
   }
 }

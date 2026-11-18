@@ -146,7 +146,7 @@ class DownloadingContent extends StatelessWidget {
       // instead of sitting exactly on the clip boundary.
       final basePadding = fill ? 10.0 : (hasReservedSize ? 8.0 : 0);
       final topPadding = hasReservedSize ? 14.0 : fill ? 10.0 : 4.0;
-      final tailInset = showTail ? (hasReservedSize ? 14.0 : 0.0) : 0.0;
+      final tailInset = (isiOS && showTail) ? (hasReservedSize ? 14.0 : 0.0) : 0.0;
 
       return Stack(
         clipBehavior: Clip.none,

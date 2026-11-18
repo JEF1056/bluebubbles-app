@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.core.app.NotificationCompat
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.models.MethodCallHandlerImpl
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -12,6 +13,12 @@ import io.flutter.plugin.common.MethodChannel
 class DeleteNotificationHandler: MethodCallHandlerImpl() {
     companion object {
         const val tag = "delete-notification"
+
+        internal fun resolveDismissedChatGuid(
+            notificationChatGuid: String?,
+            fallbackChatGuid: String?
+        ): String? = notificationChatGuid?.takeIf { it.isNotEmpty() }
+            ?: fallbackChatGuid?.takeIf { it.isNotEmpty() }
     }
 
     override fun handleMethodCall(
@@ -53,7 +60,12 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
         return true
     }
 
-    fun deleteNotification(context: Context, notificationId: Int, tag: String?): Boolean {
+    fun deleteNotification(
+        context: Context,
+        notificationId: Int,
+        tag: String?,
+        chatGuidFallback: String? = null
+    ): Boolean {
         PersistentLog.d(context, Constants.logTag, "Attempting to delete notification with ID, $notificationId from tag, $tag")
         val notificationManager = context.getSystemService(NotificationManager::class.java)
 
@@ -61,13 +73,21 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
             // Get the notification by ID
             val notification = notificationManager.activeNotifications.firstOrNull { it.id == notificationId }
 
-            // If it's null, we can't cancel it.
-            // Return true cuz there wasn't technically an issue.
             if (notification == null) {
                 PersistentLog.d(context, Constants.logTag, "Notification with ID $notificationId not found!")
             } else {
                 PersistentLog.d(context, Constants.logTag, "Cancelling notification with ID, ${notificationId}")
                 notificationManager.cancel(notification.tag, notificationId)
+            }
+
+            // Android removes swiped notifications from activeNotifications before firing deleteIntent,
+            // so fall back to chatGuidFallback from the intent extras to keep watch sync working.
+            val chatGuid = resolveDismissedChatGuid(
+                notification?.notification?.extras?.getString("chatGuid"),
+                chatGuidFallback
+            )
+            if (chatGuid != null) {
+                WearSyncManager.notifyDismissed(context, chatGuid)
             }
 
             val channelTag: String? = notification?.tag ?: tag

@@ -4,11 +4,13 @@ import 'dart:convert';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/services/backend/actions/contact_v2_actions.dart';
 import 'package:bluebubbles/services/backend/interfaces/contact_v2_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_contacts/flutter_contacts.dart' as fc;
+import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
@@ -62,6 +64,64 @@ class ContactServiceV2 {
   /// consumed by [runPendingContactSync] on the next app resume.
   bool _pendingContactSync = false;
 
+  /// Incremented whenever contacts/handles finish syncing so transient-handle
+  /// widgets (e.g. Find My) can reactively re-resolve addresses to ContactV2.
+  final RxInt cacheVersion = 0.obs;
+  Map<String, ContactV2>? _emailCache;
+  Map<String, ContactV2>? _phoneCache;
+
+  void _invalidateAddressCache() {
+    _emailCache = null;
+    _phoneCache = null;
+    cacheVersion.value++;
+  }
+
+  /// Synchronously look up the best matching [ContactV2] for [address] using an
+  /// in-memory index rebuilt lazily after contact syncs. Safe for transient
+  /// `Handle(id: null)` widgets where `HandleState` cannot subscribe by DB ID.
+  ContactV2? findContactForAddressSync(String address) {
+    if (kIsWeb || !Database.initComplete.isCompleted) return null;
+    final trimmed = address.trim();
+    if (trimmed.isEmpty) return null;
+
+    if (_emailCache == null || _phoneCache == null) {
+      final emailMap = <String, ContactV2>{};
+      final phoneMap = <String, ContactV2>{};
+      for (final c in Database.contactsV2.getAll()) {
+        final hasAvatar = !isNullOrEmpty(c.avatarPath);
+        for (final addr in c.addresses) {
+          if (addr.contains('@')) {
+            final prev = emailMap[addr];
+            if (prev == null || (hasAvatar && isNullOrEmpty(prev.avatarPath))) {
+              emailMap[addr] = c;
+            }
+          } else {
+            for (final v in ContactV2Actions.phoneNumberVariants(addr)) {
+              final prev = phoneMap[v];
+              if (prev == null || (hasAvatar && isNullOrEmpty(prev.avatarPath))) {
+                phoneMap[v] = c;
+              }
+            }
+          }
+        }
+      }
+      _emailCache = emailMap;
+      _phoneCache = phoneMap;
+    }
+
+    if (trimmed.contains('@')) {
+      return _emailCache![ContactV2.normalizeEmail(trimmed)];
+    }
+    ContactV2? firstMatch;
+    for (final v in ContactV2Actions.phoneNumberVariants(trimmed)) {
+      final c = _phoneCache![v];
+      if (c == null) continue;
+      if (!isNullOrEmpty(c.avatarPath)) return c;
+      firstMatch ??= c;
+    }
+    return firstMatch;
+  }
+
   bool get hasContactAccessSync {
     return _hasContactAccess;
   }
@@ -88,12 +148,16 @@ class ContactServiceV2 {
   Future<bool> requestContactPermission() async {
     if (kIsWeb || kIsDesktop) return false;
 
+    final wasGranted = _hasContactAccess;
     final status = await Permission.contacts.request();
     _lastKnownPermissionStatus = status;
     _hasContactAccess = status.isGranted;
 
     if (_hasContactAccess) {
       Logger.info('[ContactServiceV2] Contact permission granted');
+      if (!wasGranted) {
+        unawaited(syncContactsToHandles(wait: false));
+      }
     } else {
       Logger.warn('[ContactServiceV2] Contact permission denied');
     }
@@ -113,9 +177,13 @@ class ContactServiceV2 {
   Future<void> refreshPermissionStatusOnResume() async {
     if (kIsWeb || kIsDesktop) return;
 
+    final wasGranted = _hasContactAccess;
     final lastStatus = _lastKnownPermissionStatus;
     if (lastStatus == null || lastStatus == PermissionStatus.denied) {
       _hasContactAccess = await _canAccessContacts();
+      if (!wasGranted && _hasContactAccess) {
+        unawaited(syncContactsToHandles(wait: false));
+      }
       return;
     }
 
@@ -127,6 +195,9 @@ class ContactServiceV2 {
 
     _hasContactAccess = await _canAccessContacts();
     await PrefsSvc.system.setLastContactPermissionCheck(DateTime.now().millisecondsSinceEpoch);
+    if (!wasGranted && _hasContactAccess) {
+      unawaited(syncContactsToHandles(wait: false));
+    }
   }
 
   /// Force a live re-check of the OS contacts permission status, bypassing
@@ -149,6 +220,15 @@ class ContactServiceV2 {
     }
   }
 
+  bool get _hasServerAddress {
+    if (SettingsSvc.settings.serverAddress.value.trim().isNotEmpty) return true;
+    try {
+      return GetIt.I.isRegistered<HttpService>() && HttpSvc.origin.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Same as [syncContactsToHandles], but also returns the device contact
   /// count and matched-contact count — used by the Contacts Management
   /// page's manual refresh for diagnostic display.
@@ -156,10 +236,11 @@ class ContactServiceV2 {
     const Map<String, dynamic> empty = {'affectedHandleIds': <int>[], 'deviceContactCount': 0, 'matchedContactCount': 0};
 
     final access = await hasContactAccess;
-    if (!access) return empty;
+    final canSync = (kIsWeb || kIsDesktop) ? access : (access || _hasServerAddress);
+    if (!canSync) return empty;
 
     try {
-      final raw = await ContactV2Interface.syncContactsToHandlesWithStats();
+      final raw = await ContactV2Interface.syncContactsToHandlesWithStats(includeDeviceContacts: access);
       final affectedHandleIds = (raw['affectedHandleIds'] as List).cast<int>();
       notifyHandlesUpdated(affectedHandleIds);
       return {
@@ -243,8 +324,9 @@ class ContactServiceV2 {
 
   Future<List<int>> syncContactsToHandles({bool wait = true}) async {
     final access = await hasContactAccess;
-    if (!access) {
-      Logger.warn('[ContactServiceV2] Cannot fetch contacts without permission');
+    final canSync = (kIsWeb || kIsDesktop) ? access : (access || _hasServerAddress);
+    if (!canSync) {
+      Logger.warn('[ContactServiceV2] Cannot fetch contacts without permission or server address');
       return [];
     }
 
@@ -253,11 +335,11 @@ class ContactServiceV2 {
       List<int> affectedHandleIds = [];
 
       if (wait) {
-        affectedHandleIds = await ContactV2Interface.syncContactsToHandles();
+        affectedHandleIds = await ContactV2Interface.syncContactsToHandles(includeDeviceContacts: access);
         notifyHandlesUpdated(affectedHandleIds);
       } else {
         // Fire and forget
-        ContactV2Interface.syncContactsToHandles().then((affectedHandleIds) {
+        ContactV2Interface.syncContactsToHandles(includeDeviceContacts: access).then((affectedHandleIds) {
           Logger.info(
               '[ContactServiceV2] Completed contact sync, notifying UI of ${affectedHandleIds.length} affected handles');
           notifyHandlesUpdated(affectedHandleIds);
@@ -277,8 +359,7 @@ class ContactServiceV2 {
   /// Get a ContactV2 for a specific handle ID
   /// This retrieves the contact from the isolate/database
   Future<ContactV2?> getContactForHandle(int handleId) async {
-    final access = await hasContactAccess;
-    if (!access) return null;
+    if (kIsWeb && !(await hasContactAccess)) return null;
 
     try {
       final contacts = await ContactV2Interface.getContactsForHandles(
@@ -295,8 +376,7 @@ class ContactServiceV2 {
 
   /// Get ContactV2 entities for multiple handle IDs
   Future<List<ContactV2>> getContactsForHandles(List<int> handleIds) async {
-    final access = await hasContactAccess;
-    if (!access) return [];
+    if (kIsWeb && !(await hasContactAccess)) return [];
 
     try {
       return await ContactV2Interface.getContactsForHandles(
@@ -311,6 +391,7 @@ class ContactServiceV2 {
   /// Notify the UI that certain handles have been updated.
   /// Pushes fresh DB data into the HandleState registry so reactive Obx() widgets rebuild.
   void notifyHandlesUpdated(List<int> handleIds) {
+    _invalidateAddressCache();
     if (handleIds.isEmpty) return;
 
     // Push refreshed Handle data into the HandleState registry
@@ -369,7 +450,7 @@ class ContactServiceV2 {
   /// Match a handle to its associated contact
   /// Returns the contact if found, null otherwise
   Future<ContactV2?> matchHandleToContact(Handle handle) async {
-    if (!_hasContactAccess) return null;
+    if ((kIsWeb && !_hasContactAccess) || handle.id == null) return null;
 
     try {
       final contact = await getContactForHandle(handle.id!);

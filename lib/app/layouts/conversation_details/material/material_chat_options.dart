@@ -288,7 +288,9 @@ class ExpressiveChatOptions extends StatelessWidget {
         build: (context) => M3EListTile(
           icon: Icons.keyboard_outlined,
           title: "Send typing indicators",
-          supportingText: "Overrides the global setting",
+          supportingText: typingOverride == null
+              ? "Following global setting (${SettingsSvc.settings.privateSendTypingIndicators.value ? "enabled" : "disabled"})"
+              : "Overrides global setting (${typingOverride ? "enabled" : "disabled"})",
           trailing: Switch(
             value: typingOverride ?? SettingsSvc.settings.privateSendTypingIndicators.value,
             activeThumbColor: _switchColor(context),
@@ -330,7 +332,9 @@ class ExpressiveChatOptions extends StatelessWidget {
         build: (context) => M3EListTile(
           icon: Icons.mark_email_read_outlined,
           title: "${SettingsSvc.settings.privateManualMarkAsRead.value ? "Automatically send " : "Send "}read receipts",
-          supportingText: "Overrides the global setting",
+          supportingText: readReceiptOverride == null
+              ? "Following global setting (${SettingsSvc.settings.privateMarkChatAsRead.value ? "enabled" : "disabled"})"
+              : "Overrides global setting (${readReceiptOverride ? "enabled" : "disabled"})",
           trailing: Switch(
             value: readReceiptOverride ?? SettingsSvc.settings.privateMarkChatAsRead.value,
             activeThumbColor: _switchColor(context),

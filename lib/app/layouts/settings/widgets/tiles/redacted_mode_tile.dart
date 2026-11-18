@@ -26,7 +26,7 @@ class RedactedModeTile extends StatelessWidget {
             Text(
               SettingsSvc.settings.redactedMode.value ? "Enabled" : "Disabled",
               style: context.theme.textTheme.bodyMedium!.apply(
-                color: context.theme.colorScheme.outline.withValues(alpha: 0.85),
+                color: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.85),
               ),
             ),
             const SizedBox(width: 5),

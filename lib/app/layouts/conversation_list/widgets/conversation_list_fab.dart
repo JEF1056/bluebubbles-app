@@ -1,4 +1,5 @@
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -213,30 +214,56 @@ class _MaterialFAB extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedCrossFade(
-      crossFadeState: controller.selectedChats.isEmpty ? CrossFadeState.showFirst : CrossFadeState.showSecond,
-      alignment: Alignment.center,
-      duration: const Duration(milliseconds: 300),
-      secondChild: const SizedBox.shrink(),
-      firstChild: SizedBox(
-        width: NavigationSvc.width(context),
-        height: 125,
-        child: Stack(
-          alignment: Alignment.bottomCenter,
-          clipBehavior: Clip.none,
-          children: [
-            // Scroll to top FAB
-            _ScrollToTopFAB(
-              controller: controller,
-              onPressed: onScrollToTop,
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      child: controller.selectedChats.isNotEmpty
+          ? const SizedBox.shrink()
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (!controller.showMaterialFABText) ...[
+                  _ScrollToTopFAB(
+                    controller: controller,
+                    onPressed: onScrollToTop,
+                  ),
+                  const SizedBox(height: 10),
+                ],
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _MaterialSearchFAB(context: context),
+                    const SizedBox(width: 10),
+                    _MaterialComposeFAB(controller: controller),
+                  ],
+                ),
+              ],
             ),
-            // Main compose FAB
-            Positioned(
-              right: SettingsSvc.settings.skin.value == Skins.Material ? 15 : 0,
-              child: _MaterialComposeFAB(controller: controller),
-            ),
-          ],
-        ),
+    );
+  }
+}
+
+class _MaterialSearchFAB extends StatelessWidget {
+  const _MaterialSearchFAB({required this.context});
+
+  final BuildContext context;
+
+  @override
+  Widget build(BuildContext _) {
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: FloatingActionButton(
+        heroTag: null,
+        elevation: 3,
+        shape: const CircleBorder(),
+        backgroundColor: context.theme.colorScheme.surfaceContainerHigh,
+        foregroundColor: context.theme.colorScheme.onSurface,
+        tooltip: 'Search',
+        onPressed: () {
+          NavigationSvc.pushLeft(context, const SearchView());
+        },
+        child: const Icon(Icons.search_rounded),
       ),
     );
   }
@@ -254,18 +281,12 @@ class _ScrollToTopFAB extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedOpacity(
-      opacity: !controller.showMaterialFABText ? 1 : 0,
-      duration: const Duration(milliseconds: 300),
-      child: FloatingActionButton.small(
-        heroTag: null,
-        backgroundColor: context.theme.colorScheme.secondary,
-        onPressed: onPressed,
-        child: Icon(
-          Icons.arrow_upward,
-          color: context.theme.colorScheme.onSecondary,
-        ),
-      ),
+    return FloatingActionButton.small(
+      heroTag: null,
+      backgroundColor: context.theme.colorScheme.secondaryContainer,
+      foregroundColor: context.theme.colorScheme.onSecondaryContainer,
+      onPressed: onPressed,
+      child: const Icon(Icons.arrow_upward),
     );
   }
 }
@@ -280,59 +301,18 @@ class _MaterialComposeFAB extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isMonet = ThemeSvc.isAnyMaterialYouSelected;
-    final bgColor = isMonet ? context.theme.colorScheme.primaryContainer : context.theme.colorScheme.primary;
-    final fgColor = isMonet ? context.theme.colorScheme.onPrimaryContainer : context.theme.colorScheme.onPrimary;
-
-    return InkWell(
+    return GestureDetector(
       onLongPress:
           SettingsSvc.settings.cameraFAB.value && !kIsWeb && !kIsDesktop ? () => controller.openCamera(context) : null,
-      child: Padding(
-        padding: const EdgeInsets.only(right: 4.5, bottom: 9),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeInOut,
-          height: 56,
-          decoration: BoxDecoration(
-            color: bgColor,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: () => controller.openNewChatCreator(context),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(CupertinoIcons.bubble_left, color: fgColor, size: 24),
-                    ClipRect(
-                      child: AnimatedAlign(
-                        duration: const Duration(milliseconds: 250),
-                        curve: Curves.easeInOut,
-                        alignment: Alignment.centerLeft,
-                        widthFactor: controller.showMaterialFABText ? 1.0 : 0.0,
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 10),
-                          child: Text(
-                            'Start chat',
-                            style: context.theme.textTheme.labelLarge!.copyWith(
-                              color: fgColor,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+      child: FloatingActionButton.extended(
+        heroTag: null,
+        shape: const StadiumBorder(),
+        backgroundColor: context.theme.colorScheme.primaryContainer,
+        foregroundColor: context.theme.colorScheme.onPrimaryContainer,
+        isExtended: controller.showMaterialFABText,
+        onPressed: () => controller.openNewChatCreator(context),
+        icon: const Icon(Icons.chat_outlined),
+        label: const Text('Start chat'),
       ),
     );
   }

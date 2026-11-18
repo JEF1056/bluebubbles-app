@@ -39,9 +39,12 @@ void openDm(MessagePopupActionContext ctx) {
 void showThread(MessagePopupActionContext ctx) {
   ctx.popDetails();
   if (ctx.message.threadOriginatorGuid != null) {
-    final mwc = ctx.service.getMessageStateIfExists(ctx.message.threadOriginatorGuid!);
+    final root = resolveRootReplyTarget(ctx.message, ctx.message.normalizedThreadPart, service: ctx.service);
+    final mwc = root.message != null
+        ? (ctx.service.getMessageStateIfExists(root.message!.guid!) ?? ctx.service.getOrCreateState(root.message!))
+        : null;
     if (mwc == null) return ctx.showSnack("Error", "Failed to find thread!", type: SnackbarType.error);
-    final originatorPart = mwc.partById(ctx.message.normalizedThreadPart);
+    final originatorPart = mwc.partById(root.part);
     if (originatorPart == null) return ctx.showSnack("Error", "Failed to find thread!", type: SnackbarType.error);
     showReplyThread(ctx.context, mwc.message, originatorPart, ctx.service, ctx.cvController);
   } else {

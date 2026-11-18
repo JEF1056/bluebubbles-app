@@ -56,7 +56,15 @@ class SettingsService {
       serverVersionCode: PrefsSvc.server.getServerVersionCode() ?? 0,
       apiVersions: PrefsSvc.server.getApiVersions(),
       serverBuildVersion: PrefsSvc.server.getServerBuildVersion(),
+      supportsFaceTimeCallsFlag: PrefsSvc.server.getSupportsFaceTimeCalls(),
     );
+    if (!headless &&
+        settings.serverPrivateAPI.value == true &&
+        !settings.enablePrivateAPI.value &&
+        !PrefsSvc.server.isPrivateApiDisabledByUser()) {
+      settings.enablePrivateAPI.value = true;
+      settings.privateAPISend.value = true;
+    }
 
     if (!headless && !kIsWeb && !kIsDesktop) {
       // Parallelize independent operations
@@ -151,6 +159,7 @@ class SettingsService {
       }
 
       final details = ServerDetails.fromServerInfo(response.data['data']);
+      await _syncServerPrivateApi(details.privateApiEnabled, toSave: toSave);
       await _saveServerDetails(details);
 
       if (toSave.isNotEmpty) {
@@ -185,6 +194,7 @@ class SettingsService {
     if (!settings.finishedSetup.value ||
         settings.enablePrivateAPI.value ||
         settings.serverPrivateAPI.value != true ||
+        PrefsSvc.server.isPrivateApiDisabledByUser() ||
         PrefsSvc.server.hasSeenPrivateApiEnableTip() ||
         _showingPapiPopup) {
       return;
@@ -206,7 +216,33 @@ class SettingsService {
   /// Caches and persists [details] fetched elsewhere, so the cache doesn't keep showing the previous server.
   Future<void> updateServerDetails(ServerDetails details) async {
     _serverDetails.value = details;
+    final List<String> toSave = [];
+    await _syncServerPrivateApi(details.privateApiEnabled, toSave: toSave);
+    if (toSave.isNotEmpty) {
+      await settings.saveManyAsync(toSave);
+    }
     await _saveServerDetails(details);
+  }
+
+  Future<void> _syncServerPrivateApi(bool? serverPrivateApi, {List<String>? toSave}) async {
+    if (serverPrivateApi == null) return;
+    if (settings.serverPrivateAPI.value != serverPrivateApi) {
+      settings.serverPrivateAPI.value = serverPrivateApi;
+      toSave?.add('serverPrivateAPI');
+    }
+    if (!serverPrivateApi || PrefsSvc.server.isPrivateApiDisabledByUser()) return;
+
+    if (!settings.enablePrivateAPI.value) {
+      settings.enablePrivateAPI.value = true;
+      toSave?.add('enablePrivateAPI');
+      if (!settings.privateAPISend.value) {
+        settings.privateAPISend.value = true;
+        toSave?.add('privateAPISend');
+      }
+    }
+    if (!PrefsSvc.server.hasSeenPrivateApiEnableTip()) {
+      await PrefsSvc.server.markPrivateApiEnableTipShown();
+    }
   }
 
   Future<void> _saveServerDetails(ServerDetails details) async {
@@ -217,6 +253,7 @@ class SettingsService {
       serverVersionCode: details.serverVersionCode,
       apiVersions: details.apiVersions,
       serverBuildVersion: details.serverBuildVersion ?? "",
+      supportsFaceTimeCalls: details.supportsFaceTimeCallsFlag,
     );
   }
 

@@ -270,8 +270,9 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
       final chatState = controller.chatState;
       final latestMessage = chatState.latestMessage.value;
       final isFromMe = latestMessage?.isFromMe ?? false;
+      final isRead = latestMessage?.dateRead != null;
       final isDelivered =
-          controller.chat.isGroup || !isFromMe || latestMessage?.isDelivered == true || latestMessage?.dateRead != null;
+          controller.chat.isGroup || !isFromMe || latestMessage?.isDelivered == true || isRead;
 
       // subtitle.value is already contact-info-free when redacted mode is on
       // (ChatState.redactContactInfo / updateChatLatestMessage ensure this).
@@ -290,8 +291,7 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
       // instead of italic styling — mirrors the Google Messages visual pattern.
       // Suppress when showing a draft so the layout stays clean.
       final showDeliveryIcon = material && isFromMe && !controller.chat.isGroup && !hasDraft;
-      final isMonet = ThemeSvc.isAnyMaterialYouSelected;
-      final iconColor = isMonet ? context.theme.colorScheme.primary : context.theme.colorScheme.outline;
+      final iconColor = isRead ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant;
 
       final TextSpan subtitleSpan;
       if (hasDraft) {
@@ -350,10 +350,10 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
                       padding: EdgeInsets.only(
                           right: 4, top: ((widget.style.fontSize ?? 14) * (widget.style.height ?? 1.5) - 14) / 2),
                       child: Opacity(
-                        opacity: isDelivered ? 1.0 : 0.35,
+                        opacity: isDelivered || isRead ? 1.0 : 0.45,
                         child: Icon(
-                          Icons.check_circle_outline,
-                          size: 14,
+                          isDelivered || isRead ? Icons.done_all : Icons.done,
+                          size: 15,
                           color: iconColor,
                         ),
                       ),

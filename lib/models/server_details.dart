@@ -19,6 +19,9 @@ class ServerDetails {
   /// v1 feature level (1.x) so that older clients' feature gates keep working.
   final String? serverBuildVersion;
 
+  /// Explicit server capability flag from `/server/info` (`supportsFaceTimeCalls`), if present.
+  final bool? supportsFaceTimeCallsFlag;
+
   const ServerDetails({
     required this.macOSVersion,
     required this.macOSMinorVersion,
@@ -29,6 +32,7 @@ class ServerDetails {
     this.proxyService,
     this.apiVersions,
     this.serverBuildVersion,
+    this.supportsFaceTimeCallsFlag,
   });
 
   /// From `/server/info`'s `data`.
@@ -46,6 +50,7 @@ class ServerDetails {
       proxyService: data['proxy_service'] as String?,
       apiVersions: (data['api_versions'] as List? ?? const []).whereType<int>().toList(),
       serverBuildVersion: build == null || build.isEmpty ? null : build,
+      supportsFaceTimeCallsFlag: data['supportsFaceTimeCalls'] as bool?,
     );
   }
 
@@ -60,6 +65,7 @@ class ServerDetails {
         'proxyService': proxyService,
         'apiVersions': apiVersions,
         'serverBuildVersion': serverBuildVersion,
+        'supportsFaceTimeCallsFlag': supportsFaceTimeCallsFlag,
       };
 
   factory ServerDetails.fromMap(Map<String, dynamic> map) => ServerDetails(
@@ -72,6 +78,7 @@ class ServerDetails {
         proxyService: map['proxyService'] as String?,
         apiVersions: (map['apiVersions'] as List?)?.cast<int>(),
         serverBuildVersion: map['serverBuildVersion'] as String?,
+        supportsFaceTimeCallsFlag: map['supportsFaceTimeCallsFlag'] as bool?,
       );
 
   const ServerDetails.empty()
@@ -83,7 +90,8 @@ class ServerDetails {
         iCloudAccount = null,
         proxyService = null,
         apiVersions = null,
-        serverBuildVersion = null;
+        serverBuildVersion = null,
+        supportsFaceTimeCallsFlag = null;
 
   bool get isV2Server => apiVersions?.contains(2) ?? false;
 
@@ -179,9 +187,9 @@ class ServerDetails {
   /// (macOS release, Apple Intelligence, subscription) is answered by `genmoji/status`.
   bool get supportsGenmoji => isV2Server;
 
-  /// Place outgoing FaceTime calls (`/api/v2/facetime/call`): a v2 server. Whether its FaceTime Private API and
-  /// outgoing calls are switched on isn't in `server/info`; the route's refusal says which to turn on.
-  bool get supportsFaceTimeCalls => isV2Server;
+  /// Place outgoing FaceTime calls (`/api/v2/facetime/call`): prefers the explicit
+  /// `supportsFaceTimeCalls` flag from `server/info`, falling back to `isV2Server`.
+  bool get supportsFaceTimeCalls => supportsFaceTimeCallsFlag ?? isV2Server;
 
   /// macOS version as a display string, e.g. "14.2".
   String get macOSVersionString => '$macOSVersion.$macOSMinorVersion';

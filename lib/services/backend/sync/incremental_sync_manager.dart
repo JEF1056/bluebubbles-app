@@ -470,6 +470,9 @@ class IncrementalSyncManager extends SyncManager {
       }
     }
 
+    // Snapshot server background metadata before bulkSyncChats replaces entries with DB rows.
+    final serverBackgroundSnapshots = List<Chat>.from(chatCache.values);
+
     // Sync the chats
     List<Chat> theChats = await Chat.bulkSyncChats(chatCache.values.toList());
 
@@ -477,6 +480,11 @@ class IncrementalSyncManager extends SyncManager {
     for (var chat in theChats) {
       if (!chatCache.containsKey(chat.guid)) continue;
       chatCache[chat.guid] = chat;
+    }
+
+    // Sync per-chat wallpapers when server properties changed.
+    for (final serverChat in serverBackgroundSnapshots) {
+      await Chat.syncBackground(serverChat, targetChat: chatCache[serverChat.guid]).catchError((_) {});
     }
 
     // Add everything to the global cache

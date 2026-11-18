@@ -51,27 +51,30 @@ class TextFieldIconBar extends StatelessWidget {
 
   Widget _attachmentButton(BuildContext context) {
     final hasBackground = ChatsSvc.getChatState(controller.chat.guid)?.hasCustomWallpaper ?? false;
+    final iOS = SettingsSvc.settings.skin.value == Skins.iOS;
     Widget button(VoidCallback onPressed) => IconButton(
           style: IconButton.styleFrom(
             backgroundColor: hasBackground
                 ? context.theme.colorScheme.surfaceContainerHighest
-                : context.theme.colorScheme.outline.withValues(alpha: 0.2),
+                : (iOS
+                    ? context.theme.colorScheme.outline.withValues(alpha: 0.2)
+                    : context.theme.colorScheme.surfaceContainerHigh),
             shape: const CircleBorder(),
             padding: EdgeInsets.zero,
-            minimumSize: const Size(36, 36),
-            fixedSize: const Size(36, 36),
+            minimumSize: iOS ? const Size(36, 36) : const Size(48, 48),
+            fixedSize: iOS ? const Size(36, 36) : const Size(48, 48),
           ),
           icon: Icon(
             Icons.add,
-            color: context.theme.colorScheme.outline,
-            size: 22,
+            color: iOS ? context.theme.colorScheme.outline : context.theme.colorScheme.onSurfaceVariant,
+            size: iOS ? 22 : 24,
           ),
-          visualDensity: Platform.isAndroid ? VisualDensity.compact : null,
+          visualDensity: iOS && Platform.isAndroid ? VisualDensity.compact : null,
           onPressed: onPressed,
         );
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: EdgeInsets.symmetric(horizontal: iOS ? 10 : 4),
       child: kIsDesktop
           // Desktop has no attachment sheet: `+` opens a menu of the same actions instead.
           ? DesktopAttachmentMenu(

@@ -41,6 +41,10 @@ class SocketIOForegroundService : Service() {
         const val RECONNECT_FAILED = "BlueBubbles failed to reconnect to your server..."
         const val DESTROYED = "BlueBubbles Service was destroyed!"
         const val DISABLED = "BlueBubbles Foreground Service is disabled"
+
+        @Volatile
+        var activeSocket: Socket? = null
+            private set
     }
 
     private var mSocket: Socket? = null
@@ -72,6 +76,9 @@ class SocketIOForegroundService : Service() {
     private val eventBlacklist: Array<String> = arrayOf(
         "typing-indicator",
         "new-findmy-location",
+        "ft-bridge-answer",
+        "ft-bridge-ice",
+        "ft-bridge-hangup",
         Socket.EVENT_CONNECT,
         Socket.EVENT_DISCONNECT
     )
@@ -159,6 +166,7 @@ class SocketIOForegroundService : Service() {
             val encodedPw = URLEncoder.encode(storedPassword, "UTF-8")
             opts.query = "password=$encodedPw"
             mSocket = IO.socket(serverUrl, opts)
+            activeSocket = mSocket
             mSocket!!.connect()
 
             mSocket!!.on(Socket.EVENT_CONNECT) {
@@ -335,6 +343,7 @@ class SocketIOForegroundService : Service() {
         PersistentLog.d(applicationContext, Constants.logTag, "BlueBubbles Service is being destroyed!")
 
         super.onDestroy()
+        activeSocket = null
         mSocket?.disconnect()
         mSocket?.close()
 

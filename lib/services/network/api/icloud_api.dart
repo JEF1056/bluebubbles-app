@@ -20,10 +20,15 @@ class iCloudApi {
   }
 
   /// Refresh FindMy devices on server
-  Future<Response> refreshDevices({CancelToken? cancelToken}) async {
+  Future<Response> refreshDevices({String? deviceId, bool force = false, CancelToken? cancelToken}) async {
     return _svc.runApiGuarded(() async {
+      final data = <String, dynamic>{
+        if (force) 'force': true,
+        if (deviceId != null) 'deviceId': deviceId,
+      };
       final response = await _svc.dio.post(
         "${_svc.apiRoot}/icloud/findmy/devices/refresh",
+        data: data.isEmpty ? null : data,
         queryParameters: _svc.buildQueryParams(),
         cancelToken: cancelToken,
         options: Options(
@@ -48,10 +53,48 @@ class iCloudApi {
   }
 
   /// Refresh FindMy friends on server
-  Future<Response> refreshFriends({CancelToken? cancelToken}) async {
+  Future<Response> refreshFriends({
+    String? handle,
+    bool force = false,
+    bool live = false,
+    CancelToken? cancelToken,
+  }) async {
     return _svc.runApiGuarded(() async {
+      final data = <String, dynamic>{
+        if (force) 'force': true,
+        if (live) 'live': true,
+        if (handle != null) 'handle': handle,
+      };
       final response = await _svc.dio.post(
         "${_svc.apiRoot}/icloud/findmy/friends/refresh",
+        data: data.isEmpty ? null : data,
+        queryParameters: _svc.buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Start true FindMy live location streaming for a focused friend handle
+  Future<Response> startLiveFindMyFriend(String handle, {CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.post(
+        "${_svc.apiRoot}/icloud/findmy/friends/live/start",
+        data: {'handle': handle},
+        queryParameters: _svc.buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Stop FindMy live location streaming for a focused friend handle (or any active live friend)
+  Future<Response> stopLiveFindMyFriend({String? handle, CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final trimmed = handle?.trim();
+      final response = await _svc.dio.post(
+        "${_svc.apiRoot}/icloud/findmy/friends/live/stop",
+        data: (trimmed != null && trimmed.isNotEmpty) ? {'handle': trimmed} : null,
         queryParameters: _svc.buildQueryParams(),
         cancelToken: cancelToken,
       );

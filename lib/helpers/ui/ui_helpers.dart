@@ -44,8 +44,8 @@ class BackButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.transparent,
-      child: SizedBox(
-        width: 48,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
         child: XGestureDetector(
           supportTouch: true,
           onTap: !kIsDesktop
@@ -60,9 +60,13 @@ class BackButton extends StatelessWidget {
                   }
                 },
           child: IconButton(
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
             icon: Obx(() => Icon(
                   SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: color ?? context.theme.colorScheme.primary,
+                  color: color ??
+                      (SettingsSvc.settings.skin.value == Skins.Material
+                          ? context.theme.colorScheme.onSurface
+                          : context.theme.colorScheme.primary),
                 )),
             iconSize: SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24,
             onPressed: () {
@@ -89,7 +93,7 @@ Widget buildBackButton(BuildContext context,
     color: Colors.transparent,
     child: Container(
       padding: padding,
-      width: 48,
+      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       child: XGestureDetector(
         supportTouch: true,
         onTap: !kIsDesktop
@@ -104,13 +108,18 @@ Widget buildBackButton(BuildContext context,
                 }
               },
         child: IconButton(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
           iconSize: iconSize ?? (SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24),
           icon: skin != null
               ? Icon(skin != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: context.theme.colorScheme.primary)
+                  color: skin == Skins.Material
+                      ? context.theme.colorScheme.onSurface
+                      : context.theme.colorScheme.primary)
               : Obx(() => Icon(
                   SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: context.theme.colorScheme.primary)),
+                  color: SettingsSvc.settings.skin.value == Skins.Material
+                      ? context.theme.colorScheme.onSurface
+                      : context.theme.colorScheme.primary)),
           onPressed: () {
             if (kIsDesktop) return;
             final result = callback?.call() ?? true;

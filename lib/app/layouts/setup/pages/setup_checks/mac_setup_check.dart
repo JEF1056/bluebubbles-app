@@ -23,10 +23,10 @@ class MacSetupCheck extends StatelessWidget {
               borderRadius: BorderRadius.circular(25),
               gradient: LinearGradient(
                 begin: AlignmentDirectional.topStart,
-                colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
               ),
             ),
-            height: 40,
+            height: 48,
             child: ElevatedButton(
               style: ButtonStyle(
                 shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -36,8 +36,8 @@ class MacSetupCheck extends StatelessWidget {
                 ),
                 backgroundColor: WidgetStateProperty.all(Colors.transparent),
                 shadowColor: WidgetStateProperty.all(Colors.transparent),
-                maximumSize: WidgetStateProperty.all(const Size(300, 36)),
-                minimumSize: WidgetStateProperty.all(const Size(30, 30)),
+                maximumSize: WidgetStateProperty.all(const Size(300, 44)),
+                minimumSize: WidgetStateProperty.all(const Size(30, 44)),
               ),
               onPressed: () async {
                 await launchUrl(Uri(scheme: "https", host: "bluebubbles.app", path: "install"),

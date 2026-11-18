@@ -7,6 +7,8 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:get_it/get_it.dart';
+import 'package:universal_io/io.dart';
 
 // ignore: non_constant_identifier_names
 ActionHandler MessageHandlerSvc =
@@ -43,7 +45,9 @@ class ActionHandler extends GetxService {
     final callUuid = data["uuid"];
     String? address = data["handle"]?["address"];
     String caller = data["address"] ?? "Unknown Number";
-    bool isAudio = data["is_audio"];
+    final bool isAudio = data["is_video"] != null
+        ? !(data["is_video"] as bool)
+        : (data["is_audio"] as bool? ?? false);
     Uint8List? chatIcon;
 
     if (address != null) {
@@ -54,11 +58,32 @@ class ActionHandler extends GetxService {
       caller = contact?.displayName ?? caller;
     }
 
+    if (Platform.isAndroid && isAudio) {
+      final handledByTelecom = await NotificationsSvc.createIncomingFaceTimeNotification(
+        callUuid,
+        caller,
+        chatIcon,
+        isAudio,
+        callerAddress: address,
+      );
+      if (handledByTelecom) return;
+      if (LifecycleSvc.isAlive) {
+        await showFaceTimeOverlay(callUuid, caller, chatIcon, isAudio);
+      }
+      return;
+    }
+
     if (!LifecycleSvc.isAlive) {
       if (kIsDesktop) {
         await showFaceTimeOverlay(callUuid, caller, chatIcon, isAudio);
       }
-      await NotificationsSvc.createIncomingFaceTimeNotification(callUuid, caller, chatIcon, isAudio);
+      await NotificationsSvc.createIncomingFaceTimeNotification(
+        callUuid,
+        caller,
+        chatIcon,
+        isAudio,
+        callerAddress: address,
+      );
     } else {
       await showFaceTimeOverlay(callUuid, caller, chatIcon, isAudio);
     }
@@ -83,6 +108,12 @@ class ActionHandler extends GetxService {
   Future<void> handleEvent(String event, Map<String, dynamic> data, String source, {bool useQueue = true}) async {
     Logger.info("Received $event from $source");
     switch (event) {
+      case "pinned-chats-updated":
+        final guids = ChatsService.extractPinnedChatGuids(data);
+        if (guids != null && GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.headless) {
+          await ChatsSvc.applyPinnedChatGuids(guids);
+        }
+        return;
       case "new-message":
         if (!isNullOrEmpty(data)) {
           final payload = ServerPayload.fromJson(data);

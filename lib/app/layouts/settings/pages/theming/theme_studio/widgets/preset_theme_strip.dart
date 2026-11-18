@@ -219,12 +219,12 @@ class _ModeGroupState extends State<_ModeGroup> {
         const SizedBox(height: 4),
         Row(
           children: [
-            Icon(Icons.info_outline_rounded, size: 11, color: context.theme.colorScheme.outline),
+            Icon(Icons.info_outline_rounded, size: 11, color: context.theme.colorScheme.onSurfaceVariant),
             const SizedBox(width: 4),
             Text(
               "Tap and hold on a theme for more options",
               style: context.theme.textTheme.labelSmall?.copyWith(
-                color: context.theme.colorScheme.outline,
+                color: context.theme.colorScheme.onSurfaceVariant,
                 fontSize: 11,
               ),
             ),
@@ -662,7 +662,7 @@ class _ThemeCardState extends State<_ThemeCard> {
         duration: const Duration(milliseconds: 200),
         width: 76,
         decoration: BoxDecoration(
-          color: context.theme.colorScheme.surfaceVariant.withValues(alpha: 0.4),
+          color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: borderColor, width: borderWidth),
         ),

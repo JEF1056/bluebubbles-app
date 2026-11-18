@@ -1,12 +1,10 @@
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
-import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 
 class MaterialHeader extends CustomStateful<ConversationListController> {
@@ -29,7 +27,7 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
               height: controller.selectedChats.isEmpty ? 100 : null,
               width: NavigationSvc.width(context),
               color: SettingsSvc.settings.windowEffect.value == WindowEffect.disabled
-                  ? context.theme.colorScheme.surfaceContainerHighest
+                  ? context.theme.colorScheme.surfaceContainer
                   : Colors.transparent,
             )),
         AnimatedSwitcher(
@@ -38,95 +36,67 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
               ? SafeArea(
                   child: Obx(() {
                     NavigationSvc.listener.value;
-                    return Container(
-                      decoration: BoxDecoration(
-                        color: !NavigationSvc.isAvatarOnly(context) && !showArchived && !showUnknown
-                            ? context.theme.colorScheme.surfaceContainerHighest.withValues(
-                                alpha: SettingsSvc.settings.windowEffect.value == WindowEffect.disabled ? 1 : 0.7)
-                            : Colors.transparent,
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.only(left: 5.0, top: 6.0, bottom: 6.0),
+                    if (NavigationSvc.isAvatarOnly(context)) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
+                        child: Center(
+                          child: Material(
+                            color: Colors.transparent,
+                            shape: const CircleBorder(),
+                            clipBehavior: Clip.antiAlias,
+                            child: OverflowMenu(extraItems: true, controller: controller),
+                          ),
+                        ),
+                      );
+                    }
+                    if (!showArchived && !showUnknown) {
+                      return Padding(
+                        padding: const EdgeInsets.only(left: 20.0, right: 12.0, top: 6.0, bottom: 6.0),
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.start,
                           children: [
-                            if (NavigationSvc.isAvatarOnly(context))
-                              Material(
-                                color: Colors.transparent,
-                                shape: const CircleBorder(),
-                                clipBehavior: Clip.antiAlias,
-                                child: OverflowMenu(extraItems: true, controller: controller),
+                            Text(
+                              "BlueBubbles",
+                              style: context.theme.textTheme.titleLarge?.copyWith(
+                                color: context.theme.colorScheme.onSurface,
+                                fontWeight: FontWeight.w500,
+                                fontSize: 22,
                               ),
-                            if (!NavigationSvc.isAvatarOnly(context))
-                              Padding(
-                                padding: const EdgeInsets.only(left: 18, right: 10),
-                                child: (!showArchived && !showUnknown)
-                                    ? SvgPicture.asset('assets/icon/bb-icon.svg',
-                                        width: 26,
-                                        height: 26,
-                                        colorFilter: ColorFilter.mode(
-                                            context.theme.colorScheme.onSurfaceVariant, BlendMode.srcIn))
-                                    : IconButton(
-                                        onPressed: () async {
-                                          Navigator.of(context).pop();
-                                        },
-                                        padding: EdgeInsets.zero,
-                                        icon: Icon(
-                                          Icons.arrow_back,
-                                          color: context.theme.colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                              ),
-                            if (!NavigationSvc.isAvatarOnly(context)) HeaderText(controller: controller, fontSize: 18),
-                            if (!NavigationSvc.isAvatarOnly(context) && !showArchived && !showUnknown)
-                              Expanded(
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.end,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      onPressed: () async {
-                                        controller.openCamera(context);
-                                      },
-                                      icon: Icon(
-                                        Icons.camera_alt_outlined,
-                                        color: context.theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                    Padding(
-                                        padding: const EdgeInsets.only(left: 2),
-                                        child: IconButton(
-                                          onPressed: () async {
-                                            NavigationSvc.pushLeft(
-                                              context,
-                                              const SearchView(),
-                                            );
-                                          },
-                                          icon: Icon(
-                                            Icons.search_rounded,
-                                            color: context.theme.colorScheme.onSurfaceVariant,
-                                          ),
-                                        )),
-                                    const ChatListFilterButton(),
-                                    const Padding(
-                                      padding: EdgeInsets.only(right: 8),
-                                      child: OverflowMenu(),
-                                    ),
-                                  ],
-                                ),
-                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const SyncIndicator(size: 12),
+                            const Spacer(),
+                            const ChatListFilterButton(),
+                            OverflowMenu(controller: controller),
                           ],
                         ),
+                      );
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        children: [
+                          IconButton(
+                            onPressed: () async {
+                              Navigator.of(context).pop();
+                            },
+                            icon: Icon(
+                              Icons.arrow_back,
+                              color: context.theme.colorScheme.onSurface,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          HeaderText(controller: controller, fontSize: 20),
+                        ],
                       ),
                     );
                   }),
                 )
               : SafeArea(
                   child: Padding(
-                    padding: const EdgeInsets.only(
-                      right: 20.0,
-                      left: 20.0,
-                      top: 10,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0,
+                      vertical: 8.0,
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,

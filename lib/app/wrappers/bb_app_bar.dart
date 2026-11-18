@@ -108,7 +108,7 @@ class BBAppBar extends StatelessWidget implements PreferredSizeWidget {
     // contrast even in a light theme. Estimate from the real visible color instead.
     final effectiveBrightnessColor = effectiveBg == Colors.transparent ? context.theme.colorScheme.surface : effectiveBg;
     final effectiveCenterTitle = centerTitle ?? context.iOS;
-    final effectiveSurfaceTint = surfaceTintColor ?? context.theme.colorScheme.primary;
+    final effectiveSurfaceTint = surfaceTintColor ?? Colors.transparent;
     final effectiveTitle =
         title ?? (titleText != null ? Text(titleText!, style: titleStyle ?? context.theme.textTheme.titleLarge) : null);
 

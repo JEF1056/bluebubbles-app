@@ -90,7 +90,7 @@ class _ChatCreatorTileState extends State<ChatCreatorTile> with ThemeHelpers {
         ),
         subtitle: Text(
           _buildSubtitleText(),
-          style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.outline),
+          style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
         ),
         leading: Padding(
           padding: const EdgeInsets.only(right: 5.0),

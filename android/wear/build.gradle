@@ -1,0 +1,192 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "org.jetbrains.kotlin.plugin.compose"
+    id "com.google.devtools.ksp"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+def hasReleaseKeystore = keystorePropertiesFile.exists() && keystoreProperties['storeFile']
+
+if (System.getenv('BB_REQUIRE_RELEASE_SIGNING') == 'true' && !hasReleaseKeystore) {
+    throw new GradleException(
+        'BB_REQUIRE_RELEASE_SIGNING is set, but android/key.properties is missing or has no ' +
+        'storeFile entry. Refusing to fall back to debug signing for a release build.')
+}
+
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode') ?: '1'
+def flutterVersionName = localProperties.getProperty('flutter.versionName') ?: '1.0'
+
+android {
+    namespace "com.wearbubbles"
+    compileSdk 37
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+        resValues = true
+    }
+
+    defaultConfig {
+        applicationId "com.bluebubbles.messaging"
+        minSdk 30
+        targetSdk 36
+        // Offset from :app versionCode (20002000+) so mobile & wear APKs do not collide on Play Console.
+        versionCode 30002000 + flutterVersionCode.toInteger()
+        versionName flutterVersionName
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+
+    packaging {
+        resources {
+            excludes += [
+                'META-INF/versions/9/OSGI-INF/MANIFEST.MF',
+                '/META-INF/{AL2.0,LGPL2.1}'
+            ]
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                def sf = file(keystoreProperties['storeFile'])
+                storeFile sf.exists() ? sf : rootProject.file("app/${keystoreProperties['storeFile']}")
+                storePassword keystoreProperties['storePassword']
+            }
+        }
+        debug {
+        }
+    }
+
+    flavorDimensions = ["app"]
+
+    productFlavors {
+        joel {
+            dimension "app"
+            resValue "string", "app_name_en", "BlueBubbles Dev (Joel)"
+            resValue "color", "ic_launcher_background", "#4c49de"
+            applicationId "com.bluebubbles.messaging.joel"
+        }
+        tanay {
+            dimension "app"
+            resValue "string", "app_name_en", "BlueBubbles (Tanay Special Sauce)"
+            resValue "color", "ic_launcher_background", "#4c49de"
+            applicationId "com.bluebubbles.messaging.tanay"
+        }
+        alpha {
+            dimension "app"
+            resValue "string", "app_name_en", "BlueBubbles (Alpha)"
+            resValue "color", "ic_launcher_background", "#49dbde"
+            applicationId "com.bluebubbles.messaging.alpha"
+        }
+        beta {
+            dimension "app"
+            resValue "string", "app_name_en", "BlueBubbles (Beta)"
+            resValue "color", "ic_launcher_background", "#4990de"
+            applicationId "com.bluebubbles.messaging.beta"
+        }
+        prod {
+            getIsDefault().set(true)
+            dimension "app"
+            resValue "string", "app_name_en", "BlueBubbles"
+            resValue "color", "ic_launcher_background", "#4990de"
+            applicationId "com.bluebubbles.messaging"
+        }
+        prodNoAa {
+            dimension "app"
+            resValue "string", "app_name_en", "BlueBubbles"
+            resValue "color", "ic_launcher_background", "#4990de"
+            applicationId "com.bluebubbles.messaging"
+        }
+    }
+
+    buildTypes {
+        release {
+            def releaseSigning = hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
+            productFlavors.joel.signingConfig signingConfigs.debug
+            productFlavors.tanay.signingConfig signingConfigs.debug
+            productFlavors.alpha.signingConfig releaseSigning
+            productFlavors.beta.signingConfig releaseSigning
+            productFlavors.prod.signingConfig releaseSigning
+            productFlavors.prodNoAa.signingConfig releaseSigning
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+dependencies {
+    def composeBom = platform('androidx.compose:compose-bom:2024.09.03')
+    implementation composeBom
+
+    // Wear Compose & Horologist
+    implementation 'androidx.wear.compose:compose-material:1.4.0'
+    implementation 'androidx.wear.compose:compose-foundation:1.4.0'
+    implementation 'androidx.wear.compose:compose-navigation:1.4.0'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'com.google.android.horologist:horologist-compose-layout:0.6.20'
+
+    // Core Android
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.activity:activity-compose:1.9.3'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
+    implementation 'androidx.wear:wear-input:1.2.0-alpha02'
+    implementation 'androidx.wear:wear-remote-interactions:1.1.0'
+
+    // Room
+    implementation 'androidx.room:room-runtime:2.7.1'
+    implementation 'androidx.room:room-ktx:2.7.1'
+    ksp 'androidx.room:room-compiler:2.7.1'
+
+    // Networking
+    implementation 'com.squareup.retrofit2:retrofit:3.0.0'
+    implementation 'com.squareup.retrofit2:converter-gson:3.0.0'
+    implementation 'com.squareup.okhttp3:okhttp:5.3.2'
+    implementation 'com.google.code.gson:gson:2.10.1'
+    implementation('io.socket:socket.io-client:2.1.1') {
+        exclude group: 'org.json', module: 'json'
+    }
+
+    // Images & GIFs
+    implementation 'io.coil-kt:coil-compose:2.7.0'
+    implementation 'io.coil-kt:coil-gif:2.7.0'
+
+    // DataStore & WorkManager
+    implementation 'androidx.datastore:datastore-preferences:1.1.1'
+    implementation 'androidx.work:work-runtime-ktx:2.9.1'
+
+    // Coroutines & Wearable Data Layer
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1'
+    implementation 'com.google.android.gms:play-services-wearable:18.2.0'
+
+    // Unit Tests
+    testImplementation 'junit:junit:4.13.2'
+}

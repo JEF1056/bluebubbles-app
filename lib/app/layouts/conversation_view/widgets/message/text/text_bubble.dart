@@ -93,7 +93,10 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
         runs: _hasRunEffects ? part.runs : const [],
         animation: _runAnimation,
         textOffset: isNullOrEmpty(part.subject) ? 0 : part.displaySubject!.length + 1,
-        child: RichText(text: TextSpan(children: spans)),
+        child: RichText(
+          text: TextSpan(children: spans),
+          textHeightBehavior: !iOS ? const TextHeightBehavior(leadingDistribution: TextLeadingDistribution.even) : null,
+        ),
       );
 
   @override
@@ -188,31 +191,35 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
       final isTempMessage = controller.isSending.value;
       final isFromMe = controller.isFromMe.value;
 
+      final material = !iOS && !samsung;
+      final tailGutter = iOS && !message.isBigEmoji ? 10.0 : 0.0;
+      final useGradient = !isFromMe && !message.isBigEmoji && SettingsSvc.settings.colorfulBubbles.value;
+
       return Container(
         constraints: BoxConstraints(
           maxWidth: message.isBigEmoji
               ? NavigationSvc.width(context)
               : NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 40,
-          minHeight: 36,
+          minHeight: material ? 38 : 36,
         ),
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15).add(EdgeInsets.only(
-            left: isFromMe || message.isBigEmoji ? 0 : 10, right: isFromMe && !message.isBigEmoji ? 10 : 0)),
+        padding: EdgeInsets.symmetric(vertical: material ? 9 : 8, horizontal: material ? 16 : 15)
+            .add(EdgeInsets.only(left: isFromMe ? 0 : tailGutter, right: isFromMe ? tailGutter : 0)),
         color: isFromMe && !message.isBigEmoji
             ? (selected
                 ? context.theme.colorScheme.tertiaryContainer
                 : context.theme.colorScheme
                     .bubble(context, message.chat.target?.isIMessage ?? true)
                     .darkenAmount(isTempMessage ? 0.2 : 0))
-            : null,
-        decoration: isFromMe || message.isBigEmoji
-            ? null
-            : BoxDecoration(
+            : (!isFromMe && !message.isBigEmoji && !useGradient ? getBubbleColors(selected).first : null),
+        decoration: useGradient
+            ? BoxDecoration(
                 gradient: LinearGradient(
                   begin: AlignmentDirectional.bottomCenter,
                   end: AlignmentDirectional.topCenter,
                   colors: getBubbleColors(selected),
                 ),
-              ),
+              )
+            : null,
         // alignment: Alignment.center,
         child: FutureBuilder<List<InlineSpan>>(
             future: buildEnrichedMessageSpans(
@@ -253,7 +260,7 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
                           final value1 = anim.get("size");
                           return Transform.scale(scale: value1, alignment: Alignment.center, child: child);
                         },
-                        child: _richText(snapshot.data!),
+                        child: Center(widthFactor: 1, child: _richText(snapshot.data!)),
                       ));
                 }
                 return Center(

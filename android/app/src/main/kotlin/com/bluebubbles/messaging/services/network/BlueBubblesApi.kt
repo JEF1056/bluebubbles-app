@@ -33,4 +33,29 @@ interface BlueBubblesApi {
     fun ping(
         @Query("guid") guid: String
     ): Call<ApiResponse>
+
+    @POST("facetime/call")
+    fun placeFaceTimeCall(
+        @Query("guid") guid: String,
+        @Body request: FaceTimeCallRequest
+    ): Call<ApiResponse>
+
+    @POST("facetime/decline/{callUuid}")
+    fun declineFaceTimeCall(
+        @Path("callUuid") callUuid: String,
+        @Query("guid") guid: String
+    ): Call<ApiResponse>
+
+    @POST("facetime/leave/{callUuid}")
+    fun leaveFaceTimeCall(
+        @Path("callUuid") callUuid: String,
+        @Query("guid") guid: String
+    ): Call<ApiResponse>
+
+    @POST("facetime/set-muted/{callUuid}")
+    fun setFaceTimeMuted(
+        @Path("callUuid") callUuid: String,
+        @Query("guid") guid: String,
+        @Body request: FaceTimeSetMutedRequest
+    ): Call<ApiResponse>
 }

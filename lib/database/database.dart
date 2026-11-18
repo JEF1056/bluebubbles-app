@@ -22,7 +22,7 @@ class Database {
 
   /// Bump this whenever preset theme definitions change (colors, font sizes,
   /// etc.) to force existing installs to re-seed preset themes on next launch.
-  static int themesVersion = 6;
+  static int themesVersion = 8;
 
   static late final Store store;
   static late final Box<Attachment> attachments;
@@ -318,8 +318,8 @@ class Database {
       final needsReseed = isFirstRun || storedThemesVersion < Database.themesVersion;
       if (isFirstRun) {
         await PrefsSvc.theme.setSelectedThemes(
-          darkTheme: "OLED Dark",
-          lightTheme: "Bright White",
+          darkTheme: ThemesService.materialYouDarkName,
+          lightTheme: ThemesService.materialYouLightName,
         );
       }
       if (needsReseed) {

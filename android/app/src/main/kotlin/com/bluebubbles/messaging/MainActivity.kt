@@ -3,6 +3,7 @@ package com.bluebubbles.messaging
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.LocusId
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -71,6 +72,7 @@ class MainActivity : FlutterFragmentActivity() {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
+        updateLocusContext(intent?.getStringExtra("chatGuid"))
         window.decorView.setWindowInsetsAnimationCallback(
             object : WindowInsetsAnimation.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                 override fun onProgress(
@@ -83,6 +85,19 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             },
         )
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        updateLocusContext(intent.getStringExtra("chatGuid"))
+    }
+
+    fun updateLocusContext(chatGuid: String?) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val locusId = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }?.let(::LocusId)
+            setLocusContext(locusId, null)
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

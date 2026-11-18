@@ -2,6 +2,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attach
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_holder.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart' show StickerPlacement;
 import 'package:bluebubbles/services/ui/chat/conversation_view_controller.dart';
 import 'package:flutter/foundation.dart';
@@ -81,7 +82,7 @@ class StickerObserver extends StatelessWidget {
         placed: placed,
         hidden: state.showingPopup.value,
         isFromMe: state.message.isFromMe ?? false,
-        tailGutter: !part.isMediaCollection,
+        tailGutter: CurrentSkin.iOS && !part.isMediaCollection,
       );
       return placed ? Positioned.fill(child: holder) : holder;
     });
@@ -141,7 +142,7 @@ class StickerSpace extends StatelessWidget {
               .nonNulls
               .toList(),
           isFromMe: state.message.isFromMe ?? false,
-          tailGutter: !part.isMediaCollection,
+          tailGutter: CurrentSkin.iOS && !part.isMediaCollection,
           columnWidth: columnWidth,
           child: child,
         ));

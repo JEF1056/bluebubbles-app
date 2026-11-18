@@ -60,6 +60,10 @@ class SyncService {
     SettingsSvc.settings.lastIncrementalSync.value = DateTime.now().millisecondsSinceEpoch;
     await SettingsSvc.settings.saveOneAsync('lastIncrementalSync');
     await _manager!.start();
+    if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.headless) {
+      unawaited(SettingsSvc.refreshServerDetails());
+      unawaited(ChatsSvc.syncPinnedChatsFromServer());
+    }
   }
 
   /// [catchUp]: a sync that must not be lost to the cooldown, because something may have been missed since the last
@@ -213,6 +217,9 @@ class SyncService {
     // (permissions, unsupported server) and shouldn't defeat the throttle.
     if (chatSyncFailed) {
       _lastIncrementalSyncTimestamp = null;
+    } else if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.headless) {
+      unawaited(SettingsSvc.refreshServerDetails());
+      unawaited(ChatsSvc.syncPinnedChatsFromServer());
     }
 
     var contactSyncResult = true;

@@ -207,14 +207,14 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                       text: TextSpan(
-                        style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.outline),
+                        style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.onSurfaceVariant),
                         children: MessageHelper.buildEmojiText(
                             SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
                                 ? "User iCloud"
                                 : SettingsSvc.settings.iCloudAccount.isEmpty
                                     ? "Unknown iCloud account"
                                     : SettingsSvc.settings.iCloudAccount.value,
-                            context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.outline)),
+                            context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.onSurfaceVariant)),
                       ),
                     ),
                   ),
@@ -389,7 +389,7 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                           color: tileColor,
                           child: Padding(
                             padding: const EdgeInsets.only(left: 15.0),
-                            child: SettingsDivider(color: context.theme.colorScheme.surfaceVariant),
+                            child: SettingsDivider(color: context.theme.colorScheme.outlineVariant),
                           ),
                         ),
                       if (accountInfo['active_alias'] != null)

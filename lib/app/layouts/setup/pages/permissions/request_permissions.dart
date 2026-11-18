@@ -186,7 +186,7 @@ class _PermissionCard extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                    colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                   ),
                 ),
                 child: Icon(icon, color: Colors.white, size: 24),
@@ -298,20 +298,20 @@ class _ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       width: double.infinity,
-      height: 40,
+      height: 48,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(24),
           gradient: LinearGradient(
             begin: AlignmentDirectional.topStart,
-            colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+            colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
           ),
         ),
         child: ElevatedButton.icon(
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           ),
           onPressed: onPressed,
           icon: Icon(icon, color: Colors.white, size: 18),

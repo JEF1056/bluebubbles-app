@@ -45,7 +45,14 @@ Future<T?> createAsyncTask<T>(AsyncTask<List<dynamic>, T> task) async {
   return task.result;
 }
 
-bool get kIsDesktop => (Platform.isWindows || Platform.isLinux || Platform.isMacOS) && !kIsWeb;
+// Respect debugDefaultTargetPlatformOverride in tests so desktop hosts can simulate mobile UI.
+bool get kIsDesktop =>
+    !kIsWeb &&
+    (debugDefaultTargetPlatformOverride != null
+        ? (debugDefaultTargetPlatformOverride == TargetPlatform.windows ||
+            debugDefaultTargetPlatformOverride == TargetPlatform.linux ||
+            debugDefaultTargetPlatformOverride == TargetPlatform.macOS)
+        : (Platform.isWindows || Platform.isLinux || Platform.isMacOS));
 
 bool get isSnap => !kIsWeb && Platform.isLinux && Platform.environment.containsKey('SNAP');
 

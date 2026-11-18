@@ -445,7 +445,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                TextFieldIconBar(controller: controller, localController: localController),
+                if (!material) TextFieldIconBar(controller: controller, localController: localController),
+                if (material) const SizedBox(width: 12),
                 Expanded(
                   child: Stack(
                     alignment: Alignment.centerLeft,
@@ -472,10 +473,11 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                     ],
                   ),
                 ),
-                if (iOS || material) const SizedBox(width: 10),
-                if (samsung)
+                if (iOS) const SizedBox(width: 10),
+                if (material) const SizedBox(width: 8),
+                if (samsung || material)
                   Padding(
-                    padding: const EdgeInsets.only(right: 5.0),
+                    padding: EdgeInsets.only(right: material ? 12.0 : 5.0),
                     child: TextFieldSuffix(
                       subjectTextController: controller.subjectTextController,
                       textController: controller.textController,

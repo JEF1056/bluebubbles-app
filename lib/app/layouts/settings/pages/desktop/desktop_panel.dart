@@ -94,7 +94,7 @@ class _DesktopPanelState extends State<DesktopPanel> with ThemeHelpers {
                               color: tileColor,
                               child: Padding(
                                 padding: const EdgeInsets.only(left: 15.0),
-                                child: SettingsDivider(color: context.theme.colorScheme.surfaceVariant),
+                                child: SettingsDivider(color: context.theme.colorScheme.outlineVariant),
                               ),
                             ),
                             SettingsSwitch(
@@ -123,7 +123,7 @@ class _DesktopPanelState extends State<DesktopPanel> with ThemeHelpers {
                       color: tileColor,
                       child: Padding(
                         padding: const EdgeInsets.only(left: 15.0),
-                        child: SettingsDivider(color: context.theme.colorScheme.surfaceVariant),
+                        child: SettingsDivider(color: context.theme.colorScheme.outlineVariant),
                       ),
                     ),
                   if (Platform.isLinux)
@@ -171,7 +171,7 @@ class _DesktopPanelState extends State<DesktopPanel> with ThemeHelpers {
                         color: tileColor,
                         child: Padding(
                           padding: const EdgeInsets.only(left: 15.0),
-                          child: SettingsDivider(color: context.theme.colorScheme.surfaceVariant),
+                          child: SettingsDivider(color: context.theme.colorScheme.outlineVariant),
                         ),
                       );
                     }
@@ -203,7 +203,7 @@ class _DesktopPanelState extends State<DesktopPanel> with ThemeHelpers {
                         color: tileColor,
                         child: Padding(
                           padding: const EdgeInsets.only(left: 15.0),
-                          child: SettingsDivider(color: context.theme.colorScheme.surfaceVariant),
+                          child: SettingsDivider(color: context.theme.colorScheme.outlineVariant),
                         ),
                       );
                     }

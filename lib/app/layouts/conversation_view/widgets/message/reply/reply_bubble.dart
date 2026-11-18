@@ -44,8 +44,13 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
   }
 
   void _openReplyThread(BuildContext context, String chatGuid, MessagePart? part) {
-    if (part == null) return;
-    showReplyThread(context, message, part, MessagesSvc(chatGuid), widget.cvController);
+    showReplyThread(
+      context,
+      message,
+      part ?? MessagePart(part: widget.part),
+      MessagesSvc(chatGuid),
+      widget.cvController,
+    );
   }
 
   Color getBubbleColor() {
@@ -97,9 +102,11 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
             minHeight: 30,
           ),
           child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () => _openReplyThread(context, chatGuid, resolvedPart),
             child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15),
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
               decoration: hasBackground
                   ? BoxDecoration(
                       color: context.theme.colorScheme.surfaceContainerHighest,
@@ -120,6 +127,11 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
                         style: context.textTheme.bodyMedium!.apply(fontSizeFactor: 1.15),
                       ),
                     ]),
+                    textHeightBehavior: const TextHeightBehavior(
+                      applyHeightToFirstAscent: true,
+                      applyHeightToLastDescent: true,
+                      leadingDistribution: TextLeadingDistribution.even,
+                    ),
                     style: context.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.onSurface),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -182,7 +194,8 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15).add(
                                         EdgeInsets.only(
-                                            left: message.isFromMe! ? 0 : 10, right: message.isFromMe! ? 10 : 0)),
+                                            left: !CurrentSkin.iOS || message.isFromMe! ? 0 : 10,
+                                            right: CurrentSkin.iOS && message.isFromMe! ? 10 : 0)),
                                     child: Text(
                                       "Failed to parse thread parts!",
                                       style: (context.theme.extensions[BubbleText] as BubbleText).bubbleText.apply(
@@ -223,8 +236,8 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
                                           child: Padding(
                                             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15).add(
                                                 EdgeInsets.only(
-                                                    left: message.isFromMe! ? 0 : 10,
-                                                    right: message.isFromMe! ? 10 : 0)),
+                                                    left: !CurrentSkin.iOS || message.isFromMe! ? 0 : 10,
+                                                    right: CurrentSkin.iOS && message.isFromMe! ? 10 : 0)),
                                             child: FutureBuilder<List<InlineSpan>>(
                                                 future: buildEnrichedMessageSpans(
                                                   context,

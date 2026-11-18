@@ -7,7 +7,9 @@ class SharedPreferencesServerActions {
   static const String _serverVersionCodeKey = 'server-version-code';
   static const String _apiVersionsKey = 'server-api-versions';
   static const String _serverBuildVersionKey = 'server-build-version';
+  static const String _supportsFaceTimeCallsKey = 'server-supports-facetime-calls';
   static const String _privateApiEnableTipKey = 'private-api-enable-tip';
+  static const String _privateApiDisabledByUserKey = 'private-api-disabled-by-user';
   static const String _serverUpdateCheckKey = 'server-update-check';
   static const String _clientUpdateCheckKey = 'client-update-check';
 
@@ -32,6 +34,8 @@ class SharedPreferencesServerActions {
     return version == null || version.isEmpty ? null : version;
   }
 
+  bool? getSupportsFaceTimeCalls() => service.i.getBool(_supportsFaceTimeCallsKey);
+
   Future<void> setServerDetails({
     int? macOSVersion,
     int? macOSMinorVersion,
@@ -39,6 +43,7 @@ class SharedPreferencesServerActions {
     int? serverVersionCode,
     List<int>? apiVersions,
     String? serverBuildVersion,
+    bool? supportsFaceTimeCalls,
   }) async {
     if (macOSVersion != null) {
       await service.i.setInt(_macOSVersionKey, macOSVersion);
@@ -58,12 +63,21 @@ class SharedPreferencesServerActions {
     if (serverBuildVersion != null) {
       await service.i.setString(_serverBuildVersionKey, serverBuildVersion);
     }
+    if (supportsFaceTimeCalls != null) {
+      await service.i.setBool(_supportsFaceTimeCallsKey, supportsFaceTimeCalls);
+    }
   }
 
   bool hasSeenPrivateApiEnableTip() => service.i.getBool(_privateApiEnableTipKey) ?? false;
 
   Future<void> markPrivateApiEnableTipShown() async {
     await service.i.setBool(_privateApiEnableTipKey, true);
+  }
+
+  bool isPrivateApiDisabledByUser() => service.i.getBool(_privateApiDisabledByUserKey) ?? false;
+
+  Future<void> setPrivateApiDisabledByUser(bool disabled) async {
+    await service.i.setBool(_privateApiDisabledByUserKey, disabled);
   }
 
   String? getServerUpdateCheckVersion() => service.i.getString(_serverUpdateCheckKey);

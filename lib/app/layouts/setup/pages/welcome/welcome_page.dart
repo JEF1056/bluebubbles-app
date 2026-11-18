@@ -96,7 +96,7 @@ class _WelcomePageState extends State<WelcomePage> with TickerProviderStateMixin
               return Container(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(25),
-                  color: context.theme.colorScheme.surface.lightenOrDarken(65),
+                  color: context.theme.colorScheme.surfaceContainerHighest,
                 ),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0),

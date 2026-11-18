@@ -132,6 +132,7 @@ class _PrivateAPIPanelState extends CustomState<PrivateAPIPanel, void, PrivateAP
                       Obx(
                         () => SettingsSwitch(
                           onChanged: (bool val) async {
+                            await PrefsSvc.server.setPrivateApiDisabledByUser(!val);
                             SettingsSvc.settings.enablePrivateAPI.value = val;
                             await SettingsSvc.settings.saveOneAsync('enablePrivateAPI');
                           },

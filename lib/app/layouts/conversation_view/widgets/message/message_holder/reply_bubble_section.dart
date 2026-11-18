@@ -1,8 +1,10 @@
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -33,12 +35,15 @@ class ReplyBubbleSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final chat = ChatStateScope.chatOf(context);
     final message = MessageStateScope.messageOf(context);
-    final part = replyTo.guid == message.threadOriginatorGuid ? message.normalizedThreadPart : 0;
-    final showReplyAvatar = (chat.isGroup || alwaysShowAvatars || !isIOS) && !replyTo.isFromMe!;
+    final service = MessagesSvc(cvController.chat.guid);
+    final rootTarget = resolveRootReplyTarget(message, message.normalizedThreadPart, service: service);
+    final part = replyTo.guid == rootTarget.guid ? rootTarget.part : 0;
+    final isSamsung = SettingsSvc.settings.skin.value == Skins.Samsung;
+    final showReplyAvatar = (chat.isGroup || alwaysShowAvatars || isSamsung) && !replyTo.isFromMe!;
 
     // Provide the replyTo message's state so ReplyBubble displays the original
     // message content rather than the current (reply) message's content.
-    final replyToState = MessagesSvc(cvController.chat.guid).getOrCreateState(replyTo);
+    final replyToState = service.getOrCreateState(replyTo);
 
     Widget replyBubble = MessageStateScope(
       messageState: replyToState,

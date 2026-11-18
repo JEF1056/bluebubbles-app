@@ -63,7 +63,7 @@ class StorageExpressiveResultsSection extends StatelessWidget with StorageAnalyz
               child: Center(
                 child: Text(
                   "No attachments match this filter.",
-                  style: context.theme.textTheme.bodyMedium?.copyWith(color: context.theme.colorScheme.outline),
+                  style: context.theme.textTheme.bodyMedium?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                 ),
               ),
             ),
@@ -89,7 +89,7 @@ class StorageExpressiveResultsSection extends StatelessWidget with StorageAnalyz
               padding: const EdgeInsets.only(top: 12),
               child: Text(
                 "Orphaned files and link previews aren't shown while a chat or age filter is active.",
-                style: context.theme.textTheme.labelSmall?.copyWith(color: context.theme.colorScheme.outline),
+                style: context.theme.textTheme.labelSmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                 textAlign: TextAlign.center,
               ),
             ),

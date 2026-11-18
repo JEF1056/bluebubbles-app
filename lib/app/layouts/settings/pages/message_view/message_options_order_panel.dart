@@ -52,7 +52,7 @@ class _MessageOptionsOrderPanelState extends State<MessageOptionsOrderPanel> wit
               padding: const EdgeInsets.symmetric(vertical: 13),
               child: Text(
                 "Drag the handle on the right side of each option to reorder how they appear in the message context menu.",
-                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
+                style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
               ),
             ),
             onReorder: (start, end) {

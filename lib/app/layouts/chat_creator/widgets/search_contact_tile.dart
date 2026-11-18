@@ -21,64 +21,54 @@ class SearchContactTile extends StatelessWidget {
   final ContactV2 contact;
   final ChatCreatorController controller;
 
-  @override
-  Widget build(BuildContext context) {
-    // Deduplicate phone numbers and email addresses.
+  static List<({String address, String? label})> addressesFor(
+    ContactV2 contact, {
+    required bool showEmails,
+  }) {
     final seenNumbers = <String>{};
     final uniquePhones = contact.phoneNumbers.where((p) => seenNumbers.add(p.number.numericOnly())).toList();
 
     final seenAddresses = <String>{};
-    final uniqueEmails = contact.emailAddresses.where((e) => seenAddresses.add(e.address.trim())).toList();
+    final uniqueEmails = showEmails
+        ? contact.emailAddresses.where((e) => seenAddresses.add(e.address.trim())).toList()
+        : const <dynamic>[];
 
-    if (uniquePhones.isEmpty && uniqueEmails.isEmpty) return const SizedBox.shrink();
+    return [
+      for (final p in uniquePhones) (address: p.number, label: p.label),
+      for (final e in uniqueEmails) (address: e.address as String, label: e.label as String?),
+    ];
+  }
 
+  @override
+  Widget build(BuildContext context) {
     return Obx(() {
       final hideInfo = SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value;
       // Email addresses are only valid for iMessage
       final showEmails = controller.selectedService.value.isIMessageService;
+      final entries = addressesFor(contact, showEmails: showEmails);
+      if (entries.isEmpty) return const SizedBox.shrink();
 
       return Column(
         key: ValueKey(contact.nativeContactId),
         mainAxisSize: MainAxisSize.min,
         children: [
-          ...uniquePhones.map(
-            (p) => _ContactAddressRow(
+          for (final entry in entries)
+            ContactAddressRow(
               displayName: hideInfo ? 'Contact' : contact.computedDisplayName,
-              address: hideInfo ? '' : p.number,
-              label: hideInfo ? null : p.label,
+              address: hideInfo ? '' : entry.address,
+              label: hideInfo ? null : entry.label,
               contact: contact,
               onTap: () {
-                if (controller.selectedContacts.firstWhereOrNull((c) => c.address == p.number) != null) {
+                if (controller.selectedContacts.firstWhereOrNull((c) => c.address == entry.address) != null) {
                   return;
                 }
                 controller.addSelected(
                   SelectedContact(
                     displayName: contact.computedDisplayName,
-                    address: p.number,
+                    address: entry.address,
                   ),
                 );
               },
-            ),
-          ),
-          if (showEmails)
-            ...uniqueEmails.map(
-              (e) => _ContactAddressRow(
-                displayName: hideInfo ? 'Contact' : contact.computedDisplayName,
-                address: hideInfo ? '' : e.address,
-                label: hideInfo ? null : e.label,
-                contact: contact,
-                onTap: () {
-                  if (controller.selectedContacts.firstWhereOrNull((c) => c.address == e.address) != null) {
-                    return;
-                  }
-                  controller.addSelected(
-                    SelectedContact(
-                      displayName: contact.computedDisplayName,
-                      address: e.address,
-                    ),
-                  );
-                },
-              ),
             ),
         ],
       );
@@ -86,13 +76,16 @@ class SearchContactTile extends StatelessWidget {
   }
 }
 
-class _ContactAddressRow extends StatelessWidget {
-  const _ContactAddressRow({
+class ContactAddressRow extends StatelessWidget {
+  const ContactAddressRow({
+    super.key,
     required this.displayName,
     required this.address,
     required this.contact,
     required this.onTap,
     this.label,
+    this.shape,
+    this.tileColor,
   });
 
   final String displayName;
@@ -100,13 +93,17 @@ class _ContactAddressRow extends StatelessWidget {
   final String? label;
   final ContactV2 contact;
   final VoidCallback onTap;
+  final ShapeBorder? shape;
+  final Color? tileColor;
 
   @override
   Widget build(BuildContext context) {
     final subtitle = (label != null && label!.isNotEmpty) ? '$address  •  $label' : address;
 
     return Material(
-      color: Colors.transparent,
+      color: tileColor ?? Colors.transparent,
+      shape: shape,
+      clipBehavior: shape != null ? Clip.antiAlias : Clip.none,
       child: InkWell(
         onTap: onTap,
         child: ListTile(
@@ -126,7 +123,7 @@ class _ContactAddressRow extends StatelessWidget {
           subtitle: Text(
             subtitle,
             style: context.theme.textTheme.bodySmall?.copyWith(
-              color: context.theme.colorScheme.outline,
+              color: context.theme.colorScheme.onSurfaceVariant,
             ),
             overflow: TextOverflow.ellipsis,
           ),

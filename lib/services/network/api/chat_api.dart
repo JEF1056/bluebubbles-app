@@ -240,6 +240,28 @@ class ChatApi {
     });
   }
 
+  /// Get a chat's synced wallpaper image by the chat [guid]
+  Future<Response> getBackground(
+    String guid, {
+    void Function(int, int)? onReceiveProgress,
+    CancelToken? cancelToken,
+  }) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.get(
+        "${_svc.apiRoot}/chat/$guid/background",
+        queryParameters: _svc.buildQueryParams(),
+        options: Options(
+          responseType: ResponseType.bytes,
+          receiveTimeout: _svc.dio.options.receiveTimeout! * 12,
+          headers: _svc.headers,
+        ),
+        cancelToken: cancelToken,
+        onReceiveProgress: onReceiveProgress,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
   /// Set a group chat icon by the chat [guid]
   Future<Response> setIcon(
     String guid,
@@ -297,6 +319,31 @@ class ChatApi {
       final response = await _svc.dio.delete(
         "${_svc.apiRoot}/chat/$guid/$messageGuid",
         queryParameters: _svc.buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Fetch ordered pinned chat GUIDs from macOS (Private API required on server)
+  Future<Response> getPinned({CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.get(
+        "${_svc.apiRoot}/chat/pinned",
+        queryParameters: _svc.buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Pin or unpin a chat by [guid] on macOS (Private API required on server)
+  Future<Response> setPinned(String guid, {bool pinned = true, CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.post(
+        "${_svc.apiRoot}/chat/$guid/pin",
+        queryParameters: _svc.buildQueryParams(),
+        data: {"pinned": pinned},
         cancelToken: cancelToken,
       );
       return _svc.returnSuccessOrError(response);

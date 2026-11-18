@@ -82,11 +82,11 @@ class ThemeStruct {
 
   static ThemeStruct getLightTheme() {
     final name = PrefsSvc.theme.getSelectedLightTheme();
-    final query = Database.themes.query(ThemeStruct_.name.equals(name ?? "Bright White")).build();
+    final query = Database.themes.query(ThemeStruct_.name.equals(name ?? ThemesService.materialYouLightName)).build();
     query.limit = 1;
     final result = query.findFirst();
     if (result == null) {
-      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == "Bright White");
+      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouLightName);
       return _clonePreset(preset);
     }
     return result;
@@ -94,11 +94,11 @@ class ThemeStruct {
 
   static ThemeStruct getDarkTheme() {
     final name = PrefsSvc.theme.getSelectedDarkTheme();
-    final query = Database.themes.query(ThemeStruct_.name.equals(name ?? "OLED Dark")).build();
+    final query = Database.themes.query(ThemeStruct_.name.equals(name ?? ThemesService.materialYouDarkName)).build();
     query.limit = 1;
     final result = query.findFirst();
     if (result == null) {
-      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == "OLED Dark");
+      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouDarkName);
       return _clonePreset(preset);
     }
     return result;
@@ -201,10 +201,15 @@ class ThemeStruct {
             "surfaceVariant": data.colorScheme.surfaceVariant.toARGB32(),
             "onSurfaceVariant": data.colorScheme.onSurfaceVariant.toARGB32(),
             "outline": data.colorScheme.outline.toARGB32(),
+            "outlineVariant": data.colorScheme.outlineVariant.toARGB32(),
             "shadow": data.colorScheme.shadow.toARGB32(),
             "inverseSurface": data.colorScheme.inverseSurface.toARGB32(),
             "onInverseSurface": data.colorScheme.onInverseSurface.toARGB32(),
             "inversePrimary": data.colorScheme.inversePrimary.toARGB32(),
+            "surfaceContainerLowest": data.colorScheme.surfaceContainerLowest.toARGB32(),
+            "surfaceContainerLow": data.colorScheme.surfaceContainerLow.toARGB32(),
+            "surfaceContainer": data.colorScheme.surfaceContainer.toARGB32(),
+            "surfaceContainerHigh": data.colorScheme.surfaceContainerHigh.toARGB32(),
             "surfaceContainerHighest": data.colorScheme.surfaceContainerHighest.toARGB32(),
             "iMessageBubble": (data.extensions[BubbleColors] as BubbleColors?)?.iMessageBubbleColor?.toARGB32(),
             "oniMessageBubble": (data.extensions[BubbleColors] as BubbleColors?)?.oniMessageBubbleColor?.toARGB32(),
@@ -338,13 +343,17 @@ class ThemeStruct {
       ),
       useMaterial3: true,
     ).toTheme;
-    final baseTheme = map["colorScheme"]["surfaceContainerHighest"] != null
-        ? baseFlexTheme.copyWith(
-            colorScheme: baseFlexTheme.colorScheme.copyWith(
-              surfaceContainerHighest: Color(map["colorScheme"]["surfaceContainerHighest"]),
-            ),
-          )
-        : baseFlexTheme;
+    final csMap = map["colorScheme"];
+    final baseTheme = baseFlexTheme.copyWith(
+      colorScheme: baseFlexTheme.colorScheme.copyWith(
+        outlineVariant: csMap["outlineVariant"] != null ? Color(csMap["outlineVariant"]) : null,
+        surfaceContainerLowest: csMap["surfaceContainerLowest"] != null ? Color(csMap["surfaceContainerLowest"]) : null,
+        surfaceContainerLow: csMap["surfaceContainerLow"] != null ? Color(csMap["surfaceContainerLow"]) : null,
+        surfaceContainer: csMap["surfaceContainer"] != null ? Color(csMap["surfaceContainer"]) : null,
+        surfaceContainerHigh: csMap["surfaceContainerHigh"] != null ? Color(csMap["surfaceContainerHigh"]) : null,
+        surfaceContainerHighest: csMap["surfaceContainerHighest"] != null ? Color(csMap["surfaceContainerHighest"]) : null,
+      ),
+    );
     return ThemeStruct(
         id: json["ROWID"],
         name: json["name"],

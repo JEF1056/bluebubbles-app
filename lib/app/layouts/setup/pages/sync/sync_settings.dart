@@ -135,10 +135,10 @@ class SyncSettings extends StatelessWidget {
           borderRadius: BorderRadius.circular(25),
           gradient: LinearGradient(
             begin: AlignmentDirectional.topStart,
-            colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+            colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
           ),
         ),
-        height: 40,
+        height: 48,
         child: ElevatedButton(
           style: ButtonStyle(
             shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -148,8 +148,8 @@ class SyncSettings extends StatelessWidget {
             ),
             backgroundColor: WidgetStateProperty.all(Colors.transparent),
             shadowColor: WidgetStateProperty.all(Colors.transparent),
-            maximumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 36)),
-            minimumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 36)),
+            maximumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 44)),
+            minimumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 44)),
           ),
           onPressed: () async {
             final numberOfMessagesPerPage = controller.numberToDownload.clamp(1, double.infinity).toInt();
@@ -215,7 +215,7 @@ class _NumberOfMessagesTextState extends CustomState<NumberOfMessagesText, int, 
               style: context.theme.textTheme.bodyLarge!
                   .apply(
                     fontSizeDelta: 1.5,
-                    color: context.theme.colorScheme.outline,
+                    color: context.theme.colorScheme.onSurfaceVariant,
                   )
                   .copyWith(height: 1),
             ),

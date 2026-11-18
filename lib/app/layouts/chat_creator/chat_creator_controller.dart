@@ -165,9 +165,9 @@ class ChatCreatorController extends StatefulController {
       case ChatServiceType.iMessage:
         return c.isIMessage;
       case ChatServiceType.sms:
-        return !c.isIMessage;
+        return !c.isIMessage && !c.isRCS;
       case ChatServiceType.rcs:
-        return false;
+        return c.isRCS;
     }
   }
 

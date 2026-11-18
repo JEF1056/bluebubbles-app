@@ -37,6 +37,7 @@ class Message {
   String? associatedMessageType;
   String? associatedMessageEmoji;
   String? expressiveSendStyleId;
+  String? service;
   Handle? handle;
   bool hasAttachments;
   bool hasReactions;
@@ -99,6 +100,7 @@ class Message {
     this.associatedMessageType,
     this.associatedMessageEmoji,
     this.expressiveSendStyleId,
+    this.service,
     this.handle,
     this.hasAttachments = false,
     this.hasReactions = false,
@@ -193,6 +195,7 @@ class Message {
       associatedMessageType: json["associatedMessageType"],
       associatedMessageEmoji: json["associatedMessageEmoji"],
       expressiveSendStyleId: json["expressiveSendStyleId"],
+      service: json["service"],
       handle: json['handle'] != null ? Handle.fromMap(json['handle']) : null,
       hasAttachments: attachments.isNotEmpty || json['hasAttachments'] == true,
       attachments: (json['attachments'] as List? ?? []).map((a) => Attachment.fromMap(a)).toList(),
@@ -448,7 +451,10 @@ class Message {
     return isFromMe != newerMessage.isFromMe;
   }
 
-  int get normalizedThreadPart => threadOriginatorPart == null ? 0 : int.parse(threadOriginatorPart![0]);
+  int get normalizedThreadPart {
+    if (threadOriginatorPart == null || threadOriginatorPart!.isEmpty) return 0;
+    return int.tryParse(threadOriginatorPart!.split(':').first) ?? 0;
+  }
 
   bool connectToUpper() => threadOriginatorGuid != null;
 
@@ -653,6 +659,7 @@ class Message {
       "associatedMessageType": associatedMessageType,
       "associatedMessageEmoji": associatedMessageEmoji,
       "expressiveSendStyleId": expressiveSendStyleId,
+      "service": service,
       "handle": handle?.toMap(),
       "hasAttachments": hasAttachments,
       "hasReactions": hasReactions,

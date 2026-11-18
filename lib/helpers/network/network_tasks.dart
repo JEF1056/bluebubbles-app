@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:isolate';
 
+import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/backend/sync/server_v2_migrations.dart';
@@ -41,6 +42,10 @@ class NetworkTasks {
         ChatsSvc.reset();
         await ChatsSvc.init();
       }
+    } else if (Database.initComplete.isCompleted &&
+        GetIt.I.isRegistered<ContactServiceV2>() &&
+        Database.contactsV2.isEmpty()) {
+      unawaited(ContactsSvcV2.syncContactsToHandles(wait: false));
     }
 
     // When we re-connect, try an incremental sync. The sync's cooldown keeps it from running several times in quick

@@ -536,7 +536,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                             : const SizedBox.shrink(),
                       ),
                     ),
-                  if (SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && chat.isIMessage)
+                  if (SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && (chat.isIMessage || chat.isRCS))
                     Positioned(
                       bottom: _pickerBottom(context, narrowScreen),
                       right: isFromMe ? 15 : null,
@@ -678,12 +678,20 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                         },
                       ),
                     ),
-                  if (!iOS && SettingsSvc.settings.enablePrivateAPI.value && minBigSur && chat.isIMessage && isSent)
+                  if (!iOS &&
+                      SettingsSvc.settings.enablePrivateAPI.value &&
+                      minBigSur &&
+                      (chat.isIMessage || chat.isRCS) &&
+                      isSent)
                     Positioned(
-                      left: !message.isFromMe!
-                          ? widget.childPosition.dx + widget.size.width + (reactions.isNotEmpty ? 20 : 5)
-                          : widget.childPosition.dx - 55,
-                      top: materialOffset,
+                      left: (!message.isFromMe!
+                              ? widget.childPosition.dx + widget.size.width + (reactions.isNotEmpty ? 20 : 5)
+                              : widget.childPosition.dx - 55)
+                          .clamp(8.0, max(8.0, widthContext.width - 43.0)),
+                      top: materialOffset.clamp(
+                        MediaQuery.paddingOf(context).top + (kIsDesktop ? 80 : 50) + 8.0,
+                        max(MediaQuery.paddingOf(context).top + (kIsDesktop ? 80 : 50) + 8.0, context.height - 45.0),
+                      ),
                       child: Material(
                         color: context.theme.colorScheme.primary,
                         borderRadius: BorderRadius.circular(20),
@@ -726,7 +734,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
     final canEdit = (message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 15) ?? false);
     final canUnsend = (message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 2) ?? false);
     return [
-      if (SettingsSvc.settings.enablePrivateAPI.value && minBigSur && chat.isIMessage && isSent)
+      if (SettingsSvc.settings.enablePrivateAPI.value && minBigSur && (chat.isIMessage || chat.isRCS) && isSent)
         DetailsMenuActionWidget(
           onTap: () => popup_navigation_actions.reply(_buildActionContext(DetailsMenuAction.Reply)),
           action: DetailsMenuAction.Reply,

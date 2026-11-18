@@ -34,6 +34,32 @@ class FaceTimeApi {
     });
   }
 
+  /// Decline an incoming FaceTime call on the Mac
+  Future<Response> decline(String callUuid, {CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.post(
+        "${_svc.apiRoot}/facetime/decline/$callUuid",
+        queryParameters: _svc.buildQueryParams(),
+        data: {},
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Sync mute state with the server's active FaceTime call
+  Future<Response> setMuted(String callUuid, bool muted, {CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.post(
+        "${_svc.apiRoot}/facetime/set-muted/$callUuid",
+        queryParameters: _svc.buildQueryParams(),
+        data: {'muted': muted},
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
   /// `POST facetime/call` — has the server's Mac ring [address] on FaceTime, and hands back a
   /// link to join the call. The Mac leaves on its own once someone has joined.
   ///
@@ -47,7 +73,12 @@ class FaceTimeApi {
   ///
   /// The server takes a list of addresses, but dials them as one 1:1 request; group calls
   /// aren't a supported flow, so this takes one.
-  Future<PlacedFaceTimeCall> call(String address, {bool video = true, CancelToken? cancelToken}) async {
+  Future<PlacedFaceTimeCall> call(
+    String address, {
+    bool video = true,
+    bool isTelephony = false,
+    CancelToken? cancelToken,
+  }) async {
     final Response response;
     try {
       response = await _svc.runApiGuarded(() async {
@@ -57,6 +88,7 @@ class FaceTimeApi {
           data: {
             'addresses': [address],
             'video': video,
+            if (isTelephony) 'isTelephony': true,
           },
           // An availability check, a dial (up to 20s) and a link (up to 15s) on the Mac.
           options: Options(receiveTimeout: _svc.dio.options.receiveTimeout! * 3),
@@ -73,7 +105,7 @@ class FaceTimeApi {
 
     final data = (response.data['data'] as Map).cast<String, dynamic>();
     return PlacedFaceTimeCall(
-      link: (data['link'] as Map)['url'] as String,
+      link: (data['link'] as Map?)?['url'] as String?,
       call: FaceTimeCall.fromMap((data['call'] as Map).cast<String, dynamic>()),
     );
   }

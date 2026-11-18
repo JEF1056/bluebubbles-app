@@ -80,10 +80,11 @@ class MessagePartContent extends StatelessWidget {
             ),
         };
         final isFromMe = message.isFromMe == true;
+        final edgeInset = CurrentSkin.iOS ? _collectionEdgeInset : 0.0;
         return Padding(
           padding: EdgeInsets.only(
-            left: isFromMe ? 0 : _collectionEdgeInset,
-            right: isFromMe ? _collectionEdgeInset : 0,
+            left: isFromMe ? 0 : edgeInset,
+            right: isFromMe ? edgeInset : 0,
           ),
           child: collection,
         );

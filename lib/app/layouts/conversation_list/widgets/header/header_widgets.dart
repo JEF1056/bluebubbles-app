@@ -167,17 +167,21 @@ class MaterialAvatarMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return AnimatedDropdownMenu(
       menuWidth: 240,
-      trigger: (context, showMenu) => GestureDetector(
+      trigger: (context, showMenu) => InkWell(
+        customBorder: const CircleBorder(),
         onTap: showMenu,
-        child: Container(
-          padding: const EdgeInsets.all(2),
-          child: const ContactAvatarWidget(
-            size: 32,
-            preferHighResAvatar: true,
-            borderThickness: 0.1,
-            editable: false,
-            fontSize: 12,
-            scaleSize: false,
+        child: const SizedBox(
+          width: 48,
+          height: 48,
+          child: Center(
+            child: ContactAvatarWidget(
+              size: 32,
+              preferHighResAvatar: true,
+              borderThickness: 0.1,
+              editable: false,
+              fontSize: 12,
+              scaleSize: false,
+            ),
           ),
         ),
       ),

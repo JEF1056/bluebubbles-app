@@ -261,23 +261,68 @@ class NotificationsService {
             !message.isReaction;
         final String reactionType = SettingsSvc.settings.notificationReactionActionType.value;
 
+        final Handle? senderHandle = message.handleRelation.target;
+        final ContactV2? senderContact = senderHandle?.contactsV2.where((c) => c.isNative).firstOrNull ??
+            senderHandle?.contactsV2.firstOrNull;
+        final String? contactKey = senderHandle?.address;
+        final String? contactUri = ContactV2.personUriForAddress(contactKey);
+        final String? nativeContactId = (senderContact != null &&
+                senderContact.isNative &&
+                senderContact.nativeContactId.isNotEmpty)
+            ? senderContact.nativeContactId
+            : null;
+
+        final List<Map<String, dynamic>> participants = chat.people.map((h) {
+          final ContactV2? c = h.contactsV2.where((e) => e.isNative).firstOrNull ?? h.contactsV2.firstOrNull;
+          return <String, dynamic>{
+            'name': h.displayName,
+            'key': h.address,
+            'uri': ContactV2.personUriForAddress(h.address),
+            'native_contact_id': (c != null && c.isNative && c.nativeContactId.isNotEmpty) ? c.nativeContactId : null,
+          };
+        }).toList();
+
+        String? attachmentPath;
+        String? attachmentMime;
+        if (!hideContent && message.dbAttachments.isNotEmpty) {
+          for (final att in message.dbAttachments) {
+            final mime = att.mimeType;
+            if (mime != null && mime.startsWith('image/')) {
+              final path = att.path;
+              if (File(path).existsSync()) {
+                attachmentPath = path;
+                attachmentMime = mime;
+                break;
+              }
+            }
+          }
+        }
+
         await GetIt.I.isReady<MethodChannelService>();
-        await MethodChannelSvc.actions.createIncomingMessageNotification(
-          channelId: NEW_MESSAGE_CHANNEL,
-          chatId: chat.id,
-          chatGuid: guid,
-          chatIsGroup: isGroup,
-          chatTitle: title,
-          chatIcon: isGroup ? chatIcon : contactIcon,
-          contactName: contactName,
-          contactAvatar: contactIcon,
-          messageGuid: message.guid!,
-          messageText: text,
-          messageDate: message.dateCreated!.millisecondsSinceEpoch,
-          messageIsFromMe: false,
-          showReactionAction: showReactionAction,
-          reactionType: reactionType,
-        );
+        await MethodChannelSvc.invokeMethod('create-incoming-message-notification', {
+          'channel_id': NEW_MESSAGE_CHANNEL,
+          'chat_id': chat.id,
+          'chat_guid': guid,
+          'chat_is_group': isGroup,
+          'chat_title': title,
+          'chat_icon': isGroup ? chatIcon : contactIcon,
+          'contact_name': contactName,
+          'contact_avatar': contactIcon,
+          'contact_key': contactKey,
+          'contact_uri': contactUri,
+          'native_contact_id': nativeContactId,
+          'you_name': SettingsSvc.settings.userName.value,
+          'you_key': 'me',
+          'participants': participants,
+          'attachment_path': attachmentPath,
+          'attachment_mime': attachmentMime,
+          'message_guid': message.guid!,
+          'message_text': text,
+          'message_date': message.dateCreated!.millisecondsSinceEpoch,
+          'message_is_from_me': false,
+          'show_reaction_action': showReactionAction,
+          'reaction_type': reactionType,
+        });
       }
     }
   }
@@ -311,8 +356,8 @@ class NotificationsService {
     await createNotification(chat, message);
   }
 
-  Future<void> createIncomingFaceTimeNotification(
-      String? callUuid, String caller, Uint8List? chatIcon, bool isAudio) async {
+  Future<bool> createIncomingFaceTimeNotification(
+      String? callUuid, String caller, Uint8List? chatIcon, bool isAudio, {String? callerAddress}) async {
     // Set some notification defaults
     String title = caller;
     String text = "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
@@ -326,11 +371,13 @@ class NotificationsService {
           await IntentsSvc.answerFaceTime(callUuid);
         });
       }
+      return false;
     } else if (kIsDesktop) {
       _lock.synchronized(() async => await showPersistentDesktopFaceTimeNotif(callUuid, caller, chatIcon, isAudio));
+      return false;
     } else {
       final numeric = callUuid?.numericOnly();
-      await MethodChannelSvc.actions.createIncomingFaceTimeNotification(
+      return await MethodChannelSvc.actions.createIncomingFaceTimeNotification(
         channelId: FACETIME_CHANNEL,
         notificationId:
             numeric != null ? int.parse(numeric.substring(0, min(8, numeric.length))) : Random().nextInt(9998) + 1,
@@ -339,6 +386,8 @@ class NotificationsService {
         callerAvatar: chatIcon,
         caller: caller,
         callUuid: callUuid,
+        isVideo: !isAudio,
+        callerAddress: callerAddress,
       );
     }
   }
@@ -347,6 +396,9 @@ class NotificationsService {
     if (kIsDesktop) {
       await clearDesktopFaceTimeNotif(callUuid);
     } else if (!kIsWeb) {
+      if (Platform.isAndroid) {
+        await MethodChannelSvc.actions.endFaceTimeCall(callUuid: callUuid);
+      }
       final numeric = callUuid.numericOnly();
       MethodChannelSvc.actions.deleteNotification(
         notificationId: int.parse(numeric.substring(0, min(8, numeric.length))),

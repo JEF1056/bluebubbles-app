@@ -24,7 +24,7 @@ class SettingsHeader extends StatelessWidget {
       alignment: Alignment.bottomLeft,
       color: Colors.transparent,
       child: Padding(
-        padding: EdgeInsets.only(bottom: 8.0, left: SettingsSvc.settings.skin.value == Skins.iOS ? 30 : 15),
+        padding: EdgeInsets.only(bottom: 8.0, left: SettingsSvc.settings.skin.value == Skins.iOS ? 30 : 16),
         child: Text(text.psCapitalize,
             style: SettingsSvc.settings.skin.value == Skins.iOS ? iosSubtitle : materialSubtitle),
       ),

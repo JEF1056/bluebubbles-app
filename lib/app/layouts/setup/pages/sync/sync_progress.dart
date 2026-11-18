@@ -87,7 +87,7 @@ class _SyncProgressState extends State<SyncProgress> {
                             borderRadius: BorderRadius.circular(20),
                             child: LinearProgressIndicator(
                               value: syncManager.progress.value == 0 ? null : syncManager.progress.value,
-                              backgroundColor: context.theme.colorScheme.outline,
+                              backgroundColor: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.2),
                               valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
                             ),
                           ),
@@ -131,10 +131,10 @@ class _SyncProgressState extends State<SyncProgress> {
                         borderRadius: BorderRadius.circular(25),
                         gradient: LinearGradient(
                           begin: AlignmentDirectional.topStart,
-                          colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                          colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                         ),
                       ),
-                      height: 40,
+                      height: 48,
                       padding: const EdgeInsets.all(2),
                       child: ElevatedButton(
                         style: ButtonStyle(
@@ -145,8 +145,8 @@ class _SyncProgressState extends State<SyncProgress> {
                           ),
                           backgroundColor: WidgetStateProperty.all(context.theme.colorScheme.surface),
                           shadowColor: WidgetStateProperty.all(context.theme.colorScheme.surface),
-                          maximumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 36)),
-                          minimumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 36)),
+                          maximumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 44)),
+                          minimumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 44)),
                         ),
                         onPressed: () async {
                           Get.offAll(
@@ -186,10 +186,10 @@ class _SyncProgressState extends State<SyncProgress> {
                         borderRadius: BorderRadius.circular(25),
                         gradient: LinearGradient(
                           begin: AlignmentDirectional.topStart,
-                          colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                          colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                         ),
                       ),
-                      height: 40,
+                      height: 48,
                       child: ElevatedButton(
                         style: ButtonStyle(
                           shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -199,8 +199,8 @@ class _SyncProgressState extends State<SyncProgress> {
                           ),
                           backgroundColor: WidgetStateProperty.all(Colors.transparent),
                           shadowColor: WidgetStateProperty.all(Colors.transparent),
-                          maximumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 36)),
-                          minimumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 36)),
+                          maximumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 44)),
+                          minimumSize: WidgetStateProperty.all(Size(context.width * 2 / 3, 44)),
                         ),
                         onPressed: () {
                           Get.offAll(

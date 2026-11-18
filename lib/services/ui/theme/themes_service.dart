@@ -85,9 +85,11 @@ class ThemesService {
   static final oledDarkTheme = FlexColorScheme(
     textTheme: Typography.englishLike2021.merge(Typography.whiteMountainView),
     colorScheme: ColorScheme.fromSeed(
-      seedColor: Colors.blue,
+      seedColor: const Color(0xFF0B57D0),
       surface: Colors.black,
-      surfaceContainerHighest: HexColor("323332"),
+      surfaceContainer: HexColor("141619"),
+      surfaceContainerHigh: HexColor("1E2024"),
+      surfaceContainerHighest: HexColor("2A2C30"),
       error: Colors.red,
       brightness: Brightness.dark,
     ),
@@ -146,7 +148,9 @@ class ThemesService {
       splashFactory: InkSparkle.splashFactory,
       colorScheme: base.colorScheme.copyWith(
         surface: Colors.white,
-        surfaceContainerHighest: HexColor('F2F2F6'),
+        surfaceContainer: HexColor('F3F6FC'),
+        surfaceContainerHigh: HexColor('E9EEF6'),
+        surfaceContainerHighest: HexColor('E1E6EE'),
       ),
       extensions: [
         BubbleColors(
@@ -248,10 +252,8 @@ class ThemesService {
     mui_utils.CorePalette? palette,
     MaterialYouVariant variant = MaterialYouVariant.base,
   }) {
-    final resolvedPalette = palette;
-    if (resolvedPalette == null) {
-      return brightness == Brightness.dark ? oledDarkTheme : whiteLightTheme;
-    }
+    // Fall back to Google Blue M3 palette when dynamic Monet palette is unavailable.
+    final resolvedPalette = palette ?? mui_utils.CorePalette.of(0xFF0B57D0);
 
     final bool isDark = brightness == Brightness.dark;
     final satDelta = switch (variant) {
@@ -301,12 +303,22 @@ class ThemesService {
     Color onTertiary = tone(Color(resolvedPalette.tertiary.get(isDark ? 20 : 100)));
     Color tertiaryContainer = tone(Color(resolvedPalette.tertiary.get(isDark ? 30 : 90)));
     Color onTertiaryContainer = tone(Color(resolvedPalette.tertiary.get(isDark ? 90 : 10)));
-    Color surface = Color(resolvedPalette.neutral.get(isDark ? 10 : 99));
+    Color surface = Color(resolvedPalette.neutral.get(isDark ? 6 : 98));
+    Color surfaceContainerLowest = Color(resolvedPalette.neutral.get(isDark ? 4 : 100));
+    Color surfaceContainerLow = Color(resolvedPalette.neutral.get(isDark ? 10 : 96));
+    Color surfaceContainer = Color(resolvedPalette.neutral.get(isDark ? 12 : 94));
+    Color surfaceContainerHigh = Color(resolvedPalette.neutral.get(isDark ? 17 : 92));
+    Color surfaceContainerHighest = Color(resolvedPalette.neutral.get(isDark ? 22 : 90));
     Color onSurface = Color(resolvedPalette.neutral.get(isDark ? 90 : 10));
     Color surfaceVariant = Color(resolvedPalette.neutralVariant.get(isDark ? 30 : 90));
     Color onSurfaceVariant = Color(resolvedPalette.neutralVariant.get(isDark ? 80 : 30));
     Color outline = Color(resolvedPalette.neutralVariant.get(isDark ? 60 : 50));
     Color outlineVariant = Color(resolvedPalette.neutralVariant.get(isDark ? 30 : 80));
+
+    if (palette == null && variant == MaterialYouVariant.base) {
+      primary = isDark ? const Color(0xFFA8C7FA) : const Color(0xFF0B57D0);
+      onPrimary = isDark ? const Color(0xFF062E6F) : Colors.white;
+    }
 
     if (variant == MaterialYouVariant.vibrant) {
       // Make vibrant clearly "punchy primary" while muting supporting accents.
@@ -420,7 +432,11 @@ class ThemesService {
         onErrorContainer: Color(resolvedPalette.error.get(isDark ? 80 : 10)),
         surface: surface,
         onSurface: onSurface,
-        surfaceContainerHighest: surfaceVariant,
+        surfaceContainerLowest: surfaceContainerLowest,
+        surfaceContainerLow: surfaceContainerLow,
+        surfaceContainer: surfaceContainer,
+        surfaceContainerHigh: surfaceContainerHigh,
+        surfaceContainerHighest: surfaceContainerHighest,
         surfaceVariant: surfaceVariant,
         onSurfaceVariant: onSurfaceVariant,
         outline: outline,
@@ -438,12 +454,13 @@ class ThemesService {
       splashFactory: InkSparkle.splashFactory,
       extensions: [
         BubbleColors(
-          iMessageBubbleColor: primary,
-          oniMessageBubbleColor: onPrimary,
-          smsBubbleColor: secondary,
-          onSmsBubbleColor: onSecondary,
-          receivedBubbleColor: surfaceVariant,
-          onReceivedBubbleColor: onSurfaceVariant,
+          // Google Messages uses deep primaryContainer in dark mode and primary in light mode
+          iMessageBubbleColor: isDark ? primaryContainer : primary,
+          oniMessageBubbleColor: isDark ? onPrimaryContainer : onPrimary,
+          smsBubbleColor: isDark ? secondaryContainer : secondary,
+          onSmsBubbleColor: isDark ? onSecondaryContainer : onSecondary,
+          receivedBubbleColor: isDark ? surfaceContainerHighest : surfaceContainerHigh,
+          onReceivedBubbleColor: onSurface,
         ),
         BubbleText(
           bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(

@@ -7,6 +7,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/intera
 import 'package:bluebubbles/app/components/custom/custom_bouncing_scroll_physics.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/dialogs/custom_mention_dialog.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/desktop_attachment_menu.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/text_field_attachment_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/formatting_bar.dart';
@@ -171,11 +172,13 @@ class TextFieldComponentState extends State<TextFieldComponent> {
 
   String _hintText(bool isRecording) {
     if (widget.hintText != null) return widget.hintText!;
-    if (isChatCreator) return "New Message";
+    if (isChatCreator) return material ? "Text message" : "New Message";
     if (isRecording) return "";
     if (SettingsSvc.settings.recipientAsPlaceholder.value) {
       return ChatsSvc.getChatState(chat!.guid)?.title.value ?? chat!.getTitle();
     }
+    if (material) return chat!.isRCS ? "RCS message" : "Text message";
+    if (chat!.isRCS) return "Text Message • RCS";
     return chat!.isIMessage ? "iMessage" : "Text Forwarding";
   }
 
@@ -215,8 +218,10 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                     )
                   : null,
               decoration: BoxDecoration(
-                color: (!iOS || hasBackground) ? context.theme.colorScheme.surfaceContainerHighest : null,
-                borderRadius: BorderRadius.circular(20),
+                color: (!iOS || hasBackground)
+                    ? (iOS ? context.theme.colorScheme.surfaceContainerHighest : context.theme.colorScheme.surfaceContainerHigh)
+                    : null,
+                borderRadius: BorderRadius.circular(iOS ? 20 : 28),
               ),
               clipBehavior: Clip.antiAlias,
               child: AnimatedSize(
@@ -284,7 +289,12 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           hintStyle: context.theme
                               .extension<BubbleText>()!
                               .bubbleText
-                              .copyWith(color: context.theme.colorScheme.outline, fontWeight: FontWeight.bold),
+                              .copyWith(
+                                  color: material
+                                      ? context.theme.colorScheme.onSurfaceVariant
+                                      : context.theme.colorScheme.outline,
+                                  fontWeight: FontWeight.bold,
+                                  leadingDistribution: !iOS ? TextLeadingDistribution.even : null),
                           suffixIconConstraints: const BoxConstraints(minHeight: 0),
                         ),
                         onTap: () {
@@ -308,13 +318,17 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         color: context.theme.colorScheme.surfaceContainerHighest,
                       ),
                     Obx(() {
+                      final baseBubbleText = context.theme.extension<BubbleText>()!.bubbleText;
                       final field = TextField(
                         textCapitalization: TextCapitalization.sentences,
                         focusNode: controller?.focusNode ?? focusNode,
                         autocorrect: true,
                         controller: txtController,
                         scrollPhysics: const CustomBouncingScrollPhysics(),
-                        style: context.theme.extension<BubbleText>()!.bubbleText,
+                        textAlignVertical: iOS ? null : TextAlignVertical.center,
+                        style: !iOS
+                            ? baseBubbleText.copyWith(leadingDistribution: TextLeadingDistribution.even)
+                            : baseBubbleText,
                         keyboardType: TextInputType.multiline,
                         // With the formatting panel up, selection changes would otherwise bring the keyboard back.
                         // Turning it off again (a tap closes the panel) reopens the input, and the keyboard with it.
@@ -327,9 +341,12 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                             ? TextInputAction.send
                             : TextInputAction.newline,
                         cursorColor: context.theme.colorScheme.primary,
-                        cursorHeight: context.theme.extension<BubbleText>()!.bubbleText.fontSize! * 1.25,
+                        cursorHeight: baseBubbleText.fontSize! * 1.25,
                         decoration: InputDecoration(
-                          contentPadding: EdgeInsets.all(iOS && !kIsDesktop && !kIsWeb ? 10 : 12.5),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: iOS ? 10 : (material && !isChatCreator && controller != null ? 4 : 16),
+                            vertical: iOS && !kIsDesktop && !kIsWeb ? 10 : 13,
+                          ),
                           isDense: true,
                           isCollapsed: true,
                           hintText: _hintText(isRecording),
@@ -340,26 +357,110 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           fillColor: (isRecording & iOS)
                               ? context.theme.colorScheme.primary.withValues(alpha: 0.3)
                               : Colors.transparent,
-                          hintStyle: context.theme
-                              .extension<BubbleText>()!
-                              .bubbleText
-                              .copyWith(color: context.theme.colorScheme.outline),
-                          suffixIconConstraints: const BoxConstraints(minHeight: 0),
+                          hintStyle: baseBubbleText.copyWith(
+                            color: material
+                                ? context.theme.colorScheme.onSurfaceVariant
+                                : context.theme.colorScheme.outline,
+                            leadingDistribution: !iOS ? TextLeadingDistribution.even : null,
+                          ),
+                          prefixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 48),
+                          prefixIcon: material && !isChatCreator && controller != null
+                              ? Padding(
+                                  padding: const EdgeInsets.only(left: 4.0),
+                                  child: kIsDesktop
+                                      ? DesktopAttachmentMenu(
+                                          controller: controller!,
+                                          inRow: SettingsSvc.settings.textFieldButtons,
+                                          builder: (_, toggle) => IconButton(
+                                            tooltip: 'Add attachment',
+                                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                            padding: EdgeInsets.zero,
+                                            icon: Icon(
+                                              Icons.add_circle_outline,
+                                              color: context.theme.colorScheme.onSurfaceVariant,
+                                              size: 24,
+                                            ),
+                                            onPressed: toggle,
+                                          ),
+                                        )
+                                      : IconButton(
+                                          tooltip: 'Add attachment',
+                                          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                          padding: EdgeInsets.zero,
+                                          icon: Icon(
+                                            Icons.add_circle_outline,
+                                            color: context.theme.colorScheme.onSurfaceVariant,
+                                            size: 24,
+                                          ),
+                                          onPressed: () {
+                                            if (!controller!.showAttachmentPicker.value) {
+                                              controller!.focusNode.unfocus();
+                                              controller!.subjectFocusNode.unfocus();
+                                            }
+                                            controller!.showAttachmentPicker.value =
+                                                !controller!.showAttachmentPicker.value;
+                                          },
+                                        ),
+                                )
+                              : null,
+                          suffixIconConstraints: BoxConstraints(minHeight: iOS ? 0 : 48),
                           suffixIcon: samsung && !isChatCreator
                               ? null
-                              : Padding(
-                                  padding: EdgeInsets.only(right: iOS ? 0.0 : 5.0),
-                                  child: TextFieldSuffix(
-                                    subjectTextController: subjController,
-                                    textController: txtController,
-                                    controller: controller,
-                                    recorderController: recorderController,
-                                    sendMessage: sendMessage,
-                                    isChatCreator: isChatCreator,
-                                    alwaysShowSend: widget.alwaysShowSend,
-                                    hasInitialAttachments: initialAttachments.isNotEmpty,
-                                  ),
-                                ),
+                              : (material && !isChatCreator && controller != null)
+                                  ? Padding(
+                                      padding: const EdgeInsets.only(right: 4.0),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            tooltip: 'Emoji',
+                                            constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
+                                            padding: EdgeInsets.zero,
+                                            icon: Icon(
+                                              Icons.sentiment_satisfied_alt_outlined,
+                                              color: context.theme.colorScheme.onSurfaceVariant,
+                                              size: 22,
+                                            ),
+                                            onPressed: () => AttachmentActions.toggleEmojiPicker(controller!),
+                                          ),
+                                          IconButton(
+                                            tooltip: 'Gallery',
+                                            constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
+                                            padding: EdgeInsets.zero,
+                                            icon: Icon(
+                                              Icons.image_outlined,
+                                              color: context.theme.colorScheme.onSurfaceVariant,
+                                              size: 22,
+                                            ),
+                                            onPressed: () {
+                                              if (kIsDesktop) {
+                                                AttachmentActions.pickFiles(controller!);
+                                              } else {
+                                                if (!controller!.showAttachmentPicker.value) {
+                                                  controller!.focusNode.unfocus();
+                                                  controller!.subjectFocusNode.unfocus();
+                                                }
+                                                controller!.showAttachmentPicker.value =
+                                                    !controller!.showAttachmentPicker.value;
+                                              }
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                    )
+                                  : Padding(
+                                      padding: EdgeInsets.only(right: iOS ? 0.0 : 4.0),
+                                      child: TextFieldSuffix(
+                                        subjectTextController: subjController,
+                                        textController: txtController,
+                                        controller: controller,
+                                        recorderController: recorderController,
+                                        sendMessage: sendMessage,
+                                        isChatCreator: isChatCreator,
+                                        alwaysShowSend: widget.alwaysShowSend,
+                                        hasInitialAttachments: initialAttachments.isNotEmpty,
+                                      ),
+                                    ),
                         ),
                         contextMenuBuilder: (BuildContext context, EditableTextState editableTextState) {
                           final selection = editableTextState.textEditingValue.selection;

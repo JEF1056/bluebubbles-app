@@ -2,6 +2,7 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/backend/actions/attachment_actions.dart';
+import 'package:bluebubbles/services/backend/actions/contact_v2_actions.dart';
 import 'package:bluebubbles/services/backend/actions/message_actions.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -148,7 +149,11 @@ class SyncActions {
 
       final newHandles = inputHandles.where((h) => !existingMap.containsKey(h.uniqueAddressAndService)).toList();
       if (newHandles.isNotEmpty) {
-        handleBox.putMany(newHandles);
+        final ids = handleBox.putMany(newHandles);
+        for (int i = 0; i < ids.length; i++) {
+          newHandles[i].id = ids[i];
+        }
+        ContactV2Actions.linkHandlesToContactsInTx(newHandles);
       }
 
       return {
@@ -184,17 +189,23 @@ class SyncActions {
       final existing = existingMap[inputChat.guid];
       final chatToSave = existing ?? inputChat;
 
+      final rawChat = chatDataByGuid[inputChat.guid]!;
       if (existing != null) {
         if (inputChat.displayName != null && inputChat.displayName!.isNotEmpty) {
           chatToSave.displayName = inputChat.displayName;
         }
         chatToSave.chatIdentifier ??= inputChat.chatIdentifier;
         chatToSave.style ??= inputChat.style;
-        if (inputChat.isArchived == true) chatToSave.isArchived = true;
+        chatToSave.serviceName = inputChat.serviceName ?? chatToSave.serviceName;
+        if (inputChat.isArchived == true && chatToSave.isPinned != true) {
+          chatToSave.isArchived = true;
+        }
+        if (rawChat.containsKey('autoSendReadReceipts') || rawChat.containsKey('properties')) {
+          chatToSave.autoSendReadReceipts = inputChat.autoSendReadReceipts;
+        }
       }
 
       // Collect handles to link from the raw participants list.
-      final rawChat = chatDataByGuid[inputChat.guid]!;
       final participantMaps =
           ((rawChat['participants'] as List?) ?? const []).whereType<Map>().map((p) => p.cast<String, dynamic>());
       final handlesToLink = <Handle>[];

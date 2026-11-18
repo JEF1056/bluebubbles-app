@@ -65,7 +65,7 @@ class ConnectionServerTile extends StatelessWidget {
           children: [
             Text(
               subtitle,
-              style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.outline.withAlpha(220)),
+              style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.onSurfaceVariant.withAlpha(220)),
             ),
             const SizedBox(width: 5),
             const NextButton(),

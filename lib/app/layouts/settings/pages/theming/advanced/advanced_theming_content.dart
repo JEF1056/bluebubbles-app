@@ -253,7 +253,7 @@ class _AdvancedThemingContentState extends State<AdvancedThemingContent> with Th
                           color: tileColor,
                           child: Padding(
                             padding: const EdgeInsets.only(left: 15.0),
-                            child: SettingsDivider(color: context.theme.colorScheme.surfaceVariant),
+                            child: SettingsDivider(color: context.theme.colorScheme.outlineVariant),
                           ),
                         ),
                         SettingsTile(
@@ -332,10 +332,10 @@ class _AdvancedThemingContentState extends State<AdvancedThemingContent> with Th
             ]),
           ),
           SliverPadding(
-            padding: const EdgeInsets.only(top: 20, bottom: 10, left: 15),
+            padding: const EdgeInsets.only(top: 20, bottom: 10, left: 16),
             sliver: SliverToBoxAdapter(
               child: Text("COLORS",
-                  style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline)),
+                  style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.onSurfaceVariant)),
             ),
           ),
           SliverGrid(
@@ -360,10 +360,10 @@ class _AdvancedThemingContentState extends State<AdvancedThemingContent> with Th
             ),
           ),
           SliverPadding(
-            padding: const EdgeInsets.only(top: 20, bottom: 10, left: 15),
+            padding: const EdgeInsets.only(top: 20, bottom: 10, left: 16),
             sliver: SliverToBoxAdapter(
               child: Text("FONT",
-                  style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline)),
+                  style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.onSurfaceVariant)),
             ),
           ),
           SliverToBoxAdapter(

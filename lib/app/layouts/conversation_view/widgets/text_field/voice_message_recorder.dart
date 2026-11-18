@@ -57,12 +57,14 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
                 showMiddleLine: false,
               ),
               decoration: BoxDecoration(
-                border: Border.fromBorderSide(BorderSide(
-                  color: widget.iOS ? Colors.transparent : context.theme.colorScheme.outline,
-                  width: 1,
-                )),
-                borderRadius: BorderRadius.circular(20),
-                color: widget.iOS ? Colors.transparent : context.theme.colorScheme.surfaceContainerHighest,
+                border: widget.iOS
+                    ? Border.fromBorderSide(BorderSide(
+                        color: Colors.transparent,
+                        width: 1,
+                      ))
+                    : null,
+                borderRadius: BorderRadius.circular(widget.iOS ? 20 : 28),
+                color: widget.iOS ? Colors.transparent : context.theme.colorScheme.surfaceContainerHigh,
               ),
             ),
             Visibility(

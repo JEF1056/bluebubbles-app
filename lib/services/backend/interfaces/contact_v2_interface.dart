@@ -26,8 +26,8 @@ class ContactV2Interface {
   /// This operation is executed in the GlobalIsolate to prevent UI jank
   ///
   /// Returns a list of handle IDs that were affected by the matching
-  static Future<List<int>> syncContactsToHandles() async {
-    final data = _accountFilterData();
+  static Future<List<int>> syncContactsToHandles({bool includeDeviceContacts = true}) async {
+    final data = {..._accountFilterData(), 'includeDeviceContacts': includeDeviceContacts};
     if (isIsolate) {
       return await ContactV2Actions.syncContactsToHandles(data);
     } else {
@@ -38,8 +38,8 @@ class ContactV2Interface {
   /// Same as [syncContactsToHandles], but also returns the device contact
   /// count and matched-contact count for diagnostic display (Contacts
   /// Management page's manual refresh).
-  static Future<Map<String, dynamic>> syncContactsToHandlesWithStats() async {
-    final data = _accountFilterData();
+  static Future<Map<String, dynamic>> syncContactsToHandlesWithStats({bool includeDeviceContacts = true}) async {
+    final data = {..._accountFilterData(), 'includeDeviceContacts': includeDeviceContacts};
     if (isIsolate) {
       return await ContactV2Actions.syncContactsToHandlesWithStats(data);
     } else {

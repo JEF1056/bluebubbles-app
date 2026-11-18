@@ -153,7 +153,7 @@ final _entities = <obx_int.ModelEntity>[
   obx_int.ModelEntity(
     id: const obx_int.IdUid(3, 9017250848141753702),
     name: 'Chat',
-    lastPropertyId: const obx_int.IdUid(41, 4875992845906556952),
+    lastPropertyId: const obx_int.IdUid(42, 7999446161011430834),
     flags: 0,
     properties: <obx_int.ModelProperty>[
       obx_int.ModelProperty(
@@ -337,6 +337,12 @@ final _entities = <obx_int.ModelEntity>[
       obx_int.ModelProperty(
         id: const obx_int.IdUid(41, 4875992845906556952),
         name: 'textFieldRuns',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(42, 7999446161011430834),
+        name: 'serviceName',
         type: 9,
         flags: 0,
       ),
@@ -554,7 +560,7 @@ final _entities = <obx_int.ModelEntity>[
   obx_int.ModelEntity(
     id: const obx_int.IdUid(13, 4148278195232901830),
     name: 'Message',
-    lastPropertyId: const obx_int.IdUid(55, 4673117792989945365),
+    lastPropertyId: const obx_int.IdUid(56, 754086160495688481),
     flags: 0,
     properties: <obx_int.ModelProperty>[
       obx_int.ModelProperty(
@@ -833,6 +839,12 @@ final _entities = <obx_int.ModelEntity>[
       obx_int.ModelProperty(
         id: const obx_int.IdUid(55, 4673117792989945365),
         name: 'associatedMessageEmoji',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(56, 754086160495688481),
+        name: 'service',
         type: 9,
         flags: 0,
       ),
@@ -1507,7 +1519,10 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final textFieldRunsOffset = object.textFieldRuns == null
             ? null
             : fbb.writeString(object.textFieldRuns!);
-        fbb.startTable(42);
+        final serviceNameOffset = object.serviceName == null
+            ? null
+            : fbb.writeString(object.serviceName!);
+        fbb.startTable(43);
         fbb.addInt64(0, object.id ?? 0);
         fbb.addOffset(2, guidOffset);
         fbb.addOffset(4, chatIdentifierOffset);
@@ -1541,6 +1556,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
         fbb.addOffset(38, dynamicWallpaperConfigOffset);
         fbb.addOffset(39, knownGroupPhotoGuidOffset);
         fbb.addOffset(40, textFieldRunsOffset);
+        fbb.addOffset(41, serviceNameOffset);
         fbb.finish(fbb.endTable());
         return object.id ?? 0;
       },
@@ -1644,6 +1660,9 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final knownGroupPhotoGuidParam = const fb.StringReader(
           asciiOptimization: true,
         ).vTableGetNullable(buffer, rootOffset, 82);
+        final serviceNameParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGetNullable(buffer, rootOffset, 86);
         final object =
             Chat(
                 id: idParam,
@@ -1671,6 +1690,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
                 dynamicWallpaperId: dynamicWallpaperIdParam,
                 dynamicWallpaperConfig: dynamicWallpaperConfigParam,
                 knownGroupPhotoGuid: knownGroupPhotoGuidParam,
+                serviceName: serviceNameParam,
               )
               ..dbOnlyLatestMessageDate = dbOnlyLatestMessageDateValue == null
                   ? null
@@ -2047,7 +2067,10 @@ obx_int.ModelDefinition getObjectBoxModel() {
             object.associatedMessageEmoji == null
             ? null
             : fbb.writeString(object.associatedMessageEmoji!);
-        fbb.startTable(56);
+        final serviceOffset = object.service == null
+            ? null
+            : fbb.writeString(object.service!);
+        fbb.startTable(57);
         fbb.addInt64(0, object.id ?? 0);
         fbb.addInt64(1, object.originalROWID);
         fbb.addOffset(2, guidOffset);
@@ -2093,6 +2116,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
         fbb.addBool(52, object.hasEffectPlayed);
         fbb.addOffset(53, metadataOffset);
         fbb.addOffset(54, associatedMessageEmojiOffset);
+        fbb.addOffset(55, serviceOffset);
         fbb.finish(fbb.endTable());
         return object.id ?? 0;
       },
@@ -2228,6 +2252,9 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final expressiveSendStyleIdParam = const fb.StringReader(
           asciiOptimization: true,
         ).vTableGetNullable(buffer, rootOffset, 62);
+        final serviceParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGetNullable(buffer, rootOffset, 114);
         final hasAttachmentsParam = const fb.BoolReader().vTableGet(
           buffer,
           rootOffset,
@@ -2305,6 +2332,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
                 associatedMessageType: associatedMessageTypeParam,
                 associatedMessageEmoji: associatedMessageEmojiParam,
                 expressiveSendStyleId: expressiveSendStyleIdParam,
+                service: serviceParam,
                 hasAttachments: hasAttachmentsParam,
                 hasReactions: hasReactionsParam,
                 dateDeleted: dateDeletedParam,
@@ -2944,6 +2972,11 @@ class Chat_ {
     _entities[1].properties[29],
   );
 
+  /// See [Chat.serviceName].
+  static final serviceName = obx.QueryStringProperty<Chat>(
+    _entities[1].properties[30],
+  );
+
   /// see [Chat.handles]
   static final handles = obx.QueryRelationToMany<Chat, Handle>(
     _entities[1].relations[0],
@@ -3307,6 +3340,11 @@ class Message_ {
   /// See [Message.associatedMessageEmoji].
   static final associatedMessageEmoji = obx.QueryStringProperty<Message>(
     _entities[5].properties[44],
+  );
+
+  /// See [Message.service].
+  static final service = obx.QueryStringProperty<Message>(
+    _entities[5].properties[45],
   );
 
   /// see [Message.dbAttachments]

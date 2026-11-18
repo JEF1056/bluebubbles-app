@@ -367,11 +367,18 @@ class SocketService {
           (data) => MessageHandlerSvc.handleEvent("chat-read-status-changed", data, 'DartSocket')),
       s.on("imessage-aliases-removed",
           (data) => MessageHandlerSvc.handleEvent("imessage-aliases-removed", data, 'DartSocket')),
+      s.on("pinned-chats-updated", (data) {
+        final decoded = data is String ? jsonDecode(data) : data;
+        if (decoded is Map) {
+          MessageHandlerSvc.handleEvent("pinned-chats-updated", Map<String, dynamic>.from(decoded), 'DartSocket');
+        }
+      }),
       // Live Find My updates. Re-broadcast through the event dispatcher rather than
       // letting the Find My controller hook the raw socket: the socket object is
       // replaced on every restart, so a listener attached directly to it silently
       // stops firing the first time the connection is cycled.
       s.on("new-findmy-location", (data) => EventDispatcherSvc.emit('new-findmy-location', data)),
+      s.on("new-findmy-device", (data) => EventDispatcherSvc.emit('new-findmy-device', data)),
     ]);
 
     // Report the attempt before making it. closeSocket() leaves the state at

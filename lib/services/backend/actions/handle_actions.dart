@@ -1,6 +1,7 @@
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/models/models.dart' show HandleLookupKey;
+import 'package:bluebubbles/services/backend/actions/contact_v2_actions.dart';
 
 class HandleActions {
   static Future<int> saveHandleAsync(dynamic data) async {
@@ -32,6 +33,9 @@ class HandleActions {
 
       try {
         handle.id = Database.handles.put(handle);
+        if (existing == null && handle.id != null) {
+          ContactV2Actions.linkHandlesToContactsInTx([handle]);
+        }
       } on UniqueViolationException catch (_) {}
 
       // Return just the ID for efficient transfer across isolates
@@ -51,6 +55,7 @@ class HandleActions {
     }
 
     return Database.runInTransaction(TxMode.write, () {
+      final newHandles = <Handle>[];
       /// Match existing to the handles to save, where possible
       for (Handle h in handles) {
         Handle? existing;
@@ -63,13 +68,17 @@ class HandleActions {
         if (existing != null) {
           h.id = existing.id;
           h.originalROWID ??= existing.originalROWID;
+        } else {
+          newHandles.add(h);
         }
-        // Contact matching is now handled automatically by ContactServiceV2
       }
 
       List<int> insertedIds = Database.handles.putMany(handles);
       for (int i = 0; i < insertedIds.length; i++) {
         handles[i].id = insertedIds[i];
+      }
+      if (newHandles.isNotEmpty) {
+        ContactV2Actions.linkHandlesToContactsInTx(newHandles);
       }
 
       // Return just the IDs for efficient transfer across isolates

@@ -71,12 +71,13 @@ class ChatSyncManager extends SyncManager {
 
         addToOutput('Fetching group chat icons from the server...');
         for (Chat chat in serverChats) {
-          if (!chat.isGroup) continue;
-
           try {
-            await Chat.getIcon(chat, force: false);
+            if (chat.isGroup) {
+              await Chat.getIcon(chat, force: false);
+            }
+            await Chat.syncBackground(chat);
           } catch (_) {
-            // If we fail to get the icon, just continue
+            // If we fail to get the icon/background, just continue
           }
         }
 

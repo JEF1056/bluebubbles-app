@@ -53,6 +53,7 @@ class Message {
   @Property(uid: 4673117792989945365)
   String? associatedMessageEmoji;
   String? expressiveSendStyleId;
+  String? service;
   Handle? handle;
   bool hasAttachments;
   bool hasReactions;
@@ -202,6 +203,7 @@ class Message {
     this.associatedMessageType,
     this.associatedMessageEmoji,
     this.expressiveSendStyleId,
+    this.service,
     this.handle,
     this.hasAttachments = false,
     this.hasReactions = false,
@@ -318,6 +320,7 @@ class Message {
       associatedMessageType: json["associatedMessageType"],
       associatedMessageEmoji: json["associatedMessageEmoji"],
       expressiveSendStyleId: json["expressiveSendStyleId"],
+      service: json["service"],
       handle: json['handle'] != null ? Handle.fromMap(json['handle']!.cast<String, dynamic>()) : null,
       hasAttachments: (json['attachments'] as List? ?? []).isNotEmpty || json['hasAttachments'] == true,
       hasReactions: json['hasReactions'] == true,
@@ -749,7 +752,10 @@ class Message {
     return isFromMe != newerMessage.isFromMe;
   }
 
-  int get normalizedThreadPart => threadOriginatorPart == null ? 0 : int.parse(threadOriginatorPart![0]);
+  int get normalizedThreadPart {
+    if (threadOriginatorPart == null || threadOriginatorPart!.isEmpty) return 0;
+    return int.tryParse(threadOriginatorPart!.split(':').first) ?? 0;
+  }
 
   bool connectToUpper() => threadOriginatorGuid != null;
 
@@ -989,6 +995,7 @@ class Message {
     existing.country ??= newMessage.country;
 
     existing.associatedMessageEmoji ??= newMessage.associatedMessageEmoji;
+    existing.service ??= newMessage.service;
 
     if (!existing.wasDeliveredQuietly && newMessage.wasDeliveredQuietly) {
       existing.wasDeliveredQuietly = newMessage.wasDeliveredQuietly;
@@ -1118,6 +1125,7 @@ class Message {
       "associatedMessageType": associatedMessageType,
       "associatedMessageEmoji": associatedMessageEmoji,
       "expressiveSendStyleId": expressiveSendStyleId,
+      "service": service,
       "handle": getHandle()?.toMap(),
       "hasAttachments": hasAttachments,
       "attachments": dbAttachments.map((a) => a.toMap()).toList(),

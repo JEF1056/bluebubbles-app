@@ -80,14 +80,18 @@ class _NewChatCreatorState extends State<NewChatCreator> with ThemeHelpers<NewCh
 
   @override
   Widget build(BuildContext context) {
+    final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
     return BBScaffold(
+      backgroundColor: isMaterial ? context.theme.colorScheme.surfaceContainer : null,
       safeAreaTop: true,
       safeAreaBottom: true,
       resizeToAvoidBottomInset: true,
       appBar: BBAppBar(
-        titleText: 'New Message',
+        titleText: isMaterial ? 'New chat' : 'New Message',
         leading: buildBackButton(context),
-        // backgroundColor: Colors.transparent,
+        backgroundColor: isMaterial ? context.theme.colorScheme.surfaceContainer : null,
+        scrolledUnderElevation: isMaterial ? 0 : 3.0,
+        centerTitle: isMaterial ? false : null,
         toolbarHeight: kIsDesktop ? 90 : 60,
       ),
       body: FocusScope(
@@ -132,11 +136,12 @@ class _AnimatedHeader extends StatelessWidget {
                     ServiceTypePicker(controller: controller),
                     RecipientChipsRow(controller: controller),
                     const SizedBox(height: 8),
-                    Divider(
-                      height: 1,
-                      thickness: 1,
-                      color: context.theme.dividerColor.withValues(alpha: 0.25),
-                    ),
+                    if (SettingsSvc.settings.skin.value != Skins.Material)
+                      Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: context.theme.dividerColor.withValues(alpha: 0.25),
+                      ),
                   ],
                 )
               : const SizedBox.shrink(),
@@ -214,7 +219,9 @@ class _TextFieldArea extends StatelessWidget {
     return Obx(() {
       final service = controller.selectedService.value;
       final isIMsg = service == ChatServiceType.iMessage;
-      final hint = isIMsg ? "iMessage" : "Text Forwarding";
+      final hint = service == ChatServiceType.rcs
+          ? "Text Message • RCS"
+          : (isIMsg ? "iMessage" : "Text Forwarding");
       final activeCVC = controller.activeController.value;
       final sending = controller.isSending.value;
 

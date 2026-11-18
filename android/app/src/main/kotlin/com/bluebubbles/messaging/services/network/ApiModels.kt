@@ -53,6 +53,22 @@ data class SendTapbackRequest(
     val partIndex: Int? = null
 )
 
+data class FaceTimeCallRequest(
+    @SerializedName("addresses")
+    val addresses: List<String>,
+
+    @SerializedName("video")
+    val video: Boolean = false,
+
+    @SerializedName("isTelephony")
+    val isTelephony: Boolean = false
+)
+
+data class FaceTimeSetMutedRequest(
+    @SerializedName("muted")
+    val muted: Boolean
+)
+
 // Generic API Response
 data class ApiResponse(
     @SerializedName("status")

@@ -59,61 +59,101 @@ class _ConversationSearchFieldState extends State<ConversationSearchField> {
 
     return Padding(
       padding: widget.padding,
-      child: CupertinoTextField(
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _submit(),
-        onChanged: widget.onChanged,
-        focusNode: _focusNode,
-        padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 10),
-        controller: _controller,
-        placeholder: widget.placeholder,
-        style: context.theme.textTheme.bodyLarge,
-        placeholderStyle: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.outline),
-        cursorColor: context.theme.colorScheme.primary,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: context.theme.colorScheme.primary),
-        ),
-        maxLines: 1,
-        prefix: Padding(
-          padding: const EdgeInsets.only(left: 15),
-          child: Icon(
-            iOS ? CupertinoIcons.search : Icons.search,
-            color: context.theme.colorScheme.outline,
-          ),
-        ),
-        suffix: Padding(
-          padding: const EdgeInsets.only(right: 15),
-          child: !widget.isSearching
-              ? InkWell(
-                  onTap: _submit,
-                  child: Icon(Icons.arrow_forward, color: context.theme.colorScheme.primary),
-                )
-              : Padding(
-                  padding: const EdgeInsets.all(12.0),
-                  child: iOS
-                      ? Theme(
+      child: iOS
+          ? CupertinoTextField(
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _submit(),
+              onChanged: widget.onChanged,
+              focusNode: _focusNode,
+              padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 10),
+              controller: _controller,
+              placeholder: widget.placeholder,
+              style: context.theme.textTheme.bodyLarge,
+              placeholderStyle: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.outline),
+              cursorColor: context.theme.colorScheme.primary,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: context.theme.colorScheme.primary),
+              ),
+              maxLines: 1,
+              prefix: Padding(
+                padding: const EdgeInsets.only(left: 15),
+                child: Icon(
+                  CupertinoIcons.search,
+                  color: context.theme.colorScheme.outline,
+                ),
+              ),
+              suffix: Padding(
+                padding: const EdgeInsets.only(right: 15),
+                child: !widget.isSearching
+                    ? InkWell(
+                        onTap: _submit,
+                        child: Icon(Icons.arrow_forward, color: context.theme.colorScheme.primary),
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: Theme(
                           data: ThemeData(
                             cupertinoOverrideTheme: CupertinoThemeData(
                               brightness: ThemeData.estimateBrightnessForColor(context.theme.colorScheme.surface),
                             ),
                           ),
                           child: const CupertinoActivityIndicator(),
-                        )
-                      : SizedBox(
+                        ),
+                      ),
+              ),
+              suffixMode: OverlayVisibilityMode.editing,
+            )
+          : TextField(
+              textInputAction: TextInputAction.search,
+              textAlignVertical: TextAlignVertical.center,
+              onSubmitted: (_) => _submit(),
+              onChanged: widget.onChanged,
+              focusNode: _focusNode,
+              controller: _controller,
+              style: context.theme.textTheme.bodyLarge!.copyWith(
+                height: 1.25,
+                leadingDistribution: TextLeadingDistribution.even,
+              ),
+              cursorColor: context.theme.colorScheme.primary,
+              maxLines: 1,
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: widget.placeholder == 'Enter a search term...' ? 'Search messages' : widget.placeholder,
+                hintStyle: context.theme.textTheme.bodyLarge!.copyWith(
+                  color: context.theme.colorScheme.onSurfaceVariant,
+                  height: 1.25,
+                  leadingDistribution: TextLeadingDistribution.even,
+                ),
+                filled: true,
+                fillColor: context.theme.colorScheme.surfaceContainerHigh,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(28),
+                  borderSide: BorderSide.none,
+                ),
+                prefixIcon: Icon(
+                  Icons.search_rounded,
+                  color: context.theme.colorScheme.onSurfaceVariant,
+                ),
+                suffixIcon: widget.isSearching
+                    ? Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: SizedBox(
                           height: 20,
                           width: 20,
-                          child: Center(
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                            ),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
                           ),
                         ),
-                ),
-        ),
-        suffixMode: OverlayVisibilityMode.editing,
-      ),
+                      )
+                    : IconButton(
+                        onPressed: _submit,
+                        icon: Icon(Icons.arrow_forward, color: context.theme.colorScheme.primary),
+                      ),
+              ),
+            ),
     );
   }
 }

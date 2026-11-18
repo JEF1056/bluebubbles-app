@@ -486,6 +486,14 @@ class IncomingMessageHandler {
       }
     }
 
+    // 10.6. Per-chat wallpaper sync when the incoming chat payload carries a changed or cleared background.
+    if (!isIsolate && (payload.chat.serverBackgroundGuid != null || payload.chat.hasServerProperties)) {
+      final localBgGuid = serverBackgroundGuidFromPath(FilesystemSvc.getExistingChatBackgroundPath(c.guid));
+      if (localBgGuid != payload.chat.serverBackgroundGuid) {
+        unawaited(Chat.syncBackground(payload.chat, targetChat: c));
+      }
+    }
+
     // 11. Flush any out-of-order updated-message that arrived before us.
     if (saved.guid != null) _flushPendingUpdate(saved.guid!, c);
   }

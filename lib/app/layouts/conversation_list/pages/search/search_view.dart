@@ -202,47 +202,51 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                           ),
                         ),
                         Container(
-                            margin: const EdgeInsets.only(left: 10),
-                            width: 35,
-                            height: 40,
-                            child: Stack(children: [
+                            margin: const EdgeInsets.only(left: 6),
+                            width: 48,
+                            height: 48,
+                            child: Stack(alignment: Alignment.center, children: [
+                              IconButton(
+                                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                                onPressed: () {
+                                  HapticFeedback.lightImpact();
+                                  if (focusNode.hasFocus) {
+                                    focusNode.unfocus();
+                                  }
+
+                                  if (panelController.status != SlidingUpPanelStatus.expanded) {
+                                    panelController.expand();
+                                  }
+                                },
+                                icon: Icon(
+                                  Icons.tune,
+                                  color: context.theme.colorScheme.primary,
+                                ),
+                              ),
                               if (filterCount > 0)
                                 Positioned(
-                                  top: -4,
-                                  right: 0,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(5),
-                                    decoration: BoxDecoration(
-                                      color: context.theme.colorScheme.primary,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: Text(
-                                      filterCount.toString(),
-                                      style: context.theme.textTheme.bodySmall!
-                                          .copyWith(color: context.theme.colorScheme.onPrimary),
+                                  top: 2,
+                                  right: 4,
+                                  child: IgnorePointer(
+                                    child: Container(
+                                      constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                      alignment: Alignment.center,
+                                      decoration: BoxDecoration(
+                                        color: context.theme.colorScheme.primary,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Text(
+                                        filterCount.toString(),
+                                        style: context.theme.textTheme.labelSmall!.copyWith(
+                                          color: context.theme.colorScheme.onPrimary,
+                                          height: 1.0,
+                                          leadingDistribution: TextLeadingDistribution.even,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              Container(
-                                  margin: const EdgeInsets.only(left: 5),
-                                  child: Padding(
-                                      padding: const EdgeInsets.only(top: 10),
-                                      child: InkWell(
-                                        onTap: () {
-                                          HapticFeedback.lightImpact();
-                                          if (focusNode.hasFocus) {
-                                            focusNode.unfocus();
-                                          }
-
-                                          if (panelController.status != SlidingUpPanelStatus.expanded) {
-                                            panelController.expand();
-                                          }
-                                        },
-                                        child: Icon(
-                                          Icons.tune,
-                                          color: context.theme.colorScheme.primary,
-                                        ),
-                                      )))
                             ]))
                       ]),
                     ),

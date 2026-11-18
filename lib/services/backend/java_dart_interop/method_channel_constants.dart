@@ -10,6 +10,7 @@ abstract class MethodChannelInboundMethods {
   static const String scheduledMessageError = 'scheduled-message-error';
   static const String replyChat = 'ReplyChat';
   static const String markChatRead = 'MarkChatRead';
+  static const String muteChat = 'MuteChat';
   static const String chatReadStatusChanged = 'chat-read-status-changed';
   static const String mediaColors = 'MediaColors';
   static const String incomingFacetime = 'incoming-facetime';

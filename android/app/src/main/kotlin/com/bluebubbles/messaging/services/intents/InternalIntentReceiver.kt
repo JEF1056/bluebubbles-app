@@ -1,5 +1,6 @@
 package com.bluebubbles.messaging.services.intents
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationManager
@@ -8,14 +9,20 @@ import android.app.Person
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
+import androidx.core.content.ContextCompat
 import com.bluebubbles.messaging.Constants
+import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.services.network.HttpService
+import com.bluebubbles.messaging.services.notifications.CreateIncomingMessageNotification
 import com.bluebubbles.messaging.services.notifications.DeleteNotificationHandler
+import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
+import com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.Utils
 import java.io.BufferedInputStream
@@ -35,7 +42,49 @@ class InternalIntentReceiver: BroadcastReceiver() {
             "DeleteNotification" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val tag: String? = intent.getStringExtra("tag")
+                val chatGuid: String? = intent.getStringExtra("chatGuid")
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuid)
+            }
+            "DeclineFaceTime" -> {
+                val notificationId: Int = intent.getIntExtra("notificationId", 0)
+                val tag: String? = intent.getStringExtra("tag")
+                val callUuid: String? = intent.getStringExtra("callUuid")
                 DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                if (FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid) && callUuid != null) {
+                    val pendingResult = goAsync()
+                    HttpService(context).declineFaceTimeCall(
+                        callUuid = callUuid,
+                        onSuccess = { pendingResult.finish() },
+                        onError = { pendingResult.finish() }
+                    )
+                }
+            }
+            "AnswerFaceTimeAudio" -> {
+                val notificationId: Int = intent.getIntExtra("notificationId", 0)
+                val tag: String? = intent.getStringExtra("tag")
+                val callUuid: String? = intent.getStringExtra("callUuid")
+                val callerName: String = intent.getStringExtra("callerName") ?: "Unknown Caller"
+                val callerAddress: String? = intent.getStringExtra("callerAddress")
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                if (!callUuid.isNullOrBlank()) {
+                    val routed = FaceTimeConnectionService.addIncomingCall(
+                        context = context,
+                        callUuid = callUuid,
+                        callerName = callerName,
+                        address = callerAddress,
+                        autoAnswer = true
+                    )
+                    if (!routed) {
+                        val launch = Intent(context, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            putExtra("callUuid", callUuid)
+                            putExtra("answer", true)
+                            putExtra("caller", callerName)
+                            type = "AnswerFaceTime"
+                        }
+                        context.startActivity(launch)
+                    }
+                }
             }
             "MarkChatRead" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
@@ -43,6 +92,15 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val tag: String? = intent.getStringExtra("tag")
                 DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
                 DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid)) {}
+            }
+            "MuteChat" -> {
+                val notificationId: Int = intent.getIntExtra("notificationId", 0)
+                val chatGuid: String? = intent.getStringExtra("chatGuid")
+                val tag: String? = intent.getStringExtra("tag")
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                if (!chatGuid.isNullOrEmpty()) {
+                    DartWorkManager.createWorker(context, "MuteChat", hashMapOf("chatGuid" to chatGuid)) {}
+                }
             }
             "ReplyChat" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
@@ -111,7 +169,21 @@ class InternalIntentReceiver: BroadcastReceiver() {
                     PersistentLog.d(context, Constants.logTag, "Posting the user-created reply")
                     oldBuilder.setStyle(messagingStyle)
                     oldBuilder.setOnlyAlertOnce(true)
-                    oldBuilder.setGroupAlertBehavior(Notification.GROUP_ALERT_SUMMARY)
+                    oldBuilder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+                    if (succeeded && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        val existingHistory = chatNotification.notification.extras
+                            ?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
+                            ?.toList()
+                            ?: emptyList()
+                        val updatedHistory = (listOf<CharSequence>(replyText) + existingHistory).take(5).toTypedArray()
+                        oldBuilder.setRemoteInputHistory(updatedHistory)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        PersistentLog.w(context, Constants.logTag, "POST_NOTIFICATIONS permission not granted; skipping reply update")
+                        return@createWorker
+                    }
                     notificationManager.notify(Constants.newMessageNotificationTag, notificationId, oldBuilder.build())
                 }
             }
@@ -229,7 +301,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
         // Create the updated reaction intent
         val likeIntent = PendingIntent.getBroadcast(
             context,
-            notificationId + 1,
+            notificationId + CreateIncomingMessageNotification.PENDING_INTENT_LIKE_OFFSET,
             Intent(context, InternalIntentReceiver::class.java)
                 .putExtras(extras)
                 .putExtra("notificationId", notificationId)
@@ -241,74 +313,78 @@ class InternalIntentReceiver: BroadcastReceiver() {
         )
         
         // Update button label based on state
-        val actionTitle = buttonText ?: when {
-            reactionType == "love" && reactionSent -> "Un-Love"
-            reactionType == "love" && !reactionSent -> "Love"
-            reactionType == "like" && reactionSent -> "Un-Like"
-            else -> "Like"
-        }
+        val actionTitle = buttonText ?: reactionButtonTitle(reactionType, reactionSent)
         
         val likeAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Notification.Action.Builder(
                 null,
                 actionTitle,
                 likeIntent
-            ).build()
+            ).apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    setSemanticAction(Notification.Action.SEMANTIC_ACTION_THUMBS_UP)
+                }
+            }.build()
         } else {
             return
         }
         
-        // Clear existing actions and rebuild
-        oldBuilder.setActions()
-        
-        // Re-add mark as read action (get from original notification if possible)
-        val markAsReadIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId + Constants.pendingIntentMarkReadOffset,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .setType("MarkChatRead"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        
-        val markAsReadAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Notification.Action.Builder(null, "Mark As Read", markAsReadIntent).build()
+        // Preserve all existing actions (Mark As Read, Reply w/ RemoteInput+choices, Mute, WearableExtender),
+        // replacing only the reaction action in-place.
+        val existingActions = existingNotification.notification.actions
+        if (existingActions != null && existingActions.isNotEmpty()) {
+            val updatedActions = replaceReactionAction(existingActions.toList(), likeAction) { action ->
+                isReactionAction(
+                    title = action.title?.toString(),
+                    semanticAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) action.semanticAction else null
+                )
+            }
+            oldBuilder.setActions(*updatedActions.toTypedArray())
         } else {
-            return
+            oldBuilder.setActions(likeAction)
         }
-        
-        // Re-add reply action
-        val replyIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .setType("ReplyChat"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        
-        val remoteInput = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            android.app.RemoteInput.Builder("text_reply").setLabel("Reply").build()
-        } else {
-            return
-        }
-        
-        val replyAction = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            Notification.Action.Builder(null, "Reply", replyIntent)
-                .addRemoteInput(remoteInput)
-                .build()
-        } else {
-            return
-        }
-        
-        oldBuilder.addAction(markAsReadAction)
-        oldBuilder.addAction(replyAction)
-        oldBuilder.addAction(likeAction)
         
         // Post the updated notification
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            PersistentLog.w(context, Constants.logTag, "POST_NOTIFICATIONS permission not granted; skipping reaction update")
+            return
+        }
         oldBuilder.setOnlyAlertOnce(true)
         notificationManager.notify(tag, notificationId, oldBuilder.build())
+    }
+
+    companion object {
+        private val REACTION_ACTION_TITLES = setOf("Like", "Love", "Un-Like", "Un-Love", "Sending...", "Error - Retry")
+
+        internal fun reactionButtonTitle(reactionType: String, reactionSent: Boolean): String = when {
+            reactionType == "love" && reactionSent -> "Un-Love"
+            reactionType == "love" && !reactionSent -> "Love"
+            reactionType == "like" && reactionSent -> "Un-Like"
+            else -> "Like"
+        }
+
+        internal fun isReactionAction(title: String?, semanticAction: Int?): Boolean {
+            if (semanticAction == Notification.Action.SEMANTIC_ACTION_THUMBS_UP) return true
+            return title != null && title in REACTION_ACTION_TITLES
+        }
+
+        internal fun <T> replaceReactionAction(
+            actions: List<T>,
+            newReactionAction: T,
+            predicate: (T) -> Boolean
+        ): List<T> {
+            var replaced = false
+            val result = actions.map { action ->
+                if (!replaced && predicate(action)) {
+                    replaced = true
+                    newReactionAction
+                } else {
+                    action
+                }
+            }
+            return if (replaced) result else result + newReactionAction
+        }
     }
 }

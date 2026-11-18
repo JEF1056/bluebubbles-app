@@ -296,7 +296,7 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                 children: [
                   Text(
                     "To: ",
-                    style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.outline),
+                    style: context.theme.textTheme.bodyMedium!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                   ),
                   Expanded(
                     child: SingleChildScrollView(
@@ -368,7 +368,7 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                                   fillColor: Colors.transparent,
                                   hintText: "Enter a name...",
                                   hintStyle: context.theme.textTheme.bodyMedium!
-                                      .copyWith(color: context.theme.colorScheme.outline),
+                                      .copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                                 ),
                                 onSubmitted: (String value) {
                                   addressOnSubmitted();

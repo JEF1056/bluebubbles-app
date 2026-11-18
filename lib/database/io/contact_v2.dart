@@ -193,6 +193,26 @@ class ContactV2 {
     return email.toLowerCase().trim();
   }
 
+  /// Build a tel:/mailto: URI for notification Person matching (DND breakthrough fallback).
+  static String? personUriForAddress(String? address) {
+    if (address == null) return null;
+    final trimmed = address.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.contains('@')) {
+      return 'mailto:${normalizeEmail(trimmed)}';
+    }
+    final normalized = normalizePhoneNumber(trimmed);
+    return normalized.isNotEmpty ? 'tel:$normalized' : null;
+  }
+
+  /// Returns an Android ContactsContract content URI hint if native, else tel:/mailto: fallback.
+  String? notificationPersonUri({String? fallbackAddress}) {
+    if (isNative && nativeContactId.isNotEmpty) {
+      return 'content://com.android.contacts/contacts/$nativeContactId';
+    }
+    return personUriForAddress(fallbackAddress ?? addresses.firstOrNull);
+  }
+
   /// Check if an address matches any of this contact's addresses
   bool hasMatchingAddress(String address) {
     final normalized = address.contains('@') ? normalizeEmail(address) : normalizePhoneNumber(address);

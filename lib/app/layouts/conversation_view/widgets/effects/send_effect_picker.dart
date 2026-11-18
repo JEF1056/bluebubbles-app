@@ -363,7 +363,7 @@ void sendEffectAction(
                                                     minHeight: 40,
                                                   ),
                                                   padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15)
-                                                      .add(const EdgeInsets.only(right: 10)),
+                                                      .add(EdgeInsets.only(right: CurrentSkin.iOS ? 10 : 0)),
                                                   color: context.theme.colorScheme.primary,
                                                   child: CustomAnimationBuilder<Movie>(
                                                     control: animController,

@@ -46,6 +46,12 @@ class FirebaseDatabaseService extends GetxService {
     return null;
   }
 
+  /// Installed-app OAuth client used by Desktop and by self-signed Android forks
+  /// when Play Services rejects the custom signing SHA-1.
+  String getLoopbackOAuthClientId() {
+    return '500464701389-18rfq995s6dqo3e5d3n2e7i3ljr0uc9i.apps.googleusercontent.com';
+  }
+
   Future<bool> fetchFirebaseConfig() async {
     try {
       final response = await HttpSvc.fcm.getServiceAccount();

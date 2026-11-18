@@ -177,9 +177,10 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
     bool isInReply, {
     required bool hasReservedBox,
   }) {
+    final gutter = CurrentSkin.iOS ? 10.0 : 0.0;
     final sideInsets = EdgeInsets.only(
-      left: message.isFromMe! ? 0 : 10,
-      right: message.isFromMe! ? 10 : 0,
+      left: message.isFromMe! ? 0 : gutter,
+      right: message.isFromMe! ? gutter : 0,
     );
 
     // Collection fill cards are sized by the parent; padding is on the collection wrapper.

@@ -63,7 +63,7 @@ class _ConnectingDialogState extends State<ConnectingDialog> {
           ),
           backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
           content: LinearProgressIndicator(
-            backgroundColor: context.theme.colorScheme.outline,
+            backgroundColor: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.2),
             valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
           ),
         ),

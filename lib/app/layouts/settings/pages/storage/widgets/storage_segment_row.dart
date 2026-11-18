@@ -69,7 +69,7 @@ class StorageSegmentRow extends StatelessWidget with StorageAnalyzerHelpersMixin
                   const SizedBox(height: 4),
                   Text(
                     "${segment.fileCount} file${segment.fileCount == 1 ? '' : 's'}",
-                    style: context.theme.textTheme.labelSmall?.copyWith(color: context.theme.colorScheme.outline),
+                    style: context.theme.textTheme.labelSmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),

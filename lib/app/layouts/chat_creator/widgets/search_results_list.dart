@@ -3,6 +3,7 @@ import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_controller.dar
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/chat_creator_tile.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/search_contact_tile.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
@@ -47,9 +48,25 @@ class SearchResultsList extends StatelessWidget {
     return true;
   }
 
+  static RoundedRectangleBorder _m3eGroupShape(bool isFirst, bool isLast) {
+    final top = Radius.circular(isFirst ? 20.0 : 4.0);
+    final bottom = Radius.circular(isLast ? 20.0 : 4.0);
+    return RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: top, bottom: bottom),
+    );
+  }
+
+  static String _sectionLetter(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '#';
+    final first = trimmed.substring(0, 1).toUpperCase();
+    return RegExp(r'[A-Z]').hasMatch(first) ? first : '#';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
       final chats = controller.filteredChats.toList();
       final contacts = controller.filteredContacts.toList();
       final chatsLoaded = ChatsSvc.loadedAllChats.isCompleted;
@@ -57,6 +74,36 @@ class SearchResultsList extends StatelessWidget {
       final selected = controller.selectedContacts.toList();
       final showFallback = _shouldShowFallback(query, contacts, selected);
       final isEmpty = chatsLoaded && chats.isEmpty && contacts.isEmpty && !showFallback;
+      final showEmails = controller.selectedService.value.isIMessageService;
+      final hideInfo = SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value;
+
+      // Build grouped Material contact entries (alphabet header + M3E grouped cards)
+      final materialContactItems = <Object>[];
+      if (isMaterial && contacts.isNotEmpty) {
+        final grouped = <String, List<({ContactV2 contact, String address, String? label})>>{};
+        for (final c in contacts) {
+          final entries = SearchContactTile.addressesFor(c, showEmails: showEmails);
+          if (entries.isEmpty) continue;
+          final letter = _sectionLetter(hideInfo ? 'Contact' : c.computedDisplayName);
+          final bucket = grouped.putIfAbsent(letter, () => []);
+          for (final e in entries) {
+            bucket.add((contact: c, address: e.address, label: e.label));
+          }
+        }
+        for (final entry in grouped.entries) {
+          materialContactItems.add(entry.key);
+          for (var i = 0; i < entry.value.length; i++) {
+            final row = entry.value[i];
+            materialContactItems.add((
+              contact: row.contact,
+              address: row.address,
+              label: row.label,
+              isFirst: i == 0,
+              isLast: i == entry.value.length - 1,
+            ));
+          }
+        }
+      }
 
       return CustomScrollView(
         physics: ThemeSwitcher.getScrollPhysics(),
@@ -67,43 +114,48 @@ class SearchResultsList extends StatelessWidget {
           if (showFallback) ...[
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                padding: const EdgeInsets.fromLTRB(20, 12, 16, 6),
                 child: Text(
                   'New Message',
                   style: context.theme.textTheme.labelLarge?.copyWith(
-                    color: context.theme.colorScheme.outline,
+                    color: context.theme.colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
             ),
             SliverToBoxAdapter(
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () {
-                    final address = query.isEmail ? query : controller.normalizeToE164(query);
-                    controller.addSelected(
-                      SelectedContact(displayName: address, address: address),
-                    );
-                  },
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: context.theme.colorScheme.primaryContainer,
-                      child: Icon(
-                        Icons.send,
-                        size: 20,
-                        color: context.theme.colorScheme.primary,
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: isMaterial ? 16 : 0),
+                child: Material(
+                  color: isMaterial ? context.theme.colorScheme.surface : Colors.transparent,
+                  shape: isMaterial ? _m3eGroupShape(true, true) : null,
+                  clipBehavior: isMaterial ? Clip.antiAlias : Clip.none,
+                  child: InkWell(
+                    onTap: () {
+                      final address = query.isEmail ? query : controller.normalizeToE164(query);
+                      controller.addSelected(
+                        SelectedContact(displayName: address, address: address),
+                      );
+                    },
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: context.theme.colorScheme.primaryContainer,
+                        child: Icon(
+                          Icons.send,
+                          size: 20,
+                          color: context.theme.colorScheme.primary,
+                        ),
                       ),
-                    ),
-                    title: Text(
-                      'Send to "${query.isEmail ? query : controller.normalizeToE164(query)}"',
-                      style: context.theme.textTheme.bodyMedium,
-                    ),
-                    subtitle: Text(
-                      query.isEmail ? 'Email address' : 'Phone number',
-                      style: context.theme.textTheme.bodySmall?.copyWith(
-                        color: context.theme.colorScheme.outline,
+                      title: Text(
+                        'Send to "${query.isEmail ? query : controller.normalizeToE164(query)}"',
+                        style: context.theme.textTheme.bodyMedium,
+                      ),
+                      subtitle: Text(
+                        query.isEmail ? 'Email address' : 'Phone number',
+                        style: context.theme.textTheme.bodySmall?.copyWith(
+                          color: context.theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                   ),
@@ -118,11 +170,11 @@ class SearchResultsList extends StatelessWidget {
           if (chats.isNotEmpty || !chatsLoaded)
             SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                padding: const EdgeInsets.fromLTRB(20, 12, 16, 6),
                 child: Text(
                   'Conversations',
                   style: context.theme.textTheme.labelLarge?.copyWith(
-                    color: context.theme.colorScheme.outline,
+                    color: context.theme.colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -148,12 +200,16 @@ class SearchResultsList extends StatelessWidget {
                   );
                 }
                 final chat = chats[index];
+                final isFirst = index == 0;
+                final isLast = index == chats.length - 1;
                 return Obx(() {
                   final chatState = ChatsSvc.getChatState(chat.guid);
                   final title = chatState?.title.value ?? chat.getTitle();
                   final subtitle = chatState?.chatCreatorSubtitle.value ?? chat.getChatCreatorSubtitle();
-                  return Material(
-                    color: Colors.transparent,
+                  final card = Material(
+                    color: isMaterial ? context.theme.colorScheme.surface : Colors.transparent,
+                    shape: isMaterial ? _m3eGroupShape(isFirst, isLast) : null,
+                    clipBehavior: isMaterial ? Clip.antiAlias : Clip.none,
                     child: InkWell(
                       onTap: () {
                         final participants = chat.people
@@ -177,6 +233,11 @@ class SearchResultsList extends StatelessWidget {
                       ),
                     ),
                   );
+                  if (!isMaterial) return card;
+                  return Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, isLast ? 0 : 2),
+                    child: card,
+                  );
                 });
               },
               childCount: (!chatsLoaded && chats.isEmpty ? 1 : chats.length),
@@ -186,30 +247,81 @@ class SearchResultsList extends StatelessWidget {
           // ----------------------------------------------------------------
           // Contacts section
           // ----------------------------------------------------------------
-          if (contacts.isNotEmpty)
+          if (!isMaterial && contacts.isNotEmpty)
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                 child: Text(
                   'Contacts',
                   style: context.theme.textTheme.labelLarge?.copyWith(
-                    color: context.theme.colorScheme.outline,
+                    color: context.theme.colorScheme.onSurfaceVariant,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
             ),
 
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) => SearchContactTile(
-                key: ValueKey(contacts[index].nativeContactId),
-                contact: contacts[index],
-                controller: controller,
+          if (isMaterial)
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) {
+                  final item = materialContactItems[index];
+                  if (item is String) {
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 14, 16, 6),
+                      child: Text(
+                        item,
+                        style: context.theme.textTheme.titleSmall?.copyWith(
+                          color: context.theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                  }
+                  final row = item as ({ContactV2 contact, String address, String? label, bool isFirst, bool isLast});
+                  return Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, row.isLast ? 0 : 2),
+                    child: ContactAddressRow(
+                      key: ValueKey('${row.contact.nativeContactId}:${row.address}'),
+                      displayName: hideInfo ? 'Contact' : row.contact.computedDisplayName,
+                      address: hideInfo ? '' : row.address,
+                      label: hideInfo ? null : row.label,
+                      contact: row.contact,
+                      tileColor: context.theme.colorScheme.surface,
+                      shape: _m3eGroupShape(row.isFirst, row.isLast),
+                      onTap: () {
+                        if (controller.selectedContacts.firstWhereOrNull((c) => c.address == row.address) != null) {
+                          return;
+                        }
+                        controller.addSelected(
+                          SelectedContact(
+                            displayName: row.contact.computedDisplayName,
+                            address: row.address,
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+                childCount: materialContactItems.length,
               ),
-              childCount: contacts.length,
+            )
+          else
+            SliverList(
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => SearchContactTile(
+                  key: ValueKey(contacts[index].nativeContactId),
+                  contact: contacts[index],
+                  controller: controller,
+                ),
+                childCount: contacts.length,
+              ),
             ),
-          ),
+
+          if (isMaterial)
+            const SliverToBoxAdapter(
+              child: SizedBox(height: 16),
+            ),
 
           // ----------------------------------------------------------------
           // Empty state (data loaded, nothing matches the query)
@@ -224,13 +336,13 @@ class SearchResultsList extends StatelessWidget {
                     Icon(
                       Icons.search_off_rounded,
                       size: 48,
-                      color: context.theme.colorScheme.outline,
+                      color: context.theme.colorScheme.onSurfaceVariant,
                     ),
                     const SizedBox(height: 12),
                     Text(
                       'No results for "$query"',
                       style: context.theme.textTheme.bodyMedium?.copyWith(
-                        color: context.theme.colorScheme.outline,
+                        color: context.theme.colorScheme.onSurfaceVariant,
                       ),
                       textAlign: TextAlign.center,
                     ),

@@ -82,6 +82,7 @@ class CustomGroupFilterChipRow extends StatelessWidget {
                           style: TextStyle(
                             color: selected ? context.theme.colorScheme.primary : null,
                             fontWeight: selected ? FontWeight.bold : null,
+                            leadingDistribution: TextLeadingDistribution.even,
                           ),
                         ),
                         selected: selected,

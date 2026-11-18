@@ -251,6 +251,79 @@ class HttpService(private val context: Context) {
         
         return true
     }
+
+    fun placeFaceTimeCall(
+        addresses: List<String>,
+        video: Boolean = false,
+        isTelephony: Boolean = false,
+        onSuccess: ((String?) -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        if (!validateConnection()) {
+            onError?.invoke("No server URL configured")
+            return
+        }
+        val request = FaceTimeCallRequest(addresses = addresses, video = video, isTelephony = isTelephony)
+        executeApiCall(
+            call = api.placeFaceTimeCall(settings.guidAuthKey, request),
+            onSuccess = { response ->
+                val dataMap = response.data as? Map<*, *>
+                val callMap = dataMap?.get("call") as? Map<*, *>
+                val callUuid = (callMap?.get("call_uuid") ?: callMap?.get("callUuid")) as? String
+                onSuccess?.invoke(callUuid)
+            },
+            onError = onError
+        )
+    }
+
+    fun declineFaceTimeCall(
+        callUuid: String,
+        onSuccess: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        if (!validateConnection()) {
+            onError?.invoke("No server URL configured")
+            return
+        }
+        executeApiCall(
+            call = api.declineFaceTimeCall(callUuid, settings.guidAuthKey),
+            onSuccess = { onSuccess?.invoke() },
+            onError = onError
+        )
+    }
+
+    fun leaveFaceTimeCall(
+        callUuid: String,
+        onSuccess: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        if (!validateConnection()) {
+            onError?.invoke("No server URL configured")
+            return
+        }
+        executeApiCall(
+            call = api.leaveFaceTimeCall(callUuid, settings.guidAuthKey),
+            onSuccess = { onSuccess?.invoke() },
+            onError = onError
+        )
+    }
+
+    fun setFaceTimeMuted(
+        callUuid: String,
+        muted: Boolean,
+        onSuccess: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        if (!validateConnection()) {
+            onError?.invoke("No server URL configured")
+            return
+        }
+        executeApiCall(
+            call = api.setFaceTimeMuted(callUuid, settings.guidAuthKey, FaceTimeSetMutedRequest(muted)),
+            onSuccess = { onSuccess?.invoke() },
+            onError = onError
+        )
+    }
     
     /**
      * Execute an API call with error handling and optional retry for Cloudflare

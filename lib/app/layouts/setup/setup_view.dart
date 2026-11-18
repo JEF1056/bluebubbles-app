@@ -131,7 +131,7 @@ class SetupHeader extends StatelessWidget {
               borderRadius: BorderRadius.circular(25),
               gradient: LinearGradient(
                 begin: AlignmentDirectional.topStart,
-                colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
               ),
             ),
             child: Padding(

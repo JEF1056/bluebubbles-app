@@ -22,7 +22,7 @@ class StorageAnalyzePrompt extends StatelessWidget {
             Icon(
               context.iOS ? CupertinoIcons.chart_pie : Icons.pie_chart_outline,
               size: 40.0,
-              color: context.theme.colorScheme.outline,
+              color: context.theme.colorScheme.onSurfaceVariant,
             ),
             const SizedBox(height: 12.0),
             Text(
@@ -33,7 +33,7 @@ class StorageAnalyzePrompt extends StatelessWidget {
             const SizedBox(height: 8.0),
             Text(
               "Scans attachment files on this device. Nothing is deleted from your server.",
-              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.outline),
+              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16.0),

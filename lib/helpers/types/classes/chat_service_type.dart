@@ -6,7 +6,7 @@
 enum ChatServiceType {
   iMessage(label: 'iMessage', isVisible: true),
   sms(label: 'SMS', isVisible: true),
-  rcs(label: 'RCS', isVisible: false);
+  rcs(label: 'RCS', isVisible: true);
 
   const ChatServiceType({required this.label, required this.isVisible});
 
@@ -27,6 +27,26 @@ enum ChatServiceType {
 
   /// Whether chats of this type are iMessage chats.
   bool get isIMessageService => this == ChatServiceType.iMessage;
+
+  /// Whether chats of this type are RCS chats.
+  bool get isRcsService => this == ChatServiceType.rcs;
+
+  /// Parses the service type from a server `service` or `serviceName` string.
+  static ChatServiceType? fromServiceName(String? serviceName) {
+    final normalized = serviceName?.trim().toLowerCase();
+    if (normalized == null || normalized.isEmpty) return null;
+    switch (normalized) {
+      case 'rcs':
+        return ChatServiceType.rcs;
+      case 'imessage':
+        return ChatServiceType.iMessage;
+      case 'sms':
+      case 'text forwarding':
+        return ChatServiceType.sms;
+      default:
+        return null;
+    }
+  }
 
   /// Parses the service type from a chat GUID by inspecting the prefix
   /// before the first `;-;` or `;+;` separator.

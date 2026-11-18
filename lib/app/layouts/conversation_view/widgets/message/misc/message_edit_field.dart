@@ -86,7 +86,7 @@ class MessageEditField extends StatelessWidget {
               maxWidth: NavigationSvc.width(context) * 0.75 - 40,
               minHeight: 40,
             ),
-            padding: const EdgeInsets.only(right: 10).add(const EdgeInsets.all(5)),
+            padding: EdgeInsets.only(right: iOS ? 10 : 0).add(const EdgeInsets.all(5)),
             child: Focus(
               focusNode: FocusNode(),
               onKeyEvent: (_, ev) => _handleKeyEvent(ev, message),

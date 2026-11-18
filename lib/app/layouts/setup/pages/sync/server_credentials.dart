@@ -48,7 +48,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
 
   @override
   Widget build(BuildContext context) {
-    Size buttonSize = Size(context.width * 2 / 3, 36);
+    Size buttonSize = Size(context.width * 2 / 3, 48);
     return SetupPageTemplate(
       title: "Server Connection",
       subtitle: kIsWeb || kIsDesktop
@@ -195,7 +195,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                 ),
               if (token.value != null) const SizedBox(height: 10),
               Container(
-                height: 40,
+                height: 48,
                 padding: const EdgeInsets.all(2),
                 child: TextButton(
                   onPressed: () async {
@@ -211,7 +211,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  height: 40,
+                  height: 48,
                   padding: const EdgeInsets.all(2),
                   child: ElevatedButton(
                     style: ButtonStyle(
@@ -261,7 +261,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                     borderRadius: BorderRadius.circular(20),
                     color: HexColor('4285F4'),
                   ),
-                  height: 40,
+                  height: 48,
                   child: ElevatedButton(
                     style: ButtonStyle(
                       shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -312,10 +312,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                     borderRadius: BorderRadius.circular(20),
                     gradient: LinearGradient(
                       begin: AlignmentDirectional.topStart,
-                      colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                      colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                     ),
                   ),
-                  height: 40,
+                  height: 48,
                   child: ElevatedButton(
                     style: ButtonStyle(
                       shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -352,10 +352,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                     borderRadius: BorderRadius.circular(20),
                     gradient: LinearGradient(
                       begin: AlignmentDirectional.topStart,
-                      colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                      colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                     ),
                   ),
-                  height: 40,
+                  height: 48,
                   padding: const EdgeInsets.all(2),
                   child: ElevatedButton(
                     style: ButtonStyle(
@@ -391,7 +391,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                         : Theme(
                             data: context.theme.copyWith(
                               inputDecorationTheme: InputDecorationTheme(
-                                labelStyle: TextStyle(color: context.theme.colorScheme.outline),
+                                labelStyle: TextStyle(color: context.theme.colorScheme.onSurfaceVariant),
                               ),
                             ),
                             child: AutofillGroup(
@@ -448,7 +448,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                                 child: IconButton(
                                                   icon:
                                                       Icon(obscureText.value ? Icons.visibility_off : Icons.visibility),
-                                                  color: context.theme.colorScheme.outline,
+                                                  color: context.theme.colorScheme.onSurfaceVariant,
                                                   onPressed: () {
                                                     obscureText.value = !obscureText.value;
                                                   },
@@ -470,10 +470,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                           borderRadius: BorderRadius.circular(25),
                                           gradient: LinearGradient(
                                             begin: AlignmentDirectional.topStart,
-                                            colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                                            colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                                           ),
                                         ),
-                                        height: 40,
+                                        height: 48,
                                         padding: const EdgeInsets.all(2),
                                         child: ElevatedButton(
                                           style: ButtonStyle(
@@ -484,8 +484,8 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                             ),
                                             backgroundColor: WidgetStateProperty.all(context.theme.colorScheme.surface),
                                             shadowColor: WidgetStateProperty.all(context.theme.colorScheme.surface),
-                                            maximumSize: WidgetStateProperty.all(const Size(200, 36)),
-                                            minimumSize: WidgetStateProperty.all(const Size(30, 30)),
+                                            maximumSize: WidgetStateProperty.all(const Size(200, 44)),
+                                            minimumSize: WidgetStateProperty.all(const Size(30, 44)),
                                           ),
                                           onPressed: () async {
                                             showLoginButtons.value = true;
@@ -507,10 +507,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                           borderRadius: BorderRadius.circular(25),
                                           gradient: LinearGradient(
                                             begin: AlignmentDirectional.topStart,
-                                            colors: [HexColor('2772C3'), HexColor('5CA7F8').darkenPercent(5)],
+                                            colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                                           ),
                                         ),
-                                        height: 40,
+                                        height: 48,
                                         child: ElevatedButton(
                                           style: ButtonStyle(
                                             shape: WidgetStateProperty.all<RoundedRectangleBorder>(
@@ -520,8 +520,8 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                             ),
                                             backgroundColor: WidgetStateProperty.all(Colors.transparent),
                                             shadowColor: WidgetStateProperty.all(Colors.transparent),
-                                            maximumSize: WidgetStateProperty.all(const Size(200, 36)),
-                                            minimumSize: WidgetStateProperty.all(const Size(30, 30)),
+                                            maximumSize: WidgetStateProperty.all(const Size(200, 44)),
+                                            minimumSize: WidgetStateProperty.all(const Size(30, 44)),
                                           ),
                                           onPressed: () async {
                                             connect(urlController.text, passwordController.text);
@@ -649,7 +649,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
             ),
             backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
             content: LinearProgressIndicator(
-              backgroundColor: context.theme.colorScheme.outline,
+              backgroundColor: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.2),
               valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
             ),
           ),

@@ -57,7 +57,7 @@ class _SettingsSearchBarState extends State<SettingsSearchBar> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 6, 20, 8),
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
       child: widget.iOS
           ? SettingsSearchBariOS(
               // use cupertino search bar if iOS style

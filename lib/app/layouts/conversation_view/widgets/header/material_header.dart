@@ -1,4 +1,5 @@
 import 'package:bluebubbles/app/layouts/conversation_details/conversation_details.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
@@ -21,10 +22,10 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Rx<Color> _backgroundColor = context.theme.colorScheme.surfaceContainerHighest
+    final Rx<Color> _backgroundColor = context.theme.colorScheme.surfaceContainer
         .withValues(alpha: (kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled) ? 0.4 : 1)
         .obs;
-    final Color _foregroundColor = context.theme.colorScheme.onSurfaceVariant;
+    final Color _foregroundColor = context.theme.colorScheme.onSurface;
 
     return Stack(children: [
       Obx(() => AppBar(
@@ -37,9 +38,9 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
             ),
             automaticallyImplyLeading: false,
             toolbarHeight: (kIsDesktop ? 25 : 0) + kToolbarHeight,
-            leadingWidth: 30,
+            leadingWidth: 56,
             leading: Padding(
-              padding: EdgeInsets.only(left: 5.0, top: kIsDesktop ? 20 : 0),
+              padding: EdgeInsets.only(left: 4.0, top: kIsDesktop ? 20 : 0),
               child: BackButton(
                 color: _foregroundColor,
                 onPressed: () {
@@ -81,24 +82,39 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                 padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                 child: ManualMark(controller: controller),
               ),
+              if (canFaceTime(controller.chat))
+                Padding(
+                  padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+                  child: IconButton(
+                    icon: Icon(Icons.videocam_outlined, color: _foregroundColor),
+                    tooltip: 'FaceTime Video',
+                    onPressed: () => startFaceTimeCall(context, controller.chat, video: true),
+                  ),
+                ),
               if (Platform.isAndroid && !controller.chat.isGroup && controller.chat.handles.first.address.isPhoneNumber)
-                IconButton(
-                  icon: Icon(Icons.call_outlined, color: _foregroundColor),
-                  onPressed: () {
-                    launchUrl(Uri(scheme: "tel", path: controller.chat.handles.first.address));
-                  },
+                Padding(
+                  padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+                  child: IconButton(
+                    icon: Icon(Icons.call_outlined, color: _foregroundColor),
+                    onPressed: () {
+                      launchUrl(Uri(scheme: "tel", path: controller.chat.handles.first.address));
+                    },
+                  ),
                 ),
               if (Platform.isAndroid && !controller.chat.isGroup && controller.chat.handles.first.address.isEmail)
-                IconButton(
-                  icon: Icon(Icons.mail_outlined, color: _foregroundColor),
-                  onPressed: () {
-                    launchUrl(Uri(scheme: "mailto", path: controller.chat.handles.first.address));
-                  },
+                Padding(
+                  padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+                  child: IconButton(
+                    icon: Icon(Icons.mail_outlined, color: _foregroundColor),
+                    onPressed: () {
+                      launchUrl(Uri(scheme: "mailto", path: controller.chat.handles.first.address));
+                    },
+                  ),
                 ),
               Padding(
                 padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                 child: PopupMenuButton<int>(
-                  color: context.theme.colorScheme.surfaceContainerHighest,
+                  color: context.theme.colorScheme.surfaceContainerHigh,
                   shape: SettingsSvc.settings.skin.value != Skins.Material
                       ? const RoundedRectangleBorder(
                           borderRadius: BorderRadius.all(
@@ -161,7 +177,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                         value: 0,
                         child: Text(
                           'Details',
-                          style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                          style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurface),
                         ),
                       ),
                       if (!LifecycleSvc.isBubble)
@@ -170,7 +186,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                           child: Text(
                             controller.chat.isArchived! ? 'Unarchive' : 'Archive',
                             style:
-                                context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                                context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurface),
                           ),
                         ),
                       if (!LifecycleSvc.isBubble)
@@ -179,14 +195,14 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                           child: Text(
                             'Delete',
                             style:
-                                context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                                context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurface),
                           ),
                         ),
                       PopupMenuItem(
                         value: 3,
                         child: Text(
                           'Bookmarks',
-                          style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                          style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurface),
                         ),
                       ),
                     ];
@@ -257,9 +273,9 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
                 return Text(
                   _title,
                   style: context.theme.textTheme.titleLarge!
-                      .apply(color: context.theme.colorScheme.onSurfaceVariant, fontSizeFactor: 0.85),
+                      .apply(color: context.theme.colorScheme.onSurface, fontSizeFactor: 0.9),
                   maxLines: 1,
-                  overflow: TextOverflow.fade,
+                  overflow: TextOverflow.ellipsis,
                 );
               }),
               if (samsung &&

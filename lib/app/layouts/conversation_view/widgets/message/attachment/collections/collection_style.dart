@@ -26,9 +26,9 @@ abstract final class CollectionStyle {
 
   /// Radius of an author-edge corner that joins a neighbouring bubble or the subject (Material and Samsung only).
   ///
-  /// Material matches the 5px connected corner `TailClipper` draws on text bubbles. Samsung is rounder so the
+  /// Material matches the 4px connected corner `TailClipper` draws on text bubbles. Samsung is rounder so the
   /// joint doesn't look pinched against its larger 25px card radius.
-  static double get connectedCornerRadius => CurrentSkin.samsung ? 12.0 : 5.0;
+  static double get connectedCornerRadius => CurrentSkin.samsung ? 12.0 : 4.0;
 
   /// Soft card shadow, painted on the iOS skin only (null on Material / Samsung).
   static List<BoxShadow>? cardShadow(BuildContext context) {

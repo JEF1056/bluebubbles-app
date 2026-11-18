@@ -75,22 +75,26 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
   }
 
   List<InlineSpan> buildTwoPiece(String action, String? date) {
+    final material = !iOS && !samsung;
+    final color = material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final baseStyle = material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!;
+    final hasDate = date != null && date.isNotEmpty;
     return [
       TextSpan(
-        text: "$action ",
-        style: context.theme.textTheme.labelSmall!
-            .copyWith(fontWeight: FontWeight.w600, color: context.theme.colorScheme.outline),
+        text: action,
+        style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600, color: color),
       ),
-      if (date != null)
+      if (hasDate)
         TextSpan(
-            text: date,
-            style: context.theme.textTheme.labelSmall!
-                .copyWith(color: context.theme.colorScheme.outline, fontWeight: FontWeight.normal))
+          text: material ? " · $date" : " $date",
+          style: baseStyle.copyWith(color: color, fontWeight: FontWeight.normal),
+        ),
     ];
   }
 
   List<InlineSpan> getText() {
     // Use reactive MessageState fields for Obx subscription
+    final material = !iOS && !samsung;
     final dateRead = controller.dateRead.value ?? message.dateRead;
     final dateDelivered = controller.dateDelivered.value ?? message.dateDelivered;
     final wasDeliveredQuietly = controller.wasDeliveredQuietly.value;
@@ -110,8 +114,8 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
               : null);
     } else if (message.isDelivered) {
       return buildTwoPiece("Delivered", null);
-    } else if (_isSendingDisplayed && !(controller.cvController?.chat.isGroup ?? _isGroup) && !iOS) {
-      return buildTwoPiece("Sending...", "");
+    } else if (_isSendingDisplayed && (material || !(controller.cvController?.chat.isGroup ?? _isGroup)) && !iOS) {
+      return buildTwoPiece("Sending...", null);
     } else if (widget.forceShow) {
       return buildTwoPiece("Sent", buildDate(message.dateCreated));
     }
@@ -121,6 +125,11 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
 
   @override
   Widget build(BuildContext context) {
+    final material = !iOS && !samsung;
+    final indentLeft =
+        (showAvatar || (!material && SettingsSvc.settings.alwaysShowAvatars.value)) && !(message.isFromMe ?? false)
+            ? 35.0
+            : 0.0;
     return AnimatedSize(
       curve: Curves.easeInOut,
       alignment: Alignment.bottomCenter,
@@ -136,8 +145,8 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         controller.dateRead.value;
         return shouldShow && getText().isNotEmpty
             ? Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 15).add(EdgeInsets.only(
-                    top: 2, bottom: 2, left: showAvatar || SettingsSvc.settings.alwaysShowAvatars.value ? 35 : 0)),
+                padding: EdgeInsets.symmetric(horizontal: material ? 4 : 15)
+                    .add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
                 child: Text.rich(TextSpan(
                   children: getText(),
                 )),

@@ -1251,9 +1251,10 @@ class ChatsService {
     bool actualForce = force;
 
     if (isActive) {
-      // Force mark as read if chat is active
+      // Force mark as read locally if chat is active, but respect explicit
+      // privateMark: false (e.g. server chat-read-status-changed echo) to avoid
+      // a POST /read ping-pong loop.
       actualForce = true;
-      actualPrivateMark = true;
     }
 
     // Perform DB operation with adjusted parameters
@@ -1322,6 +1323,185 @@ class ChatsService {
 
     // Update state if available
     state?.updateIsPinnedInternal(value);
+
+    // Sync pin change back to server when Private API is enabled
+    if (SettingsSvc.settings.enablePrivateAPI.value) {
+      unawaited(_syncChatPinToServer(chat.guid, value));
+    }
+  }
+
+  /// Extract ordered `pinnedChatGuids` from a REST response or socket payload.
+  /// Returns `null` when the payload does not carry a `pinnedChatGuids` list so
+  /// error/unsupported responses never wipe local pins.
+  static List<String>? extractPinnedChatGuids(dynamic payload) {
+    if (payload is! Map) return null;
+    dynamic rawList;
+    if (payload['data'] is Map && (payload['data'] as Map).containsKey('pinnedChatGuids')) {
+      rawList = (payload['data'] as Map)['pinnedChatGuids'];
+    } else if (payload.containsKey('pinnedChatGuids')) {
+      rawList = payload['pinnedChatGuids'];
+    }
+    if (rawList is! List) return null;
+    final seen = <String>{};
+    final result = <String>[];
+    for (final item in rawList) {
+      if (item is String && item.isNotEmpty && seen.add(item)) {
+        result.add(item);
+      }
+    }
+    return result;
+  }
+
+  /// Compute `(chat, isPinned, pinIndex)` updates needed for [chats] to match [pinnedGuids].
+  static List<({Chat chat, bool isPinned, int? pinIndex})> computePinUpdates(
+    Iterable<Chat> chats,
+    List<String> pinnedGuids,
+  ) {
+    final pinIndexByGuid = <String, int>{
+      for (int i = 0; i < pinnedGuids.length; i++) pinnedGuids[i]: i,
+    };
+    final updates = <({Chat chat, bool isPinned, int? pinIndex})>[];
+    for (final chat in chats) {
+      final int? targetIndex = pinIndexByGuid[chat.guid];
+      final bool targetPinned = targetIndex != null;
+      if ((chat.isPinned ?? false) != targetPinned || chat.pinIndex != targetIndex) {
+        updates.add((chat: chat, isPinned: targetPinned, pinIndex: targetIndex));
+      }
+    }
+    return updates;
+  }
+
+  /// Fetch pinned chat GUIDs from `GET /api/v1/chat/pinned` and sync local ObjectBox / UI order,
+  /// plus iOS filtered/archived status and per-chat read receipt overrides.
+  Future<void> syncPinnedChatsFromServer() async {
+    if (headless || !SettingsSvc.settings.finishedSetup.value) return;
+    try {
+      final resp = await HttpSvc.chat.getPinned();
+      final guids = extractPinnedChatGuids(resp.data);
+      if (guids != null) {
+        await applyPinnedChatGuids(guids);
+      }
+    } catch (e) {
+      Logger.debug("Pinned chat sync skipped/failed: $e", tag: "ChatsService");
+    }
+    await _syncServerChatFlags();
+  }
+
+  /// Reconcile server-side iOS filter/archive flags and per-chat
+  /// `EnableReadReceiptForChat` overrides onto already-synced local chats.
+  Future<void> _syncServerChatFlags() async {
+    if (headless || !SettingsSvc.settings.finishedSetup.value) return;
+    if (!GetIt.I.isRegistered<HttpService>()) return;
+    if (hasChats.value && !loadedAllChats.isCompleted) {
+      try {
+        await loadedAllChats.future.timeout(const Duration(seconds: 10));
+      } catch (_) {}
+    }
+    try {
+      final resp = await HttpSvc.chat.query(withQuery: const [], offset: 0, limit: 500);
+      final data = resp.data is Map ? (resp.data as Map)['data'] : null;
+      if (data is! List) return;
+
+      var listChanged = false;
+      for (final item in data) {
+        if (item is! Map) continue;
+        final raw = Map<String, dynamic>.from(item);
+        final guid = raw['guid'] as String?;
+        if (guid == null || guid.isEmpty) continue;
+        final state = getChatState(guid);
+        if (state == null) continue;
+
+        final shouldArchive =
+            (raw['isArchived'] == true || Chat.isFilteredByServer(raw)) && state.chat.isPinned != true;
+        final hasReadReceiptsInfo =
+            raw.containsKey('autoSendReadReceipts') || raw.containsKey('properties');
+        final serverReadReceipts = raw['autoSendReadReceipts'] is bool
+            ? raw['autoSendReadReceipts'] as bool
+            : Chat.readReceiptsOverrideInProperties(raw['properties']);
+
+        final archiveNeedsUpdate = shouldArchive && state.chat.isArchived != true;
+        final readReceiptsNeedsUpdate =
+            hasReadReceiptsInfo && state.chat.autoSendReadReceipts != serverReadReceipts;
+        if (raw.containsKey('properties')) {
+          unawaited(Chat.syncBackground(Chat.fromMap(raw), targetChat: state.chat).catchError((_) {}));
+        }
+        if (!archiveNeedsUpdate && !readReceiptsNeedsUpdate) continue;
+
+        if (archiveNeedsUpdate) {
+          state.chat.isArchived = true;
+          state.updateArchivedInternal(true);
+          listChanged = true;
+        }
+        if (readReceiptsNeedsUpdate) {
+          state.chat.autoSendReadReceipts = serverReadReceipts;
+          state.updateAutoSendReadReceiptsInternal(serverReadReceipts);
+        }
+        await state.chat.saveAsync(
+          updateIsArchived: archiveNeedsUpdate,
+          updateAutoSendReadReceipts: readReceiptsNeedsUpdate,
+        );
+      }
+
+      if (listChanged) {
+        _scheduleListVersionUpdate(immediate: true);
+      }
+    } catch (e) {
+      Logger.debug("Server chat flags sync skipped/failed: $e", tag: "ChatsService");
+    }
+  }
+
+  /// Apply an authoritative ordered list of pinned chat GUIDs to ObjectBox and [ChatsService].
+  Future<void> applyPinnedChatGuids(List<String> pinnedGuids) async {
+    if (headless) return;
+    if (hasChats.value && !loadedAllChats.isCompleted) {
+      try {
+        await loadedAllChats.future.timeout(const Duration(seconds: 10));
+      } catch (_) {}
+    }
+
+    // Ensure any pinned chat not yet present locally is fetched and added
+    for (final guid in pinnedGuids) {
+      if (chatStates.containsKey(guid)) continue;
+      if (!GetIt.I.isRegistered<HttpService>()) continue;
+      try {
+        final resp = await HttpSvc.chat.fetchOne(guid, withQuery: "participants,lastmessage");
+        final rawData = resp.data is Map ? (resp.data as Map)['data'] : null;
+        if (rawData is Map) {
+          final fetched = Chat.fromMap(Map<String, dynamic>.from(rawData));
+          await fetched.saveAsync();
+          await addChat(fetched, immediate: false);
+        }
+      } catch (e) {
+        Logger.debug("Failed to fetch missing pinned chat $guid: $e", tag: "ChatsService");
+      }
+    }
+
+    final updates = computePinUpdates(List<Chat>.from(_sortedChats), pinnedGuids);
+    if (updates.isEmpty) return;
+
+    for (final u in updates) {
+      u.chat.isPinned = u.isPinned;
+      u.chat.pinIndex = u.pinIndex;
+      await u.chat.saveAsync(updateIsPinned: true, updatePinIndex: true);
+      final state = getChatState(u.chat.guid);
+      state?.updateIsPinnedInternal(u.isPinned);
+      state?.updatePinIndexInternal(u.pinIndex);
+    }
+
+    _sortedChats.sort(_sortCompare);
+    _scheduleListVersionUpdate(immediate: true);
+  }
+
+  Future<void> _syncChatPinToServer(String guid, bool pinned) async {
+    try {
+      final resp = await HttpSvc.chat.setPinned(guid, pinned: pinned);
+      final guids = extractPinnedChatGuids(resp.data);
+      if (guids != null) {
+        await applyPinnedChatGuids(guids);
+      }
+    } catch (e) {
+      Logger.debug("Failed to sync chat pin to server: $e", tag: "ChatsService");
+    }
   }
 
   /// Set chat pin index

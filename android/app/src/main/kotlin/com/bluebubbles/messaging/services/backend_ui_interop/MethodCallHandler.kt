@@ -1,6 +1,9 @@
 package com.bluebubbles.messaging.services.backend_ui_interop
 
+import android.app.Activity
 import android.content.Context
+import android.content.LocusId
+import android.os.Build
 import android.util.Log
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.utils.PersistentLog
@@ -31,6 +34,11 @@ import com.bluebubbles.messaging.services.system.MemoryStatsHandler
 import com.bluebubbles.messaging.services.system.TrimMemoryHandler
 import com.bluebubbles.messaging.services.foreground.StartForegroundServiceHandler
 import com.bluebubbles.messaging.services.foreground.StopForegroundServiceHandler
+import com.bluebubbles.messaging.services.telecom.EndFaceTimeCallHandler
+import com.bluebubbles.messaging.services.telecom.IsTelecomEnabledHandler
+import com.bluebubbles.messaging.services.telecom.OpenCallingAccountsHandler
+import com.bluebubbles.messaging.services.telecom.PlaceFaceTimeCallHandler
+import com.bluebubbles.messaging.services.telecom.RegisterPhoneAccountHandler
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -65,10 +73,10 @@ class MethodCallHandler {
             StartGoogleDuoRequestHandler.tag,
             OpenConversationNotificationSettingsHandler.tag,
             CreateIncomingMessageNotification.tag,
-            CreateIncomingFaceTimeNotification.tag,
             DeleteNotificationHandler.tag,
             StartForegroundServiceHandler.tag,
             StopForegroundServiceHandler.tag,
+            "set-locus-context",
         )
 
         fun setNotificationListenerResult(result: MethodChannel.Result) {
@@ -136,6 +144,19 @@ class MethodCallHandler {
             StopForegroundServiceHandler.tag -> StopForegroundServiceHandler().handleMethodCall(call, result, context)
             TrimMemoryHandler.tag -> TrimMemoryHandler().handleMethodCall(call, result, context)
             MemoryStatsHandler.tag -> MemoryStatsHandler().handleMethodCall(call, result, context)
+            PlaceFaceTimeCallHandler.tag -> PlaceFaceTimeCallHandler().handleMethodCall(call, result, context)
+            EndFaceTimeCallHandler.tag -> EndFaceTimeCallHandler().handleMethodCall(call, result, context)
+            IsTelecomEnabledHandler.tag -> IsTelecomEnabledHandler().handleMethodCall(call, result, context)
+            OpenCallingAccountsHandler.tag -> OpenCallingAccountsHandler().handleMethodCall(call, result, context)
+            RegisterPhoneAccountHandler.tag -> RegisterPhoneAccountHandler().handleMethodCall(call, result, context)
+            "set-locus-context" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && context is Activity) {
+                    val chatGuid = call.argument<String>("chat_guid")
+                    val locusId = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }?.let(::LocusId)
+                    context.setLocusContext(locusId, null)
+                }
+                result.success(null)
+            }
             else -> {
                 val error = "Could not find method call handler for ${call.method}!"
                 PersistentLog.d(context, Constants.logTag, error)

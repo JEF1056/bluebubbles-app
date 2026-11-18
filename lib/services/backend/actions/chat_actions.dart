@@ -1,9 +1,9 @@
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/actions/attachment_actions.dart';
+import 'package:bluebubbles/services/backend/actions/contact_v2_actions.dart';
 import 'package:bluebubbles/services/backend/actions/message_actions.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
-import 'package:bluebubbles/services/backend/interfaces/contact_v2_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
@@ -15,7 +15,7 @@ class ChatActions {
     final chatId = data['chatId'] as int;
 
     await MethodChannelSvc.actions.deleteNotification(
-        notificationId: chatId, tag: 'new_message', readBefore: data['readBefore'] as int?);
+        notificationId: chatId, tag: NotificationsService.NEW_MESSAGE_TAG, readBefore: data['readBefore'] as int?);
   }
 
   static Future<void> markAllChatsRead(dynamic data) async {
@@ -30,11 +30,12 @@ class ChatActions {
       Database.chats.putMany(chats);
     });
 
-    if (shouldMarkOnServer &&
-        SettingsSvc.settings.enablePrivateAPI.value &&
-        SettingsSvc.settings.privateMarkChatAsRead.value) {
+    if (shouldMarkOnServer && SettingsSvc.settings.enablePrivateAPI.value) {
+      final globalRead = SettingsSvc.settings.privateMarkChatAsRead.value;
       for (final c in chats) {
-        await HttpSvc.chat.markRead(c.guid);
+        if (c.autoSendReadReceipts ?? globalRead) {
+          await HttpSvc.chat.markRead(c.guid);
+        }
       }
     }
   }
@@ -673,6 +674,7 @@ class ChatActions {
           if (!chatToSave.lockChatName) {
             chatToSave.displayName = inputChat.displayName;
           }
+          chatToSave.serviceName = inputChat.serviceName ?? chatToSave.serviceName;
         }
 
         // Prepare handles to link (collect them for later)
@@ -710,28 +712,11 @@ class ChatActions {
       return chatsToSave.map((e) => e.id!).toList();
     });
 
-    // 5. For any brand-new handles, attempt to find and link a matching ContactV2.
-    //    This runs after the write transaction so we can open a separate write tx per match.
-    //    Guards against web (no ObjectBox) and against an empty contacts DB (desktop).
-    final List<int> affectedHandleIds = [];
-    if (brandNewHandles.isNotEmpty && !kIsWeb) {
-      for (final handle in brandNewHandles) {
-        if (handle.id == null) continue;
-        final contact = await ContactV2Interface.getContactByAddress(address: handle.address);
-        if (contact == null) continue;
-
-        Database.runInTransaction(TxMode.write, () {
-          contact.handles.add(handle);
-          Database.contactsV2.put(contact);
-        });
-
-        affectedHandleIds.add(handle.id!);
-        Logger.info(
-          'Linked new handle ${handle.address} to contact ${contact.computedDisplayName}',
-          tag: 'ChatActions',
-        );
-      }
-    }
+    // 5. For any brand-new handles, link matching existing ContactV2 records in one batch
+    //    using symmetric phone-variant matching.
+    final List<int> affectedHandleIds = brandNewHandles.isNotEmpty && !kIsWeb
+        ? Database.runInTransaction(TxMode.write, () => ContactV2Actions.linkHandlesToContactsInTx(brandNewHandles))
+        : <int>[];
 
     return {'chatIds': chatIds, 'affectedHandleIds': affectedHandleIds};
   }

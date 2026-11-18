@@ -38,12 +38,14 @@ class ConversationListController extends StatefulController {
   final ScrollController materialScrollController = ScrollController();
   final ScrollController samsungScrollController = ScrollController();
   final List<Chat> selectedChats = [];
+  final RxInt selectionVersion = 0.obs;
   bool showMaterialFABText = true;
   double materialScrollStartPosition = 0;
 
   ConversationListController({required this.showArchivedChats, required this.showUnknownSenders});
 
   void updateSelectedChats() {
+    selectionVersion.value++;
     if (SettingsSvc.settings.skin.value == Skins.Material) {
       updateWidgets<MaterialHeader>(null);
       updateMaterialFAB();
@@ -57,8 +59,10 @@ class ConversationListController extends StatefulController {
     final copy = List.from(selectedChats);
     for (Chat c in copy) {
       selectedChats.removeWhere((element) => element.guid == c.guid);
-      Get.find<ConversationTileController>(tag: c.guid).updateWidgets<MaterialConversationTile>(null);
-      Get.find<ConversationTileController>(tag: c.guid).updateWidgets<SamsungConversationTile>(null);
+      if (Get.isRegistered<ConversationTileController>(tag: c.guid)) {
+        Get.find<ConversationTileController>(tag: c.guid).updateWidgets<MaterialConversationTile>(null);
+        Get.find<ConversationTileController>(tag: c.guid).updateWidgets<SamsungConversationTile>(null);
+      }
     }
     updateSelectedChats();
   }

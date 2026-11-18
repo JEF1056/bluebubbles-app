@@ -260,6 +260,8 @@ class HandleSyncManager extends SyncManager {
   Future<void> complete() async {
     rebuildRelationships(newHandles);
     addToOutput("Successfully synced $handlesSynced handle(s)!");
+    addToOutput("Re-linking contacts...");
+    await ContactsSvcV2.syncContactsToHandles();
     addToOutput("Reloading your chats...");
 
     ChatsSvc.reset();

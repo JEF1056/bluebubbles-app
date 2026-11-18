@@ -17,6 +17,7 @@ import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress, M
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:get_it/get_it.dart';
 
 MessagesService? maybeFindMessagesSvc(String chatGuid) =>
     Get.isRegistered<MessagesService>(tag: chatGuid) ? Get.find<MessagesService>(tag: chatGuid) : null;
@@ -88,6 +89,8 @@ class MessagesService extends GetxController {
   /// Granular reactivity map to track individual message updates
   /// Key: message guid, Value: timestamp of last update
   final RxMap<String, int> messageUpdateTrigger = <String, int>{}.obs;
+  final Set<String> _fetchingOriginatorGuids = {};
+  final Set<String> _missingOriginatorGuids = {};
 
   // ========== Delivered Indicator Tracking ==========
   // Plain (non-reactive) fields — DeliveredIndicator widgets observe the three
@@ -850,6 +853,7 @@ class MessagesService extends GetxController {
 
     // Handle thread originators with improved reactivity
     if (message.threadOriginatorGuid != null) {
+      _hydrateThreadOriginators([message]);
       // Update thread originator MessageState
       final originatorState = messageStates[message.threadOriginatorGuid!];
       if (originatorState != null) {
@@ -1545,6 +1549,7 @@ class MessagesService extends GetxController {
 
   Future<bool> loadChunk(int offset, ConversationViewController controller, {int limit = 25}) async {
     List<Message> _messages = [];
+    bool reachedServerEnd = false;
 
     // Adjust offset because reactions _are_ messages. We just separate them out in the struct.
     offset = offset + struct.reactions.length;
@@ -1587,6 +1592,9 @@ class MessagesService extends GetxController {
       if (_messages.isEmpty) {
         // get from server and save
         final fromServer = await ChatsSvc.getMessages(chat.guid, offset: offset, limit: limit);
+        if (limit > 0 && fromServer.length < limit) {
+          reachedServerEnd = true;
+        }
         final rawMessages = fromServer.cast<Map<String, dynamic>>();
         final syncResult = await SyncInterface.bulkSyncData(
           chatData: chat.toMap(),
@@ -1642,7 +1650,9 @@ class MessagesService extends GetxController {
       return Future.error(e, s);
     }
 
+    final prevStructCount = struct.messages.length + struct.reactions.length;
     struct.addMessages(_messages);
+    final addedToStruct = (struct.messages.length + struct.reactions.length) - prevStructCount;
 
     // Create MessageStates for all loaded messages
     _ensureMessageStates(_messages);
@@ -1652,19 +1662,7 @@ class MessagesService extends GetxController {
     _recomputeDeliveredIndicators();
 
     // get thread originators
-    for (Message m in _messages.where((e) => e.threadOriginatorGuid != null)) {
-      // see if the originator is already loaded
-      final guid = m.threadOriginatorGuid!;
-      if (struct.getMessage(guid) != null) continue;
-      // if not, fetch local and add to data
-      final threadOriginator = Message.findOne(guid: guid);
-      if (threadOriginator != null) {
-        // create the state so it can be rendered in a reply bubble
-        final c = getOrCreateState(threadOriginator);
-        c.cvController = controller;
-        struct.addThreadOriginator(threadOriginator);
-      }
-    }
+    _hydrateThreadOriginators(_messages, controller: controller);
 
     // this indicates an audio message was kept by the recipient
     // run this every time more messages are loaded just in case
@@ -1677,8 +1675,12 @@ class MessagesService extends GetxController {
     }
 
     messagesLoaded = true;
-    return _messages.isNotEmpty;
+    return hasMoreForChunk(reachedServerEnd: reachedServerEnd, addedToStruct: addedToStruct);
   }
+
+  @visibleForTesting
+  static bool hasMoreForChunk({required bool reachedServerEnd, required int addedToStruct}) =>
+      !reachedServerEnd && addedToStruct > 0;
 
   Future<void> loadSearchChunk(Message around, SearchMethod method) async {
     List<Message> _messages = [];
@@ -1708,7 +1710,75 @@ class MessagesService extends GetxController {
       // Create MessageStates for loaded messages
       _ensureMessageStates(_messages);
     }
+    _hydrateThreadOriginators(_messages);
     _recomputeDeliveredIndicators();
+  }
+
+  void _hydrateThreadOriginators(
+    Iterable<Message> messages, {
+    ConversationViewController? controller,
+  }) {
+    final cvController = controller ??
+        (Get.isRegistered<ConversationViewController>(tag: tag)
+            ? Get.find<ConversationViewController>(tag: tag)
+            : null);
+    for (final m in messages) {
+      final guid = m.threadOriginatorGuid;
+      if (guid == null || guid.isEmpty) continue;
+      if (struct.getThreadOriginator(guid) != null) continue;
+
+      Message? threadOriginator;
+      try {
+        threadOriginator = Message.findOne(guid: guid);
+      } catch (_) {}
+
+      if (threadOriginator != null) {
+        final c = getOrCreateState(threadOriginator);
+        if (cvController != null) c.cvController = cvController;
+        struct.addThreadOriginator(threadOriginator);
+        continue;
+      }
+
+      unawaited(_fetchMissingThreadOriginator(guid, controller: cvController));
+    }
+  }
+
+  Future<void> _fetchMissingThreadOriginator(
+    String guid, {
+    ConversationViewController? controller,
+  }) async {
+    if (_fetchingOriginatorGuids.contains(guid) || _missingOriginatorGuids.contains(guid)) return;
+    if (!GetIt.I.isRegistered<HttpService>()) return;
+    _fetchingOriginatorGuids.add(guid);
+    try {
+      final response = await HttpSvc.message.fetchOne(
+        guid,
+        withQuery: "attributedBody,messageSummaryInfo,payloadData,attachment,handle,attachment.metadata",
+      );
+      if (isClosed) return;
+      final raw = response.data?['data'];
+      if (raw is! Map) {
+        _missingOriginatorGuids.add(guid);
+        return;
+      }
+      final originator = Message.fromMap(Map<String, dynamic>.from(raw));
+      final c = getOrCreateState(originator);
+      final cvController = controller ??
+          (Get.isRegistered<ConversationViewController>(tag: tag)
+              ? Get.find<ConversationViewController>(tag: tag)
+              : null);
+      if (cvController != null) c.cvController = cvController;
+      struct.addThreadOriginator(originator);
+      for (final reply in struct.messages) {
+        if (reply.threadOriginatorGuid == guid && reply.guid != null) {
+          triggerMessageUpdate(reply.guid!);
+        }
+      }
+    } catch (_) {
+      // Best-effort hydration; avoid crashing on offline/transient failures.
+    } finally {
+      _fetchingOriginatorGuids.remove(guid);
+    }
   }
 
   static Future<List<dynamic>> getMessages(

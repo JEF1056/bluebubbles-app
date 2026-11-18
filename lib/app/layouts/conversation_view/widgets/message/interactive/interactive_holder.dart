@@ -105,7 +105,10 @@ class _InteractiveHolderState extends State<InteractiveHolder> with AutomaticKee
                     minWidth: 40,
                   ),
                   child: Padding(
-                    padding: EdgeInsets.only(left: message.isFromMe! ? 0 : 10, right: message.isFromMe! ? 10 : 0),
+                    padding: EdgeInsets.only(
+                      left: iOS && !message.isFromMe! ? 10 : 0,
+                      right: iOS && message.isFromMe! ? 10 : 0,
+                    ),
                     child: Center(
                       heightFactor: 1,
                       widthFactor: 1,

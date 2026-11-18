@@ -289,4 +289,8 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 
     implementation 'org.unifiedpush.android:connector:2.5.0'
+    implementation 'com.google.android.gms:play-services-wearable:18.2.0'
+    implementation 'io.github.webrtc-sdk:android:125.6422.06'
+
+    testImplementation 'junit:junit:4.13.2'
 }

@@ -155,7 +155,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         // ready so pendingSend can fire and handleNewMessage works correctly.
         try {
           if (!service.messagesLoaded) {
-            await service.loadChunk(0, controller);
+            noMoreMessages = !(await service.loadChunk(0, controller));
           }
         } catch (e, s) {
           Logger.error('MessagesView: loadChunk failed, continuing with empty state',
@@ -217,7 +217,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
   @override
   void dispose() {
     // Clean up managers
-    if (_messages.isNotEmpty) {
+    if (_messages.isNotEmpty && chat.id != null) {
       chat.lastReadMessageGuid = _messages.first.guid;
       chat.saveAsync(updateLastReadMessageGuid: true);
     }
@@ -352,27 +352,27 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     // Start loading the next chunk of messages using mixin method
     noMoreMessages = !(await loadNextChunk(controller, _messages, limit: limit).catchError((e, stack) {
       Logger.error("Failed to fetch message chunk!", error: e, trace: stack);
-      fetching = false;
-      return true;
+      return false;
     }));
 
     if (!mounted) return;
 
-    if (noMoreMessages) {
-      Logger.debug("loadNextChunk: No more messages available");
-      fetching = false;
-      setState(() {});
-      return;
-    }
-
-    final oldLength = _messages.length;
     final oldMessageGuids = Set<String>.from(_messages.map((m) => m.guid).whereType<String>());
 
     final newMessagesFromService = messageService.struct.messages;
     final newMessages = newMessagesFromService.where((m) => !oldMessageGuids.contains(m.guid)).toList();
 
     Logger.debug(
-        "loadNextChunk: Found ${newMessages.length} new messages (old: $oldLength, new: ${newMessagesFromService.length})");
+        "loadNextChunk: Found ${newMessages.length} new messages (old: $previousLength, new: ${newMessagesFromService.length})");
+
+    if (newMessages.isEmpty) {
+      fetching = false;
+      if (noMoreMessages) {
+        Logger.debug("loadNextChunk: No more messages available");
+        setState(() {});
+      }
+      return;
+    }
 
     // Initialize message widget controllers for new messages
     for (final newMsg in newMessages) {
@@ -401,6 +401,9 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         _listKey.currentState?.insertItem(previousLength + i, duration: Duration.zero);
       }
       _listVersion.value++;
+      if (noMoreMessages) {
+        setState(() {});
+      }
     } else {
       // Fallback: structure changed in a way we can't express as a simple append.
       _listKey = GlobalKey<SliverAnimatedListState>();
@@ -710,7 +713,11 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                                     if (index >= _messages.length) {
                                       if (!noMoreMessages && handlersInitialized && index == _messages.length) {
                                         if (!fetching) {
-                                          _loadMoreMessages();
+                                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                                            if (mounted && !fetching && !noMoreMessages) {
+                                              _loadMoreMessages();
+                                            }
+                                          });
                                         }
                                         return const Loader();
                                       }
@@ -783,8 +790,8 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                               );
                             },
                           ),
-                          const SliverPadding(
-                            padding: EdgeInsets.all(70),
+                          SliverPadding(
+                            padding: EdgeInsets.all(iOS || samsung ? 70 : 12),
                           ),
                         ],
                       ),

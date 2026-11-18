@@ -2,8 +2,10 @@ import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friend_list_tile.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 
 class FindMyFriendsTabView extends StatelessWidget {
   final FindMyController controller;
@@ -13,43 +15,49 @@ class FindMyFriendsTabView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      final selectedId = controller.selectedFriendId.value;
+      final orderedWithLocation = [...controller.friendsWithLocation];
+      if (selectedId != null) {
+        final idx = orderedWithLocation.indexWhere((f) => f.stableId == selectedId);
+        if (idx > 0) {
+          final picked = orderedWithLocation.removeAt(idx);
+          orderedWithLocation.insert(0, picked);
+        }
+      }
+
       return SliverList(
         delegate: SliverChildListDelegate([
-          if (controller.fetching2.value == null ||
-              controller.fetching2.value == true ||
-              (controller.fetching2.value == false && controller.friends.isEmpty))
+          if (controller.friends.isEmpty &&
+              (controller.fetching2.value == null ||
+                  controller.fetching2.value == true ||
+                  controller.fetching2.value == false))
             _buildEmptyState(context),
-          if (controller.friendsWithLocation.isNotEmpty)
-            SettingsHeader(
-              iosSubtitle: context.theme.textTheme.labelLarge!.copyWith(
-                color: context.theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                fontWeight: FontWeight.w300,
-              ),
-              materialSubtitle: context.theme.textTheme.labelLarge!.copyWith(
-                color: context.theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-              text: "Friends",
-            ),
-          if (controller.friendsWithLocation.isNotEmpty)
-            SettingsSection(
-              backgroundColor: context.tileColor,
-              children: [
-                Material(
-                  color: Colors.transparent,
-                  child: ListView.builder(
-                    physics: const NeverScrollableScrollPhysics(),
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    itemBuilder: (context, i) => FindMyFriendListTile(
-                      item: controller.friendsWithLocation[i],
-                      controller: controller,
-                      withLocation: true,
-                    ),
-                    itemCount: controller.friendsWithLocation.length,
-                  ),
+          if (orderedWithLocation.isNotEmpty)
+            Material(
+              color: Colors.transparent,
+              child: ListView.separated(
+                physics: const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: orderedWithLocation.length,
+                separatorBuilder: (context, i) {
+                  final current = orderedWithLocation[i];
+                  if (selectedId != null && current.stableId == selectedId) {
+                    return const SizedBox(height: 2);
+                  }
+                  return Divider(
+                    height: 1,
+                    indent: 70,
+                    endIndent: 16,
+                    color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
+                  );
+                },
+                itemBuilder: (context, i) => FindMyFriendListTile(
+                  item: orderedWithLocation[i],
+                  controller: controller,
+                  withLocation: true,
                 ),
-              ],
+              ),
             ),
           if (controller.friendsWithoutLocation.isNotEmpty)
             SettingsSection(
@@ -72,6 +80,7 @@ class FindMyFriendsTabView extends StatelessWidget {
                 ),
               ],
             ),
+          const SizedBox(height: 92),
         ]),
       );
     });
@@ -94,7 +103,10 @@ class FindMyFriendsTabView extends StatelessWidget {
                 style: context.theme.textTheme.labelLarge,
               ),
             ),
-            if (controller.fetching2.value == true) buildProgressIndicator(context, size: 15),
+            if (controller.fetching2.value == true)
+              GetIt.I.isRegistered<SettingsService>()
+                  ? buildProgressIndicator(context, size: 15)
+                  : const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2)),
           ],
         ),
       ),
