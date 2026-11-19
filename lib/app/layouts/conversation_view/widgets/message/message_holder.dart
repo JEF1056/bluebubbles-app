@@ -96,7 +96,9 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
   bool get canSwipeToReply =>
       SettingsSvc.settings.enablePrivateAPI.value &&
       SettingsSvc.serverDetails.isMinBigSur &&
-      (chat.isIMessage || chat.isRCS) &&
+      (chat.isIMessage ||
+          chat.isRCS ||
+          (ChatServiceType.fromServiceName(message.service)?.supportsTapbackAndReply ?? false)) &&
       !widget.isReplyThread &&
       !controller.isSending.value &&
       !controller.hasError.value;
@@ -300,16 +302,17 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                     Padding(
                                       padding: EdgeInsets.only(
                                           left: (showAvatar || alwaysShowAvatars) && replyTo!.isFromMe! ? 35 : 0),
-                                      child: DecoratedBox(
-                                        decoration: replyTo!.isFromMe == message.isFromMe
-                                            ? ReplyLineDecoration(
-                                                isFromMe: message.isFromMe!,
-                                                color: context.theme.colorScheme.surfaceContainerHighest,
-                                                connectUpper: false,
-                                                connectLower: true,
-                                                context: context,
-                                              )
-                                            : const BoxDecoration(),
+                                      child: ReplyLineBox(
+                                        enabled: replyTo!.isFromMe == message.isFromMe,
+                                        isFromMe: message.isFromMe!,
+                                        color: context.theme.colorScheme.surfaceContainerHighest,
+                                        connectUpper: false,
+                                        connectLower: true,
+                                        fallbackMaxWidth: NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor,
+                                        onTapLine: () {
+                                          if (widget.cvController.inSelectMode.value) return;
+                                          showReplyThread(context, message, e, service, widget.cvController);
+                                        },
                                         child: ReplyBubbleSection(
                                           replyTo: replyTo!,
                                           cvController: widget.cvController,
@@ -331,15 +334,14 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                           ? EdgeInsets.only(left: 35.0 * avatarScale)
                                           : EdgeInsets.zero,
                                       child: iOS && !widget.isReplyThread && message.threadOriginatorGuid != null
-                                          ? SizedBox(
-                                              width: double.infinity,
-                                              child: CustomPaint(
-                                                painter: _ReplyLinePainter(
-                                                  color: context.theme.colorScheme.surfaceContainerHighest,
-                                                  isFromMe: message.isFromMe!,
-                                                ),
-                                                child: MessageSender(olderMessage: olderMessage),
-                                              ),
+                                          ? _buildVerticalReplyLine(
+                                              color: context.theme.colorScheme.surfaceContainerHighest,
+                                              isFromMe: message.isFromMe!,
+                                              onTap: () {
+                                                if (widget.cvController.inSelectMode.value) return;
+                                                showReplyThread(context, message, e, service, widget.cvController);
+                                              },
+                                              child: MessageSender(olderMessage: olderMessage),
                                             )
                                           : MessageSender(olderMessage: olderMessage),
                                     ),
@@ -357,20 +359,19 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                   !(message.isGroupEvent || e.isUnsent)
                                               ? EdgeInsets.only(left: 35.0 * avatarScale)
                                               : EdgeInsets.zero,
-                                          child: SizedBox(
-                                            width: double.infinity,
-                                            child: CustomPaint(
-                                              painter: _ReplyLinePainter(
-                                                color: context.theme.colorScheme.surfaceContainerHighest,
-                                                isFromMe: message.isFromMe!,
-                                              ),
-                                              child: e.isMediaCollection
-                                                  ? SizedBox(height: message.isFromMe! ? 8 : 0)
-                                                  : ReactionSpacing(
-                                                      part: e,
-                                                      minHeightWhenNoReactions: message.isFromMe! ? 8 : 0,
-                                                    ),
-                                            ),
+                                          child: _buildVerticalReplyLine(
+                                            color: context.theme.colorScheme.surfaceContainerHighest,
+                                            isFromMe: message.isFromMe!,
+                                            onTap: () {
+                                              if (widget.cvController.inSelectMode.value) return;
+                                              showReplyThread(context, message, e, service, widget.cvController);
+                                            },
+                                            child: e.isMediaCollection
+                                                ? SizedBox(height: message.isFromMe! ? 8 : 0)
+                                                : ReactionSpacing(
+                                                    part: e,
+                                                    minHeightWhenNoReactions: message.isFromMe! ? 8 : 0,
+                                                  ),
                                           ),
                                         )
                                       : iOS && e.isMediaCollection
@@ -472,6 +473,8 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                 connectUpper: connectUpper,
                                                 connectLower: connectLower,
                                                 compactHook: !iOS,
+                                                onTapLine: () =>
+                                                    showReplyThread(context, message, e, service, widget.cvController),
                                                 child: Align(
                                                   alignment:
                                                       message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
@@ -849,6 +852,38 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
     }
     return widgets;
   }
+  Widget _buildVerticalReplyLine({
+    required Color color,
+    required bool isFromMe,
+    required VoidCallback onTap,
+    required Widget child,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: Stack(
+        clipBehavior: Clip.none,
+        fit: StackFit.passthrough,
+        children: [
+          Positioned.fill(
+            child: ReplyLineHitRegion(
+              containsPoint: (pos, size) {
+                final x = isFromMe ? 35.0 : size.width - 35.0;
+                return (pos.dx - x).abs() <= ReplyLinePainter.connectorHitPadding;
+              },
+              onTap: onTap,
+            ),
+          ),
+          CustomPaint(
+            painter: _ReplyLinePainter(
+              color: color,
+              isFromMe: isFromMe,
+            ),
+            child: child,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// Custom painter to draw a simple vertical line for the reply thread
@@ -875,6 +910,9 @@ class _ReplyLinePainter extends CustomPainter {
       paint,
     );
   }
+
+  @override
+  bool? hitTest(Offset position) => false;
 
   @override
   bool shouldRepaint(_ReplyLinePainter oldDelegate) => oldDelegate.color != color || oldDelegate.isFromMe != isFromMe;

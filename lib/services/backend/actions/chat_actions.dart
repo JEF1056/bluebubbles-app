@@ -150,6 +150,9 @@ class ChatActions {
       if (updateFlags['updateKnownGroupPhotoGuid'] == true) {
         chat.knownGroupPhotoGuid = inputChat.knownGroupPhotoGuid;
       }
+      if (updateFlags['updateServiceName'] == true) {
+        chat.serviceName = inputChat.serviceName;
+      }
       if (updateFlags['updateLatestMessage'] == true) {
         final latestMessageId = chatData['dbLatestMessageId'] as int?;
         final latestMessageDateMs = chatData['dbOnlyLatestMessageDate'] as int?;
@@ -354,6 +357,16 @@ class ChatActions {
 
       if (dbChat != null) {
         inputMessage.chat.target = dbChat;
+        // Keep unified `any;-;` chats' stored serviceName aligned with the latest message's concrete service
+        // (e.g. upgrading stale "SMS" to "RCS" so tapbacks and inline replies stay enabled).
+        final msgService = inputMessage.service?.trim();
+        if (msgService != null &&
+            msgService.isNotEmpty &&
+            dbChat.guid.startsWith('any;') &&
+            dbChat.serviceName != msgService) {
+          dbChat.serviceName = msgService;
+          chatBox.put(dbChat);
+        }
       }
 
       // Save the message

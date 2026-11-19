@@ -23,6 +23,7 @@ class NetworkTasks {
   /// Timestamp of the last completed subnet port scan (Phase 2). Used to skip
   /// repeated full-subnet scans on rapid app resumes when the server is offline.
   static DateTime? _lastSubnetScanTime;
+  static bool _didInitialEmptyContactSync = false;
 
   /// Minimum gap between Phase-2 subnet scans. Phase 1 (server-reported IPs)
   /// always runs; only the expensive 255-address fallback is throttled.
@@ -41,9 +42,11 @@ class NetworkTasks {
         ChatsSvc.reset();
         await ChatsSvc.init();
       }
-    } else if (Database.initComplete.isCompleted &&
+    } else if (!_didInitialEmptyContactSync &&
+        Database.initComplete.isCompleted &&
         GetIt.I.isRegistered<ContactServiceV2>() &&
         Database.contactsV2.isEmpty()) {
+      _didInitialEmptyContactSync = true;
       unawaited(ContactsSvcV2.syncContactsToHandles(wait: false));
     }
 

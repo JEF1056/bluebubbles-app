@@ -378,39 +378,17 @@ Future<void> showConversationTileMenu(
           behavior: HitTestBehavior.opaque,
           onTap: () async {
             Navigator.pop(context); // Remove PopupMenuItem
-            showDialog(
+            showAreYouSure(
+              context,
               barrierDismissible: false,
-              context: context,
-              builder: (BuildContext context) {
-                return AlertDialog(
-                  title: Text(
-                    "Are you sure?",
-                    style: context.theme.textTheme.titleLarge,
-                  ),
-                  content: Text("This chat will be deleted from this device only",
-                      style: context.theme.textTheme.bodyLarge),
-                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                  actions: <Widget>[
-                    TextButton(
-                      child: Text("No",
-                          style:
-                              context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
-                      onPressed: () {
-                        Navigator.of(context).pop(); //Remove AlertDialog
-                      },
-                    ),
-                    TextButton(
-                      child: Text("Yes",
-                          style:
-                              context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
-                      onPressed: () async {
-                        ChatsSvc.removeChat(chat);
-                        ChatsSvc.softDeleteChat(chat);
-                        Navigator.pop(context); //Remove AlertDialog
-                      },
-                    ),
-                  ],
-                );
+              yesIsDestructive: true,
+              content: Text("This chat will be deleted from this device only",
+                  style: context.theme.textTheme.bodyLarge),
+              onNo: () => Navigator.of(context, rootNavigator: true).pop(),
+              onYes: () {
+                ChatsSvc.removeChat(chat);
+                ChatsSvc.softDeleteChat(chat);
+                Navigator.of(context, rootNavigator: true).pop();
               },
             );
           },

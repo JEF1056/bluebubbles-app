@@ -157,25 +157,28 @@ class IdbPersistence {
       _pending.clear();
 
       final completer = Completer<void>();
+      completer.future.ignore();
       _activeFlush = completer.future;
       try {
         final txn = _db.transaction(touchedStores, idbModeReadWrite);
+        final opFutures = <Future<Object?>>[];
         for (final storeName in touchedStores) {
           final store = txn.objectStore(storeName);
           if (clearedSnapshot.contains(storeName)) {
-            await store.clear();
+            opFutures.add(store.clear());
           }
           final ops = pendingSnapshot[storeName];
           if (ops != null) {
             for (final op in ops.entries) {
               if (op.value == null) {
-                await store.delete(op.key);
+                opFutures.add(store.delete(op.key));
               } else {
-                await store.put(op.value!);
+                opFutures.add(store.put(op.value!));
               }
             }
           }
         }
+        await Future.wait(opFutures);
         await txn.completed;
         completer.complete();
       } catch (e, s) {

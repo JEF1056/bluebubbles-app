@@ -35,7 +35,7 @@ class NewMessageViewModel(application: Application) : AndroidViewModel(applicati
             _isLoading.value = true
             allContacts = db.contactDao().getAllContacts()
             if (allContacts.isEmpty()) {
-                contactRepo.refreshContacts(force = true)
+                contactRepo.refreshContacts(force = false)
                 allContacts = db.contactDao().getAllContacts()
             }
             applyFilter(_query.value)

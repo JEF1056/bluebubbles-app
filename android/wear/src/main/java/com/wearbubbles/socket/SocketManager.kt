@@ -19,6 +19,13 @@ sealed class SocketEvent {
     data class UpdatedMessage(val message: MessageDto) : SocketEvent()
     data class TypingIndicator(val chatGuid: String, val display: Boolean) : SocketEvent()
     data class PinnedChatsUpdated(val pinnedChatGuids: List<String>) : SocketEvent()
+    data class IncomingFaceTime(
+        val callUuid: String,
+        val callerName: String,
+        val callerAddress: String,
+        val isVideo: Boolean
+    ) : SocketEvent()
+    data class FaceTimeCallEnded(val callUuid: String) : SocketEvent()
     data object Connected : SocketEvent()
     data object Disconnected : SocketEvent()
 }
@@ -146,11 +153,69 @@ class SocketManager {
                     _events.tryEmit(SocketEvent.PinnedChatsUpdated(guids))
                 }
 
+                on("incoming-facetime") { args ->
+                    val json = parseJsonArg(args.firstOrNull()) ?: return@on
+                    val caller = json.optString("caller", "").ifBlank {
+                        json.optString("address", "")
+                    }
+                    if (caller.isNotBlank()) {
+                        val uuid = json.optString("uuid", "").ifBlank { "ft_${caller.hashCode()}" }
+                        val isVideo = json.optBoolean("is_video", false)
+                        _events.tryEmit(
+                            SocketEvent.IncomingFaceTime(
+                                callUuid = uuid,
+                                callerName = caller,
+                                callerAddress = caller,
+                                isVideo = isVideo
+                            )
+                        )
+                    }
+                }
+
+                on("ft-call-status-changed") { args ->
+                    val json = parseJsonArg(args.firstOrNull()) ?: return@on
+                    val statusId = json.optInt("status_id", -1)
+                    val uuid = json.optString("uuid", "")
+                    if (uuid.isBlank()) return@on
+                    when (statusId) {
+                        4 -> {
+                            val handleAddr = json.optJSONObject("handle")?.optString("address", "") ?: ""
+                            val address = handleAddr.ifBlank { json.optString("address", "") }
+                            val isVideo = if (json.has("is_video")) {
+                                json.optBoolean("is_video", true)
+                            } else {
+                                !json.optBoolean("is_audio", false)
+                            }
+                            _events.tryEmit(
+                                SocketEvent.IncomingFaceTime(
+                                    callUuid = uuid,
+                                    callerName = address.ifBlank { "FaceTime Caller" },
+                                    callerAddress = address,
+                                    isVideo = isVideo
+                                )
+                            )
+                        }
+                        6 -> {
+                            _events.tryEmit(SocketEvent.FaceTimeCallEnded(uuid))
+                        }
+                    }
+                }
+
                 connect()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Socket connection setup failed", e)
         }
+    }
+
+    private fun parseJsonArg(arg: Any?): JSONObject? = when (arg) {
+        is JSONObject -> arg
+        is String -> try {
+            JSONObject(arg)
+        } catch (_: Exception) {
+            null
+        }
+        else -> null
     }
 
     @Synchronized

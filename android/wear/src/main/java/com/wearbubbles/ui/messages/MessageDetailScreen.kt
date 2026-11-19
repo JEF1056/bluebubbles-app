@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.SendToMobile
+import androidx.compose.material.icons.outlined.AddReaction
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Keyboard
@@ -49,6 +51,7 @@ import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -75,6 +78,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -88,8 +92,6 @@ import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.ListHeader
 import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.dialog.Alert
-import androidx.wear.compose.material.dialog.Dialog
 import androidx.wear.input.RemoteInputIntentHelper
 import androidx.wear.input.wearableExtender
 import coil.ImageLoader
@@ -103,7 +105,22 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.api.dto.TapbackType
+import com.wearbubbles.db.MessageDao
 import com.wearbubbles.notifications.RemoteLauncher
+import com.wearbubbles.ui.components.WearConfirmModal
+import com.wearbubbles.ui.components.WearModalActionPill
+import com.wearbubbles.ui.components.WearModalActionStyle
+import com.wearbubbles.ui.components.WearModalBorder
+import com.wearbubbles.ui.components.WearModalDestructiveRed
+import com.wearbubbles.ui.components.WearModalHeader
+import com.wearbubbles.ui.components.WearModalIconBadge
+import com.wearbubbles.ui.components.WearModalPrimaryBlue
+import com.wearbubbles.ui.components.WearModalScaffold
+import com.wearbubbles.ui.components.WearModalSurface
+import com.wearbubbles.ui.components.WearModalTextPrimary
+import com.wearbubbles.ui.components.WearModalTextSecondary
+import com.wearbubbles.ui.components.rememberReducedMotion
+import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.ErrorColor
 import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
@@ -185,10 +202,15 @@ fun MessageDetailScreen(
     }
 
     var reactionTargetMsg by remember { mutableStateOf<MessageUi?>(null) }
+    var failedActionMsg by remember { mutableStateOf<MessageUi?>(null) }
+    var showClearFailedConfirm by remember { mutableStateOf(false) }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showPeopleDialog by remember { mutableStateOf(false) }
     var showTrashConfirm by remember { mutableStateOf(false) }
     var fullscreenImage by remember { mutableStateOf<ViewerImageSource?>(null) }
+    val activeFailedMsg = failedActionMsg?.let { target ->
+        messages.firstOrNull { it.guid == target.guid && it.sendFailed }
+    }
     var lastScrolledGuid by remember(chatGuid) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(chatGuid) {
@@ -332,7 +354,13 @@ fun MessageDetailScreen(
                     maxBubbleWidth = maxBubbleWidth,
                     imageLoader = imageLoader,
                     isPlayingAudio = playingMessageGuid == msg.guid,
-                    onLongPress = { reactionTargetMsg = msg },
+                    onLongPress = {
+                        when {
+                            msg.sendFailed -> failedActionMsg = msg
+                            !MessageDao.isTempPlaceholderGuid(msg.guid) -> reactionTargetMsg = msg
+                        }
+                    },
+                    onFailedClick = { failedActionMsg = msg },
                     onImageClick = {
                         fullscreenImage = ViewerImageSource(
                             localPath = msg.localAttachmentPath,
@@ -352,34 +380,30 @@ fun MessageDetailScreen(
 
             if (sendFailedCount > 0) {
                 item(key = "send_failed_banner") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .background(ErrorContainer)
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                    WearPillButton(
+                        label = "$sendFailedCount not sent",
+                        secondaryLabel = if (sendFailedCount == 1) "Tap for options" else "Tap to clear all",
+                        onClick = {
+                            if (sendFailedCount == 1) {
+                                failedActionMsg = messages.lastOrNull { it.sendFailed }
+                            } else {
+                                showClearFailedConfirm = true
+                            }
+                        },
+                        leadingIcon = {
                             Icon(
                                 imageVector = Icons.Rounded.ErrorOutline,
                                 contentDescription = null,
                                 tint = OnErrorContainer,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Text(
-                                text = "$sendFailedCount not sent",
-                                style = centeredTextStyle(11.sp, 14.sp, FontWeight.Medium),
-                                color = OnErrorContainer,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
+                        },
+                        backgroundColor = ErrorContainer,
+                        contentColor = OnErrorContainer,
+                        minHeight = 44.dp,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
             }
 
@@ -506,7 +530,7 @@ fun MessageDetailScreen(
             item(key = "action_open_on_phone") {
                 WearPillButton(
                     label = "Open on phone",
-                    onClick = { RemoteLauncher.openServerOnPhone(context) },
+                    onClick = { RemoteLauncher.openServerOnPhoneAsync(context) },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.SendToMobile,
@@ -525,133 +549,150 @@ fun MessageDetailScreen(
         }
     }
 
-    Dialog(
+    TapbackPickerOverlay(
         showDialog = reactionTargetMsg != null,
-        onDismissRequest = { reactionTargetMsg = null }
-    ) {
-        val target = reactionTargetMsg
-        if (target != null) {
-            TapbackPickerOverlay(
-                activeByMeTypes = target.reactions.filter { it.isFromMe }.map { it.type }.toSet(),
-                onSelect = { tapback ->
-                    val activeByMe = target.reactions.any { it.type == tapback && it.isFromMe }
-                    viewModel.toggleTapback(target.guid, tapback, activeByMe)
-                    reactionTargetMsg = null
-                },
-                onDismiss = { reactionTargetMsg = null }
-            )
-        }
-    }
+        targetSnippet = reactionTargetMsg?.text?.trim()?.takeIf { it.isNotBlank() },
+        activeByMeTypes = reactionTargetMsg?.reactions
+            ?.filter { it.isFromMe }
+            ?.map { it.type }
+            ?.toSet()
+            ?: emptySet(),
+        onSelect = { tapback ->
+            val target = reactionTargetMsg
+            if (target != null) {
+                val activeByMe = target.reactions.any { it.type == tapback && it.isFromMe }
+                viewModel.toggleTapback(target.guid, tapback, activeByMe)
+            }
+            reactionTargetMsg = null
+        },
+        onDismiss = { reactionTargetMsg = null }
+    )
 
-    Dialog(
+    EmojiPickerOverlay(
         showDialog = showEmojiPicker,
-        onDismissRequest = { showEmojiPicker = false }
-    ) {
-        EmojiPickerOverlay(
-            onSelectEmoji = { emoji ->
-                viewModel.sendMessage(emoji)
-                showEmojiPicker = false
-            },
-            onOpenKeyboard = {
-                showEmojiPicker = false
-                launchKeyboardReply()
-            },
-            onDismiss = { showEmojiPicker = false }
-        )
-    }
+        onSelectEmoji = { emoji ->
+            viewModel.sendMessage(emoji)
+            showEmojiPicker = false
+        },
+        onOpenKeyboard = {
+            showEmojiPicker = false
+            launchKeyboardReply()
+        },
+        onDismiss = { showEmojiPicker = false }
+    )
 
-    Dialog(
+    PeopleModal(
         showDialog = showPeopleDialog,
-        onDismissRequest = { showPeopleDialog = false }
+        participants = participants,
+        onDismiss = { showPeopleDialog = false }
+    )
+
+    WearConfirmModal(
+        show = showTrashConfirm,
+        onDismiss = { showTrashConfirm = false },
+        title = "Move to trash?",
+        message = "Removes \"$chatTitle\" from this watch.",
+        confirmLabel = "Trash chat",
+        onConfirm = {
+            showTrashConfirm = false
+            viewModel.deleteChat(onChatDeleted)
+        },
+        dismissLabel = "Keep chat",
+        icon = Icons.Outlined.Delete,
+        destructive = true
+    )
+
+    FailedMessageActionsModal(
+        showDialog = activeFailedMsg != null,
+        messageSnippet = activeFailedMsg?.let { msg ->
+            msg.text?.trim()?.takeIf { it.isNotBlank() }
+                ?: if (msg.attachmentMimeType?.startsWith("audio/") == true) "Voice message" else null
+        },
+        canRetry = !activeFailedMsg?.text.isNullOrBlank(),
+        onRetry = {
+            val target = activeFailedMsg
+            failedActionMsg = null
+            if (target != null) {
+                viewModel.retryFailedMessage(target)
+            }
+        },
+        onDelete = {
+            val target = activeFailedMsg
+            failedActionMsg = null
+            if (target != null) {
+                viewModel.deleteFailedMessage(target.guid)
+            }
+        },
+        onDismiss = { failedActionMsg = null }
+    )
+
+    WearConfirmModal(
+        show = showClearFailedConfirm && sendFailedCount > 0,
+        onDismiss = { showClearFailedConfirm = false },
+        title = "Delete failed?",
+        message = "Removes $sendFailedCount unsent messages from this watch.",
+        confirmLabel = "Delete all",
+        onConfirm = {
+            showClearFailedConfirm = false
+            viewModel.deleteAllFailedMessages()
+        },
+        dismissLabel = "Keep",
+        icon = Icons.Outlined.Delete,
+        destructive = true
+    )
+}
+
+@Composable
+internal fun FailedMessageActionsModal(
+    showDialog: Boolean,
+    messageSnippet: String?,
+    canRetry: Boolean,
+    onRetry: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    WearModalScaffold(
+        showDialog = showDialog,
+        onDismissRequest = onDismiss
     ) {
-        Alert(
-            title = {
-                Text(
-                    text = "People",
-                    style = centeredTextStyle(15.sp, 19.sp, FontWeight.SemiBold),
-                    color = palette.onSurface,
-                    textAlign = TextAlign.Center
-                )
-            },
-            content = {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        participants.forEach { (name, address) ->
-                            Text(
-                                text = if (name != address) "$name ($address)" else name,
-                                style = centeredTextStyle(12.sp, 15.sp),
-                                color = palette.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-                item {
-                    Spacer(modifier = Modifier.height(6.dp))
-                    WearPillButton(
-                        label = "Close",
-                        onClick = { showPeopleDialog = false },
-                        backgroundColor = palette.surfaceContainerHigh,
-                        contentColor = palette.onSurface,
-                        centered = true,
-                        minHeight = 42.dp
+        item(key = "failed_header") {
+            WearModalHeader(
+                title = "Message not sent",
+                subtitle = messageSnippet,
+                subtitleMaxLines = 2,
+                badge = {
+                    WearModalIconBadge(
+                        icon = Icons.Rounded.ErrorOutline,
+                        accentColor = WearModalDestructiveRed
                     )
                 }
-            }
-        )
-    }
-
-    Dialog(
-        showDialog = showTrashConfirm,
-        onDismissRequest = { showTrashConfirm = false }
-    ) {
-        Alert(
-            title = {
-                Text(
-                    text = "Move to trash?",
-                    style = centeredTextStyle(15.sp, 19.sp, FontWeight.SemiBold),
-                    color = palette.onSurface,
-                    textAlign = TextAlign.Center
-                )
-            },
-            content = {
-                Text(
-                    text = "Remove this conversation from your watch.",
-                    style = centeredTextStyle(12.sp, 16.sp),
-                    color = palette.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            },
-            negativeButton = {
-                WearPillButton(
-                    label = "Cancel",
-                    onClick = { showTrashConfirm = false },
-                    backgroundColor = palette.surfaceContainerHigh,
-                    contentColor = palette.onSurface,
-                    centered = true,
-                    minHeight = 44.dp
-                )
-            },
-            positiveButton = {
-                WearPillButton(
-                    label = "Trash",
-                    onClick = {
-                        showTrashConfirm = false
-                        viewModel.deleteChat(onChatDeleted)
-                    },
-                    backgroundColor = ErrorContainer,
-                    contentColor = OnErrorContainer,
-                    centered = true,
-                    minHeight = 44.dp
+            )
+        }
+        if (canRetry) {
+            item(key = "failed_retry") {
+                WearModalActionPill(
+                    label = "Try again",
+                    icon = Icons.Rounded.Refresh,
+                    style = WearModalActionStyle.Primary,
+                    onClick = onRetry
                 )
             }
-        )
+        }
+        item(key = "failed_delete") {
+            WearModalActionPill(
+                label = "Delete message",
+                icon = Icons.Outlined.Delete,
+                style = WearModalActionStyle.Destructive,
+                onClick = onDelete
+            )
+        }
+        item(key = "failed_cancel") {
+            WearModalActionPill(
+                label = "Cancel",
+                style = WearModalActionStyle.Secondary,
+                onClick = onDismiss
+            )
+        }
     }
 }
 
@@ -778,22 +819,27 @@ private fun VoiceRecordingBar(
 @Composable
 private fun TypingIndicatorBubble() {
     val palette = LocalWearPalette.current
-    val transition = rememberInfiniteTransition(label = "typing")
-    val alphas = listOf(0, 180, 360).map { delayMs ->
-        transition.animateFloat(
-            initialValue = 0.35f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = keyframes {
-                    durationMillis = 900
-                    0.35f at delayMs
-                    1.0f at (delayMs + 220).coerceAtMost(900)
-                    0.35f at (delayMs + 440).coerceAtMost(900)
-                },
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "dot_$delayMs"
-        )
+    val reducedMotion = rememberReducedMotion()
+    val alphas = if (reducedMotion) {
+        listOf(0.7f, 0.7f, 0.7f)
+    } else {
+        val transition = rememberInfiniteTransition(label = "typing")
+        listOf(0, 180, 360).map { delayMs ->
+            transition.animateFloat(
+                initialValue = 0.35f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = keyframes {
+                        durationMillis = 900
+                        0.35f at delayMs
+                        1.0f at (delayMs + 220).coerceAtMost(900)
+                        0.35f at (delayMs + 440).coerceAtMost(900)
+                    },
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "dot_$delayMs"
+            ).value
+        }
     }
 
     Box(
@@ -815,7 +861,7 @@ private fun TypingIndicatorBubble() {
                 Box(
                     modifier = Modifier
                         .size(6.dp)
-                        .alpha(dotAlpha.value)
+                        .alpha(dotAlpha)
                         .clip(CircleShape)
                         .background(palette.onSurfaceVariant)
                 )
@@ -824,185 +870,260 @@ private fun TypingIndicatorBubble() {
     }
 }
 
-@OptIn(ExperimentalHorologistApi::class)
 @Composable
-private fun EmojiPickerOverlay(
-    onSelectEmoji: (String) -> Unit,
-    onOpenKeyboard: () -> Unit,
+internal fun PeopleModal(
+    showDialog: Boolean,
+    participants: List<Pair<String, String>>,
     onDismiss: () -> Unit
 ) {
-    val palette = LocalWearPalette.current
-    val columnState = rememberResponsiveColumnState(
-        contentPadding = ScalingLazyColumnDefaults.padding(
-            first = ScalingLazyColumnDefaults.ItemType.Text,
-            last = ScalingLazyColumnDefaults.ItemType.Chip
-        ),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    )
-    val rows = remember { QUICK_EMOJIS.chunked(3) }
-
-    ScreenScaffold(
-        scrollState = columnState,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
+    WearModalScaffold(
+        showDialog = showDialog,
+        onDismissRequest = onDismiss,
+        firstItemType = ScalingLazyColumnDefaults.ItemType.Icon,
+        lastItemType = ScalingLazyColumnDefaults.ItemType.Chip
     ) {
-        ScalingLazyColumn(
-            columnState = columnState,
-            modifier = Modifier
-                .fillMaxSize()
-                .background(palette.canvas)
-        ) {
-            item(key = "emoji_header") {
-                ListHeader(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = "Emoji",
-                        style = centeredTextStyle(14.sp, 18.sp, FontWeight.SemiBold),
-                        color = palette.onSurface,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+        item(key = "people_header") {
+            val countText = if (participants.isEmpty()) {
+                "No members synced"
+            } else {
+                "${participants.size} ${if (participants.size == 1) "member" else "members"}"
             }
+            WearModalHeader(
+                title = "Chat people",
+                subtitle = countText
+            ) {
+                WearModalIconBadge(
+                    icon = Icons.Outlined.Group,
+                    accentColor = WearModalPrimaryBlue
+                )
+            }
+        }
 
-            items(rows.size, key = { "emoji_row_$it" }) { rowIndex ->
-                val rowEmojis = rows[rowIndex]
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically
+        items(participants.size, key = { "participant_$it" }) { index ->
+            val (name, address) = participants[index]
+            val showAddress = address.isNotBlank() && address != name
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+                    .defaultMinSize(minHeight = 48.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(WearModalSurface)
+                    .border(1.dp, WearModalBorder, RoundedCornerShape(24.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ContactAvatar(
+                    title = name,
+                    seed = address.ifBlank { name },
+                    size = 32.dp,
+                    badgeCutoutColor = WearModalSurface
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(1.dp, Alignment.CenterVertically)
                 ) {
-                    rowEmojis.forEach { emoji ->
-                        Box(
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clip(CircleShape)
-                                .background(palette.surfaceContainerHigh)
-                                .clickable(role = Role.Button, onClick = { onSelectEmoji(emoji) }),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = emoji,
-                                style = centeredTextStyle(21.sp, 22.sp),
-                                textAlign = TextAlign.Center
-                            )
-                        }
+                    Text(
+                        text = name,
+                        style = centeredTextStyle(13.5.sp, 17.sp, FontWeight.Medium),
+                        color = WearModalTextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (showAddress) {
+                        Text(
+                            text = address,
+                            style = centeredTextStyle(11.sp, 14.sp),
+                            color = WearModalTextSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
+        }
 
-            item(key = "emoji_more") {
-                WearPillButton(
-                    label = "More",
-                    onClick = onOpenKeyboard,
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Rounded.Keyboard,
-                            contentDescription = null,
-                            tint = palette.onPrimaryAction,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    },
-                    backgroundColor = palette.primaryAction,
-                    contentColor = palette.onPrimaryAction,
-                    centered = true,
-                    minHeight = 46.dp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            item(key = "emoji_cancel") {
-                WearPillButton(
-                    label = "Cancel",
-                    onClick = onDismiss,
-                    backgroundColor = palette.surfaceContainer,
-                    contentColor = palette.onSurface,
-                    centered = true,
-                    minHeight = 46.dp
-                )
-            }
+        item(key = "people_close") {
+            WearModalActionPill(
+                label = "Close people",
+                style = WearModalActionStyle.Secondary,
+                onClick = onDismiss,
+                modifier = Modifier.padding(top = 4.dp)
+            )
         }
     }
 }
 
 @Composable
-private fun TapbackPickerOverlay(
+internal fun EmojiPickerOverlay(
+    showDialog: Boolean,
+    onSelectEmoji: (String) -> Unit,
+    onOpenKeyboard: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val rows = remember { QUICK_EMOJIS.chunked(3) }
+
+    WearModalScaffold(
+        showDialog = showDialog,
+        onDismissRequest = onDismiss,
+        firstItemType = ScalingLazyColumnDefaults.ItemType.Icon,
+        lastItemType = ScalingLazyColumnDefaults.ItemType.Chip
+    ) {
+        item(key = "emoji_header") {
+            WearModalHeader(title = "Send emoji") {
+                WearModalIconBadge(
+                    icon = Icons.Outlined.SentimentSatisfied,
+                    accentColor = WearModalPrimaryBlue
+                )
+            }
+        }
+
+        items(rows.size, key = { "emoji_row_$it" }) { rowIndex ->
+            val rowEmojis = rows[rowIndex]
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                rowEmojis.forEach { emoji ->
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(WearModalSurface)
+                            .border(1.dp, WearModalBorder, CircleShape)
+                            .semantics { contentDescription = "Send $emoji" }
+                            .clickable(role = Role.Button, onClick = { onSelectEmoji(emoji) }),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = emoji,
+                            style = centeredTextStyle(22.sp, 24.sp),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+        }
+
+        item(key = "emoji_keyboard") {
+            WearModalActionPill(
+                label = "Open keyboard",
+                icon = Icons.Rounded.Keyboard,
+                style = WearModalActionStyle.Primary,
+                onClick = onOpenKeyboard,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+
+        item(key = "emoji_close") {
+            WearModalActionPill(
+                label = "Close picker",
+                style = WearModalActionStyle.Secondary,
+                onClick = onDismiss
+            )
+        }
+    }
+}
+
+@Composable
+internal fun TapbackPickerOverlay(
+    showDialog: Boolean,
+    targetSnippet: String?,
     activeByMeTypes: Set<TapbackType>,
     onSelect: (TapbackType) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val palette = LocalWearPalette.current
     val tapbacks = TapbackType.entries
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+
+    WearModalScaffold(
+        showDialog = showDialog,
+        onDismissRequest = onDismiss,
+        firstItemType = ScalingLazyColumnDefaults.ItemType.Icon,
+        lastItemType = ScalingLazyColumnDefaults.ItemType.Chip
     ) {
-        Text(
-            text = "React",
-            style = centeredTextStyle(13.sp, 16.sp, FontWeight.SemiBold),
-            color = palette.onSurface,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            tapbacks.take(3).forEach { type ->
-                TapbackPill(
-                    type = type,
-                    selected = type in activeByMeTypes,
-                    onClick = { onSelect(type) }
+        item(key = "tapback_header") {
+            WearModalHeader(
+                title = "React to message",
+                subtitle = targetSnippet,
+                subtitleMaxLines = 1
+            ) {
+                WearModalIconBadge(
+                    icon = Icons.Outlined.AddReaction,
+                    accentColor = WearModalPrimaryBlue
                 )
             }
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            tapbacks.drop(3).forEach { type ->
-                TapbackPill(
-                    type = type,
-                    selected = type in activeByMeTypes,
-                    onClick = { onSelect(type) }
-                )
+
+        item(key = "tapback_row_1") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                tapbacks.take(3).forEach { type ->
+                    TapbackPill(
+                        type = type,
+                        isSelected = type in activeByMeTypes,
+                        onClick = { onSelect(type) }
+                    )
+                }
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        WearPillButton(
-            label = "Cancel",
-            onClick = onDismiss,
-            backgroundColor = palette.surfaceContainerHigh,
-            contentColor = palette.onSurface,
-            centered = true,
-            minHeight = 38.dp,
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-            modifier = Modifier.widthIn(min = 96.dp, max = 116.dp)
-        )
+
+        item(key = "tapback_row_2") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                tapbacks.drop(3).forEach { type ->
+                    TapbackPill(
+                        type = type,
+                        isSelected = type in activeByMeTypes,
+                        onClick = { onSelect(type) }
+                    )
+                }
+            }
+        }
+
+        item(key = "tapback_close") {
+            WearModalActionPill(
+                label = "Close reactions",
+                style = WearModalActionStyle.Secondary,
+                onClick = onDismiss
+            )
+        }
     }
 }
 
 @Composable
 private fun TapbackPill(
     type: TapbackType,
-    selected: Boolean,
+    isSelected: Boolean,
     onClick: () -> Unit
 ) {
-    val palette = LocalWearPalette.current
+    val bgColor = if (isSelected) WearModalPrimaryBlue else WearModalSurface
+    val borderColor = if (isSelected) Color(0xFF72B5FF) else WearModalBorder
+    val borderWidth = if (isSelected) 1.5.dp else 1.dp
+
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(48.dp)
             .clip(CircleShape)
-            .background(if (selected) palette.primaryAction else palette.surfaceContainerHigh)
-            .then(
-                if (selected) Modifier.border(1.5.dp, palette.primary, CircleShape)
-                else Modifier
-            )
+            .background(bgColor)
+            .border(borderWidth, borderColor, CircleShape)
+            .semantics {
+                contentDescription = "${type.label} reaction"
+                selected = isSelected
+            }
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = type.emoji,
-            style = centeredTextStyle(19.sp, 21.sp),
+            style = centeredTextStyle(20.sp, 22.sp),
             textAlign = TextAlign.Center
         )
     }
@@ -1018,6 +1139,7 @@ private fun MessageBubble(
     imageLoader: ImageLoader,
     isPlayingAudio: Boolean,
     onLongPress: () -> Unit,
+    onFailedClick: () -> Unit,
     onImageClick: () -> Unit,
     onPlayAudioClick: () -> Unit
 ) {
@@ -1144,7 +1266,7 @@ private fun MessageBubble(
                             .size(124.dp)
                             .clip(bubbleShape)
                             .combinedClickable(
-                                onClick = onImageClick,
+                                onClick = if (message.sendFailed) onFailedClick else onImageClick,
                                 onLongClick = onLongPress
                             )
                     )
@@ -1161,7 +1283,7 @@ private fun MessageBubble(
                             .background(bubbleColor)
                             .combinedClickable(
                                 role = Role.Button,
-                                onClick = onPlayAudioClick,
+                                onClick = if (message.sendFailed) onFailedClick else onPlayAudioClick,
                                 onLongClick = onLongPress
                             )
                             .padding(horizontal = 10.dp, vertical = 8.dp),
@@ -1221,7 +1343,7 @@ private fun MessageBubble(
                             .clip(bubbleShape)
                             .background(bubbleColor)
                             .combinedClickable(
-                                onClick = {},
+                                onClick = { if (message.sendFailed) onFailedClick() },
                                 onLongClick = onLongPress
                             )
                             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1271,7 +1393,29 @@ private fun MessageBubble(
             }
         }
 
-        if (message.isLatestOutgoing) {
+        if (message.sendFailed) {
+            Row(
+                modifier = Modifier
+                    .padding(end = 2.dp, top = 2.dp)
+                    .clip(RoundedCornerShape(50))
+                    .clickable(role = Role.Button, onClick = onFailedClick)
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ErrorOutline,
+                    contentDescription = null,
+                    tint = ErrorColor,
+                    modifier = Modifier.size(12.dp)
+                )
+                Text(
+                    text = "Not sent · Tap",
+                    style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
+                    color = ErrorColor
+                )
+            }
+        } else if (message.isLatestOutgoing) {
             val timeStr = remember(message.dateCreated) {
                 formatReceiptTime(message.dateCreated)
             }
@@ -1281,19 +1425,6 @@ private fun MessageBubble(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 when {
-                    message.sendFailed -> {
-                        Icon(
-                            imageVector = Icons.Rounded.ErrorOutline,
-                            contentDescription = null,
-                            tint = ErrorColor,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = "Not sent",
-                            style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                            color = ErrorColor
-                        )
-                    }
                     message.guid.startsWith("temp-") -> {
                         Text(
                             text = "Sending...",

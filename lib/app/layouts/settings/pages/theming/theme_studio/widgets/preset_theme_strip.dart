@@ -367,10 +367,94 @@ class _ModeGroupState extends State<_ModeGroup> {
   }
 
   void _showImportDialog(BuildContext context) {
-    showDialog(
+    final textController = TextEditingController();
+    final loading = false.obs;
+    bool dialogOpen = true;
+
+    Future<void> pickFile() async {
+      final result = await FilePicker.pickFile(
+        type: FileType.custom,
+        allowedExtensions: ['json', 'txt'],
+      );
+      if (result == null || !dialogOpen) return;
+      final bytes = await result.xFile.readAsBytes();
+      if (!dialogOpen) return;
+      textController.text = utf8.decode(bytes);
+    }
+
+    Future<void> doImport() async {
+      if (loading.value) return;
+      final json = textController.text.trim();
+      if (json.isEmpty) return;
+      loading.value = true;
+      final theme = await widget.controller.importThemeFromJson(json);
+      loading.value = false;
+      if (dialogOpen && context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      if (!context.mounted) return;
+      if (theme != null) {
+        showSnackbar("Imported", "Theme \"${theme.name}\" imported successfully", type: SnackbarType.success);
+      } else {
+        showSnackbar("Error", "Could not parse theme — make sure it's a valid exported JSON", type: SnackbarType.error);
+      }
+    }
+
+    showBBDialog(
       context: context,
-      builder: (ctx) => _ImportDialog(controller: widget.controller, pageContext: context),
-    );
+      title: "Import Theme",
+      icon: Icons.file_download_outlined,
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              "Paste the exported theme JSON below, or pick a .json file.",
+              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textController,
+              maxLines: 6,
+              decoration: InputDecoration(
+                hintText: '{ "name": "...", "data": { ... } }',
+                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: context.theme.colorScheme.outline)),
+                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: context.theme.colorScheme.primary)),
+              ),
+              style: context.theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: pickFile,
+              icon: const Icon(Icons.folder_open_outlined),
+              label: const Text("Pick File"),
+            ),
+            Obx(() => loading.value
+                ? const Padding(
+                    padding: EdgeInsets.only(top: 12),
+                    child: LinearProgressIndicator(),
+                  )
+                : const SizedBox.shrink()),
+          ],
+        ),
+      ),
+      actions: [
+        BBDialogAction(
+          text: "Cancel",
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
+        BBDialogAction(
+          text: "Import Theme",
+          isDefault: true,
+          onPressed: doImport,
+        ),
+      ],
+    ).whenComplete(() {
+      dialogOpen = false;
+      textController.dispose();
+    });
   }
 }
 
@@ -823,102 +907,5 @@ class _SelectionIcon extends StatelessWidget {
       return Icon(Icons.check_circle_outline_rounded, size: size, color: cs.secondary.withValues(alpha: 0.55));
     }
     return Icon(Icons.radio_button_unchecked, size: size, color: cs.outline.withValues(alpha: 0.5));
-  }
-}
-
-// ─── Import dialog ─────────────────────────────────────────────────────────────
-
-class _ImportDialog extends StatefulWidget {
-  const _ImportDialog({required this.controller, required this.pageContext});
-
-  final ThemeStudioController controller;
-  final BuildContext pageContext;
-
-  @override
-  State<_ImportDialog> createState() => _ImportDialogState();
-}
-
-class _ImportDialogState extends State<_ImportDialog> {
-  final _textController = TextEditingController();
-  bool _loading = false;
-
-  @override
-  void dispose() {
-    _textController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickFile() async {
-    final result = await FilePicker.pickFile(
-      type: FileType.custom,
-      allowedExtensions: ['json', 'txt'],
-    );
-    if (result == null) return;
-    final bytes = await result.xFile.readAsBytes();
-    _textController.text = utf8.decode(bytes);
-  }
-
-  Future<void> _doImport() async {
-    final json = _textController.text.trim();
-    if (json.isEmpty) return;
-    setState(() => _loading = true);
-    final theme = await widget.controller.importThemeFromJson(json);
-    setState(() => _loading = false);
-    if (!mounted) return;
-    Navigator.of(context).pop();
-    if (theme != null) {
-      showSnackbar("Imported", "Theme \"${theme.name}\" imported successfully", type: SnackbarType.success);
-    } else {
-      showSnackbar("Error", "Could not parse theme — make sure it's a valid exported JSON", type: SnackbarType.error);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      title: Text("Import Theme", style: context.theme.textTheme.titleLarge),
-      content: SizedBox(
-        width: 320,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              "Paste the exported theme JSON below, or pick a .json file.",
-              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _textController,
-              maxLines: 6,
-              decoration: InputDecoration(
-                hintText: '{ "name": "...", "data": { ... } }',
-                enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: context.theme.colorScheme.outline)),
-                focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: context.theme.colorScheme.primary)),
-              ),
-              style: context.theme.textTheme.bodySmall,
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _pickFile,
-              icon: const Icon(Icons.folder_open_outlined),
-              label: const Text("Pick File"),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text("Cancel", style: TextStyle(color: context.theme.colorScheme.primary)),
-        ),
-        FilledButton(
-          onPressed: _loading ? null : _doImport,
-          child: _loading
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Text("Import"),
-        ),
-      ],
-    );
   }
 }

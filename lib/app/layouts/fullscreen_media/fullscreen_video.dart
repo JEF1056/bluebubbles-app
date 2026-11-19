@@ -1,12 +1,15 @@
 import 'dart:async';
 
-import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:bluebubbles/app/components/m3e/m3e.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/video_player.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_video_player.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/dialogs/metadata_dialog.dart';
+import 'package:bluebubbles/app/layouts/fullscreen_media/fullscreen_image.dart' show FullscreenMediaActionPill;
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/share.dart';
 
 // (needed for custom back button)
 //ignore: implementation_imports
@@ -103,7 +106,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
 
       await videoController!.player.setPlaylistMode(PlaylistMode.none);
       await videoController!.player.open(media, play: false);
-      await _configureAndroidVideoColorPipeline(videoController!.player);
+      await configureAndroidVideoColorPipeline(videoController!.player, logPrefix: 'FullscreenVideo');
       await videoController!.player.setVolume(muted.value ? 0 : 100);
     }
 
@@ -122,25 +125,6 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
     }
 
     setState(() {});
-  }
-
-  Future<void> _configureAndroidVideoColorPipeline(Player player) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
-    final platform = player.platform;
-    if (platform is! NativePlayer) return;
-
-    try {
-      // Force conservative HDR->SDR conversion for iPhone HDR clips, which can
-      // otherwise appear over-bright on some Android GPU + mpv combinations.
-      await platform.setProperty('target-colorspace-hint', 'yes');
-      await platform.setProperty('target-prim', 'bt.709');
-      await platform.setProperty('target-trc', 'srgb');
-      await platform.setProperty('tone-mapping', 'hable');
-      await platform.setProperty('target-peak', '203');
-      await platform.setProperty('hdr-compute-peak', 'no');
-    } catch (e, s) {
-      Logger.error('FullscreenVideo: Failed to apply Android video color pipeline!', error: e, trace: s);
-    }
   }
 
   void createListener(VideoController controller) {
@@ -325,7 +309,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                           controller: videoController!,
                           controls: (state) => Padding(
                                 padding: EdgeInsets.all(!kIsWeb && !kIsDesktop ? 0 : 20).copyWith(
-                                    bottom: !kIsWeb && !kIsDesktop ? (iOS && widget.showInteractions ? 100 : 10) : 0),
+                                    bottom: !kIsWeb && !kIsDesktop ? (widget.showInteractions ? 96 : 10) : 0),
                                 child: kIsDesktop
                                     ? media_kit_video_controls.MaterialDesktopVideoControls(state)
                                     : media_kit_video_controls.MaterialVideoControls(state),
@@ -485,6 +469,44 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                       ),
                     );
                   }),
+                // Floating M3E dark tonal bottom action pill (!iOS)
+                if (!iOS && widget.showInteractions)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: (!kIsWeb && !kIsDesktop) ? 20 : 68,
+                    child: Obx(() {
+                      final visible = showPlayPauseOverlay.value || _hover.value;
+                      return MouseRegion(
+                        onEnter: (_) => _hover.value = true,
+                        onExit: (_) => _hover.value = false,
+                        child: IgnorePointer(
+                          ignoring: !visible,
+                          child: AnimatedOpacity(
+                            opacity: visible ? 1.0 : 0.0,
+                            duration: M3EMotion.effectsFast.duration,
+                            curve: M3EMotion.effectsFast.curve,
+                            child: SafeArea(
+                              top: false,
+                              child: Center(
+                                child: FullscreenMediaActionPill(
+                                  onSave: () => AttachmentsSvc.saveToDisk(widget.file),
+                                  onShare: (!kIsWeb && !kIsDesktop)
+                                      ? () {
+                                          if (widget.file.path != null) {
+                                            Share.files([widget.file.path!]);
+                                          }
+                                        }
+                                      : null,
+                                  onDetails: () => showMetadataDialog(widget.attachment, context),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                  ),
                 // Bottom action bar for iOS
                 if (iOS && widget.showInteractions)
                   Positioned(

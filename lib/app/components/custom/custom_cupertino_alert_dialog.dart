@@ -17,19 +17,19 @@ import 'package:flutter/rendering.dart';
 // However the values are not exactly the same as native, so eyeballing is needed.
 const TextStyle _kCupertinoDialogTitleStyle = TextStyle(
   inherit: false,
-  fontSize: 18.0,
-  fontWeight: FontWeight.w400,
+  fontSize: 17.0,
+  fontWeight: FontWeight.w600,
   height: 1.3,
-  letterSpacing: -0.5,
+  letterSpacing: -0.4,
   textBaseline: TextBaseline.alphabetic,
 );
 
 const TextStyle _kCupertinoDialogContentStyle = TextStyle(
   inherit: false,
-  fontSize: 12.0,
+  fontSize: 13.0,
   fontWeight: FontWeight.w400,
   height: 1.35,
-  letterSpacing: -0.2,
+  letterSpacing: -0.1,
   textBaseline: TextBaseline.alphabetic,
 );
 
@@ -54,7 +54,7 @@ const double _kContentPadding = 16.0;
 const double _kMinButtonHeight = 45.0;
 const double _kMinButtonFontSize = 10.0;
 const double _kDialogCornerRadius = 14.0;
-const double _kDividerThickness = 1.0;
+const double _kDividerThickness = 0.5;
 
 // A translucent color that is painted on top of the blurred backdrop as the
 // dialog's background color

@@ -64,11 +64,6 @@ data class FaceTimeCallRequest(
     val isTelephony: Boolean = false
 )
 
-data class FaceTimeSetMutedRequest(
-    @SerializedName("muted")
-    val muted: Boolean
-)
-
 // Generic API Response
 data class ApiResponse(
     @SerializedName("status")

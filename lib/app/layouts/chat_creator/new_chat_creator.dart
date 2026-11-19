@@ -2,7 +2,6 @@ import 'package:bluebubbles/app/layouts/chat_creator/chat_creator.dart' show Sel
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_controller.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/recipient_chips_row.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/search_results_list.dart';
-import 'package:bluebubbles/app/layouts/chat_creator/widgets/service_type_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/messages_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_effect_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_component.dart';
@@ -133,7 +132,6 @@ class _AnimatedHeader extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const SizedBox(height: 8),
-                    ServiceTypePicker(controller: controller),
                     RecipientChipsRow(controller: controller),
                     const SizedBox(height: 8),
                     if (SettingsSvc.settings.skin.value != Skins.Material)
@@ -217,12 +215,14 @@ class _TextFieldArea extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final service = controller.selectedService.value;
-      final isIMsg = service == ChatServiceType.iMessage;
-      final hint = service == ChatServiceType.rcs
-          ? "Text Message • RCS"
-          : (isIMsg ? "iMessage" : "Text Forwarding");
       final activeCVC = controller.activeController.value;
+      final service = activeCVC?.chat.service ?? controller.selectedService.value;
+      final isIMsg = service == ChatServiceType.iMessage;
+      final hint = activeCVC == null && controller.selectedContacts.isEmpty
+          ? "Message"
+          : service == ChatServiceType.rcs
+              ? "Text Message • RCS"
+              : (isIMsg ? "iMessage" : "Text Message");
       final sending = controller.isSending.value;
 
       final composer = Padding(

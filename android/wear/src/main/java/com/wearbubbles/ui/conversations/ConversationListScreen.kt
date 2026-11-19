@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.PushPin
@@ -43,13 +44,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.dialog.Alert
-import androidx.wear.compose.material.dialog.Dialog
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
+import com.wearbubbles.ui.components.WearConfirmModal
+import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.OnErrorContainer
@@ -248,60 +249,34 @@ fun ConversationListScreen(
         }
     }
 
-    Dialog(
-        showDialog = chatToDelete != null,
-        onDismissRequest = { chatToDelete = null }
-    ) {
-        val target = chatToDelete
-        if (target != null) {
-            Alert(
-                backgroundColor = palette.canvas,
-                title = {
-                    Text(
-                        text = "Hide chat?",
-                        style = centeredTextStyle(15.sp, 19.sp, FontWeight.SemiBold),
-                        color = palette.onSurface,
-                        textAlign = TextAlign.Center
-                    )
-                },
-                message = {
-                    Text(
-                        text = target.title,
-                        style = centeredTextStyle(12.sp, 16.sp),
-                        color = palette.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            ) {
-                item {
-                    WearPillButton(
-                        label = "Hide",
-                        onClick = {
-                            viewModel.deleteChat(target.guid)
-                            chatToDelete = null
-                        },
-                        backgroundColor = ErrorContainer,
-                        contentColor = OnErrorContainer,
-                        centered = true,
-                        minHeight = 48.dp,
-                        labelFontWeight = FontWeight.SemiBold
-                    )
-                }
-                item {
-                    WearPillButton(
-                        label = "Cancel",
-                        onClick = { chatToDelete = null },
-                        backgroundColor = palette.surfaceContainerHigh,
-                        contentColor = palette.onSurface,
-                        centered = true,
-                        minHeight = 48.dp
-                    )
-                }
+    val target = chatToDelete
+    WearConfirmModal(
+        show = target != null,
+        onDismiss = { chatToDelete = null },
+        title = "Hide chat?",
+        message = target?.let { "Removes \"${it.title}\" from your watch." } ?: "",
+        confirmLabel = "Hide chat",
+        onConfirm = {
+            if (target != null) {
+                viewModel.deleteChat(target.guid)
             }
-        }
-    }
+            chatToDelete = null
+        },
+        dismissLabel = "Keep chat",
+        icon = Icons.Outlined.VisibilityOff,
+        destructive = true,
+        headerBadge = if (target != null) {
+            {
+                ContactAvatar(
+                    title = target.title,
+                    seed = target.guid,
+                    avatarPath = target.avatarPath,
+                    isGroup = target.isGroup,
+                    size = 40.dp
+                )
+            }
+        } else null
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

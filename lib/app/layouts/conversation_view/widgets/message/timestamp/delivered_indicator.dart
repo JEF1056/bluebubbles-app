@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -127,17 +128,86 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     return [];
   }
 
+  ({IconData? icon, Color? iconColor, String? semanticLabel, List<InlineSpan> spans}) _materialStatus(
+      bool hasBackground) {
+    final dateRead = controller.dateRead.value ?? message.dateRead;
+    final dateDelivered = controller.dateDelivered.value ?? message.dateDelivered;
+    final wasDeliveredQuietly = controller.wasDeliveredQuietly.value;
+    final didNotifyRecipient = controller.didNotifyRecipient.value;
+
+    if (controller.audioWasKept.value != null) {
+      return (
+        icon: Icons.check_circle_outline,
+        iconColor: null,
+        semanticLabel: 'Kept',
+        spans: buildTwoPiece("Kept", buildDate(controller.audioWasKept.value!)),
+      );
+    } else if (!(message.isFromMe ?? false)) {
+      return (
+        icon: null,
+        iconColor: null,
+        semanticLabel: 'Received',
+        spans: widget.forceShow ? buildTwoPiece("Received", buildDate(message.dateCreated)) : const [],
+      );
+    } else if (_isSendingDisplayed) {
+      return (
+        icon: Icons.schedule,
+        iconColor: null,
+        semanticLabel: 'Sending',
+        spans: buildTwoPiece("Sending...", null),
+      );
+    } else if (dateRead != null) {
+      return (
+        icon: Icons.done_all,
+        iconColor: hasBackground ? Colors.white.withValues(alpha: 0.92) : context.theme.colorScheme.primary,
+        semanticLabel: 'Read',
+        spans: widget.forceShow ? buildTwoPiece("Read", buildDate(dateRead)) : const [],
+      );
+    } else if (dateDelivered != null) {
+      return (
+        icon: Icons.done_all,
+        iconColor: null,
+        semanticLabel: 'Delivered',
+        spans: widget.forceShow
+            ? buildTwoPiece(
+                "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
+                buildDate(dateDelivered),
+              )
+            : const [],
+      );
+    } else if (message.isDelivered) {
+      return (
+        icon: Icons.done_all,
+        iconColor: null,
+        semanticLabel: 'Delivered',
+        spans: widget.forceShow ? buildTwoPiece("Delivered", null) : const [],
+      );
+    } else if (widget.forceShow) {
+      return (
+        icon: Icons.check,
+        iconColor: null,
+        semanticLabel: 'Sent',
+        spans: buildTwoPiece("Sent", buildDate(message.dateCreated)),
+      );
+    }
+    return (icon: null, iconColor: null, semanticLabel: null, spans: const []);
+  }
+
   @override
   Widget build(BuildContext context) {
     final material = !iOS && !samsung;
+    final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+    final mutedColor = hasBackground
+        ? Colors.white.withValues(alpha: 0.86)
+        : context.theme.colorScheme.onSurfaceVariant;
     final indentLeft =
         (showAvatar || (!material && SettingsSvc.settings.alwaysShowAvatars.value)) && !(message.isFromMe ?? false)
             ? 35.0
             : 0.0;
     return AnimatedSize(
-      curve: Curves.easeInOut,
+      curve: material ? M3EMotion.spatialFast.curve : Curves.easeInOut,
       alignment: Alignment.bottomCenter,
-      duration: const Duration(milliseconds: 250),
+      duration: material ? M3EMotion.spatialFast.duration : const Duration(milliseconds: 250),
       child: Obx(() {
         // Observe the fields that affect both shouldShow and getText.
         // isSending is handled via the debounced _isSendingDisplayed + setState,
@@ -147,12 +217,54 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         controller.audioWasKept.value;
         controller.dateDelivered.value;
         controller.dateRead.value;
-        return shouldShow && getText().isNotEmpty
+        if (!shouldShow) return const SizedBox.shrink();
+
+        if (material) {
+          final status = _materialStatus(hasBackground);
+          if (status.icon == null && status.spans.isEmpty) {
+            return const SizedBox.shrink();
+          }
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                if (status.icon != null)
+                  Icon(
+                    status.icon,
+                    size: 14,
+                    color: status.iconColor ?? mutedColor,
+                    semanticLabel: status.semanticLabel,
+                  ),
+                AnimatedSize(
+                  duration: M3EMotion.spatialFast.duration,
+                  curve: M3EMotion.spatialFast.curve,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: AnimatedSwitcher(
+                    duration: M3EMotion.effectsFast.duration,
+                    switchInCurve: M3EMotion.effectsFast.curve,
+                    switchOutCurve: M3EMotion.effectsFast.curve,
+                    child: status.spans.isEmpty
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            key: ValueKey('${status.semanticLabel}_${widget.forceShow}'),
+                            padding: EdgeInsets.only(left: status.icon != null ? 4 : 0),
+                            child: Text.rich(TextSpan(children: status.spans)),
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final spans = getText();
+        return spans.isNotEmpty
             ? Padding(
-                padding: EdgeInsets.symmetric(horizontal: material ? 4 : 15)
-                    .add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
+                padding: const EdgeInsets.symmetric(horizontal: 15).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
                 child: Text.rich(TextSpan(
-                  children: getText(),
+                  children: spans,
                 )),
               )
             : const SizedBox.shrink();

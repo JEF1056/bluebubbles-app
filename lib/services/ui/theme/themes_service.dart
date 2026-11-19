@@ -81,7 +81,8 @@ class ThemesService {
   }
 
   static final oledDarkTheme = FlexColorScheme(
-    textTheme: Typography.englishLike2021.merge(Typography.whiteMountainView),
+    fontFamily: kDefaultAppFontFamily,
+    textTheme: defaultAppTextTheme(Brightness.dark),
     colorScheme: ColorScheme.fromSeed(
       seedColor: const Color(0xFF0B57D0),
       surface: Colors.black,
@@ -103,6 +104,7 @@ class ThemesService {
     ),
     BubbleText(
       bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(
+        fontFamily: kDefaultAppFontFamily,
         fontSize: ThemeStruct.defaultTextSizes["bubbleText"],
         height: Typography.englishLike2021.bodyMedium!.height! * 0.85,
         color: Colors.white,
@@ -111,7 +113,8 @@ class ThemesService {
   ]);
 
   static final nordDarkTheme = FlexColorScheme(
-    textTheme: Typography.englishLike2021.merge(Typography.whiteMountainView),
+    fontFamily: kDefaultAppFontFamily,
+    textTheme: defaultAppTextTheme(Brightness.dark),
     colorScheme: ColorScheme.fromSwatch(
       primarySwatch: createMaterialColor(HexColor("5E81AC")),
       accentColor: HexColor("88C0D0"),
@@ -125,6 +128,7 @@ class ThemesService {
   ).toTheme.copyWith(splashFactory: InkSparkle.splashFactory, extensions: [
     BubbleText(
       bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(
+        fontFamily: kDefaultAppFontFamily,
         fontSize: ThemeStruct.defaultTextSizes["bubbleText"],
         height: Typography.englishLike2021.bodyMedium!.height! * 0.85,
       ),
@@ -133,7 +137,8 @@ class ThemesService {
 
   static final whiteLightTheme = () {
     final base = FlexColorScheme(
-      textTheme: Typography.englishLike2021.merge(Typography.blackMountainView),
+      fontFamily: kDefaultAppFontFamily,
+      textTheme: defaultAppTextTheme(Brightness.light),
       colorScheme: ColorScheme.fromSeed(
         seedColor: Colors.blue,
         surface: Colors.white,
@@ -161,6 +166,7 @@ class ThemesService {
         ),
         BubbleText(
           bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(
+            fontFamily: kDefaultAppFontFamily,
             fontSize: ThemeStruct.defaultTextSizes["bubbleText"],
             height: Typography.englishLike2021.bodyMedium!.height! * 0.85,
           ),
@@ -407,7 +413,8 @@ class ThemesService {
     }
 
     final base = FlexColorScheme(
-      textTheme: Typography.englishLike2021.merge(isDark ? Typography.whiteMountainView : Typography.blackMountainView),
+      fontFamily: kDefaultAppFontFamily,
+      textTheme: defaultAppTextTheme(brightness),
       colorScheme: ColorScheme.fromSeed(
         seedColor: primary,
         brightness: brightness,
@@ -462,6 +469,7 @@ class ThemesService {
         ),
         BubbleText(
           bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(
+            fontFamily: kDefaultAppFontFamily,
             fontSize: ThemeStruct.defaultTextSizes["bubbleText"],
             height: Typography.englishLike2021.bodyMedium!.height! * 0.85,
             color: Color(resolvedPalette.neutral.get(isDark ? 90 : 10)),
@@ -491,13 +499,15 @@ class ThemesService {
                   ThemeStruct(
                     name: "${e.name.split(RegExp(r"(?=[A-Z])")).join(" ").capitalize} ☀",
                     themeData: FlexThemeData.light(
+                            fontFamily: kDefaultAppFontFamily,
                             scheme: e, surfaceMode: FlexSurfaceMode.highSurfaceLowScaffold, blendLevel: 40)
                         .copyWith(
-                            textTheme: Typography.englishLike2021.merge(Typography.blackMountainView),
+                            textTheme: defaultAppTextTheme(Brightness.light),
                             splashFactory: InkSparkle.splashFactory,
                             extensions: [
                           BubbleText(
                             bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(
+                              fontFamily: kDefaultAppFontFamily,
                               fontSize: ThemeStruct.defaultTextSizes["bubbleText"],
                               height: Typography.englishLike2021.bodyMedium!.height! * 0.85,
                             ),
@@ -507,13 +517,15 @@ class ThemesService {
                   ThemeStruct(
                     name: "${e.name.split(RegExp(r"(?=[A-Z])")).join(" ").capitalize} 🌙",
                     themeData: FlexThemeData.dark(
+                            fontFamily: kDefaultAppFontFamily,
                             scheme: e, surfaceMode: FlexSurfaceMode.highSurfaceLowScaffold, blendLevel: 40)
                         .copyWith(
-                            textTheme: Typography.englishLike2021.merge(Typography.whiteMountainView),
+                            textTheme: defaultAppTextTheme(Brightness.dark),
                             splashFactory: InkSparkle.splashFactory,
                             extensions: [
                           BubbleText(
                             bubbleText: Typography.englishLike2021.bodyMedium!.copyWith(
+                              fontFamily: kDefaultAppFontFamily,
                               fontSize: ThemeStruct.defaultTextSizes["bubbleText"],
                               height: Typography.englishLike2021.bodyMedium!.height! * 0.85,
                             ),

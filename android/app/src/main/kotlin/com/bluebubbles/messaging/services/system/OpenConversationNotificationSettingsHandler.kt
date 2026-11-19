@@ -8,6 +8,7 @@ import android.os.Build
 import android.provider.Settings
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.models.MethodCallHandlerImpl
+import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
 import com.bluebubbles.messaging.utils.PersistentLog
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -31,14 +32,21 @@ class OpenConversationNotificationSettingsHandler: MethodCallHandlerImpl() {
         val notificationManager: NotificationManager = context.getSystemService(NotificationManager::class.java)
         val channelName: String = call.argument("display_name")!!
         val channelId: String = call.argument("channel_id")!!
+        NotificationChannelHandler.ensureChannelGroups(notificationManager)
         // We don't check if the channel exists because the underlying new messages channel gets returned then
         PersistentLog.d(context, Constants.logTag, "Creating channel...")
         // setup channel with parameters
         val channel = NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_HIGH)
         // set the channel to allow bubbling and showing badges
+        channel.group = NotificationChannelHandler.GROUP_MESSAGES
         channel.setAllowBubbles(true)
         channel.setShowBadge(true)
-        channel.setConversationId("com.bluebubbles.new_messages", channelId);
+        channel.enableVibration(true)
+        channel.setSound(
+            Settings.System.DEFAULT_NOTIFICATION_URI,
+            NotificationChannelHandler.instantCommunicationAudioAttributes()
+        )
+        channel.setConversationId(NotificationChannelHandler.NEW_MESSAGES_CHANNEL_ID, channelId)
         // create the channel
         notificationManager.createNotificationChannel(channel)
         // create the intent and launch

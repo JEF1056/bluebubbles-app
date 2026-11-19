@@ -16,6 +16,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:sliding_up_panel2/sliding_up_panel2.dart';
 
 class FindMyPage extends StatefulWidget {
@@ -166,9 +167,9 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                                 key: const ValueKey('tabs-view'),
                                 controller: controller.tabController,
                                 children: [
-                                  _buildFriendsTab(context, true),
-                                  _buildDevicesTab(context, true),
-                                  _buildItemsTab(context, true),
+                                  _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
+                                  _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
+                                  _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
                                 ],
                               ),
                             ),
@@ -187,18 +188,18 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     });
   }
 
-  Widget _buildFriendsTab(BuildContext context, bool isTablet) {
+  Widget _buildTab(BuildContext context, ScrollController scrollController, String samsungTitle, Widget tabView) {
     return ScrollbarWrapper(
-      controller: controller.friendsController,
+      controller: scrollController,
       child: Obx(
         () => RefreshIndicator(
           onRefresh: () => controller.hardRefresh(),
           child: CustomScrollView(
-            controller: controller.friendsController,
+            controller: scrollController,
             physics: ThemeSwitcher.getScrollPhysics(),
             slivers: [
-              if (context.samsung) _buildSamsungAppBar(context, "FindMy Friends"),
-              if (!context.samsung) FindMyFriendsTabView(controller: controller),
+              if (context.samsung) _buildSamsungAppBar(context, samsungTitle),
+              if (!context.samsung) tabView,
               if (context.samsung)
                 SliverToBoxAdapter(
                   child: ConstrainedBox(
@@ -208,71 +209,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                     child: CustomScrollView(
                       physics: const NeverScrollableScrollPhysics(),
                       shrinkWrap: true,
-                      slivers: [FindMyFriendsTabView(controller: controller)],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDevicesTab(BuildContext context, bool isTablet) {
-    return ScrollbarWrapper(
-      controller: controller.devicesController,
-      child: Obx(
-        () => RefreshIndicator(
-          onRefresh: () => controller.hardRefresh(),
-          child: CustomScrollView(
-            controller: controller.devicesController,
-            physics: ThemeSwitcher.getScrollPhysics(),
-            slivers: [
-              if (context.samsung) _buildSamsungAppBar(context, "FindMy Devices"),
-              if (!context.samsung) FindMyDevicesTabView(controller: controller),
-              if (context.samsung)
-                SliverToBoxAdapter(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        minHeight:
-                            context.height - 50 - context.mediaQueryPadding.top - context.mediaQueryViewPadding.top),
-                    child: CustomScrollView(
-                      physics: const NeverScrollableScrollPhysics(),
-                      shrinkWrap: true,
-                      slivers: [FindMyDevicesTabView(controller: controller)],
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildItemsTab(BuildContext context, bool isTablet) {
-    return ScrollbarWrapper(
-      controller: controller.itemsController,
-      child: Obx(
-        () => RefreshIndicator(
-          onRefresh: () => controller.hardRefresh(),
-          child: CustomScrollView(
-            controller: controller.itemsController,
-            physics: ThemeSwitcher.getScrollPhysics(),
-            slivers: [
-              if (context.samsung) _buildSamsungAppBar(context, "FindMy Items"),
-              if (!context.samsung) FindMyItemsTabView(controller: controller),
-              if (context.samsung)
-                SliverToBoxAdapter(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                        minHeight:
-                            context.height - 50 - context.mediaQueryPadding.top - context.mediaQueryViewPadding.top),
-                    child: CustomScrollView(
-                      physics: const NeverScrollableScrollPhysics(),
-                      shrinkWrap: true,
-                      slivers: [FindMyItemsTabView(controller: controller)],
+                      slivers: [tabView],
                     ),
                   ),
                 ),
@@ -386,15 +323,15 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                           children: <Widget>[
                             _buildScrollNotificationWrapper(
                               controller.friendsController,
-                              _buildFriendsTab(context, false),
+                              _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
                             ),
                             _buildScrollNotificationWrapper(
                               controller.devicesController,
-                              _buildDevicesTab(context, false),
+                              _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
                             ),
                             _buildScrollNotificationWrapper(
                               controller.itemsController,
-                              _buildItemsTab(context, false),
+                              _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
                             ),
                           ],
                         ),
@@ -409,9 +346,8 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                   top: 10 + (kIsDesktop ? appWindow.titleBarHeight : MediaQuery.of(context).padding.top),
                   left: 14,
                   child: ClipOval(
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                      child: Container(
+                    child: Builder(builder: (context) {
+                      final button = Container(
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
@@ -429,8 +365,15 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                           ],
                         ),
                         child: buildBackButton(context, padding: const EdgeInsets.only(right: 2)),
-                      ),
-                    ),
+                      );
+                      final highPerf = GetIt.I.isRegistered<SettingsService>() && SettingsSvc.settings.highPerfMode.value;
+                      return highPerf
+                          ? button
+                          : BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                              child: button,
+                            );
+                    }),
                   ),
                 ),
               if (kIsDesktop) _buildDesktopTitleBar(context),
@@ -685,64 +628,68 @@ class FindMyFloatingNavPill extends StatelessWidget {
     final cs = context.theme.colorScheme;
     return Obx(() {
       final selectedIndex = controller.tabIndex.value;
+      final nav = Container(
+        height: 62,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHigh.withValues(alpha: 0.90),
+          borderRadius: BorderRadius.circular(32),
+          border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.42)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: List.generate(items.length, (i) {
+            final item = items[i];
+            final active = selectedIndex == i;
+            return Expanded(
+              child: Material(
+                color: active ? cs.secondaryContainer.withValues(alpha: 0.85) : Colors.transparent,
+                borderRadius: BorderRadius.circular(26),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(26),
+                  onTap: () => onSelectTab(i),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        active ? item.activeIcon : item.icon,
+                        size: 21,
+                        color: active ? cs.primary : cs.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        item.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: context.theme.textTheme.labelSmall?.copyWith(
+                          fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                          color: active ? cs.primary : cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }),
+        ),
+      );
+      final highPerf = GetIt.I.isRegistered<SettingsService>() && SettingsSvc.settings.highPerfMode.value;
       return ClipRRect(
         key: const ValueKey('findmy-floating-nav'),
         borderRadius: BorderRadius.circular(32),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            height: 62,
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-            decoration: BoxDecoration(
-              color: cs.surfaceContainerHigh.withValues(alpha: 0.90),
-              borderRadius: BorderRadius.circular(32),
-              border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.42)),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: Row(
-              children: List.generate(items.length, (i) {
-                final item = items[i];
-                final active = selectedIndex == i;
-                return Expanded(
-                  child: Material(
-                    color: active ? cs.secondaryContainer.withValues(alpha: 0.85) : Colors.transparent,
-                    borderRadius: BorderRadius.circular(26),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(26),
-                      onTap: () => onSelectTab(i),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            active ? item.activeIcon : item.icon,
-                            size: 21,
-                            color: active ? cs.primary : cs.onSurfaceVariant,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            item.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: context.theme.textTheme.labelSmall?.copyWith(
-                              fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                              color: active ? cs.primary : cs.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
-        ),
+        child: highPerf
+            ? nav
+            : BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: nav,
+              ),
       );
     });
   }

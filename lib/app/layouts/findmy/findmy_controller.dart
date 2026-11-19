@@ -205,7 +205,6 @@ class FindMyController extends GetxController {
   void Function(LatLng center, double zoom, {Offset offset})? _cameraAnimator;
   void Function(String key, LatLng from, LatLng to, void Function(LatLng) onStep)? _pinInterpolator;
   VoidCallback? onRequestDetailSheetOpen;
-  VoidCallback? onRequestDetailSheetClose;
   double Function()? detailSheetOffsetProvider;
 
   StreamSubscription? locationSub;
@@ -385,21 +384,8 @@ class FindMyController extends GetxController {
           locatingFriendId.value == friendId) {
         locatingFriendId.value = null;
       }
-    } on DioException catch (e, s) {
-      if (CancelToken.isCancel(e) || cancelToken.isCancelled) return;
-      if (_isAlive && seq == _liveStreamSeq) {
-        _logWarn("Live friend start failed, falling back to targeted refresh", error: e, trace: s);
-        if (_canRefreshFriends && selectedFriendId.value == friendId) {
-          unawaited(_refreshTargetedFriend(
-            friendId: friendId,
-            handle: trimmed,
-            showLocating: true,
-            force: true,
-          ));
-        }
-      }
     } catch (e, s) {
-      if (cancelToken.isCancelled) return;
+      if (cancelToken.isCancelled || (e is DioException && CancelToken.isCancel(e))) return;
       if (_isAlive && seq == _liveStreamSeq) {
         _logWarn("Live friend start failed, falling back to targeted refresh", error: e, trace: s);
         if (_canRefreshFriends && selectedFriendId.value == friendId) {
@@ -520,36 +506,47 @@ class FindMyController extends GetxController {
 
   void focusFriend(FindMyFriend friend, {double? sheetOffsetPx, double minZoom = 14.5}) {
     selectFriend(friend);
-    if (tabIndex.value != 0) {
-      tabIndex.value = 0;
-      tabController?.animateTo(0);
-    }
-    _scrollToTop(friendsController);
-    onRequestDetailSheetOpen?.call();
-    if ((friend.latitude ?? 0) != 0 && (friend.longitude ?? 0) != 0) {
-      final key = friend.stableId ?? friend.title ?? 'friend';
-      final pt = animatedPoints[key] ?? markerPointForFriend(friend);
-      final targetZoom = _targetFocusZoom(minZoom);
-      final offsetY = sheetOffsetPx ?? detailSheetOffsetProvider?.call() ?? 0;
-      animateCameraTo(pt, targetZoom, offset: Offset(0, -offsetY));
-    }
+    final hasCoords = (friend.latitude ?? 0) != 0 && (friend.longitude ?? 0) != 0;
+    final key = friend.stableId ?? friend.title ?? 'friend';
+    _focusTarget(
+      targetTab: 0,
+      scrollController: friendsController,
+      point: hasCoords ? (animatedPoints[key] ?? markerPointForFriend(friend)) : null,
+      sheetOffsetPx: sheetOffsetPx,
+      minZoom: minZoom,
+    );
   }
 
   void focusDevice(FindMyDevice device, {double? sheetOffsetPx, double minZoom = 14.5}) {
     selectDevice(device);
-    final targetTab = device.isConsideredAccessory ? 2 : 1;
+    final isAcc = device.isConsideredAccessory;
+    final hasCoords = device.location?.latitude != null && device.location?.longitude != null;
+    final key = device.id ?? device.name ?? 'device';
+    _focusTarget(
+      targetTab: isAcc ? 2 : 1,
+      scrollController: isAcc ? itemsController : devicesController,
+      point: hasCoords ? (animatedPoints[key] ?? markerPointForDevice(device)) : null,
+      sheetOffsetPx: sheetOffsetPx,
+      minZoom: minZoom,
+    );
+  }
+
+  void _focusTarget({
+    required int targetTab,
+    required ScrollController scrollController,
+    required LatLng? point,
+    double? sheetOffsetPx,
+    double minZoom = 14.5,
+  }) {
     if (tabIndex.value != targetTab) {
       tabIndex.value = targetTab;
       tabController?.animateTo(targetTab);
     }
-    _scrollToTop(device.isConsideredAccessory ? itemsController : devicesController);
+    _scrollToTop(scrollController);
     onRequestDetailSheetOpen?.call();
-    if (device.location?.latitude != null && device.location?.longitude != null) {
-      final key = device.id ?? device.name ?? 'device';
-      final pt = animatedPoints[key] ?? markerPointForDevice(device);
-      final targetZoom = _targetFocusZoom(minZoom);
+    if (point != null) {
       final offsetY = sheetOffsetPx ?? detailSheetOffsetProvider?.call() ?? 0;
-      animateCameraTo(pt, targetZoom, offset: Offset(0, -offsetY));
+      animateCameraTo(point, _targetFocusZoom(minZoom), offset: Offset(0, -offsetY));
     }
   }
 
@@ -576,7 +573,18 @@ class FindMyController extends GetxController {
     unawaited(_stopLiveFriendStream());
     popupController.hideAllPopups();
     _syncLiveHeartbeat();
-    onRequestDetailSheetClose?.call();
+  }
+
+  Future<Position?> _fetchCurrentPosition() async {
+    var perm = await Geolocator.checkPermission();
+    if (!_isAlive) return null;
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+      if (!_isAlive) return null;
+    }
+    if (perm != LocationPermission.whileInUse && perm != LocationPermission.always) return null;
+    final pos = await Geolocator.getCurrentPosition();
+    return _isAlive ? pos : null;
   }
 
   Future<void> recenterToUser({double zoom = 14.5}) async {
@@ -587,14 +595,8 @@ class FindMyController extends GetxController {
     }
     if (!autoFetch || (Platform.isLinux && !kIsWeb)) return;
     try {
-      var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
-      if (!_isAlive) return;
-      if (perm == LocationPermission.whileInUse || perm == LocationPermission.always) {
-        final pos = await Geolocator.getCurrentPosition();
-        if (!_isAlive) return;
+      final pos = await _fetchCurrentPosition();
+      if (pos != null) {
         location.value = pos;
         buildLocationMarker(pos);
         animateCameraTo(LatLng(pos.latitude, pos.longitude), zoom);
@@ -733,6 +735,7 @@ class FindMyController extends GetxController {
     _isForeground = false;
     _liveHeartbeatTimer?.cancel();
     _liveHeartbeatTimer = null;
+    if (locationSub?.isPaused == false) locationSub!.pause();
     if (_activeLiveStreamHandle != null) {
       unawaited(_stopLiveFriendStream());
     }
@@ -740,6 +743,7 @@ class FindMyController extends GetxController {
 
   void onAppResumed() {
     _isForeground = true;
+    locationSub?.resume();
     final friendId = selectedFriendId.value;
     final handle = _selectedFriendHandle() ?? _selectedFriendTargetHandle;
     if (friendId != null &&
@@ -1267,31 +1271,22 @@ class FindMyController extends GetxController {
     if (!_isAlive) return;
 
     if (!(Platform.isLinux && !kIsWeb) && locationSub == null && location.value == null) {
-      LocationPermission granted = await Geolocator.checkPermission();
-      if (!_isAlive) return;
-      if (granted == LocationPermission.denied) {
-        granted = await Geolocator.requestPermission();
-        if (!_isAlive) return;
-      }
+      _fetchCurrentPosition().then((loc) {
+        if (loc == null) return;
+        location.value = loc;
+        buildLocationMarker(loc);
+        if (!kIsDesktop) {
+          locationSub = Geolocator.getPositionStream().listen((event) {
+            if (!_isAlive) return;
+            buildLocationMarker(event);
 
-      if (granted == LocationPermission.whileInUse || granted == LocationPermission.always) {
-        Geolocator.getCurrentPosition().then((loc) {
-          if (!_isAlive) return;
-          location.value = loc;
-          buildLocationMarker(location.value!);
-          if (!kIsDesktop) {
-            locationSub = Geolocator.getPositionStream().listen((event) {
-              if (!_isAlive) return;
-              buildLocationMarker(event);
-
-              if (!hasMovedToCurrentLocation.value) {
-                mapController.move(LatLng(event.latitude, event.longitude), 10);
-                hasMovedToCurrentLocation.value = true;
-              }
-            });
-          }
-        });
-      }
+            if (!hasMovedToCurrentLocation.value) {
+              mapController.move(LatLng(event.latitude, event.longitude), 10);
+              hasMovedToCurrentLocation.value = true;
+            }
+          });
+        }
+      });
     }
 
     // Fetch friends data

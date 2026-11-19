@@ -1,6 +1,8 @@
 package com.bluebubbles.messaging.services.telecom
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.services.foreground.SocketIOForegroundService
 import com.bluebubbles.messaging.utils.PersistentLog
@@ -61,6 +63,13 @@ class WebRtcAudioClient(
     }
 
     private val lock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val disconnectTimeoutRunnable = Runnable {
+        if (!stopped) {
+            PersistentLog.w(context, TAG, "ICE disconnected >10s for $callUuid; hanging up")
+            onRemoteHangup()
+        }
+    }
     private val pendingRemoteIce = mutableListOf<IceCandidate>()
     private val pendingOutboundEvents = mutableListOf<Pair<String, JSONObject>>()
 
@@ -139,6 +148,7 @@ class WebRtcAudioClient(
         synchronized(lock) {
             if (stopped) return
             stopped = true
+            mainHandler.removeCallbacks(disconnectTimeoutRunnable)
 
             if (sendHangup) {
                 try {
@@ -257,10 +267,21 @@ class WebRtcAudioClient(
             override fun onSignalingChange(state: PeerConnection.SignalingState?) {}
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
                 PersistentLog.d(context, Constants.logTag, "[$TAG] ICE state=$state ($callUuid)")
-                if (state == PeerConnection.IceConnectionState.CONNECTED ||
-                    state == PeerConnection.IceConnectionState.COMPLETED
-                ) {
-                    onConnected()
+                when (state) {
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED -> {
+                        mainHandler.removeCallbacks(disconnectTimeoutRunnable)
+                        onConnected()
+                    }
+                    PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        mainHandler.removeCallbacks(disconnectTimeoutRunnable)
+                        mainHandler.postDelayed(disconnectTimeoutRunnable, 10_000L)
+                    }
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        mainHandler.removeCallbacks(disconnectTimeoutRunnable)
+                        mainHandler.post { if (!stopped) onRemoteHangup() }
+                    }
+                    else -> {}
                 }
             }
 

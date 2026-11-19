@@ -1,6 +1,7 @@
 package com.bluebubbles.messaging.services.notifications
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -17,9 +18,11 @@ import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.R
 import com.bluebubbles.messaging.models.MethodCallHandlerImpl
 import com.bluebubbles.messaging.services.intents.InternalIntentReceiver
+import com.bluebubbles.messaging.services.system.PushShareTargetsHandler
 import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy
 import com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.Utils
 import io.flutter.plugin.common.MethodCall
@@ -28,6 +31,15 @@ import io.flutter.plugin.common.MethodChannel
 class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
     companion object {
         const val tag = "create-incoming-facetime-notification"
+
+        internal fun formatCallerUri(callerAddress: String?): String? {
+            val trimmed = callerAddress?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return when {
+                trimmed.startsWith("tel:") || trimmed.startsWith("mailto:") -> trimmed
+                trimmed.contains("@") -> "mailto:$trimmed"
+                else -> "tel:$trimmed"
+            }
+        }
     }
 
     override fun handleMethodCall(
@@ -43,38 +55,62 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
         val title: String = call.argument("title")!!
         val body: String = call.argument("body")!!
         val isVideo: Boolean = call.argument("is_video") ?: true
+        val isOngoing: Boolean = call.argument("is_ongoing") ?: false
         val callerAddress: String? = call.argument("caller_address")
         // contact details
         val callerName: String = call.argument("caller")!!
         val callerIcon: ByteArray? = call.argument("caller_avatar")
 
-        val route = FaceTimeRoutingPolicy.resolveIncomingRoute(
-            isVideo = isVideo,
-            callUuid = callUuid,
-            phoneAccountEnabled = FaceTimeConnectionService.isPhoneAccountEnabled(context)
-        )
-        if (route == IncomingFaceTimeRoute.TELECOM_DIRECT && callUuid != null) {
-            val added = FaceTimeConnectionService.addIncomingCall(
+        if (!isOngoing && !callUuid.isNullOrBlank()) {
+            WearSyncManager.notifyIncomingCall(
                 context = context,
                 callUuid = callUuid,
                 callerName = callerName,
-                address = callerAddress
+                callerAddress = callerAddress,
+                isVideo = isVideo
             )
-            if (added) {
-                result.success(true)
-                return
+        }
+
+        if (!isOngoing) {
+            val route = FaceTimeRoutingPolicy.resolveIncomingRoute(
+                isVideo = isVideo,
+                callUuid = callUuid,
+                phoneAccountEnabled = FaceTimeConnectionService.isPhoneAccountEnabled(context)
+            )
+            if (route == IncomingFaceTimeRoute.TELECOM_DIRECT && callUuid != null) {
+                val added = FaceTimeConnectionService.addIncomingCall(
+                    context = context,
+                    callUuid = callUuid,
+                    callerName = callerName,
+                    address = callerAddress
+                )
+                if (added) {
+                    result.success(true)
+                    return
+                }
             }
         }
 
         val callerBitmap = if ((callerIcon?.size ?: 0) == 0) null else BitmapFactory.decodeByteArray(callerIcon!!, 0, callerIcon.size)
         val callerIconCompat = if ((callerIcon?.size ?: 0) == 0) null else Utils.getAdaptiveIconFromByteArray(callerIcon!!)
+        val resolvedCallerUri = PushShareTargetsHandler.resolveContactLookupUri(
+            context = context,
+            nativeContactId = null,
+            fallbackUri = formatCallerUri(callerAddress)
+        )
 
         // build the caller object
-        val caller = Person.Builder()
+        val callerBuilder = Person.Builder()
             .setName(callerName)
             .setIcon(callerIconCompat)
             .setImportant(true)
-            .build()
+        if (!resolvedCallerUri.isNullOrBlank()) {
+            callerBuilder.setUri(resolvedCallerUri)
+        }
+        if (!callerAddress.isNullOrBlank()) {
+            callerBuilder.setKey(callerAddress)
+        }
+        val caller = callerBuilder.build()
 
         // create a bundle for extra info
         val extras = Bundle()
@@ -110,7 +146,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             .build()
 
         // Create intent for handing off video call to Telecom audio-only (autoAnswer=true)
-        val audioAnswerIntent = if (!callUuid.isNullOrBlank()) {
+        val audioAnswerIntent = if (!isOngoing && !callUuid.isNullOrBlank()) {
             PendingIntent.getBroadcast(
                 context,
                 notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
@@ -132,7 +168,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 .build()
         }
 
-        // Create intent for declining the facetime on the Mac
+        // Create intent for declining or hanging up the facetime call
         val declineIntent = PendingIntent.getBroadcast(
             context,
             notificationId + Constants.pendingIntentDeclineFaceTimeOffset,
@@ -143,13 +179,14 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 .setType("DeclineFaceTime"),
             piFlags
         )
-        val declineAction = NotificationCompat.Action.Builder(0, "Decline", declineIntent)
+        val declineAction = NotificationCompat.Action.Builder(0, if (isOngoing) "Hang Up" else "Decline", declineIntent)
             .setShowsUserInterface(false)
             .build()
 
+        val notificationManager = context.getSystemService(NotificationManager::class.java)
         val notificationBuilder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.mipmap.ic_stat_icon)
-            .setAutoCancel(true)
+            .setAutoCancel(!isOngoing)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -158,24 +195,43 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             .addExtras(extras)
             .addPerson(caller)
             .setColor(4888294)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (isOngoing) {
             notificationBuilder
-                .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, declineIntent, answerIntent))
+                .setUsesChronometer(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+        }
+        val canUseFsi = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+            notificationManager.canUseFullScreenIntent()
+        // CallStyle on Android 14+ requires an FGS, user-initiated job, or fullScreenIntent;
+        // ongoing updates from Dart/MethodChannel use notify() without an FGS, so fall back to standard actions.
+        val useCallStyle = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !isOngoing && canUseFsi
+        if (useCallStyle) {
+            val callStyle = NotificationCompat.CallStyle.forIncomingCall(caller, declineIntent, answerIntent)
+                .setIsVideo(isVideo)
+            notificationBuilder
+                .setStyle(callStyle)
                 .setFullScreenIntent(openSummaryIntent, true)
-            if (audioAnswerAction != null) {
+            if (isVideo && audioAnswerAction != null) {
                 notificationBuilder.addAction(audioAnswerAction)
             }
         } else {
-            notificationBuilder
-                .addAction(answerAction)
-            if (audioAnswerAction != null) {
-                notificationBuilder.addAction(audioAnswerAction)
+            if (callerName.isNotBlank()) {
+                notificationBuilder.setContentTitle(callerName)
+            }
+            if (!isOngoing) {
+                notificationBuilder.addAction(answerAction)
+                if (isVideo && audioAnswerAction != null) {
+                    notificationBuilder.addAction(audioAnswerAction)
+                }
             }
             notificationBuilder
                 .addAction(declineAction)
                 .extend(NotificationCompat.WearableExtender().apply {
-                    addAction(answerAction)
-                    if (audioAnswerAction != null) addAction(audioAnswerAction)
+                    if (!isOngoing) {
+                        addAction(answerAction)
+                        if (isVideo && audioAnswerAction != null) addAction(audioAnswerAction)
+                    }
                     addAction(declineAction)
                 })
         }
@@ -184,8 +240,10 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
         }
         if (callUuid != null) {
             notificationBuilder.setContentIntent(openSummaryIntent)
-            // clear after 30 seconds in case we didn't get an event from the server
-            notificationBuilder.setTimeoutAfter(30000)
+            if (!isOngoing) {
+                // clear after 30 seconds in case we didn't get an event from the server
+                notificationBuilder.setTimeoutAfter(30000)
+            }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -196,8 +254,12 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             return
         }
 
-        val notificationManager = context.getSystemService(NotificationManager::class.java)
-        notificationManager.notify(Constants.newFaceTimeNotificationTag, notificationId, notificationBuilder.build())
+        val builtNotification = notificationBuilder.build().apply {
+            if (!isOngoing) {
+                flags = flags or Notification.FLAG_INSISTENT
+            }
+        }
+        notificationManager.notify(Constants.newFaceTimeNotificationTag, notificationId, builtNotification)
         result.success(false)
     }
 }

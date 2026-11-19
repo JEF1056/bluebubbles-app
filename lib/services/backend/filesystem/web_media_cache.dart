@@ -30,6 +30,9 @@ class WebMediaCache {
 
   Future<idb.Database>? _dbFuture;
   int _lastAccessTick = 0;
+  final Map<String, int> _pendingLruTouches = {};
+  Future<void>? _activeEviction;
+  bool _evictQueued = false;
 
   WebMediaCache._({
     idb.IdbFactory? idbFactory,
@@ -98,38 +101,34 @@ class WebMediaCache {
 
   Future<Uint8List?> get(String store, String key) async {
     final db = await _openDb();
-    final txn = db.transaction([store, _metadataStore], idb.idbModeReadWrite);
-    final dataStore = txn.objectStore(store);
-    final raw = await dataStore.getObject(key);
-    final bytes = _asBytes(raw);
-    if (bytes != null) {
-      final metaStore = txn.objectStore(_metadataStore);
-      await metaStore.put({
-        'store': store,
-        'key': key,
-        'byteLength': bytes.length,
-        'lastAccessedAt': _nextTick(),
-      }, _metaKey(store, key));
-    }
+    final txn = db.transaction(store, idb.idbModeReadOnly);
+    final raw = await txn.objectStore(store).getObject(key);
     await txn.completed;
+    final bytes = _asBytes(raw);
+    if (bytes != null && store == attachmentsStore) {
+      _pendingLruTouches[_metaKey(store, key)] = _nextTick();
+    }
     return bytes;
   }
 
   Future<void> put(String store, String key, Uint8List bytes) async {
     final db = await _openDb();
+    final tick = _nextTick();
+    _pendingLruTouches.remove(_metaKey(store, key));
     final txn = db.transaction([store, _metadataStore], idb.idbModeReadWrite);
     await txn.objectStore(store).put(bytes, key);
     await txn.objectStore(_metadataStore).put({
       'store': store,
       'key': key,
       'byteLength': bytes.length,
-      'lastAccessedAt': _nextTick(),
+      'lastAccessedAt': tick,
     }, _metaKey(store, key));
     await txn.completed;
     await _evictIfNeeded();
   }
 
   Future<void> delete(String store, String key) async {
+    _pendingLruTouches.remove(_metaKey(store, key));
     final db = await _openDb();
     final txn = db.transaction([store, _metadataStore], idb.idbModeReadWrite);
     await txn.objectStore(store).delete(key);
@@ -143,6 +142,7 @@ class WebMediaCache {
     final rawEntries = await readTxn.objectStore(_metadataStore).getAll();
     await readTxn.completed;
 
+    _pendingLruTouches.removeWhere((k, _) => k.startsWith('$store::'));
     final writeTxn = db.transaction([store, _metadataStore], idb.idbModeReadWrite);
     await writeTxn.objectStore(store).clear();
     final metaStore = writeTxn.objectStore(_metadataStore);
@@ -158,6 +158,7 @@ class WebMediaCache {
   }
 
   Future<void> clearAll() async {
+    _pendingLruTouches.clear();
     final db = await _openDb();
     final stores = [
       attachmentsStore,
@@ -186,7 +187,7 @@ class WebMediaCache {
     return total;
   }
 
-  Future<Map<String, Uint8List>> getAllEntries(String store) async {
+  Future<Map<String, Uint8List>> getAllEntries(String store, {String? keyPrefix}) async {
     final db = await _openDb();
     final txn = db.transaction([store, _metadataStore], idb.idbModeReadOnly);
     final entries = await txn.objectStore(_metadataStore).getAll();
@@ -195,7 +196,7 @@ class WebMediaCache {
     for (final entry in entries) {
       if (entry is Map && entry['store'] == store) {
         final key = entry['key'] as String?;
-        if (key != null) {
+        if (key != null && (keyPrefix == null || key.startsWith(keyPrefix))) {
           final bytes = _asBytes(await dataStore.getObject(key));
           if (bytes != null) result[key] = bytes;
         }
@@ -205,39 +206,68 @@ class WebMediaCache {
     return result;
   }
 
-  Future<int> _effectiveMaxBytes() async {
+  Future<int> _effectiveMaxBytes(int totalBytes) async {
     final remaining = await _quotaEstimator();
     if (remaining == null) return _maxBytes;
-    return min(_maxBytes, (remaining * 0.5).floor());
+    return min(_maxBytes, ((remaining + totalBytes) * 0.5).floor());
   }
 
   Future<void> _evictIfNeeded() async {
-    final limit = await _effectiveMaxBytes();
+    if (_activeEviction != null) {
+      _evictQueued = true;
+      return _activeEviction!;
+    }
+    do {
+      _evictQueued = false;
+      final future = _runEviction();
+      _activeEviction = future;
+      try {
+        await future;
+      } finally {
+        _activeEviction = null;
+      }
+    } while (_evictQueued);
+  }
+
+  int _lastAccessedTickFor(Map entry) {
+    final store = entry['store'] as String?;
+    final key = entry['key'] as String?;
+    final stored = (entry['lastAccessedAt'] as num?)?.toInt() ?? 0;
+    if (store == null || key == null) return stored;
+    final pending = _pendingLruTouches[_metaKey(store, key)] ?? 0;
+    return max(stored, pending);
+  }
+
+  Future<void> _runEviction() async {
     final db = await _openDb();
     final readTxn = db.transaction(_metadataStore, idb.idbModeReadOnly);
     final rawEntries = await readTxn.objectStore(_metadataStore).getAll();
     await readTxn.completed;
 
     final entries = rawEntries.whereType<Map>().toList();
-    var total = 0;
+    var pinnedBytes = 0;
+    var attachmentBytes = 0;
     for (final entry in entries) {
-      total += (entry['byteLength'] as num?)?.toInt() ?? 0;
+      final len = (entry['byteLength'] as num?)?.toInt() ?? 0;
+      if (entry['store'] == attachmentsStore) {
+        attachmentBytes += len;
+      } else {
+        pinnedBytes += len;
+      }
     }
-    if (total <= limit) return;
+    final limit = await _effectiveMaxBytes(pinnedBytes + attachmentBytes);
+    final attachmentBudget = max(0, limit - pinnedBytes);
+    if (attachmentBytes <= attachmentBudget) return;
 
     // Only evict attachments; fonts and chat backgrounds stay pinned unless explicitly cleared.
     final evictable = entries.where((e) => e['store'] == attachmentsStore).toList()
-      ..sort((a, b) {
-        final at = (a['lastAccessedAt'] as num?)?.toInt() ?? 0;
-        final bt = (b['lastAccessedAt'] as num?)?.toInt() ?? 0;
-        return at.compareTo(bt);
-      });
+      ..sort((a, b) => _lastAccessedTickFor(a).compareTo(_lastAccessedTickFor(b)));
 
     final toDelete = <Map>[];
     for (final entry in evictable) {
-      if (total <= limit) break;
+      if (attachmentBytes <= attachmentBudget) break;
       toDelete.add(entry);
-      total -= (entry['byteLength'] as num?)?.toInt() ?? 0;
+      attachmentBytes -= (entry['byteLength'] as num?)?.toInt() ?? 0;
     }
     if (toDelete.isEmpty) return;
 
@@ -252,6 +282,7 @@ class WebMediaCache {
       final store = entry['store'] as String?;
       final key = entry['key'] as String?;
       if (store == null || key == null) continue;
+      _pendingLruTouches.remove(_metaKey(store, key));
       await writeTxn.objectStore(store).delete(key);
       await metaStore.delete(_metaKey(store, key));
     }

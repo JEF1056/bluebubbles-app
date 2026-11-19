@@ -33,6 +33,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
@@ -173,6 +174,11 @@
             android:exported="true" />
 
         <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="remoteMessaging"
+            tools:node="merge" />
+
+        <service
             android:name=".services.telecom.FaceTimeConnectionService"
             android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
             android:exported="true">
@@ -215,7 +221,9 @@
             android:exported="true"
             android:windowSoftInputMode="adjustResize"
             android:allowEmbedded="true"
-            android:resizeableActivity="true">
+            android:resizeableActivity="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

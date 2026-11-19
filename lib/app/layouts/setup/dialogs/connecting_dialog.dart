@@ -54,19 +54,9 @@ class _ConnectingDialogState extends State<ConnectingDialog> {
         onDismiss: () => Navigator.of(context).pop(),
       );
     } else {
-      return PopScope(
+      return const PopScope(
         canPop: false,
-        child: AlertDialog(
-          title: Text(
-            "Connecting...",
-            style: context.theme.textTheme.titleLarge,
-          ),
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-          content: LinearProgressIndicator(
-            backgroundColor: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.2),
-            valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-          ),
-        ),
+        child: BBProgressDialog(title: "Connecting..."),
       );
     }
   }

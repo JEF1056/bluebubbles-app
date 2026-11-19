@@ -40,9 +40,10 @@ class _SyncProgressState extends State<SyncProgress> {
     ever<SyncStatus>(syncManager.status, (event) async {
       String err = syncManager.error ?? "Unknown Error";
       if (event == SyncStatus.COMPLETED_ERROR) {
-        await showDialog(
-          context: context,
-          builder: (context) => FailedToScanDialog(exception: err, title: "An error occured during setup!"),
+        await FailedToScanDialog.show(
+          context,
+          exception: err,
+          title: "An error occured during setup!",
         );
 
         controller.pageController.animateToPage(

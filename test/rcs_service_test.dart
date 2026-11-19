@@ -1,5 +1,6 @@
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/types/classes/chat_service_type.dart';
+import 'package:bluebubbles/helpers/ui/reaction_helpers.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -115,6 +116,58 @@ void main() {
       expect(supports(rcsMsg), isTrue);
       expect(supports(imsgMsg), isTrue);
       expect(supports(smsMsg), isFalse);
+    });
+
+    test('Message.fillsGapsIn and takeOmittableFieldsFrom preserve RCS emoji tapback and service', () {
+      final stored = Message.fromMap({
+        'guid': '6B0D259E-F92F-4F26-8B59-CD232702967D',
+        'associatedMessageGuid': '6A35DF5D-EC56-4179-B822-2BD3E38DEE26',
+        'associatedMessageType': '2006',
+        'text': 'Reacted 😭 to “Hi”',
+      });
+      final incoming = Message.fromMap({
+        'guid': '6B0D259E-F92F-4F26-8B59-CD232702967D',
+        'associatedMessageGuid': 'p:0/6A35DF5D-EC56-4179-B822-2BD3E38DEE26',
+        'associatedMessageType': '2006',
+        'associatedMessageEmoji': '😭',
+        'service': 'RCS',
+        'text': 'Reacted 😭 to “Hi”',
+      });
+
+      expect(stored.associatedMessageEmoji, isNull);
+      expect(stored.associatedMessagePart, isNull);
+      expect(incoming.fillsGapsIn(stored), isTrue);
+
+      stored.takeOmittableFieldsFrom(incoming);
+      expect(stored.associatedMessageEmoji, '😭');
+      expect(stored.associatedMessagePart, 0);
+      expect(stored.service, 'RCS');
+    });
+
+    test('bare-UUID RCS emoji tapback renders and can be removed by p:0/ removal', () {
+      final addReaction = Message.fromMap({
+        'guid': '6B0D259E-F92F-4F26-8B59-CD232702967D',
+        'associatedMessageGuid': '6A35DF5D-EC56-4179-B822-2BD3E38DEE26',
+        'associatedMessageType': '2006',
+        'associatedMessageEmoji': '😭',
+        'isFromMe': true,
+        'handleId': 0,
+        'dateCreated': 1000,
+      });
+      expect(addReaction.associatedMessageGuid, '6A35DF5D-EC56-4179-B822-2BD3E38DEE26');
+      expect(addReaction.associatedMessagePart, isNull);
+      expect(getUniqueReactionMessages([addReaction]), hasLength(1));
+
+      final removeReaction = Message.fromMap({
+        'guid': '7C1E36AF-0000-0000-0000-000000000001',
+        'associatedMessageGuid': 'p:0/6A35DF5D-EC56-4179-B822-2BD3E38DEE26',
+        'associatedMessageType': '3006',
+        'associatedMessageEmoji': '😭',
+        'isFromMe': true,
+        'handleId': 0,
+        'dateCreated': 2000,
+      });
+      expect(getUniqueReactionMessages([addReaction, removeReaction]), isEmpty);
     });
   });
 }

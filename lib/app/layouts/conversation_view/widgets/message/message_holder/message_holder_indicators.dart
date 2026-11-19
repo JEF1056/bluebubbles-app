@@ -56,27 +56,25 @@ class ErrorIndicatorObserver extends StatelessWidget {
             color: context.theme.colorScheme.error,
           ),
           onPressed: () {
-            showDialog(
-              context: context,
-              builder: (BuildContext context) => MessageErrorDialog(
-                errorCode: errorCode,
-                errorText: errorText,
-                chatId: chat.id!,
-                onRetry: () => retryMessage(
-                  message: message,
-                  chat: chat,
-                  service: service,
-                  controller: ms,
-                ),
-                onRemove: () async {
-                  // Delete the message from DB and remove from service
-                  await service.deleteMessage(message);
-                  // Get the "new" latest info
-                  List<Message> latest = await Chat.getMessagesAsync(chat, limit: 1);
-                  ChatsSvc.setChatLatestMessage(chat, latest.first);
-                  await chat.saveAsync();
-                },
+            showMessageErrorDialog(
+              context,
+              errorCode: errorCode,
+              errorText: errorText,
+              chatId: chat.id!,
+              onRetry: () => retryMessage(
+                message: message,
+                chat: chat,
+                service: service,
+                controller: ms,
               ),
+              onRemove: () async {
+                // Delete the message from DB and remove from service
+                await service.deleteMessage(message);
+                // Get the "new" latest info
+                List<Message> latest = await Chat.getMessagesAsync(chat, limit: 1);
+                ChatsSvc.setChatLatestMessage(chat, latest.first);
+                await chat.saveAsync();
+              },
             );
           },
         );

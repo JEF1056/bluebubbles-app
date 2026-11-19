@@ -34,32 +34,6 @@ class FaceTimeApi {
     });
   }
 
-  /// Decline an incoming FaceTime call on the Mac
-  Future<Response> decline(String callUuid, {CancelToken? cancelToken}) async {
-    return _svc.runApiGuarded(() async {
-      final response = await _svc.dio.post(
-        "${_svc.apiRoot}/facetime/decline/$callUuid",
-        queryParameters: _svc.buildQueryParams(),
-        data: {},
-        cancelToken: cancelToken,
-      );
-      return _svc.returnSuccessOrError(response);
-    });
-  }
-
-  /// Sync mute state with the server's active FaceTime call
-  Future<Response> setMuted(String callUuid, bool muted, {CancelToken? cancelToken}) async {
-    return _svc.runApiGuarded(() async {
-      final response = await _svc.dio.post(
-        "${_svc.apiRoot}/facetime/set-muted/$callUuid",
-        queryParameters: _svc.buildQueryParams(),
-        data: {'muted': muted},
-        cancelToken: cancelToken,
-      );
-      return _svc.returnSuccessOrError(response);
-    });
-  }
-
   /// `POST facetime/call` — has the server's Mac ring [address] on FaceTime, and hands back a
   /// link to join the call. The Mac leaves on its own once someone has joined.
   ///

@@ -22,19 +22,23 @@ Future<void> writeMergedLogInIsolate(
     port.close();
     rethrow;
   }
-  // The entry point's result, or the onExit null if the isolate died first.
-  final result = port.first;
-  final Object? message;
   try {
-    message = await result.timeout(timeout);
-  } on TimeoutException {
-    isolate.kill(priority: Isolate.immediate);
-    // Wait for it to exit, so the caller can delete the half-written file.
-    await result.timeout(const Duration(seconds: 5), onTimeout: () => null);
-    rethrow;
+    // The entry point's result, or the onExit null if the isolate died first.
+    final result = port.first;
+    final Object? message;
+    try {
+      message = await result.timeout(timeout);
+    } on TimeoutException {
+      isolate.kill(priority: Isolate.immediate);
+      // Wait for it to exit, so the caller can delete the half-written file.
+      await result.timeout(const Duration(seconds: 5), onTimeout: () => null);
+      rethrow;
+    }
+    if (message is (String, String)) throw RemoteError(message.$1, message.$2);
+    if (message != true) throw StateError("The log merge isolate exited without finishing");
+  } finally {
+    port.close();
   }
-  if (message is (String, String)) throw RemoteError(message.$1, message.$2);
-  if (message != true) throw StateError("The log merge isolate exited without finishing");
 }
 
 /// The merge isolate's entry point: reports `true` on success, or the error and stack trace as strings.

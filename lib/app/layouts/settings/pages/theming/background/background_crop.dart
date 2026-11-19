@@ -371,14 +371,7 @@ class _BackgroundCropState extends State<BackgroundCrop> with ThemeHelpers {
   void _showSavingDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Processing image...", style: context.theme.textTheme.titleLarge),
-        content: SizedBox(
-          height: 70,
-          child: Center(child: buildProgressIndicator(context)),
-        ),
-        backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      ),
+      builder: (context) => const BBProgressDialog(title: "Processing image..."),
       barrierDismissible: false,
     );
   }

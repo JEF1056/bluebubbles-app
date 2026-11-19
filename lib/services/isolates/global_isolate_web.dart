@@ -9,14 +9,11 @@ import 'package:flutter/foundation.dart';
 /// Web implementation of [GlobalIsolate]: executes dispatched actions inline on the main thread
 /// since Web/Wasm does not support `dart:isolate`.
 class GlobalIsolate {
-  final StreamController<dynamic> _controller = StreamController.broadcast();
   final Map<IsolateEvent, List<Function(dynamic)>> _eventListeners = {};
 
   final Duration taskTimeout;
   final Duration startupTimeout;
   final Duration? idleTimeout;
-
-  Stream<dynamic> get outputStream => _controller.stream;
 
   bool get isRunning => false;
 
@@ -38,9 +35,6 @@ class GlobalIsolate {
     if (clearEventListeners) {
       _eventListeners.clear();
       IsolateEventEmitter._instances.remove(this);
-    }
-    if (closeOutputStream && !_controller.isClosed) {
-      _controller.close();
     }
   }
 

@@ -52,9 +52,6 @@ interface ChatDao {
     @Query("SELECT COUNT(*) FROM chats")
     suspend fun getChatCount(): Int
 
-    @Query("SELECT COUNT(*) FROM chats WHERE hasUnreadMessage = 1")
-    suspend fun getUnreadCount(): Int
-
     @Query("SELECT MAX(lastMessageDate) FROM chats")
     suspend fun getLastMessageTime(): Long?
 

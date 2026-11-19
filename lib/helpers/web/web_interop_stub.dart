@@ -17,11 +17,3 @@ bool get isWebDocumentHidden => false;
 String get webNotificationPermission => 'denied';
 
 Future<String> requestWebNotificationPermission() async => 'denied';
-
-void showWebNotification({
-  required String title,
-  String? body,
-  String? icon,
-  String? tag,
-  void Function()? onClick,
-}) {}

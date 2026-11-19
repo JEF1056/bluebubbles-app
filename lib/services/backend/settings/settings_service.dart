@@ -417,7 +417,7 @@ class SettingsService {
 
   Future<void> checkServerUpdate() async {
     late ServerUpdateInfo updateInfo;
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       updateInfo = await ServerInterface.checkForServerUpdate();
     } else {
       updateInfo = await checkForServerUpdate();
@@ -674,6 +674,7 @@ class SettingsService {
   }
 
   Future<void> checkClientUpdate() async {
+    if (kIsWeb) return;
     if (Platform.isAndroid && await StoreChecker.getSource == Source.IS_INSTALLED_FROM_PLAY_STORE) {
       return _checkPlayUpdate();
     }

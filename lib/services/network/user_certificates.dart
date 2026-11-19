@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:universal_io/io.dart';
 import 'package:flutter_user_certificates_android/flutter_user_certificates_android.dart';
 
@@ -13,8 +14,8 @@ class UserCertificates {
     if (_initialized) return _cache;
     _initialized = true;
 
-    // Non-Android platforms use the system cert store as-is.
-    if (!Platform.isAndroid) {
+    // Non-Android platforms (and Web, where universal_io checks userAgent) use the system cert store as-is.
+    if (kIsWeb || !Platform.isAndroid) {
       return null;
     }
 

@@ -15,6 +15,35 @@ import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
 
+/// Adds [path] to [controller.pickedAttachments] if [size] <= 1 GB (returns false otherwise).
+Future<bool> addPickedAttachmentIfUnderLimit(
+  ConversationViewController controller, {
+  required String path,
+  String? name,
+  required int size,
+  FutureOr<Uint8List?> Function()? readBytes,
+  bool toggleIfPresent = false,
+}) async {
+  if (size / 1024000 > 1000) {
+    showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.", type: SnackbarType.error);
+    return false;
+  }
+  if (toggleIfPresent) {
+    final existingIdx = controller.pickedAttachments.indexWhere((e) => e.path == path);
+    if (existingIdx >= 0) {
+      controller.pickedAttachments.removeAt(existingIdx);
+      return true;
+    }
+  }
+  controller.pickedAttachments.add(PlatformFile(
+    path: path,
+    name: (name != null && name.isNotEmpty) ? name : path.split('/').last,
+    size: size,
+    bytes: readBytes != null ? await readBytes() : null,
+  ));
+  return true;
+}
+
 /// Opens the Google Messages-style split live camera + recent gallery sheet.
 Future<void> showGmsgCameraGallerySheet(
   BuildContext context,
@@ -90,6 +119,8 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
 
   AssetPathEntity? _recentAlbum;
   final List<AssetEntity> _assets = [];
+  // Persisted across sheet reopens so pre-selected attachments keep their badge.
+  static final RxMap<String, String> _resolvedAssetPaths = <String, String>{}.obs;
   bool _loadingPhotos = true;
   bool _loadingMorePhotos = false;
   bool _hasMorePhotos = true;
@@ -129,7 +160,14 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
         if (mounted) setState(() => _cameraStatus = _CameraStatus.loading);
         unawaited(_disposeCamera());
       } else if (state == AppLifecycleState.resumed) {
-        unawaited(_initCamera());
+        unawaited(_initCamera(preferredIndex: _cameraIndex));
+      }
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed) {
+      if (_cameraController == null && _cameraStatus == _CameraStatus.ready) {
+        unawaited(_initCamera(preferredIndex: _cameraIndex));
       }
       return;
     }
@@ -140,8 +178,6 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
       _recordingTimer?.cancel();
       _isRecording = false;
       unawaited(_disposeCamera());
-    } else if (state == AppLifecycleState.resumed) {
-      unawaited(_initCamera());
     }
   }
 
@@ -258,6 +294,7 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
       }
 
       await _disposeCamera();
+      if (!mounted) return;
 
       final nextController = CameraController(
         _cameras[_cameraIndex],
@@ -266,6 +303,10 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
       );
       _cameraController = nextController;
       await nextController.initialize();
+      if (!mounted || _cameraController != nextController) {
+        await nextController.dispose();
+        return;
+      }
 
       try {
         await nextController.setFlashMode(_flashMode);
@@ -386,67 +427,23 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
   }
 
   Future<void> _onShutterPressed() async {
-    if (_useAndroidNativeCamera) {
-      if (_cameraStatus != _CameraStatus.ready || _isCapturing) return;
-      if (!_isVideoMode) {
-        setState(() => _isCapturing = true);
-        try {
-          final path = await _androidCameraChannel.invokeMethod<String>('takePicture');
-          if (path != null && path.isNotEmpty) {
-            await _attachXFileAndClose(XFile(path));
-          }
-        } catch (e, s) {
-          Logger.error("Failed to take picture", error: e, trace: s);
-          showSnackbar("Error", "Failed to capture photo", type: SnackbarType.error);
-        } finally {
-          if (mounted) setState(() => _isCapturing = false);
-        }
-        return;
-      }
-
-      if (_isRecording) {
-        setState(() => _isCapturing = true);
-        _recordingTimer?.cancel();
-        try {
-          final path = await _androidCameraChannel.invokeMethod<String>('stopVideoRecording');
-          if (mounted) setState(() => _isRecording = false);
-          if (path != null && path.isNotEmpty) {
-            await _attachXFileAndClose(XFile(path));
-          }
-        } catch (e, s) {
-          Logger.error("Failed to stop video recording", error: e, trace: s);
-          showSnackbar("Error", "Failed to save video", type: SnackbarType.error);
-          if (mounted) setState(() => _isRecording = false);
-        } finally {
-          if (mounted) setState(() => _isCapturing = false);
-        }
-      } else {
-        try {
-          await _androidCameraChannel.invokeMethod<void>('startVideoRecording', {'enableAudio': _micGranted});
-          _recordingTimer?.cancel();
-          setState(() {
-            _isRecording = true;
-            _recordingSeconds = 0;
-          });
-          _recordingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-            if (mounted) setState(() => _recordingSeconds++);
-          });
-        } catch (e, s) {
-          Logger.error("Failed to start video recording", error: e, trace: s);
-          showSnackbar("Error", "Failed to start recording", type: SnackbarType.error);
-        }
-      }
+    if (_isCapturing) return;
+    final cam = _cameraController;
+    if (_useAndroidNativeCamera ? _cameraStatus != _CameraStatus.ready : (cam == null || !cam.value.isInitialized)) {
       return;
     }
-
-    final cam = _cameraController;
-    if (cam == null || !cam.value.isInitialized || _isCapturing) return;
 
     if (!_isVideoMode) {
       setState(() => _isCapturing = true);
       try {
-        final file = await cam.takePicture();
-        await _attachXFileAndClose(file);
+        final XFile? file;
+        if (_useAndroidNativeCamera) {
+          final path = await _androidCameraChannel.invokeMethod<String>('takePicture');
+          file = (path != null && path.isNotEmpty) ? XFile(path) : null;
+        } else {
+          file = await cam!.takePicture();
+        }
+        if (file != null) await _attachXFileAndClose(file);
       } catch (e, s) {
         Logger.error("Failed to take picture", error: e, trace: s);
         showSnackbar("Error", "Failed to capture photo", type: SnackbarType.error);
@@ -460,9 +457,15 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
       setState(() => _isCapturing = true);
       _recordingTimer?.cancel();
       try {
-        final file = await cam.stopVideoRecording();
+        final XFile? file;
+        if (_useAndroidNativeCamera) {
+          final path = await _androidCameraChannel.invokeMethod<String>('stopVideoRecording');
+          file = (path != null && path.isNotEmpty) ? XFile(path) : null;
+        } else {
+          file = await cam!.stopVideoRecording();
+        }
         if (mounted) setState(() => _isRecording = false);
-        await _attachXFileAndClose(file);
+        if (file != null) await _attachXFileAndClose(file);
       } catch (e, s) {
         Logger.error("Failed to stop video recording", error: e, trace: s);
         showSnackbar("Error", "Failed to save video", type: SnackbarType.error);
@@ -472,7 +475,11 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
       }
     } else {
       try {
-        await cam.startVideoRecording();
+        if (_useAndroidNativeCamera) {
+          await _androidCameraChannel.invokeMethod<void>('startVideoRecording', {'enableAudio': _micGranted});
+        } else {
+          await cam!.startVideoRecording();
+        }
         _recordingTimer?.cancel();
         setState(() {
           _isRecording = true;
@@ -489,18 +496,14 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
   }
 
   Future<void> _attachXFileAndClose(XFile file) async {
-    final size = await file.length();
-    if (size / 1024000 > 1000) {
-      showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.", type: SnackbarType.error);
-      return;
-    }
-    controller.pickedAttachments.add(PlatformFile(
+    final added = await addPickedAttachmentIfUnderLimit(
+      controller,
       path: file.path,
-      name: file.name.isNotEmpty ? file.name : file.path.split('/').last,
-      size: size,
-      bytes: kIsWeb ? await file.readAsBytes() : null,
-    ));
-    if (mounted) Navigator.of(context).pop();
+      name: file.name,
+      size: await file.length(),
+      readBytes: kIsWeb ? file.readAsBytes : null,
+    );
+    if (added && mounted) Navigator.of(context).pop();
   }
 
   Future<void> _loadRecentPhotos({bool reset = false}) async {
@@ -592,17 +595,11 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
     final files = await ImagePicker().pickMultiImage();
     if (files.isEmpty) return;
     for (final file in files) {
-      final size = await file.length();
-      if (size / 1024000 > 1000) {
-        showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.", type: SnackbarType.error);
-        continue;
-      }
-      controller.pickedAttachments.add(PlatformFile(
+      await addPickedAttachmentIfUnderLimit(
+        controller,
         path: file.path,
-        name: file.path.split('/').last,
-        size: size,
-        bytes: null,
-      ));
+        size: await file.length(),
+      );
     }
     if (mounted) Navigator.of(context).pop();
   }
@@ -610,23 +607,17 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
   Future<void> _toggleAsset(AssetEntity asset) async {
     final file = await asset.file;
     if (file == null) return;
-    final size = await file.length();
-    if (size / 1024000 > 1000) {
-      showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.", type: SnackbarType.error);
-      return;
+    if (!_resolvedAssetPaths.containsKey(asset.id) && _resolvedAssetPaths.length >= 500) {
+      _resolvedAssetPaths.remove(_resolvedAssetPaths.keys.first);
     }
-
-    final existingIdx = controller.pickedAttachments.indexWhere((e) => e.path == file.path);
-    if (existingIdx >= 0) {
-      controller.pickedAttachments.removeAt(existingIdx);
-    } else {
-      controller.pickedAttachments.add(PlatformFile(
-        path: file.path,
-        name: file.path.split('/').last,
-        size: size,
-        bytes: kIsWeb ? await file.readAsBytes() : null,
-      ));
-    }
+    _resolvedAssetPaths[asset.id] = file.path;
+    await addPickedAttachmentIfUnderLimit(
+      controller,
+      path: file.path,
+      size: await file.length(),
+      readBytes: kIsWeb ? file.readAsBytes : null,
+      toggleIfPresent: true,
+    );
   }
 
   List<double> get _zoomSteps {
@@ -1093,8 +1084,10 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
                   (context, index) {
                     final asset = _assets[index];
                     return _GmsgPhotoGridTile(
+                      key: ValueKey(asset.id),
                       asset: asset,
                       controller: controller,
+                      resolvedAssetPaths: _resolvedAssetPaths,
                       onTap: () => _toggleAsset(asset),
                     );
                   },
@@ -1156,13 +1149,16 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
 
 class _GmsgPhotoGridTile extends StatefulWidget {
   const _GmsgPhotoGridTile({
+    super.key,
     required this.asset,
     required this.controller,
+    required this.resolvedAssetPaths,
     required this.onTap,
   });
 
   final AssetEntity asset;
   final ConversationViewController controller;
+  final RxMap<String, String> resolvedAssetPaths;
   final VoidCallback onTap;
 
   @override
@@ -1170,41 +1166,26 @@ class _GmsgPhotoGridTile extends StatefulWidget {
 }
 
 class _GmsgPhotoGridTileState extends State<_GmsgPhotoGridTile> {
-  String? _filePath;
-  String? _thumbPath;
+  Uint8List? _thumbBytes;
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_resolveMedia());
+    unawaited(_loadThumbnail());
   }
 
-  Future<void> _resolveMedia() async {
+  Future<void> _loadThumbnail() async {
     try {
-      final file = await widget.asset.file;
-      if (file == null) {
-        if (mounted) setState(() => _loading = false);
-        return;
-      }
-      _filePath = file.path;
-
-      if (widget.asset.type == AssetType.video || (widget.asset.mimeType?.startsWith('video/') ?? false)) {
-        try {
-          _thumbPath = await AttachmentsSvc.getVideoThumbnail(file.path, useCachedFile: false);
-        } catch (_) {}
-      } else if (widget.asset.mimeType == 'image/heic' ||
-          widget.asset.mimeType == 'image/heif' ||
-          widget.asset.mimeType == 'image/tif' ||
-          widget.asset.mimeType == 'image/tiff') {
-        final fake = Attachment(transferName: file.path, mimeType: widget.asset.mimeType!);
-        _thumbPath = await AttachmentsSvc.ensureImageCompatibility(fake, actualPath: file.path);
-      } else {
-        _thumbPath = file.path;
+      final bytes = await widget.asset.thumbnailDataWithSize(const ThumbnailSize.square(300));
+      if (mounted) {
+        setState(() {
+          _thumbBytes = bytes;
+          _loading = false;
+        });
       }
     } catch (_) {
       // Render fallback tile cleanly on any decode/IO failure.
-    } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -1215,7 +1196,8 @@ class _GmsgPhotoGridTileState extends State<_GmsgPhotoGridTile> {
     return Obx(() {
       final hideAttachments =
           SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideAttachments.value;
-      final selected = _filePath != null && widget.controller.pickedAttachments.any((e) => e.path == _filePath);
+      final resolvedPath = widget.resolvedAssetPaths[widget.asset.id];
+      final selected = resolvedPath != null && widget.controller.pickedAttachments.any((e) => e.path == resolvedPath);
       final isVideo = widget.asset.type == AssetType.video;
 
       return InkWell(
@@ -1223,17 +1205,16 @@ class _GmsgPhotoGridTileState extends State<_GmsgPhotoGridTile> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (_loading || hideAttachments || _thumbPath == null)
+            if (_loading || hideAttachments || _thumbBytes == null)
               ColoredBox(
                 color: scheme.surfaceContainerHighest,
                 child: isVideo ? Icon(Icons.videocam_outlined, color: scheme.onSurfaceVariant) : null,
               )
             else
-              Image.file(
-                File(_thumbPath!),
+              Image.memory(
+                _thumbBytes!,
                 fit: BoxFit.cover,
-                cacheWidth: 300,
-                filterQuality: FilterQuality.low,
+                gaplessPlayback: true,
                 errorBuilder: (_, _, _) => ColoredBox(
                   color: scheme.surfaceContainerHighest,
                   child: Icon(Icons.broken_image_outlined, color: scheme.onSurfaceVariant),

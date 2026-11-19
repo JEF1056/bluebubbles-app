@@ -16,6 +16,7 @@ import androidx.core.app.ServiceCompat
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.R
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
+import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
 import com.bluebubbles.messaging.utils.PersistentLog
 import io.socket.client.IO
 import io.socket.client.Socket
@@ -276,32 +277,20 @@ class SocketIOForegroundService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                Constants.foregroundServiceNotificationChannel,
-                "BlueBubbles Foreground Service",
-                NotificationManager.IMPORTANCE_MIN
-            )
-
-            // This channel should not vibrate or make sound
-            channel.setSound(null, null)
-            channel.enableVibration(false)
-
-            // Create the channel
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-        }
+        NotificationChannelHandler.ensureForegroundServiceChannel(this)
     }
 
     private fun createNotification(contentText: String): Notification {
         currentNotification = contentText
-        return NotificationCompat.Builder(this, Constants.foregroundServiceNotificationChannel)
+        return NotificationCompat.Builder(this, NotificationChannelHandler.FOREGROUND_SERVICE_CHANNEL_ID)
             .setContentTitle("BlueBubbles Service")
             .setContentText(contentText)
             .setSmallIcon(R.mipmap.ic_stat_icon)
             // The notification should be categorized as silent
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
+            .setLocalOnly(true)
             // The notification should be ongoing and not cancelable.
             // This does not prevent dismissing it on Android 14+.
             .setOngoing(true)

@@ -109,38 +109,34 @@ void messageInfo(MessagePopupActionContext ctx) {
   }
   final String str = encoder.convert(map);
   final adaptiveTheme = Theme.of(ctx.context);
-  showDialog(
+  showBBDialog(
     context: ctx.context,
-    builder: (context) => Theme(
+    title: "Message Info",
+    icon: Icons.info_outline,
+    content: Theme(
       data: adaptiveTheme,
-      child: AlertDialog(
-        title: Text("Message Info", style: adaptiveTheme.textTheme.titleLarge),
-        backgroundColor: adaptiveTheme.colorScheme.surfaceContainerHighest,
-        content: SizedBox(
-          width: NavigationSvc.width(ctx.widthContext) * 3 / 5,
-          height: context.height * 1 / 4,
-          child: Container(
-            padding: const EdgeInsets.all(10.0),
-            decoration: BoxDecoration(
-              color: adaptiveTheme.colorScheme.surface,
-              borderRadius: const BorderRadius.all(Radius.circular(10)),
-            ),
-            child: SingleChildScrollView(
-              child: SelectableText(str, style: adaptiveTheme.textTheme.bodyLarge),
-            ),
+      child: SizedBox(
+        width: NavigationSvc.width(ctx.widthContext) * 3 / 5,
+        height: ctx.context.height * 1 / 4,
+        child: Container(
+          padding: const EdgeInsets.all(10.0),
+          decoration: BoxDecoration(
+            color: adaptiveTheme.colorScheme.surface,
+            borderRadius: const BorderRadius.all(Radius.circular(10)),
+          ),
+          child: SingleChildScrollView(
+            child: SelectableText(str, style: adaptiveTheme.textTheme.bodyLarge),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text(
-              "Close",
-              style: adaptiveTheme.textTheme.bodyLarge!.copyWith(color: adaptiveTheme.colorScheme.primary),
-            ),
-          ),
-        ],
       ),
     ),
+    actions: [
+      BBDialogAction(
+        text: "Close",
+        isDefault: true,
+        onPressed: () => Navigator.of(ctx.context, rootNavigator: true).pop(),
+      ),
+    ],
   );
 }
 

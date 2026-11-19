@@ -1,4 +1,3 @@
-import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart' show HandleLookupKey;
@@ -40,7 +39,9 @@ String resolveFriendDisplayName({
   @visibleForTesting Iterable<ContactV2>? contactsOverride,
 }) {
   if (hideContactInfo) {
-    final handleState = handle != null ? HandleSvc.getOrCreateHandleState(handle) : null;
+    final handleState = (handle != null && GetIt.I.isRegistered<HandleService>())
+        ? HandleSvc.getOrCreateHandleState(handle)
+        : null;
     return handleState?.fakeName ?? 'Contact';
   }
 
@@ -66,7 +67,7 @@ String resolveFriendDisplayName({
           ? ContactV2Actions.matchContactForAddress(contactsOverride, rawAddress)
           : (GetIt.I.isRegistered<ContactServiceV2>()
               ? ContactsSvcV2.findContactForAddressSync(rawAddress)
-              : ContactV2Actions.matchContactForAddress(Database.contactsV2.getAll(), rawAddress));
+              : null);
       if (matched != null) {
         final cName = matched.displayName.isNotEmpty ? matched.displayName : matched.computedDisplayName;
         if (cName.isNotEmpty) return cName;
@@ -178,12 +179,23 @@ class FindMyFriend {
         now: now,
       );
 
-  String resolveDisplayName({bool hideContactInfo = false}) => resolveFriendDisplayName(
-        handle: handle,
-        handleAddress: handleAddress,
-        title: title,
-        hideContactInfo: hideContactInfo,
-      );
+  String? _cachedDisplayName;
+  bool? _cachedHideContactInfo;
+
+  String resolveDisplayName({bool hideContactInfo = false}) {
+    if (_cachedDisplayName != null && _cachedHideContactInfo == hideContactInfo) {
+      return _cachedDisplayName!;
+    }
+    final resolved = resolveFriendDisplayName(
+      handle: handle,
+      handleAddress: handleAddress,
+      title: title,
+      hideContactInfo: hideContactInfo,
+    );
+    _cachedDisplayName = resolved;
+    _cachedHideContactInfo = hideContactInfo;
+    return resolved;
+  }
 
   factory FindMyFriend.fromJson(Map<String, dynamic> json) {
     final rawTs = json["last_updated"] ?? json["timeStamp"] ?? json["timestamp"] ?? 0;

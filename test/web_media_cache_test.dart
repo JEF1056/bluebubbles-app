@@ -67,12 +67,14 @@ void main() {
       expect(await cache.get(WebMediaCache.attachmentsStore, 'c'), bytesOf(40, 3));
     });
 
-    test('caps effective limit below 50% of estimated remaining storage quota', () async {
-      final quotaCache = WebMediaCache.forTesting(
+    test('caps effective limit below 50% of estimated storage quota (remaining + cache usage)', () async {
+      late WebMediaCache quotaCache;
+      quotaCache = WebMediaCache.forTesting(
         idbFactory: idbFactoryMemory,
         dbName: 'test_quota_$dbCounter',
         maxBytes: WebMediaCache.defaultMaxBytes,
-        quotaEstimator: () async => 120, // 50% cap = 60 bytes
+        // Simulates navigator.storage.estimate() where remaining = quota - usage (120 - cacheUsage).
+        quotaEstimator: () async => 120 - await quotaCache.usageBytes(),
       );
       addTearDown(quotaCache.close);
 
@@ -82,6 +84,17 @@ void main() {
       expect(await quotaCache.usageBytes(), 40);
       expect(await quotaCache.get(WebMediaCache.attachmentsStore, 'x'), isNull);
       expect(await quotaCache.get(WebMediaCache.attachmentsStore, 'y'), bytesOf(40, 5));
+    });
+
+    test('getAllEntries with keyPrefix only loads matching entries', () async {
+      await cache.put(WebMediaCache.attachmentsStore, 'avatar_1', bytesOf(10, 1));
+      await cache.put(WebMediaCache.attachmentsStore, 'att_1', bytesOf(20, 2));
+      await cache.put(WebMediaCache.attachmentsStore, 'avatar_2', bytesOf(15, 3));
+
+      final avatars = await cache.getAllEntries(WebMediaCache.attachmentsStore, keyPrefix: 'avatar_');
+      expect(avatars.keys.toSet(), {'avatar_1', 'avatar_2'});
+      expect(avatars['avatar_1'], bytesOf(10, 1));
+      expect(avatars['avatar_2'], bytesOf(15, 3));
     });
 
     test('LRU eviction preserves fontsStore and chatBackgroundsStore while evicting attachmentsStore', () async {

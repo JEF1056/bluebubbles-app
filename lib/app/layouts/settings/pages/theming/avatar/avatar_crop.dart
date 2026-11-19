@@ -52,20 +52,7 @@ class _AvatarCropState extends State<AvatarCrop> with ThemeHelpers {
   Future<void> _handlePickedImage(Uint8List bytes, {String? fileName}) async {
     final lowerName = (fileName ?? '').toLowerCase();
     if (lowerName.endsWith('.gif')) {
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text("Saving avatar...", style: context.theme.textTheme.titleLarge),
-          content: SizedBox(
-            height: 70,
-            child: Center(
-              child: buildProgressIndicator(context),
-            ),
-          ),
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-        ),
-        barrierDismissible: false,
-      );
+      showSavingAvatarDialog();
       onCropped(CropSuccess(bytes));
       return;
     }
@@ -213,16 +200,7 @@ class _AvatarCropState extends State<AvatarCrop> with ThemeHelpers {
   void showSavingAvatarDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Saving avatar...", style: context.theme.textTheme.titleLarge),
-        content: SizedBox(
-          height: 70,
-          child: Center(
-            child: buildProgressIndicator(context),
-          ),
-        ),
-        backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      ),
+      builder: (context) => const BBProgressDialog(title: "Saving avatar..."),
       barrierDismissible: false,
     );
   }

@@ -160,8 +160,6 @@ class FilesystemService {
     return candidates.isEmpty ? null : candidates.first.path;
   }
 
-  Uint8List? getCachedChatBackgroundBytes(String chatGuid) => _webChatBackgrounds[chatGuid];
-
   Uint8List? getCachedChatBackgroundByPath(String path) {
     final base = stripWebPathVersion(path);
     if (!base.startsWith('web-bg://')) return null;
@@ -272,14 +270,17 @@ class FilesystemService {
         _webChatBackgrounds
           ..clear()
           ..addAll(await WebMediaCache.instance.getAllEntries(WebMediaCache.chatBackgroundsStore));
-        final attachmentEntries = await WebMediaCache.instance.getAllEntries(WebMediaCache.attachmentsStore);
+        final avatarEntries = await WebMediaCache.instance.getAllEntries(
+          WebMediaCache.attachmentsStore,
+          keyPrefix: 'avatar_',
+        );
         _webAvatars
           ..clear()
-          ..addEntries(attachmentEntries.entries.where((e) => e.key.startsWith('avatar_')));
+          ..addAll(avatarEntries);
       } catch (_) {}
     }
     packageInfo = await PackageInfo.fromPlatform();
-    if (!headless && Platform.isAndroid) {
+    if (!kIsWeb && !headless && Platform.isAndroid) {
       androidInfo = await DeviceInfoPlugin().androidInfo;
     }
   }

@@ -267,13 +267,17 @@ class _FontPickerTile extends StatelessWidget {
   final void Function(String) onChanged;
 
   void _openSheet(BuildContext context) {
-    showModalBottomSheet<void>(
+    showBBBottomSheet<void>(
       context: context,
-      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-      isScrollControlled: true,
-      builder: (_) => _FontPickerSheet(
-        currentFont: currentFont,
-        onSelected: onChanged,
+      title: "Select Font Family",
+      icon: Icons.font_download_outlined,
+      padding: EdgeInsets.zero,
+      builder: (ctx) => SizedBox(
+        height: MediaQuery.sizeOf(ctx).height * 0.65,
+        child: _FontPickerSheet(
+          currentFont: currentFont,
+          onSelected: onChanged,
+        ),
       ),
     );
   }
@@ -301,7 +305,7 @@ class _FontPickerTile extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          currentFont,
+                          currentFont == 'Default' ? 'Default (Google Sans)' : currentFont,
                           style: context.theme.textTheme.bodyLarge,
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -343,7 +347,11 @@ class _FontPickerSheetState extends State<_FontPickerSheet> {
   void _onSearch() {
     final q = _searchCtrl.text.toLowerCase();
     setState(() {
-      _filtered = q.isEmpty ? _getFontNames() : _getFontNames().where((f) => f.toLowerCase().contains(q)).toList();
+      _filtered = q.isEmpty
+          ? _getFontNames()
+          : _getFontNames()
+              .where((f) => (f == 'Default' ? 'Default (Google Sans)' : f).toLowerCase().contains(q))
+              .toList();
     });
   }
 
@@ -355,49 +363,45 @@ class _FontPickerSheetState extends State<_FontPickerSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      minChildSize: 0.4,
-      maxChildSize: 0.9,
-      expand: false,
-      builder: (_, scrollCtrl) => Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: TextField(
-              controller: _searchCtrl,
-              autofocus: false,
-              decoration: InputDecoration(
-                hintText: 'Search fonts…',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: TextField(
+            controller: _searchCtrl,
+            autofocus: false,
+            decoration: InputDecoration(
+              hintText: 'Search fonts…',
+              prefixIcon: const Icon(Icons.search),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              contentPadding: const EdgeInsets.symmetric(vertical: 10),
             ),
           ),
-          Expanded(
-            child: ListView.builder(
-              controller: scrollCtrl,
-              itemCount: _filtered.length,
-              itemBuilder: (_, i) {
-                final font = _filtered[i];
-                final selected = font == widget.currentFont;
-                return ListTile(
-                  dense: true,
-                  title: Text(font, style: context.theme.textTheme.bodyMedium),
-                  selected: selected,
-                  selectedTileColor: context.theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
-                  trailing: selected ? Icon(Icons.check, color: context.theme.colorScheme.primary) : null,
-                  onTap: () {
-                    Navigator.of(context).pop();
-                    widget.onSelected(font);
-                  },
-                );
-              },
-            ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: _filtered.length,
+            itemBuilder: (_, i) {
+              final font = _filtered[i];
+              final selected = font == widget.currentFont;
+              return ListTile(
+                dense: true,
+                title: Text(
+                  font == 'Default' ? 'Default (Google Sans)' : font,
+                  style: context.theme.textTheme.bodyMedium,
+                ),
+                selected: selected,
+                selectedTileColor: context.theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
+                trailing: selected ? Icon(Icons.check, color: context.theme.colorScheme.primary) : null,
+                onTap: () {
+                  Navigator.of(context, rootNavigator: true).pop();
+                  widget.onSelected(font);
+                },
+              );
+            },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

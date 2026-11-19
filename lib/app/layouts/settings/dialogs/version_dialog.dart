@@ -5,102 +5,82 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 void showVersionDialog(BuildContext context) {
-  showDialog<void>(
+  final packageInfoFuture = PackageInfo.fromPlatform();
+  showBBDialog<void>(
     context: context,
-    builder: (BuildContext context) {
-      return FutureBuilder<PackageInfo>(
-          future: PackageInfo.fromPlatform(),
-          builder: (BuildContext context, AsyncSnapshot<PackageInfo> snapshot) {
-            return AlertDialog(
-              contentPadding: const EdgeInsets.only(
-                top: 24,
-                left: 24,
-                right: 24,
+    title: "BlueBubbles",
+    content: FutureBuilder<PackageInfo>(
+      future: packageInfoFuture,
+      builder: (BuildContext ctx, AsyncSnapshot<PackageInfo> snapshot) {
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.asset(
+                "assets/icon/icon.png",
+                width: 40,
+                height: 40,
               ),
-              elevation: 10.0,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(
-                  10.0,
-                ),
-              ),
-              scrollable: true,
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-              content: ListBody(
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      IconTheme(
-                        data: Theme.of(context).iconTheme,
-                        child: Image.asset(
-                          "assets/icon/icon.png",
-                          width: 30,
-                          height: 30,
-                        ),
-                      ),
-                      Expanded(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                          child: ListBody(
-                            children: <Widget>[
-                              Text(
-                                "BlueBubbles",
-                                style: Theme.of(context).textTheme.titleLarge,
-                              ),
-                              if (!kIsDesktop)
-                                Text(
-                                    "Version Number: ${snapshot.hasData ? snapshot.data!.version : "N/A"}",
-                                    style: Theme.of(context).textTheme.bodyLarge),
-                              if (!kIsDesktop)
-                                Text(
-                                    "Version Code: ${snapshot.hasData ? snapshot.data!.buildNumber.toString().lastChars(min(4, snapshot.data!.buildNumber.length)) : "N/A"}",
-                                    style: Theme.of(context).textTheme.bodyLarge),
-                              if (kIsDesktop)
-                                Text(
-                                  appVersion,
-                                  style: Theme.of(context).textTheme.bodyLarge,
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  if (!kIsDesktop)
+                    Text(
+                      "Version Number: ${snapshot.hasData ? snapshot.data!.version : "N/A"}",
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
+                  if (!kIsDesktop)
+                    Text(
+                      "Version Code: ${snapshot.hasData ? snapshot.data!.buildNumber.lastChars(min(4, snapshot.data!.buildNumber.length)) : "N/A"}",
+                      style: Theme.of(ctx)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                    ),
+                  if (kIsDesktop)
+                    Text(
+                      appVersion,
+                      style: Theme.of(ctx).textTheme.bodyMedium,
+                    ),
                 ],
               ),
-              actions: <Widget>[
-                TextButton(
-                  child: Text("View Licenses",
-                      style: Theme.of(context).textTheme.bodyLarge!
-                          .copyWith(color: Theme.of(context).colorScheme.primary)),
-                  onPressed: () {
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (BuildContext context) => Theme(
-                        data: Theme.of(context),
-                        child: LicensePage(
-                          applicationName: "BlueBubbles",
-                          applicationVersion: snapshot.hasData ? snapshot.data!.version : "",
-                          applicationIcon: Image.asset(
-                            "assets/icon/icon.png",
-                            width: 30,
-                            height: 30,
-                          ),
-                        ),
-                      ),
-                    ));
-                  },
+            ),
+          ],
+        );
+      },
+    ),
+    actions: <BBDialogAction>[
+      BBDialogAction(
+        text: "View Licenses",
+        onPressed: () async {
+          final info = await packageInfoFuture;
+          if (!context.mounted) return;
+          Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(
+            builder: (BuildContext ctx) => Theme(
+              data: Theme.of(ctx),
+              child: LicensePage(
+                applicationName: "BlueBubbles",
+                applicationVersion: info.version,
+                applicationIcon: Image.asset(
+                  "assets/icon/icon.png",
+                  width: 30,
+                  height: 30,
                 ),
-                TextButton(
-                  child: Text("Close",
-                      style: Theme.of(context).textTheme.bodyLarge!
-                          .copyWith(color: Theme.of(context).colorScheme.primary)),
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
-                ),
-              ],
-            );
-          });
-    },
+              ),
+            ),
+          ));
+        },
+      ),
+      BBDialogAction(
+        text: "Close",
+        isDefault: true,
+        onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+      ),
+    ],
   );
 }

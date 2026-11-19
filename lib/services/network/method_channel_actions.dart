@@ -83,11 +83,23 @@ class MethodChannelActions {
     return raw.map((key, value) => MapEntry(key.toString(), value is num ? value.toInt() : 0));
   }
 
-  Future<void> deleteNotification({required int notificationId, String? tag, int? readBefore}) async {
+  Future<void> deleteNotification({
+    required int notificationId,
+    String? tag,
+    int? readBefore,
+    String? callUuid,
+  }) async {
     await service.invokeMethod('delete-notification', {
       'notification_id': notificationId,
       'tag': ?tag,
       'read_before': ?readBefore,
+      'call_uuid': ?callUuid,
+    });
+  }
+
+  Future<void> setLocusContext(String? chatGuid) async {
+    await service.invokeMethod('set-locus-context', {
+      'chat_guid': chatGuid,
     });
   }
 
@@ -130,6 +142,10 @@ class MethodChannelActions {
     required bool messageIsFromMe,
     required bool showReactionAction,
     required String reactionType,
+    bool isReaction = false,
+    bool isEdit = false,
+    bool onlyAlertOnce = false,
+    List<Map<String, dynamic>>? historicMessages,
   }) async {
     await service.invokeMethod('create-incoming-message-notification', {
       'channel_id': channelId,
@@ -146,6 +162,10 @@ class MethodChannelActions {
       'message_is_from_me': messageIsFromMe,
       'show_reaction_action': showReactionAction,
       'reaction_type': reactionType,
+      'is_reaction': isReaction,
+      'is_edit': isEdit,
+      'only_alert_once': onlyAlertOnce,
+      'historic_messages': ?historicMessages,
     });
   }
 

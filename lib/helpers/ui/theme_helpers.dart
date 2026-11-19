@@ -112,6 +112,16 @@ class BubbleText extends ThemeExtension<BubbleText> {
   }
 }
 
+/// Bundled official OFL Google Sans family (Google Messages default typography).
+const String kDefaultAppFontFamily = 'GoogleSans';
+
+TextTheme defaultAppTextTheme(Brightness brightness) {
+  final base = brightness == Brightness.light
+      ? Typography.englishLike2021.merge(Typography.blackMountainView)
+      : Typography.englishLike2021.merge(Typography.whiteMountainView);
+  return base.apply(fontFamily: kDefaultAppFontFamily);
+}
+
 extension EmojiFontFallback on ThemeData {
   /// Windows' own font fallback misses newer emoji (e.g. U+1FAEA), and Web
   /// needs explicit emoji font fallback (cached Apple Color Emoji / system emoji)

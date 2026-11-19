@@ -60,25 +60,10 @@ Future<void> updatePhoto(BuildContext context, Chat chat) async {
       SettingsSvc.serverDetails.supportsGroupChatManagement) {
     if (!context.mounted) return;
     showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            title: Text(
-              "Updating group photo...",
-              style: context.theme.textTheme.titleLarge,
-            ),
-            content: SizedBox(
-              height: 70,
-              child: Center(
-                child: CircularProgressIndicator(
-                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                ),
-              ),
-            ),
-          );
-        });
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) => const BBProgressDialog(title: "Updating group photo..."),
+    );
     final response = await HttpSvc.chat.setIcon(chat.guid, result);
     if (response.statusCode == 200) {
       await ChatsSvc.setChatCustomAvatarPath(chat, result);

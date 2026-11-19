@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/custom/custom_cupertino_alert_dialog.dart';
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_view.dart';
 import 'package:bluebubbles/app/components/wallpaper/theme_wallpaper_palette.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -7,7 +8,7 @@ import 'package:bluebubbles/models/genmoji.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:flutter/cupertino.dart' hide CupertinoAlertDialog, CupertinoDialogAction;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -192,10 +193,15 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
     final content = _buildContent(context);
 
     if (iOS) {
+      final scheme = context.theme.colorScheme;
       return CupertinoTheme(
-        // Bridge Material brightness into the Cupertino color system (as showBBDialog does).
-        data: CupertinoThemeData(brightness: Theme.of(context).brightness),
+        // Bridge Material brightness & primary accent into the Cupertino color system (as showBBDialog does).
+        data: CupertinoThemeData(
+          brightness: Theme.of(context).brightness,
+          primaryColor: scheme.primary,
+        ),
         child: CupertinoAlertDialog(
+          backgroundColor: scheme.surfaceContainerHighest.withValues(alpha: 0.78),
           title: const Text("Genmoji"),
           content: Material(type: MaterialType.transparency, child: content),
           actions: _actions
@@ -212,28 +218,42 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
       );
     }
 
+    final scheme = context.theme.colorScheme;
+    const minSize = Size(64, 48);
+    const btnPadding = EdgeInsets.symmetric(horizontal: 20, vertical: 10);
+    const shape = StadiumBorder();
     return AlertDialog(
       title: Text("Genmoji", style: context.theme.textTheme.titleLarge),
-      backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+      backgroundColor: scheme.surfaceContainerHigh,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
       contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 6),
       content: SizedBox(width: 300, child: content),
-      actions: _actions
-          .map(
-            (a) => TextButton(
-              onPressed: a.onPressed,
-              child: Text(
-                a.label,
-                style: context.theme.textTheme.bodyLarge!.copyWith(
-                  color: a.onPressed == null
-                      ? context.theme.colorScheme.outline
-                      : a.isDestructive
-                      ? context.theme.colorScheme.error
-                      : context.theme.colorScheme.primary,
-                ),
-              ),
+      actions: _actions.map((a) {
+        if (a.isDefault) {
+          return FilledButton(
+            onPressed: a.onPressed,
+            style: FilledButton.styleFrom(
+              backgroundColor: a.isDestructive ? scheme.error : scheme.primary,
+              foregroundColor: a.isDestructive ? scheme.onError : scheme.onPrimary,
+              minimumSize: minSize,
+              padding: btnPadding,
+              shape: shape,
             ),
-          )
-          .toList(),
+            child: Text(a.label),
+          );
+        }
+        return TextButton(
+          onPressed: a.onPressed,
+          style: TextButton.styleFrom(
+            foregroundColor: a.isDestructive ? scheme.error : scheme.primary,
+            minimumSize: minSize,
+            padding: btnPadding,
+            shape: shape,
+          ),
+          child: Text(a.label),
+        );
+      }).toList(),
     );
   }
 

@@ -16,6 +16,7 @@ import com.wearbubbles.api.dto.ContactRelayDto
 import com.wearbubbles.api.dto.MessageRelayDto
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.db.MessageDao
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.db.entities.MessageEntity
@@ -71,6 +72,38 @@ class PhoneRelayClient(private val context: Context) {
             error = "Phone relay timed out"
         )
 
+        internal suspend fun reconcileOrphanedSendResult(
+            result: SendResultPayload,
+            messageDao: MessageDao
+        ) {
+            val tempGuid = result.tempGuid?.takeIf { it.isNotBlank() } ?: return
+            if (result.success) {
+                val realEntity = result.message?.toEntity()
+                if (realEntity != null) {
+                    messageDao.replaceTempMessage(tempGuid, realEntity)
+                } else {
+                    messageDao.deleteByGuid(tempGuid)
+                }
+            } else {
+                messageDao.markSendFailed(tempGuid)
+            }
+        }
+
+        internal fun MessageRelayDto.toEntity() = MessageEntity(
+            guid = guid,
+            chatGuid = chatGuid,
+            text = text,
+            isFromMe = isFromMe,
+            dateCreated = dateCreated,
+            handleAddress = handleAddress,
+            attachmentGuid = attachmentGuid,
+            attachmentMimeType = attachmentMimeType,
+            associatedMessageGuid = associatedMessageGuid,
+            associatedMessageType = associatedMessageType,
+            dateDelivered = dateDelivered,
+            dateRead = dateRead
+        )
+
         const val PATH_CREDENTIALS = "/bb/credentials"
         const val PATH_REQUEST_CREDENTIALS = "/bb/request-credentials"
         const val PATH_REQUEST_SYNC = "/bb/request-sync"
@@ -89,8 +122,12 @@ class PhoneRelayClient(private val context: Context) {
         const val PATH_AVATAR_PREFIX = "/bb/avatar/"
         const val PATH_MARK_READ = "/bb/mark-read"
         const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
-        const val PATH_TYPING = "/bb/typing"
         const val PATH_WATCH_ACTIVE = "/bb/watch-active"
+        const val PATH_OPEN_CHAT = "/bb/open-chat"
+        const val PATH_INCOMING_CALL = "/bb/incoming-call"
+        const val PATH_CALL_ENDED = "/bb/call-ended"
+        const val PATH_ANSWER_CALL_AUDIO = "/bb/answer-call-audio"
+        const val PATH_DECLINE_CALL = "/bb/decline-call"
 
         private val gsonStatic = Gson()
 
@@ -355,27 +392,32 @@ class PhoneRelayClient(private val context: Context) {
         return sendToPhone(PATH_MARK_READ, payload)
     }
 
-    fun sendMarkRead(chatGuid: String) {
-        scope.launch { sendMarkReadAwait(chatGuid) }
-    }
-
     suspend fun sendDismissNotificationAwait(chatGuid: String): Boolean {
         val payload = JsonObject().apply { addProperty("chatGuid", chatGuid) }.toString().toByteArray()
         return sendToPhone(PATH_DISMISS_NOTIFICATION, payload)
     }
 
-    fun sendDismissNotification(chatGuid: String) {
-        scope.launch { sendDismissNotificationAwait(chatGuid) }
+    suspend fun sendOpenChatAwait(chatGuid: String): Boolean {
+        val payload = JsonObject().apply { addProperty("chatGuid", chatGuid) }.toString().toByteArray()
+        return sendToPhone(PATH_OPEN_CHAT, payload)
     }
 
-    fun sendTyping(chatGuid: String, isTyping: Boolean) {
-        scope.launch {
-            val payload = JsonObject().apply {
-                addProperty("chatGuid", chatGuid)
-                addProperty("isTyping", isTyping)
-            }.toString().toByteArray()
-            sendToPhone(PATH_TYPING, payload)
-        }
+    suspend fun sendAnswerCallAudioAwait(
+        callUuid: String,
+        callerName: String? = null,
+        callerAddress: String? = null
+    ): Boolean {
+        val payload = JsonObject().apply {
+            addProperty("callUuid", callUuid)
+            if (!callerName.isNullOrBlank()) addProperty("callerName", callerName)
+            if (!callerAddress.isNullOrBlank()) addProperty("callerAddress", callerAddress)
+        }.toString().toByteArray()
+        return sendToPhone(PATH_ANSWER_CALL_AUDIO, payload)
+    }
+
+    suspend fun sendDeclineCallAwait(callUuid: String): Boolean {
+        val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString().toByteArray()
+        return sendToPhone(PATH_DECLINE_CALL, payload)
     }
 
     fun notifyWatchActive(active: Boolean) {
@@ -418,7 +460,13 @@ class PhoneRelayClient(private val context: Context) {
             val type = object : TypeToken<List<MessageRelayDto>>() {}.type
             val list: List<MessageRelayDto> = gson.fromJson(root.get("messages"), type) ?: return
             val entities = list.map { it.toEntity() }
-            db.messageDao().upsertAndPrune(entities)
+            val chatGuid = root.str("chatGuid") ?: entities.firstOrNull()?.chatGuid
+            if (chatGuid != null) {
+                val staleCutoff = System.currentTimeMillis() - MessageDao.STALE_PENDING_TIMEOUT_MS
+                db.messageDao().upsertAndReconcileBatch(chatGuid, entities, staleCutoff)
+            } else {
+                db.messageDao().upsertAndPrune(entities)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "handleMessagesSyncJson error: ${e.message}")
         }
@@ -448,7 +496,7 @@ class PhoneRelayClient(private val context: Context) {
         try {
             val dto = gson.fromJson(json, MessageRelayDto::class.java) ?: return
             val entity = dto.toEntity()
-            db.messageDao().upsert(entity)
+            db.messageDao().upsertAndReconcile(entity, tempGuid = dto.tempGuid)
             if (isUpdate) {
                 _events.tryEmit(RelayEvent.UpdatedMessage(entity))
             } else {
@@ -472,8 +520,18 @@ class PhoneRelayClient(private val context: Context) {
     fun handleSendResultJson(json: String) {
         try {
             val result = gson.fromJson(json, SendResultPayload::class.java) ?: return
-            pendingResults[result.requestId]?.complete(result)
-            result.tempGuid?.let { pendingResults[it]?.complete(result) }
+            val handledByRequest = pendingResults[result.requestId]?.complete(result) == true
+            val handledByTemp = result.tempGuid?.let { pendingResults[it]?.complete(result) } == true
+            if (!handledByRequest && !handledByTemp && !result.tempGuid.isNullOrBlank()) {
+                // Late result after timeout, screen exit, or process death — reconcile Room directly.
+                scope.launch {
+                    try {
+                        reconcileOrphanedSendResult(result, db.messageDao())
+                    } catch (e: Exception) {
+                        Log.w(TAG, "reconcileOrphanedSendResult failed: ${e.message}")
+                    }
+                }
+            }
         } catch (_: Exception) {
         }
     }
@@ -515,21 +573,6 @@ class PhoneRelayClient(private val context: Context) {
 
     private fun safeFileName(key: String): String =
         key.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-
-    private fun MessageRelayDto.toEntity() = MessageEntity(
-        guid = guid,
-        chatGuid = chatGuid,
-        text = text,
-        isFromMe = isFromMe,
-        dateCreated = dateCreated,
-        handleAddress = handleAddress,
-        attachmentGuid = attachmentGuid,
-        attachmentMimeType = attachmentMimeType,
-        associatedMessageGuid = associatedMessageGuid,
-        associatedMessageType = associatedMessageType,
-        dateDelivered = dateDelivered,
-        dateRead = dateRead
-    )
 
     private fun JsonObject.str(key: String): String? =
         if (has(key) && !get(key).isJsonNull) get(key).asString else null

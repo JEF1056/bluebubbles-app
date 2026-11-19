@@ -1,6 +1,8 @@
 package com.bluebubbles.messaging.services.backend_ui_interop
 
 import android.content.Context
+import android.content.pm.ServiceInfo
+import android.os.Build
 import androidx.concurrent.futures.CallbackToFutureAdapter
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
@@ -10,6 +12,7 @@ import androidx.work.WorkerParameters
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.R
+import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -324,16 +327,29 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
 
     // Dumb thing that appears to be necessary for Android 11 and under (see https://stackoverflow.com/questions/69684656/upgrading-to-workmanager-2-7-0-how-to-implement-getforegroundinfoasync-for-rxwo)
     override fun getForegroundInfoAsync(): ListenableFuture<ForegroundInfo> {
-        val notification = NotificationCompat.Builder(applicationContext, "com.bluebubbles.foreground_service")
+        val channelId = NotificationChannelHandler.ensureForegroundServiceChannel(applicationContext)
+        val notification = NotificationCompat.Builder(applicationContext, channelId)
             .setSmallIcon(R.mipmap.ic_stat_icon)
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
+            .setShowWhen(false)
+            .setLocalOnly(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setContentTitle("BlueBubbles DartWorker")
             .setContentText("BlueBubbles is performing short work in the background")
             .setColor(4888294)
             .build()
-        return Futures.immediateFuture(ForegroundInfo(Constants.dartWorkerNotificationId, notification))
+        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ForegroundInfo(
+                Constants.dartWorkerNotificationId,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+            )
+        } else {
+            ForegroundInfo(Constants.dartWorkerNotificationId, notification)
+        }
+        return Futures.immediateFuture(info)
     }
 }

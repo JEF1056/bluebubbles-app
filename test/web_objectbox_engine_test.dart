@@ -587,5 +587,31 @@ void main() {
       expect(() => Store.attach(null, null), throwsUnsupportedError);
       expect(() => store.reference, throwsUnsupportedError);
     });
+
+    test('empty-string secondary index query and message persist before afterPut', () async {
+      final chats = store.box<Chat>();
+      final messages = store.box<Message>();
+      final attachments = store.box<Attachment>();
+
+      // Secondary-index equality query on '' must still find items with empty guid.
+      final emptyGuidChat = Chat(guid: '');
+      chats.put(emptyGuidChat);
+      final q = chats.query(Chat_.guid.equals('')).build();
+      expect(q.find().map((c) => c.id), contains(emptyGuidChat.id));
+      q.close();
+
+      // Seed an existing attachment so a duplicate guid in afterPut throws UniqueViolationException.
+      attachments.put(Attachment(guid: 'dup-att-1'));
+      final msg = Message(guid: 'msg-persist-before-afterput', text: 'hello');
+      msg.dbAttachments.add(Attachment(guid: 'dup-att-1'));
+      expect(() => messages.put(msg), throwsA(isA<UniqueViolationException>()));
+
+      // Message must still have been enqueued for persistence and survive reload.
+      await store.flush();
+      final reopened = await openStore(idbFactory: memoryFactory, dbName: dbName);
+      final reloaded = reopened.box<Message>().query(Message_.guid.equals('msg-persist-before-afterput')).build().findFirst();
+      expect(reloaded?.text, 'hello');
+      await reopened.close(flushPending: false);
+    });
   });
 }

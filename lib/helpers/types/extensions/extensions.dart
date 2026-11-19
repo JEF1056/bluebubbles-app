@@ -387,8 +387,8 @@ extension MessageNotificationExtension on Message {
     if (own.isNotEmpty || associatedMessageGuid == null) return own;
     final reacted = Message.findOne(guid: associatedMessageGuid);
     if (reacted == null) return const [];
-    return associatedMessagePart != null && reacted.attributedBody.isNotEmpty
-        ? reacted.inlineAttachmentsIn(associatedMessagePart)
+    return reacted.attributedBody.isNotEmpty
+        ? reacted.inlineAttachmentsIn(associatedMessagePart ?? 0)
         : reacted.inlineAttachments;
   }
 
@@ -488,22 +488,23 @@ extension MessageNotificationExtension on Message {
           } else {
             String? messageText;
             bool attachment = false;
-            if (associatedMessagePart != null && associatedMessage.attributedBody.firstOrNull != null) {
+            final targetPart = associatedMessagePart ?? 0;
+            if (associatedMessage.attributedBody.firstOrNull != null) {
               final attrBod = associatedMessage.attributedBody.first;
               // Only Genmoji keep their U+FFFC, so the placeholders line up with previewInlineAttachments
               final ranges = attrBod.runs
                   .where((e) =>
-                      e.attributes?.messagePart == associatedMessagePart && (!e.isAttachment || e.isEmojiImage))
+                      e.attributes?.messagePart == targetPart && (!e.isAttachment || e.isEmojiImage))
                   .map((e) => e.range)
                   .sorted((a, b) => a.first.compareTo(b.first));
               final attachmentGuids = attrBod.runs
                   .where(
-                      (e) => e.attributes?.messagePart == associatedMessagePart && e.attributes?.attachmentGuid != null)
+                      (e) => e.attributes?.messagePart == targetPart && e.attributes?.attachmentGuid != null)
                   .map((e) => e.attributes?.attachmentGuid)
                   .toSet();
               // A Genmoji shares its part with text, and the part reads as that text
               final partHasText = attrBod.runs.any(
-                  (e) => e.attributes?.messagePart == associatedMessagePart && e.attributes?.attachmentGuid == null);
+                  (e) => e.attributes?.messagePart == targetPart && e.attributes?.attachmentGuid == null);
               if (attachmentGuids.isNotEmpty && !partHasText) {
                 attachment = true;
                 messageText = _getAttachmentText(

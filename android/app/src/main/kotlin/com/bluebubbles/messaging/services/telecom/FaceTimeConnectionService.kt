@@ -190,8 +190,7 @@ class FaceTimeConnectionService : ConnectionService() {
 
         val connection = FaceTimeConnection(
             context = applicationContext,
-            callUuid = callUuid,
-            isIncoming = true
+            callUuid = callUuid
         ).apply {
             setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED)
             setCallerDisplayName(callerName, TelecomManager.PRESENTATION_ALLOWED)
@@ -207,6 +206,7 @@ class FaceTimeConnectionService : ConnectionService() {
             connection.answerFromHandoff()
         } else {
             connection.setRinging()
+            connection.scheduleRingingTimeout()
         }
         return connection
     }
@@ -236,8 +236,7 @@ class FaceTimeConnectionService : ConnectionService() {
         val addressUri = request?.address ?: buildHandleUri(address, callerName)
         val connection = FaceTimeConnection(
             context = applicationContext,
-            callUuid = null,
-            isIncoming = false
+            callUuid = null
         ).apply {
             setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED)
             setCallerDisplayName(callerName, TelecomManager.PRESENTATION_ALLOWED)

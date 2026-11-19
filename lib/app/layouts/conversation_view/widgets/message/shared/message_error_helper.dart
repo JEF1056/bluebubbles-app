@@ -26,58 +26,48 @@ class ErrorHelper {
   }
 }
 
-/// Shared widget for displaying message/reaction error dialogs
-class MessageErrorDialog extends StatelessWidget {
-  const MessageErrorDialog({
-    super.key,
-    required this.errorCode,
-    required this.errorText,
-    required this.onRetry,
-    required this.onRemove,
-    required this.chatId,
-  });
-
-  final int errorCode;
-  final String errorText;
-  final VoidCallback onRetry;
-  final VoidCallback onRemove;
-  final int chatId;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      title: Text(ErrorHelper.getErrorTitle(errorCode), style: context.theme.textTheme.titleLarge),
-      content: Text(errorText, style: context.theme.textTheme.bodyLarge),
-      actions: <Widget>[
-        TextButton(
-          child: Text("Retry",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
-          onPressed: () async {
-            Navigator.of(context).pop();
-            onRetry();
-          },
-        ),
-        TextButton(
-          child: Text("Remove",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
-          onPressed: () async {
-            Navigator.of(context).pop();
-            onRemove();
-            await NotificationsSvc.clearFailedToSend(chatId);
-          },
-        ),
-        TextButton(
-          child: Text("Cancel",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary)),
-          onPressed: () async {
-            Navigator.of(context).pop();
-            await NotificationsSvc.clearFailedToSend(chatId);
-          },
-        )
-      ],
-    );
-  }
+/// Displays a skin-aware message/reaction error dialog via [showBBDialog].
+Future<void> showMessageErrorDialog(
+  BuildContext context, {
+  required int errorCode,
+  required String errorText,
+  required VoidCallback onRetry,
+  required VoidCallback onRemove,
+  required int chatId,
+}) {
+  return showBBDialog<void>(
+    context: context,
+    title: ErrorHelper.getErrorTitle(errorCode),
+    body: errorText,
+    icon: Icons.error_outline,
+    iconColor: context.theme.colorScheme.error,
+    actions: [
+      BBDialogAction(
+        text: "Retry",
+        isDefault: true,
+        onPressed: () {
+          Navigator.of(context, rootNavigator: true).pop();
+          onRetry();
+        },
+      ),
+      BBDialogAction(
+        text: "Remove",
+        isDestructive: true,
+        onPressed: () async {
+          Navigator.of(context, rootNavigator: true).pop();
+          onRemove();
+          await NotificationsSvc.clearFailedToSend(chatId);
+        },
+      ),
+      BBDialogAction(
+        text: "Cancel",
+        onPressed: () async {
+          Navigator.of(context, rootNavigator: true).pop();
+          await NotificationsSvc.clearFailedToSend(chatId);
+        },
+      ),
+    ],
+  );
 }
 
 /// Shared retry logic for reactions

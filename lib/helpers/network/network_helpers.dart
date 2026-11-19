@@ -59,12 +59,15 @@ Future<String> getDeviceName() async {
     // so we'll have to generate one ourselves, and store it for future use.
     int uniqueId = await getOrCreateUniqueId();
 
-    if (Platform.isAndroid) {
+    if (kIsWeb) {
+      WebBrowserInfo webInfo = await deviceInfo.webBrowserInfo;
+      items.addAll([
+        webInfo.browserName.name,
+        if (webInfo.platform != null && webInfo.platform!.isNotEmpty) webInfo.platform!,
+      ]);
+    } else if (Platform.isAndroid) {
       AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
       items.addAll([androidInfo.brand, androidInfo.model, uniqueId.toString()]);
-    } else if (kIsWeb) {
-      WebBrowserInfo webInfo = await deviceInfo.webBrowserInfo;
-      items.addAll([webInfo.browserName.name, webInfo.platform!]);
     } else if (Platform.isWindows) {
       WindowsDeviceInfo windowsInfo = await deviceInfo.windowsInfo;
       items.addAll([windowsInfo.computerName]);

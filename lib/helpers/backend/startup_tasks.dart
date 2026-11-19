@@ -496,7 +496,7 @@ class StartupTasks {
     Logger.info("Share targets updated");
 
     // Check if we need to request a review
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       Logger.info("Scheduling review flow check for 1 minute from now...");
       Future.delayed(const Duration(minutes: 1), () async {
         await reviewFlow();
@@ -620,7 +620,7 @@ class StartupTasks {
     // seconds when the server is unreachable — a serverInfo() call that runs to the
     // full apiTimeout, then a 255-address subnet scan — leaving the connection
     // indicator red for that entire window on every resume.
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       // Also restore the alive marker early: until it is back, LifecycleService.isAlive
       // reports false for a foreground app, which makes the method-channel handlers
       // treat incoming pushes as belonging to the headless isolate.
@@ -646,7 +646,7 @@ class StartupTasks {
 
     // On app resume, use the global isolate so it's ready for other tasks.
     if (GetIt.I.isRegistered<SyncService>()) {
-      if (!Platform.isAndroid) {
+      if (kIsWeb || !Platform.isAndroid) {
         unawaited(SyncSvc.startIncrementalSync(useGlobalIsolate: true));
       } else if (lifecycle == null ||
           !lifecycle.hasResumed ||

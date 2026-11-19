@@ -227,8 +227,24 @@ class ImageActions {
       final quality = input['quality'] as int;
 
       final bytes = await File(path).readAsBytes();
+      final encoded = generatePreviewBytes(bytes, maxDimension: maxDimension, quality: quality);
+      if (encoded == null) return false;
+      await File(outputPath).writeAsBytes(encoded);
+      return true;
+    } catch (e) {
+      Logger.warn('Error generating image preview: $e');
+      return false;
+    }
+  }
+
+  static Uint8List? generatePreviewBytes(
+    Uint8List bytes, {
+    int maxDimension = 1080,
+    int quality = 85,
+  }) {
+    try {
       var image = img.decodeImage(bytes);
-      if (image == null) return false;
+      if (image == null) return null;
 
       // Bakes rotation from the decoded image's own EXIF orientation (if
       // present) into the pixel buffer. This is safe here because the
@@ -248,11 +264,10 @@ class ImageActions {
       // JPEG fills in transparency, so see-through images preview as PNG. Checked per pixel, since plenty of
       // opaque screenshots carry an unused alpha channel
       final encoded = _isSeeThrough(image) ? img.encodePng(image) : img.encodeJpg(image, quality: quality);
-      await File(outputPath).writeAsBytes(encoded);
-      return true;
+      return Uint8List.fromList(encoded);
     } catch (e) {
-      Logger.warn('Error generating image preview: $e');
-      return false;
+      Logger.warn('Error generating image preview bytes: $e');
+      return null;
     }
   }
 

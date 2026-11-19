@@ -1,117 +1,169 @@
-import 'dart:ui';
+import 'dart:async';
 
-import 'package:bluebubbles/helpers/types/constants.dart';
-import 'package:bluebubbles/helpers/ui/ui_helpers.dart';
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
+import 'package:bluebubbles/app/components/facetime/incoming_facetime_screen.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/intents_service.dart';
+import 'package:bluebubbles/services/backend/notifications/notifications_service.dart';
 import 'package:bluebubbles/services/backend/settings/settings_service.dart';
 import 'package:faker/faker.dart' hide Image;
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
-import 'package:bluebubbles/services/backend/notifications/notifications_service.dart';
+import 'package:get_it/get_it.dart';
 
 Map<String, Route> faceTimeOverlays = {}; // Map from call uuid to overlay route
 
-/// Hides the FaceTime overlay with the given [callUuid]
-/// Also calls [NotificationsService.clearFaceTimeNotification] to clear the notification
-void hideFaceTimeOverlay(String callUuid) {
-  NotificationsSvc.clearFaceTimeNotification(callUuid);
-  if (faceTimeOverlays.containsKey(callUuid)) {
-    final route = faceTimeOverlays.remove(callUuid)!;
-    if (Get.context != null) {
-      Navigator.of(Get.context!, rootNavigator: true).removeRoute(route);
-    }
+/// Hides the FaceTime overlay with the given [callUuid].
+/// Also calls [NotificationsService.clearFaceTimeNotification] to clear the notification.
+void hideFaceTimeOverlay(String callUuid, {bool keepCallState = false}) {
+  if (GetIt.I.isRegistered<NotificationsService>()) {
+    NotificationsSvc.clearFaceTimeNotification(callUuid);
+  }
+  if (!keepCallState && ActiveCallController.instance.state.callUuid == callUuid) {
+    ActiveCallController.instance.clear();
+  }
+  final route = faceTimeOverlays.remove(callUuid);
+  if (route != null && route.isActive) {
+    route.navigator?.removeRoute(route);
   }
 }
 
-/// Shows a FaceTime overlay with the given [callUuid], [caller], [chatIcon], and [isAudio]
-/// Saves the overlay route in [faceTimeOverlays]
-Future<void> showFaceTimeOverlay(String callUuid, String caller, Uint8List? chatIcon, bool isAudio) async {
-  if (SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value) {
-    if (chatIcon != null) chatIcon = null;
-    caller = faker.person.name();
-  }
-  chatIcon ??= (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
-  chatIcon = await clip(chatIcon, size: 256, circle: true);
+void _pushFaceTimeRoute({
+  required BuildContext targetContext,
+  required String callUuid,
+  required String barrierLabel,
+  required Duration transitionDuration,
+  required RoutePageBuilder pageBuilder,
+  required RouteTransitionsBuilder transitionBuilder,
+}) {
+  final navigator = Navigator.of(targetContext, rootNavigator: true);
+  final route = RawDialogRoute<void>(
+    barrierDismissible: false,
+    barrierLabel: barrierLabel,
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    transitionDuration: transitionDuration,
+    pageBuilder: pageBuilder,
+    transitionBuilder: transitionBuilder,
+  );
+  // Record synchronously so immediate calls to showFaceTimeConnectingOverlay/hideFaceTimeOverlay see it before frame 1.
+  faceTimeOverlays[callUuid] = route;
+  unawaited(
+    navigator.push(route).then((_) {
+      if (faceTimeOverlays[callUuid] == route) {
+        faceTimeOverlays.remove(callUuid);
+      }
+    }),
+  );
+}
 
-  // If we are somehow already showing an overlay for this call, close it
+/// Shows a full-bleed frosted FaceTime overlay for an incoming call.
+/// Saves the overlay route in [faceTimeOverlays].
+Future<void> showFaceTimeOverlay(
+  String callUuid,
+  String caller,
+  Uint8List? chatIcon,
+  bool isAudio, {
+  BuildContext? context,
+  ActiveCallController? controller,
+}) async {
+  Uint8List? avatarBytes = chatIcon;
+  var displayCaller = caller;
+  if (GetIt.I.isRegistered<SettingsService>() &&
+      SettingsSvc.settings.redactedMode.value &&
+      SettingsSvc.settings.hideContactInfo.value) {
+    avatarBytes = null;
+    displayCaller = faker.person.name();
+  }
+
+  final targetContext = context ?? Get.context;
+  if (targetContext == null) return;
+
+  // If we are somehow already showing an overlay for this call, close it first.
   hideFaceTimeOverlay(callUuid);
 
-  showDialog(
-      context: Get.context!,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          final route = ModalRoute.of(dialogContext);
-          if (route != null) faceTimeOverlays[callUuid] = route;
-        });
-        return BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
-          child: AlertDialog(
-            icon: Image.memory(chatIcon!, width: 48, height: 48),
-            title: Text(caller),
-            content: Text(
-              "Incoming FaceTime ${isAudio ? "Audio" : "Video"} Call",
-              textAlign: TextAlign.center,
-            ),
-            actionsAlignment: MainAxisAlignment.center,
-            actions: [
-              MaterialButton(
-                elevation: 0,
-                hoverElevation: 0,
-                color: Colors.green.withValues(alpha: 0.2),
-                splashColor: Colors.green,
-                highlightColor: Colors.green.withValues(alpha: 0.5),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.0)),
-                padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 36.0),
-                child: Column(
-                  children: [
-                    Icon(
-                      SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.phone : Icons.call_outlined,
-                      color: Colors.green,
-                    ),
-                    const Text(
-                      "Accept",
-                    ),
-                  ],
-                ),
-                onPressed: () async {
-                  await IntentsSvc.answerFaceTime(callUuid);
-                },
-              ),
-              const SizedBox(width: 16.0),
-              MaterialButton(
-                elevation: 0,
-                hoverElevation: 0,
-                color: Colors.red.withValues(alpha: 0.2),
-                splashColor: Colors.red,
-                highlightColor: Colors.red.withValues(alpha: 0.5),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8.0)),
-                padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 36.0),
-                child: Column(
-                  children: [
-                    Icon(
-                      SettingsSvc.settings.skin.value == Skins.iOS
-                          ? CupertinoIcons.phone_down
-                          : Icons.call_end_outlined,
-                      color: Colors.red,
-                    ),
-                    const Text(
-                      "Ignore",
-                    ),
-                  ],
-                ),
-                onPressed: () {
-                  hideFaceTimeOverlay(callUuid);
-                  // Fallback in case the route capture hasn't fired yet
-                  if (Navigator.of(dialogContext, rootNavigator: true).canPop()) {
-                    Navigator.of(dialogContext, rootNavigator: true).pop();
-                  }
-                },
-              ),
-            ],
-          ),
-        );
-      }).then((_) => faceTimeOverlays.remove(callUuid));
+  final callController = controller ?? ActiveCallController.instance;
+  callController.startIncoming(
+    callUuid: callUuid,
+    callerName: displayCaller,
+    avatarBytes: avatarBytes,
+    isVideo: !isAudio,
+  );
+
+  final reducedMotion = facetimeReducedMotionOf(targetContext);
+  _pushFaceTimeRoute(
+    targetContext: targetContext,
+    callUuid: callUuid,
+    barrierLabel: 'Incoming FaceTime Call',
+    transitionDuration: reducedMotion ? Duration.zero : const Duration(milliseconds: 220),
+    pageBuilder: (dialogContext, animation, secondaryAnimation) => IncomingFaceTimeScreen(
+      callUuid: callUuid,
+      callerName: displayCaller,
+      avatarBytes: avatarBytes,
+      isAudio: isAudio,
+      controller: callController,
+      onAnswerVideo: () => IntentsSvc.answerFaceTime(callUuid),
+      onAnswerAudio: () => IntentsSvc.answerFaceTime(callUuid, audioOnly: true),
+      onDecline: () => hideFaceTimeOverlay(callUuid),
+      onCancelConnecting: () => hideFaceTimeOverlay(callUuid),
+    ),
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      if (reducedMotion) return child;
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
+/// Transitions an existing FaceTime overlay into the connecting state, or shows
+/// a sleek frosted connecting overlay when answered from a notification/intent.
+Future<void> showFaceTimeConnectingOverlay(
+  String callUuid, {
+  String? caller,
+  Uint8List? chatIcon,
+  bool isAudio = false,
+  BuildContext? context,
+  ActiveCallController? controller,
+}) async {
+  final callController = controller ?? ActiveCallController.instance;
+  callController.setConnecting(
+    callUuid: callUuid,
+    callerName: caller,
+    avatarBytes: chatIcon,
+    isVideo: !isAudio,
+  );
+
+  // If the incoming screen is already visible for this call, it updates in-place.
+  if (faceTimeOverlays.containsKey(callUuid)) return;
+
+  final targetContext = context ?? Get.context;
+  if (targetContext == null) return;
+
+  final state = callController.state;
+  final reducedMotion = facetimeReducedMotionOf(targetContext);
+  _pushFaceTimeRoute(
+    targetContext: targetContext,
+    callUuid: callUuid,
+    barrierLabel: 'Connecting FaceTime Call',
+    transitionDuration: reducedMotion ? Duration.zero : const Duration(milliseconds: 200),
+    pageBuilder: (dialogContext, animation, secondaryAnimation) => IncomingFaceTimeScreen(
+      callUuid: callUuid,
+      callerName: state.callerName.isNotEmpty ? state.callerName : (caller ?? 'FaceTime Call'),
+      avatarBytes: state.avatarBytes ?? chatIcon,
+      isAudio: isAudio,
+      isConnecting: true,
+      controller: callController,
+      onCancelConnecting: () => hideFaceTimeOverlay(callUuid),
+    ),
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      if (reducedMotion) return child;
+      return FadeTransition(opacity: animation, child: child);
+    },
+  );
 }

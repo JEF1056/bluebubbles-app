@@ -290,17 +290,6 @@ class QueryBooleanProperty<EntityT> extends QueryProperty<EntityT, bool> {
 
 class QueryStringVectorProperty<EntityT> extends QueryProperty<EntityT, List<String>> {
   const QueryStringVectorProperty(super.name, super.getter);
-
-  Condition<EntityT> containsElement(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, List<String>>(
-        this,
-        (a, _, __) {
-          if (a == null) return false;
-          final np = caseSensitive ? p : p.toLowerCase();
-          return a.any((e) => (caseSensitive ? e : e.toLowerCase()) == np);
-        },
-        alias: alias,
-      );
 }
 
 class QueryRelationToOne<EntityT, TargetT> extends QueryIntegerProperty<EntityT> {
@@ -589,7 +578,8 @@ class Query<T> {
       if (pred.isEquality &&
           _box._secondaryIndexProp != null &&
           identical(pred.prop, _box._secondaryIndexProp) &&
-          pred.value != null) {
+          pred.value != null &&
+          pred.value!.isNotEmpty) {
         final id = _box._secondaryIndex[pred.value!];
         if (id == null) return const [];
         final item = _box._items[id];
@@ -678,22 +668,7 @@ class Query<T> {
     return list.isEmpty ? null : list.first;
   }
 
-  Future<T?> findFirstAsync() async => findFirst();
-
-  T? findUnique() {
-    final all = _executeRaw();
-    if (all.isEmpty) return null;
-    if (all.length > 1) {
-      throw ObjectBoxException('Query expected unique result, found ${all.length}');
-    }
-    return all.first;
-  }
-
-  Future<T?> findUniqueAsync() async => findUnique();
-
-  List<int> findIds() => find().map((e) => _box._idOf(e)!).toList();
-
-  Future<List<int>> findIdsAsync() async => findIds();
+  Future<List<int>> findIdsAsync() async => find().map((e) => _box._idOf(e)!).toList();
 
   int count() {
     int n = 0;
@@ -715,8 +690,6 @@ class Query<T> {
     return _box.removeMany(ids);
   }
 
-  Future<int> removeAsync() async => remove();
-
   PropertyQuery<D> property<D>(QueryProperty<T, D> prop) =>
       PropertyQuery<D>._(find(), (entity) => prop.getter(entity as T));
 
@@ -729,9 +702,6 @@ class Query<T> {
     }
     return QueryParam<D>._(setters, listSetters);
   }
-
-  String describe() => 'Query<$T>';
-  String describeParameters() => 'QueryParameters<$T>';
 
   void close() {}
 }
@@ -1239,19 +1209,12 @@ class Box<T> {
 
   T? get(int id) => _items[id];
 
-  Future<T?> getAsync(int id) async => get(id);
-
   List<T?> getMany(List<int> ids, {bool growableResult = false}) {
     final list = ids.map((id) => _items[id]).toList(growable: growableResult);
     return list;
   }
 
-  Future<List<T?>> getManyAsync(List<int> ids, {bool growableResult = false}) async =>
-      getMany(ids, growableResult: growableResult);
-
   List<T> getAll() => _items.values.toList();
-
-  Future<List<T>> getAllAsync() async => getAll();
 
   int count({int limit = 0}) {
     final len = _items.length;
@@ -1263,15 +1226,11 @@ class Box<T> {
 
   bool contains(int id) => _items.containsKey(id);
 
-  bool containsMany(List<int> ids) => ids.every(_items.containsKey);
-
   int put(T object, {PutMode mode = PutMode.put}) {
     final id = _putSingle(object, mode: mode);
     _store._emitChangesIfOutsideTx([T]);
     return id;
   }
-
-  Future<int> putAsync(T object, {PutMode mode = PutMode.put}) async => put(object, mode: mode);
 
   List<int> putMany(List<T> objects, {PutMode mode = PutMode.put}) {
     if (objects.isEmpty) return const [];
@@ -1282,13 +1241,6 @@ class Box<T> {
     _store._emitChangesIfOutsideTx([T]);
     return ids;
   }
-
-  Future<List<int>> putManyAsync(List<T> objects, {PutMode mode = PutMode.put}) async =>
-      putMany(objects, mode: mode);
-
-  int putQueued(T object, {PutMode mode = PutMode.put}) => put(object, mode: mode);
-
-  List<int> putManyQueued(List<T> objects, {PutMode mode = PutMode.put}) => putMany(objects, mode: mode);
 
   int _putSingle(T object, {PutMode mode = PutMode.put}) {
     int? existingId = _getId(object);
@@ -1333,13 +1285,13 @@ class Box<T> {
     _onAttach?.call(object, _store);
     _items[targetId] = object;
     _indexInsert(targetId, object);
-    _afterPut?.call(object, _store);
 
     final encoded = _encode(object);
     _store._schedulePersist(() {
       _committedEncoded[targetId] = encoded;
       _store._persistence?.enqueuePut(_storeName, targetId, encoded);
     }, T);
+    _afterPut?.call(object, _store);
     return targetId;
   }
 
@@ -1359,8 +1311,6 @@ class Box<T> {
     if (count > 0) _store._emitChangesIfOutsideTx([T]);
     return count;
   }
-
-  Future<int> removeManyAsync(List<int> ids) async => removeMany(ids);
 
   int removeAll() {
     final count = _items.length;
@@ -1385,8 +1335,6 @@ class Box<T> {
     _store._emitChangesIfOutsideTx([T]);
     return count;
   }
-
-  Future<int> removeAllAsync() async => removeAll();
 
   bool _removeSingle(int id) {
     final existing = _items[id];
@@ -1932,18 +1880,34 @@ Future<Store> openStore({
   String dbName = IdbPersistence.dbName,
   bool registerAsActive = true,
 }) async {
-  final persistence = await IdbPersistence.open(
-    factory: idbFactory,
-    dbName: dbName,
-    registerAsActive: registerAsActive,
-  );
-  final store = Store._(persistence);
-  if (registerAsActive) {
-    Store._active = store;
-    IdbPersistence.onClearAllInMemory = store.clearInMemory;
+  IdbPersistence? persistence;
+  try {
+    persistence = await IdbPersistence.open(
+      factory: idbFactory,
+      dbName: dbName,
+      registerAsActive: registerAsActive,
+    );
+    final store = Store._(persistence);
+    if (registerAsActive) {
+      Store._active = store;
+      IdbPersistence.onClearAllInMemory = store.clearInMemory;
+    }
+    await store._hydrate();
+    return store;
+  } catch (e, s) {
+    if (persistence != null) {
+      try {
+        await persistence.close(flushPending: false);
+      } catch (_) {}
+    }
+    Logger.error("Failed to open web ObjectBox IDB store, falling back to in-memory store", error: e, trace: s);
+    final store = createInMemoryStore();
+    if (registerAsActive) {
+      Store._active = store;
+      IdbPersistence.onClearAllInMemory = store.clearInMemory;
+    }
+    return store;
   }
-  await store._hydrate();
-  return store;
 }
 
 Store createInMemoryStore() => Store._(null);
@@ -2593,7 +2557,3 @@ class _Codec {
 
 // Legacy compatibility shims kept for any direct references
 dynamic getObjectBoxModel() => null;
-
-class ObjectboxShims {
-  static Store openStore({String? directory}) => createInMemoryStore();
-}

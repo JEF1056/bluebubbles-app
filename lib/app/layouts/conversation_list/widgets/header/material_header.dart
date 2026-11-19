@@ -1,4 +1,8 @@
+import 'dart:ui';
+
+import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -23,17 +27,31 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        Obx(() => Container(
-              height: controller.selectedChats.isEmpty ? 100 : null,
-              width: NavigationSvc.width(context),
-              color: SettingsSvc.settings.windowEffect.value == WindowEffect.disabled
-                  ? context.theme.colorScheme.surfaceContainer
-                  : Colors.transparent,
-            )),
+        Positioned.fill(
+          child: Obx(() {
+            final hasWindowEffect = SettingsSvc.settings.windowEffect.value != WindowEffect.disabled;
+            final backgroundColor = hasWindowEffect
+                ? Colors.transparent
+                : context.theme.colorScheme.surfaceContainer.withValues(alpha: 0.86);
+            Widget background = ColoredBox(color: backgroundColor);
+            if (!hasWindowEffect && !SettingsSvc.settings.highPerfMode.value) {
+              background = ClipRect(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                  child: background,
+                ),
+              );
+            }
+            return background;
+          }),
+        ),
         AnimatedSwitcher(
-          duration: const Duration(milliseconds: 500),
+          duration: M3EMotion.spatialDefault.duration,
+          switchInCurve: M3EMotion.spatialDefault.curve,
+          switchOutCurve: M3EMotion.effectsFast.curve,
           child: controller.selectedChats.isEmpty
               ? SafeArea(
+                  key: const ValueKey('header_normal'),
                   child: Obx(() {
                     NavigationSvc.listener.value;
                     if (NavigationSvc.isAvatarOnly(context)) {
@@ -51,23 +69,55 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
                     }
                     if (!showArchived && !showUnknown) {
                       return Padding(
-                        padding: const EdgeInsets.only(left: 20.0, right: 12.0, top: 6.0, bottom: 6.0),
-                        child: Row(
-                          children: [
-                            Text(
-                              "BlueBubbles",
-                              style: context.theme.textTheme.titleLarge?.copyWith(
-                                color: context.theme.colorScheme.onSurface,
-                                fontWeight: FontWeight.w500,
-                                fontSize: 22,
-                              ),
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+                        child: Material(
+                          color: context.theme.colorScheme.surfaceContainerHigh,
+                          borderRadius: M3EShapes.radiusXl,
+                          clipBehavior: Clip.antiAlias,
+                          child: SizedBox(
+                            height: 48,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Tooltip(
+                                    message: 'Search',
+                                    child: InkWell(
+                                      onTap: () => NavigationSvc.pushLeft(context, const SearchView()),
+                                      borderRadius: M3EShapes.radiusXl,
+                                      child: Padding(
+                                        padding: const EdgeInsets.only(left: 16, right: 8),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.search_rounded,
+                                              size: 20,
+                                              color: context.theme.colorScheme.onSurfaceVariant,
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Flexible(
+                                              child: Text(
+                                                "Search BlueBubbles",
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: context.theme.textTheme.bodyLarge?.copyWith(
+                                                  color: context.theme.colorScheme.onSurfaceVariant,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            const SyncIndicator(size: 12),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const ChatListFilterButton(),
+                                OverflowMenu(controller: controller),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            const SyncIndicator(size: 12),
-                            const Spacer(),
-                            const ChatListFilterButton(),
-                            OverflowMenu(controller: controller),
-                          ],
+                          ),
                         ),
                       );
                     }
@@ -93,6 +143,7 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
                   }),
                 )
               : SafeArea(
+                  key: const ValueKey('header_selection'),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 16.0,

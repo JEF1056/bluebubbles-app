@@ -46,36 +46,33 @@ class FindMyDetailSheet extends StatelessWidget {
     }
 
     if (!context.mounted) return;
-    await showDialog(
+    await showBBDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(displayName),
-        content: SelectableText(address),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: address));
-              Navigator.of(ctx).pop();
-              showSnackbar('Copied', 'Copied contact address');
-            },
-            child: const Text('Copy'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+      title: displayName,
+      icon: Icons.person_outline_rounded,
+      content: SelectableText(address),
+      actions: [
+        BBDialogAction(
+          text: 'Close',
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
+        BBDialogAction(
+          text: 'Copy Address',
+          isDefault: true,
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: address));
+            Navigator.of(context, rootNavigator: true).pop();
+            showSnackbar('Copied', 'Copied contact address');
+          },
+        ),
+      ],
     );
   }
 
   static void showDetailModal(BuildContext context, FindMyController controller) {
-    showModalBottomSheet(
+    showBBBottomSheet<void>(
       context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      padding: EdgeInsets.zero,
       builder: (sheetCtx) => SingleChildScrollView(
         child: Padding(
           padding: EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).padding.bottom + 12),
@@ -218,10 +215,7 @@ class FindMyDetailSheet extends StatelessWidget {
           _ActionTile(
             icon: Icons.info_outline,
             label: 'Info',
-            onTap: () => showDialog(
-              context: context,
-              builder: (_) => FindMyRawDataDialog(item: friend),
-            ),
+            onTap: () => FindMyRawDataDialog.show(context, friend),
           ),
       ],
     );
@@ -326,10 +320,7 @@ class FindMyDetailSheet extends StatelessWidget {
           _ActionTile(
             icon: Icons.info_outline,
             label: 'Info',
-            onTap: () => showDialog(
-              context: context,
-              builder: (_) => FindMyRawDataDialog(item: device),
-            ),
+            onTap: () => FindMyRawDataDialog.show(context, device),
           ),
       ],
     );

@@ -258,6 +258,48 @@ class SocketService {
 
   // ── Connection lifecycle ───────────────────────────────────────────────────
 
+  @visibleForTesting
+  static Map<String, dynamic> buildSocketOptions({
+    required String password,
+    Map<String, String>? extraHeaders,
+    bool isWeb = kIsWeb,
+  }) {
+    final options = OptionBuilder()
+        .setQuery({"guid": password})
+        .setTransports(['websocket', 'polling'])
+        // Disable so that we can create the listeners first
+        .disableAutoConnect()
+        // Required for the socket to be restartable at all. Without it, `io()`
+        // reuses its cached Manager for this scheme://host:port and hands back the
+        // *same* Socket — pinned to the auth query and headers it was first built
+        // with. (Its cache check looks up the namespace as '' while the socket is
+        // stored under '/', so the miss that would bypass the cache never happens.)
+        .enableForceNew()
+        // Reconnection is socket.io's job — concern 1 above. Attempts are left
+        // unlimited (the library default) so the backoff can grow to
+        // _reconnectDelayMax and settle there. Do NOT call
+        // setReconnectionAttempts(): a finite cap makes socket.io emit
+        // `reconnect_failed` and stop for good, which only [_socketGaveUp] recovers
+        // from, and then only on the rediscovery timer's schedule.
+        .enableReconnection()
+        .setReconnectionDelay(_reconnectDelay.inMilliseconds)
+        .setReconnectionDelayMax(_reconnectDelayMax.inMilliseconds);
+
+    // On Web, let socket_io_client use the native browser WebSocket/XHR transports:
+    // WebsocketAdapter uses universal_io WebSocket (unsupported on Web) and UserCertificates,
+    // and extraHeaders triggers CORS preflights / cannot be sent on browser WebSockets.
+    if (!isWeb) {
+      if (extraHeaders != null) {
+        options.setExtraHeaders(extraHeaders);
+      }
+      // WebsocketAdapter allows socket io client
+      // to trust user certificates on Android
+      options.setHttpClientAdapter(WebsocketAdapter());
+    }
+
+    return options.build();
+  }
+
   void startSocket() {
     // Background tasks that can start a socket — a URL save, an in-flight discovery
     // run — must not resurrect it behind the user's back after the lifecycle
@@ -298,31 +340,12 @@ class SocketService {
     Logger.info("Starting socket connection to $serverAddress");
     _dialedOrigin = serverAddress;
 
-    OptionBuilder options = OptionBuilder()
-        .setQuery({"guid": password})
-        .setTransports(['websocket', 'polling'])
-        .setExtraHeaders(HttpSvc.headers)
-        // WebsocketAdapter allows socket io client
-        // to trust user certificates on Android
-        .setHttpClientAdapter(WebsocketAdapter())
-        // Disable so that we can create the listeners first
-        .disableAutoConnect()
-        // Required for the socket to be restartable at all. Without it, `io()`
-        // reuses its cached Manager for this scheme://host:port and hands back the
-        // *same* Socket — pinned to the auth query and headers it was first built
-        // with. (Its cache check looks up the namespace as '' while the socket is
-        // stored under '/', so the miss that would bypass the cache never happens.)
-        .enableForceNew()
-        // Reconnection is socket.io's job — concern 1 above. Attempts are left
-        // unlimited (the library default) so the backoff can grow to
-        // _reconnectDelayMax and settle there. Do NOT call
-        // setReconnectionAttempts(): a finite cap makes socket.io emit
-        // `reconnect_failed` and stop for good, which only [_socketGaveUp] recovers
-        // from, and then only on the rediscovery timer's schedule.
-        .enableReconnection()
-        .setReconnectionDelay(_reconnectDelay.inMilliseconds)
-        .setReconnectionDelayMax(_reconnectDelayMax.inMilliseconds);
-    final s = io(serverAddress, options.build());
+    final options = buildSocketOptions(
+      password: password,
+      extraHeaders: kIsWeb ? null : HttpSvc.headers,
+      isWeb: kIsWeb,
+    );
+    final s = io(serverAddress, options);
     socket = s;
 
     // Every registration returns its own unsubscribe callback — keep them all so

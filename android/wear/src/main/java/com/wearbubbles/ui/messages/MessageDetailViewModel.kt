@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wearbubbles.WearBubblesApp
+import com.wearbubbles.api.dto.ReactionBadge
 import com.wearbubbles.api.dto.TapbackType
 import com.wearbubbles.api.dto.TapbackUtils
 import com.wearbubbles.data.ChatRepository
@@ -29,12 +30,6 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Collections
 
-data class ReactionBadgeUi(
-    val type: TapbackType,
-    val count: Int,
-    val isFromMe: Boolean
-)
-
 data class MessageUi(
     val guid: String,
     val text: String?,
@@ -44,7 +39,7 @@ data class MessageUi(
     val dateDelivered: Long,
     val dateRead: Long,
     val sendFailed: Boolean,
-    val reactions: List<ReactionBadgeUi>,
+    val reactions: List<ReactionBadge>,
     val attachmentGuid: String?,
     val attachmentMimeType: String?,
     val attachmentUrl: String?,
@@ -75,9 +70,6 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
 
     private val _chatTitle = MutableStateFlow("Chat")
     val chatTitle: StateFlow<String> = _chatTitle.asStateFlow()
-
-    private val _chatAvatarPath = MutableStateFlow<String?>(null)
-    val chatAvatarPath: StateFlow<String?> = _chatAvatarPath.asStateFlow()
 
     private val _isGroup = MutableStateFlow(false)
     val isGroup: StateFlow<Boolean> = _isGroup.asStateFlow()
@@ -111,7 +103,35 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         if (chatGuid.isBlank()) return
         viewModelScope.launch {
             chatRepo.deleteLocalChat(chatGuid)
+            messageRepo.deleteMessagesForChat(chatGuid)
             onDeleted()
+        }
+    }
+
+    fun deleteFailedMessage(guid: String) {
+        viewModelScope.launch {
+            messageRepo.deleteMessage(guid)
+        }
+    }
+
+    fun deleteAllFailedMessages() {
+        if (chatGuid.isBlank()) return
+        viewModelScope.launch {
+            messageRepo.deleteFailedMessages(chatGuid)
+        }
+    }
+
+    fun retryFailedMessage(msg: MessageUi) {
+        val text = msg.text?.trim()?.takeIf { it.isNotBlank() } ?: return
+        viewModelScope.launch {
+            messageRepo.deleteMessage(msg.guid)
+            _isSending.value = true
+            _error.value = null
+            val res = messageRepo.sendMessage(chatGuid, text)
+            if (res.isFailure) {
+                _error.value = res.exceptionOrNull()?.localizedMessage?.take(50) ?: "Failed to send"
+            }
+            _isSending.value = false
         }
     }
 
@@ -142,6 +162,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         NotificationHelper.cancelNotification(getApplication(), guid)
 
         viewModelScope.launch {
+            messageRepo.markStalePendingFailed(guid)
             serverUrl = settings.getServerUrl().trimEnd('/')
             password = settings.getPassword()
             customHeaders = settings.getCustomHeaders()
@@ -155,7 +176,6 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                     chat.chatIdentifier,
                     chat.participantAddresses
                 )
-                _chatAvatarPath.value = contactRepo.resolveAvatarForChat(chat.guid, chat.participantAddresses)
                 val addrs = chat.participantAddresses.split(",")
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
@@ -165,14 +185,11 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                 val addr = guid.substringAfterLast(";-;")
                 val resolved = contactRepo.resolveDisplayName(addr)
                 _chatTitle.value = resolved
-                _chatAvatarPath.value = contactRepo.resolveAvatarPath(addr)
                 _participants.value = listOf(resolved to addr)
             }
 
-            chatRepo.markChatRead(guid)
-        }
+            launch { chatRepo.markChatRead(guid) }
 
-        viewModelScope.launch {
             combine(
                 messageRepo.getMessages(guid),
                 _attachmentRevision,
@@ -208,15 +225,13 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                 }
 
                 _messages.value = visible.map { entity ->
-                    val reactions = reactionsByTarget[entity.guid].orEmpty().map {
-                        ReactionBadgeUi(it.type, it.count, it.isFromMe)
-                    }
+                    val reactions = reactionsByTarget[entity.guid].orEmpty()
                     val senderName = if (!entity.isFromMe && _isGroup.value && entity.handleAddress != null) {
                         contactRepo.resolveDisplayName(entity.handleAddress)
                     } else null
 
                     val attUrl = if (entity.attachmentGuid != null && serverUrl.isNotBlank() && password.isNotBlank()) {
-                        "$serverUrl/api/v1/attachment/${entity.attachmentGuid}/download?password=$password"
+                        com.wearbubbles.api.ApiClient.getAttachmentUrl(serverUrl, password, entity.attachmentGuid)
                     } else null
 
                     MessageUi(

@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
@@ -23,13 +24,24 @@ import com.bluebubbles.messaging.services.notifications.CreateIncomingMessageNot
 import com.bluebubbles.messaging.services.notifications.DeleteNotificationHandler
 import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
+import com.bluebubbles.messaging.utils.SettingsHelper
 import com.bluebubbles.messaging.utils.Utils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.net.URLEncoder
+import java.util.UUID
 
 
 class InternalIntentReceiver: BroadcastReceiver() {
@@ -43,13 +55,13 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val tag: String? = intent.getStringExtra("tag")
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuid)
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuidFallback = chatGuid)
             }
             "DeclineFaceTime" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val tag: String? = intent.getStringExtra("tag")
                 val callUuid: String? = intent.getStringExtra("callUuid")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
                 if (FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid) && callUuid != null) {
                     val pendingResult = goAsync()
                     HttpService(context).declineFaceTimeCall(
@@ -65,7 +77,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val callUuid: String? = intent.getStringExtra("callUuid")
                 val callerName: String = intent.getStringExtra("callerName") ?: "Unknown Caller"
                 val callerAddress: String? = intent.getStringExtra("callerAddress")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
                 if (!callUuid.isNullOrBlank()) {
                     val routed = FaceTimeConnectionService.addIncomingCall(
                         context = context,
@@ -79,6 +91,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             putExtra("callUuid", callUuid)
                             putExtra("answer", true)
+                            putExtra("audioOnly", true)
                             putExtra("caller", callerName)
                             type = "AnswerFaceTime"
                         }
@@ -90,14 +103,14 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
                 val tag: String? = intent.getStringExtra("tag")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuidFallback = chatGuid)
                 DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid)) {}
             }
             "MuteChat" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
                 val tag: String? = intent.getStringExtra("tag")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag)
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuidFallback = chatGuid)
                 if (!chatGuid.isNullOrEmpty()) {
                     DartWorkManager.createWorker(context, "MuteChat", hashMapOf("chatGuid" to chatGuid)) {}
                 }
@@ -106,85 +119,82 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
                 val messageGuid: String? = intent.getStringExtra("messageGuid")
+                val dataReply = resolveFirstDataResult(RemoteInput.getDataResultsFromIntent(intent, "text_reply"))
+                if (dataReply != null && !chatGuid.isNullOrBlank()) {
+                    val (mimeType, dataUri) = dataReply
+                    val ext = extensionForMime(mimeType)
+                    val tempFile = File(context.cacheDir, "reply_media_${System.currentTimeMillis()}.$ext")
+                    val copied = try {
+                        context.contentResolver.openInputStream(dataUri)?.use { input ->
+                            tempFile.outputStream().use { output -> input.copyTo(output) }
+                            true
+                        } ?: false
+                    } catch (e: Exception) {
+                        PersistentLog.e(context, Constants.logTag, "Failed to read RemoteInput data URI: ${e.message}")
+                        false
+                    }
+                    if (!copied) {
+                        tempFile.delete()
+                        updateReplyNotification(context, notificationId, replyText = "Media reply", succeeded = false)
+                        return
+                    }
+                    val pendingResult = goAsync()
+                    CoroutineScope(Dispatchers.IO).launch {
+                        var succeeded = false
+                        try {
+                            val settings = SettingsHelper(context)
+                            if (settings.hasServerUrl() && settings.hasAuthKey()) {
+                                val client = WearSyncManager.buildOkHttpClient(settings, minReadTimeoutMs = 130_000L)
+                                val method = if (settings.enablePrivateAPI && settings.privateAPIAttachmentSend) {
+                                    "private-api"
+                                } else {
+                                    "apple-script"
+                                }
+                                val tempGuid = "temp-${UUID.randomUUID()}"
+                                val multipart = MultipartBody.Builder()
+                                    .setType(MultipartBody.FORM)
+                                    .addFormDataPart("chatGuid", chatGuid)
+                                    .addFormDataPart("tempGuid", tempGuid)
+                                    .addFormDataPart("name", tempFile.name)
+                                    .addFormDataPart("method", method)
+                                    .addFormDataPart(
+                                        "attachment",
+                                        tempFile.name,
+                                        tempFile.asRequestBody(mimeType.toMediaType())
+                                    )
+                                    .build()
+                                val url = "${settings.apiRoot}/message/attachment?password=${URLEncoder.encode(settings.guidAuthKey, "UTF-8")}"
+                                client.newCall(Request.Builder().url(url).post(multipart).build()).execute().use { resp ->
+                                    succeeded = resp.isSuccessful
+                                    if (!succeeded) {
+                                        PersistentLog.e(context, Constants.logTag, "Media reply upload failed with HTTP ${resp.code}")
+                                    }
+                                }
+                            } else {
+                                PersistentLog.w(context, Constants.logTag, "Missing server settings for media reply")
+                            }
+                        } catch (e: Exception) {
+                            PersistentLog.e(context, Constants.logTag, "Media reply upload error: ${e.message}")
+                        } finally {
+                            tempFile.delete()
+                            updateReplyNotification(
+                                context = context,
+                                notificationId = notificationId,
+                                replyText = if (succeeded) "Sent an image" else "Media reply",
+                                mediaMime = if (succeeded) mimeType else null,
+                                mediaUri = if (succeeded) dataUri else null,
+                                succeeded = succeeded
+                            )
+                            pendingResult.finish()
+                        }
+                    }
+                    return
+                }
+
                 val replyText = RemoteInput.getResultsFromIntent(intent)?.getString("text_reply") ?: return
 
                 DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid, "messageGuid" to messageGuid, "text" to replyText)) { succeeded ->
-                    val notificationManager = context.getSystemService(NotificationManager::class.java)
-                    // this is used to copy the style, since the notification already exists
-                    PersistentLog.d(context, Constants.logTag, "Fetching existing notification values")
-                    val chatNotification = notificationManager.activeNotifications.lastOrNull { it.id == notificationId }
-                    if (chatNotification == null) {
-                        PersistentLog.e(context, Constants.logTag, "Could not find notification with ID $notificationId")
-                        return@createWorker
-                    }
-                    val oldBuilder = Notification.Builder.recoverBuilder(context, chatNotification.notification)
-                    val oldStyle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                        oldBuilder.style as? Notification.MessagingStyle
-                    } else {
-                        val temp = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(chatNotification.notification)
-                        if (temp != null) {
-                            Notification.MessagingStyle(Person.Builder()
-                                .setName(temp.user.name)
-                                .setIcon(temp.user.icon?.toIcon(context))
-                                .build()
-                            )
-                        } else null
-                    }
-
-                    PersistentLog.d(context, Constants.logTag, "Creating sender and message object for the user-created reply")
-                    val prefs = context.getSharedPreferences("FlutterSharedPreferences", 0)
-
-                    // If we couldn't extract the old style, create a new one so the user still sees their reply
-                    val messagingStyle = oldStyle ?: run {
-                        PersistentLog.w(context, Constants.logTag, "Could not extract MessagingStyle, creating new one for reply")
-                        Notification.MessagingStyle(Person.Builder()
-                            .setName(prefs.getString("userName", "You"))
-                            .build()
-                        )
-                    }
-                    val sender = Person.Builder()
-                        .setName(prefs.getString("userName", "You"))
-                    val avatarPath = prefs.getString("userAvatarPath", "")
-                    if (avatarPath!!.isNotEmpty()) {
-                        val file = File(avatarPath)
-                        val bytes = ByteArray(file.length().toInt())
-                        try {
-                            val bis = BufferedInputStream(FileInputStream(file))
-                            val dis = DataInputStream(bis)
-                            dis.readFully(bytes)
-                            sender.setIcon(Utils.getAdaptiveIconFromByteArray(bytes).toIcon(context))
-                        } catch (e: IOException) {
-                            e.printStackTrace()
-                        }
-                    }
-                    // Render the reply as undelivered when the Dart work did not succeed.
-                    // Showing it as a normal sent message would tell the user their reply
-                    // went through when it never left the device — silent message loss.
-                    messagingStyle.addMessage(Notification.MessagingStyle.Message(
-                        if (succeeded) replyText else "⚠ Not sent: $replyText",
-                        System.currentTimeMillis(),
-                        sender.build()
-                    ))
-
-                    PersistentLog.d(context, Constants.logTag, "Posting the user-created reply")
-                    oldBuilder.setStyle(messagingStyle)
-                    oldBuilder.setOnlyAlertOnce(true)
-                    oldBuilder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
-                    if (succeeded && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        val existingHistory = chatNotification.notification.extras
-                            ?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
-                            ?.toList()
-                            ?: emptyList()
-                        val updatedHistory = (listOf<CharSequence>(replyText) + existingHistory).take(5).toTypedArray()
-                        oldBuilder.setRemoteInputHistory(updatedHistory)
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        PersistentLog.w(context, Constants.logTag, "POST_NOTIFICATIONS permission not granted; skipping reply update")
-                        return@createWorker
-                    }
-                    notificationManager.notify(Constants.newMessageNotificationTag, notificationId, oldBuilder.build())
+                    updateReplyNotification(context, notificationId, replyText = replyText, succeeded = succeeded)
                 }
             }
             "LikeMessage" -> {
@@ -219,6 +229,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 // Use the new HttpService to send the tapback without Flutter engine
                 // If reaction was already sent, prefix with "-" to remove it
                 val reactionToSend = if (reactionSent) "-$reactionType" else reactionType
+                val pendingResult = goAsync()
                 val httpService = HttpService(context)
                 httpService.sendTapback(
                     chatGuid = chatGuid,
@@ -226,42 +237,136 @@ class InternalIntentReceiver: BroadcastReceiver() {
                     selectedMessageGuid = messageGuid,
                     reaction = reactionToSend,
                     onSuccess = { response ->
-                        val actionName = if (reactionSent) "removed" else "sent"
-                        PersistentLog.i(context, Constants.logTag, "Reaction ($reactionToSend) $actionName successfully")
-                        
-                        // Update the notification to toggle the button label
-                        updateReactionButton(
-                            context, 
-                            notificationId, 
-                            chatGuid, 
-                            messageGuid, 
-                            messageText, 
-                            reactionType, 
-                            !reactionSent,
-                            channelId,
-                            tag
-                        )
+                        try {
+                            val actionName = if (reactionSent) "removed" else "sent"
+                            PersistentLog.i(context, Constants.logTag, "Reaction ($reactionToSend) $actionName successfully")
+
+                            // Update the notification to toggle the button label
+                            updateReactionButton(
+                                context,
+                                notificationId,
+                                chatGuid,
+                                messageGuid,
+                                messageText,
+                                reactionType,
+                                !reactionSent,
+                                channelId,
+                                tag
+                            )
+                        } finally {
+                            pendingResult.finish()
+                        }
                     },
                     onError = { error ->
-                        PersistentLog.e(context, Constants.logTag, "Failed to send reaction: $error")
-                        
-                        // Show error state, then revert after a delay
-                        updateReactionButton(
-                            context, 
-                            notificationId, 
-                            chatGuid, 
-                            messageGuid, 
-                            messageText, 
-                            reactionType, 
-                            reactionSent,
-                            channelId,
-                            tag,
-                            buttonText = "Error - Retry"
-                        )
+                        try {
+                            PersistentLog.e(context, Constants.logTag, "Failed to send reaction: $error")
+
+                            // Show error state, then revert after a delay
+                            updateReactionButton(
+                                context,
+                                notificationId,
+                                chatGuid,
+                                messageGuid,
+                                messageText,
+                                reactionType,
+                                reactionSent,
+                                channelId,
+                                tag,
+                                buttonText = "Error - Retry"
+                            )
+                        } finally {
+                            pendingResult.finish()
+                        }
                     }
                 )
             }
         }
+    }
+
+    @SuppressLint("NewApi")
+    private fun updateReplyNotification(
+        context: Context,
+        notificationId: Int,
+        replyText: String,
+        mediaMime: String? = null,
+        mediaUri: Uri? = null,
+        succeeded: Boolean
+    ) {
+        val notificationManager = context.getSystemService(NotificationManager::class.java)
+        PersistentLog.d(context, Constants.logTag, "Fetching existing notification values")
+        val chatNotification = notificationManager.activeNotifications.lastOrNull { it.id == notificationId }
+        if (chatNotification == null) {
+            PersistentLog.e(context, Constants.logTag, "Could not find notification with ID $notificationId")
+            return
+        }
+        val oldBuilder = Notification.Builder.recoverBuilder(context, chatNotification.notification)
+        val oldStyle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            oldBuilder.style as? Notification.MessagingStyle
+        } else {
+            val temp = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(chatNotification.notification)
+            if (temp != null) {
+                Notification.MessagingStyle(Person.Builder()
+                    .setName(temp.user.name)
+                    .setIcon(temp.user.icon?.toIcon(context))
+                    .build()
+                )
+            } else null
+        }
+
+        PersistentLog.d(context, Constants.logTag, "Creating sender and message object for the user-created reply")
+        val prefs = context.getSharedPreferences("FlutterSharedPreferences", 0)
+
+        val messagingStyle = oldStyle ?: run {
+            PersistentLog.w(context, Constants.logTag, "Could not extract MessagingStyle, creating new one for reply")
+            Notification.MessagingStyle(Person.Builder()
+                .setName(prefs.getString("userName", "You"))
+                .build()
+            )
+        }
+        val sender = Person.Builder()
+            .setName(prefs.getString("userName", "You"))
+        val avatarPath = prefs.getString("userAvatarPath", "")
+        if (!avatarPath.isNullOrEmpty()) {
+            val file = File(avatarPath)
+            val bytes = ByteArray(file.length().toInt())
+            try {
+                val bis = BufferedInputStream(FileInputStream(file))
+                val dis = DataInputStream(bis)
+                dis.readFully(bytes)
+                sender.setIcon(Utils.getAdaptiveIconFromByteArray(bytes).toIcon(context))
+            } catch (e: IOException) {
+                e.printStackTrace()
+            }
+        }
+        val msg = Notification.MessagingStyle.Message(
+            if (succeeded) replyText else "⚠ Not sent: $replyText",
+            System.currentTimeMillis(),
+            sender.build()
+        )
+        if (succeeded && mediaMime != null && mediaUri != null) {
+            msg.setData(mediaMime, mediaUri)
+        }
+        messagingStyle.addMessage(msg)
+
+        PersistentLog.d(context, Constants.logTag, "Posting the user-created reply")
+        oldBuilder.setStyle(messagingStyle)
+        oldBuilder.setOnlyAlertOnce(true)
+        oldBuilder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
+        if (succeeded && mediaMime == null && replyText.isNotBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val existingHistory = chatNotification.notification.extras
+                ?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
+                ?.toList()
+                ?: emptyList()
+            val updatedHistory = (listOf<CharSequence>(replyText) + existingHistory).take(5).toTypedArray()
+            oldBuilder.setRemoteInputHistory(updatedHistory)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            PersistentLog.w(context, Constants.logTag, "POST_NOTIFICATIONS permission not granted; skipping reply update")
+            return
+        }
+        notificationManager.notify(Constants.newMessageNotificationTag, notificationId, oldBuilder.build())
     }
 
     private fun updateReactionButton(
@@ -309,7 +414,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 .putExtra("reactionType", reactionType)
                 .putExtra("reactionSent", reactionSent)
                 .setType("LikeMessage"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         
         // Update button label based on state
@@ -357,6 +462,16 @@ class InternalIntentReceiver: BroadcastReceiver() {
 
     companion object {
         private val REACTION_ACTION_TITLES = setOf("Like", "Love", "Un-Like", "Un-Love", "Sending...", "Error - Retry")
+
+        internal fun resolveFirstDataResult(dataResults: Map<String, Uri>?): Pair<String, Uri>? =
+            dataResults?.entries?.firstOrNull { it.key.isNotBlank() }?.let { it.key to it.value }
+
+        internal fun extensionForMime(mimeType: String): String = when {
+            mimeType.contains("png", ignoreCase = true) -> "png"
+            mimeType.contains("gif", ignoreCase = true) -> "gif"
+            mimeType.contains("webp", ignoreCase = true) -> "webp"
+            else -> "jpg"
+        }
 
         internal fun reactionButtonTitle(reactionType: String, reactionSent: Boolean): String = when {
             reactionType == "love" && reactionSent -> "Un-Love"

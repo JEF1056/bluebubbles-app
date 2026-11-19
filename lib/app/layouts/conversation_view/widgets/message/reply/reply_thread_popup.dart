@@ -358,6 +358,14 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
     }
   }
 
+  void _dismiss() {
+    if (!mounted) return;
+    final route = ModalRoute.of(context);
+    if (route?.isCurrent ?? true) {
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = context.theme;
@@ -366,8 +374,8 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
 
     return BBScaffold(
       backgroundColor: blurDisabled ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9) : Colors.transparent,
-      safeAreaTop: true,
-      safeAreaBottom: true,
+      safeAreaTop: false,
+      safeAreaBottom: false,
       safeAreaLeft: false,
       safeAreaRight: false,
       body: Stack(
@@ -375,7 +383,7 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
         children: [
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(context).pop(),
+            onTap: _dismiss,
             child: BackdropFilter(
               filter: ImageFilter.blur(
                 sigmaX: blurDisabled ? 0 : 30,
@@ -386,26 +394,30 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
               ),
             ),
           ),
-          Column(
-            children: [
-              if (_isInteractiveThread) _buildHeader(context, theme, isIOS),
-              Expanded(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: () => Navigator.of(context).pop(),
-                  child: Center(
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 5.0),
-                      child: _isInteractiveThread
-                          ? Obx(() => _buildMessageList(context, _resolveMessages()))
-                          : _buildMessageList(context, widget.initialMessages),
+          SafeArea(
+            left: false,
+            right: false,
+            child: Column(
+              children: [
+                if (_isInteractiveThread) _buildHeader(context, theme, isIOS),
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onTap: _dismiss,
+                    child: Center(
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 5.0),
+                        child: _isInteractiveThread
+                            ? Obx(() => _buildMessageList(context, _resolveMessages()))
+                            : _buildMessageList(context, widget.initialMessages),
+                      ),
                     ),
                   ),
                 ),
-              ),
-              if (_isInteractiveThread) _buildComposer(context, theme, isIOS),
-            ],
+                if (_isInteractiveThread) _buildComposer(context, theme, isIOS),
+              ],
+            ),
           ),
         ],
       ),
@@ -450,7 +462,7 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
             ),
             IconButton(
               tooltip: 'Close thread',
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: _dismiss,
               icon: Icon(
                 isIOS ? CupertinoIcons.xmark_circle_fill : Icons.close,
                 color: theme.colorScheme.onSurfaceVariant,
@@ -473,31 +485,41 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
 
     return Column(
       mainAxisSize: MainAxisSize.min,
-      children: messages
-          .mapIndexed((index, e) => GestureDetector(
-                onTap: () {
-                  Navigator.of(context).pop();
-                  if (widget.originatorPart == null && SettingsSvc.settings.skin.value == Skins.iOS) {
-                    // pop twice to remove convo details page
-                    Navigator.of(context).pop();
-                  }
-                  if (e.guid != null) {
-                    MessagesSvc(widget.cvController.chat.guid).jumpToMessage.call(e.guid!);
-                  }
-                },
-                child: AbsorbPointer(
-                  absorbing: true,
-                  child: MessageHolder(
-                    cvController: widget.cvController,
-                    message: messages[index],
-                    oldMessage: index > 0 ? messages[index - 1] : null,
-                    newMessage: index < messages.length - 1 ? messages[index + 1] : null,
-                    isReplyThread: true,
-                    replyPart: index == 0 ? widget.originatorPart : null,
-                  ),
-                ),
-              ))
-          .toList(),
+      children: messages.mapIndexed((index, e) {
+        final messageHolder = MessageHolder(
+          cvController: widget.cvController,
+          message: messages[index],
+          oldMessage: index > 0 ? messages[index - 1] : null,
+          newMessage: index < messages.length - 1 ? messages[index + 1] : null,
+          isReplyThread: true,
+          replyPart: index == 0 ? widget.originatorPart : null,
+        );
+
+        // Reply thread views stay in place on dismiss; only bookmarks jump to a message on tap.
+        if (_isInteractiveThread) {
+          return IgnorePointer(
+            ignoring: true,
+            child: messageHolder,
+          );
+        }
+
+        return GestureDetector(
+          onTap: () {
+            _dismiss();
+            if (widget.originatorPart == null && SettingsSvc.settings.skin.value == Skins.iOS) {
+              // pop twice to remove convo details page
+              Navigator.of(context).pop();
+            }
+            if (e.guid != null) {
+              MessagesSvc(widget.cvController.chat.guid).jumpToMessage.call(e.guid!);
+            }
+          },
+          child: AbsorbPointer(
+            absorbing: true,
+            child: messageHolder,
+          ),
+        );
+      }).toList(),
     );
   }
 

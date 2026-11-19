@@ -7,10 +7,12 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.service.MessageListenerService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class SettingsUiState(
     val serverUrl: String = "",
@@ -78,7 +80,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             app.socketManager.disconnect()
             MessageListenerService.stop(getApplication())
             settings.clearAll()
-            db.clearAllTables()
+            withContext(Dispatchers.IO) {
+                db.clearAllTables()
+            }
             _uiState.value = _uiState.value.copy(isResetDone = true)
         }
     }

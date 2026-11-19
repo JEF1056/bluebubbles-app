@@ -49,29 +49,30 @@ object UpdateChecker {
                 .header("Accept", "application/vnd.github.v3+json")
                 .build()
 
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext null
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
 
-            val body = response.body?.string() ?: return@withContext null
-            val release = gson.fromJson(body, GitHubRelease::class.java) ?: return@withContext null
+                val body = response.body?.string() ?: return@withContext null
+                val release = gson.fromJson(body, GitHubRelease::class.java) ?: return@withContext null
 
-            val remoteVersion = release.tagName.removePrefix("v")
-            val currentVersion = BuildConfig.VERSION_NAME
+                val remoteVersion = release.tagName.removePrefix("v")
+                val currentVersion = BuildConfig.VERSION_NAME
 
-            if (!isNewerVersion(remoteVersion, currentVersion)) return@withContext null
+                if (!isNewerVersion(remoteVersion, currentVersion)) return@withContext null
 
-            val dismissed = settings.getDismissedUpdateVersion()
-            if (dismissed == remoteVersion) return@withContext null
+                val dismissed = settings.getDismissedUpdateVersion()
+                if (dismissed == remoteVersion) return@withContext null
 
-            val apkAsset = release.assets.firstOrNull {
-                it.name.endsWith(".apk") && it.name.contains("wear", ignoreCase = true)
-            } ?: return@withContext null
+                val apkAsset = release.assets.firstOrNull {
+                    it.name.endsWith(".apk") && it.name.contains("wear", ignoreCase = true)
+                } ?: return@withContext null
 
-            UpdateInfo(
-                versionName = remoteVersion,
-                downloadUrl = apkAsset.downloadUrl,
-                releaseNotes = release.body ?: ""
-            )
+                UpdateInfo(
+                    versionName = remoteVersion,
+                    downloadUrl = apkAsset.downloadUrl,
+                    releaseNotes = release.body ?: ""
+                )
+            }
         } catch (_: Exception) {
             null
         }

@@ -40,19 +40,8 @@ class ContactTile extends StatelessWidget {
     final navigator = Navigator.of(context, rootNavigator: true);
     showDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-          title: Text(
-            "Removing participant...",
-            style: context.theme.textTheme.titleLarge,
-          ),
-          content: SizedBox(
-            height: 70,
-            child: Center(child: buildProgressIndicator(context)),
-          ),
-        );
-      },
+      barrierDismissible: false,
+      builder: (BuildContext context) => const BBProgressDialog(title: "Removing participant..."),
     );
 
     HttpSvc.chat.modifyParticipant("remove", chat.guid, handle.address).then((response) async {
@@ -67,6 +56,7 @@ class ContactTile extends StatelessWidget {
       }
       Logger.info("Removed participant ${handle.address}");
     }).catchError((err, stack) {
+      navigator.pop();
       Logger.error("Failed to remove participant ${handle.address}", error: err, trace: stack);
       late final String error;
       if (err is Response) {
@@ -110,57 +100,36 @@ class ContactTile extends StatelessWidget {
                 }
               },
         onSecondaryTap: () {
-          showModalBottomSheet(
+          showBBBottomSheet<void>(
             context: context,
-            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-            ),
+            title: displayName,
+            icon: Icons.person_outlined,
+            padding: const EdgeInsets.only(bottom: 8),
             builder: (ctx) {
-              return SafeArea(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.person_outlined, size: 18),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              displayName,
-                              style: context.theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(height: 8),
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ListTile(
+                    mouseCursor: MouseCursor.defer,
+                    leading: const Icon(Icons.copy_outlined),
+                    title: const Text("Copy address"),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      Clipboard.setData(ClipboardData(text: handle.address));
+                      showCopiedToast("Address copied to clipboard");
+                    },
+                  ),
+                  if (canBeRemoved)
                     ListTile(
                       mouseCursor: MouseCursor.defer,
-                      leading: const Icon(Icons.copy_outlined),
-                      title: const Text("Copy address"),
+                      leading: Icon(Icons.person_remove_outlined, color: context.theme.colorScheme.error),
+                      title: Text("Remove from chat", style: TextStyle(color: context.theme.colorScheme.error)),
                       onTap: () {
                         Navigator.of(ctx).pop();
-                        Clipboard.setData(ClipboardData(text: handle.address));
-                        showCopiedToast("Address copied to clipboard");
+                        _removeParticipant(context);
                       },
                     ),
-                    if (canBeRemoved)
-                      ListTile(
-                        mouseCursor: MouseCursor.defer,
-                        leading: Icon(Icons.person_remove_outlined, color: context.theme.colorScheme.error),
-                        title: Text("Remove from chat", style: TextStyle(color: context.theme.colorScheme.error)),
-                        onTap: () {
-                          Navigator.of(ctx).pop();
-                          _removeParticipant(context);
-                        },
-                      ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
+                ],
               );
             },
           );

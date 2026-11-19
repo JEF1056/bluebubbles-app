@@ -166,21 +166,23 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
     final disabled = !widget.enableGestures || widget.isEditing;
     return Obx(() {
       final isTempMessage = widget.controller.isSending.value;
+      final supportsTapback = widget.cvController.chat.isIMessage ||
+          widget.cvController.chat.isRCS ||
+          (ChatServiceType.fromServiceName(widget.controller.message.service)?.supportsTapbackAndReply ?? false);
       return GestureDetector(
         key: globalKey,
         onDoubleTap: disabled
             ? null
             : SettingsSvc.settings.doubleTapForDetails.value || isTempMessage
                 ? () => openPopup()
-                : SettingsSvc.settings.enableQuickTapback.value &&
-                        (widget.cvController.chat.isIMessage || widget.cvController.chat.isRCS)
+                : SettingsSvc.settings.enableQuickTapback.value && supportsTapback
                     ? () => sendTapback(null, widget.part.part)
                     : null,
         onLongPress: disabled
             ? null
             : SettingsSvc.settings.doubleTapForDetails.value &&
                     SettingsSvc.settings.enableQuickTapback.value &&
-                    (widget.cvController.chat.isIMessage || widget.cvController.chat.isRCS) &&
+                    supportsTapback &&
                     !isTempMessage
                 ? () => sendTapback(null, widget.part.part)
                 : () => openPopup(),

@@ -364,7 +364,7 @@ fun NewMessageScreen(
     val filteredContacts = remember(allContacts, query) {
         filterContacts(allContacts, query)
     }
-    val relayClient = remember(context) { com.wearbubbles.relay.PhoneRelayClient(context.applicationContext) }
+    val relayClient = remember(context) { (context.applicationContext as com.wearbubbles.WearBubblesApp).phoneRelayClient }
     val favoriteContacts = remember(allContacts, recentChats) {
         selectFavoriteContacts(
             contacts = allContacts,

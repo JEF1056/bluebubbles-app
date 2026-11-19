@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_library_tile.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/genmoji.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -151,11 +153,14 @@ class _GenmojiLibraryPopoverState extends State<_GenmojiLibraryPopover> {
   Widget build(BuildContext context) {
     final scheme = context.theme.colorScheme;
     final textTheme = context.theme.textTheme;
-    return Material(
-      color: scheme.surfaceContainerHigh,
-      elevation: 10,
+    final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
+    final radius = BorderRadius.circular(isIOS ? 20 : 24);
+    final surface = Material(
+      color: isIOS ? scheme.surfaceContainerHigh.withValues(alpha: 0.85) : scheme.surfaceContainerHigh,
+      surfaceTintColor: Colors.transparent,
+      elevation: isIOS ? 0 : 10,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: radius,
         side: BorderSide(color: scheme.outline.withValues(alpha: 0.15)),
       ),
       clipBehavior: Clip.antiAlias,
@@ -219,6 +224,14 @@ class _GenmojiLibraryPopoverState extends State<_GenmojiLibraryPopover> {
             ),
           ],
         ),
+      ),
+    );
+    if (!isIOS) return surface;
+    return ClipRRect(
+      borderRadius: radius,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+        child: surface,
       ),
     );
   }

@@ -128,87 +128,99 @@ class Share {
     if (kIsDesktop || kIsWeb) {
       cvc(chat).showingOverlays = true;
     }
-    await showDialog(
-        context: Get.context!,
-        builder: (context) => FutureBuilder(
-            future: getLocationPreview(),
-            builder: (context, snapshot) {
-              if (snapshot.data != null) {
-                _attachmentGuid = snapshot.data!.guid;
-                fileName = snapshot.data!.fileName;
-                bytes = snapshot.data!.bytes;
-                url = snapshot.data!.mapImageUrl;
-                title = snapshot.data!.title;
-              }
-              // Gate on the attachment itself rather than on the preview
-              // image: a location with no thumbnail is still sendable.
-              if (bytes == null) {
-                return AbsorbPointer(
-                  child: AlertDialog(
-                    backgroundColor: Get.theme.colorScheme.surfaceContainerHighest,
-                    title: Text(
-                      snapshot.hasError ? "Couldn't Get Location" : "Loading Location...",
-                      style: Get.textTheme.titleLarge,
-                    ),
-                    content: snapshot.hasError
-                        ? Text("Check that location permissions are granted and try again.",
-                            style: Get.textTheme.bodyMedium)
-                        : buildProgressIndicator(context),
+    bool loadingOpen = true;
+    showDialog(
+      context: Get.context!,
+      barrierDismissible: true,
+      builder: (_) => const BBProgressDialog(title: "Loading Location..."),
+    ).whenComplete(() => loadingOpen = false);
+
+    Object? locationError;
+    try {
+      final preview = await getLocationPreview();
+      _attachmentGuid = preview.guid;
+      fileName = preview.fileName;
+      bytes = preview.bytes;
+      url = preview.mapImageUrl;
+      title = preview.title;
+    } catch (e) {
+      locationError = e;
+    }
+
+    final wasCancelled = !loadingOpen;
+    if (loadingOpen) {
+      Navigator.of(Get.context!, rootNavigator: true).pop();
+    }
+
+    if (!wasCancelled) {
+      if (locationError != null || bytes == null) {
+        await showBBDialog<void>(
+          context: Get.context!,
+          title: "Couldn't Get Location",
+          icon: Icons.location_off_outlined,
+          iconColor: Get.theme.colorScheme.error,
+          body: "Check that location permissions are granted and try again.",
+          actions: [
+            BBDialogAction(
+              text: "Dismiss",
+              isDefault: true,
+              onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
+            ),
+          ],
+        );
+      } else {
+        await showBBDialog<void>(
+          context: Get.context!,
+          title: "Send Location?",
+          icon: Icons.location_on_outlined,
+          content: SizedBox(
+            width: 150,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (url != null)
+                  Image.network(
+                    url,
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.none,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                    frameBuilder: (_, child, frame, _) {
+                      if (frame == null) {
+                        return Center(
+                          heightFactor: 1,
+                          child: buildProgressIndicator(Get.context!),
+                        );
+                      }
+                      return child;
+                    },
                   ),
-                );
-              }
-              return AlertDialog(
-                backgroundColor: Get.theme.colorScheme.surfaceContainerHighest,
-                title: Text("Send Location?", style: Get.textTheme.titleLarge),
-                content: SizedBox(
-                  width: 150,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (url != null)
-                        Image.network(
-                          url!,
-                          gaplessPlayback: true,
-                          filterQuality: FilterQuality.none,
-                          errorBuilder: (_, _, _) {
-                            return const SizedBox.shrink();
-                          },
-                          frameBuilder: (_, child, frame, _) {
-                            if (frame == null) {
-                              return Center(
-                                heightFactor: 1,
-                                child: buildProgressIndicator(context),
-                              );
-                            } else {
-                              return child;
-                            }
-                          },
-                        ),
-                      if (url != null) const SizedBox(height: 15),
-                      Text(
-                        title ?? "No location details found",
-                        style: context.theme.textTheme.bodyMedium!.apply(fontWeightDelta: 2),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
+                if (url != null) const SizedBox(height: 15),
+                Text(
+                  title ?? "No location details found",
+                  style: Get.context!.theme.textTheme.bodyMedium!.apply(fontWeightDelta: 2),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-                      child: Text("Cancel",
-                          style: Get.textTheme.bodyLarge!.copyWith(color: Get.theme.colorScheme.primary))),
-                  TextButton(
-                      onPressed: () {
-                        send = true;
-                        Navigator.of(Get.context!, rootNavigator: true).pop();
-                      },
-                      child:
-                          Text("Send", style: Get.textTheme.bodyLarge!.copyWith(color: Get.theme.colorScheme.primary)))
-                ],
-              );
-            }));
+              ],
+            ),
+          ),
+          actions: [
+            BBDialogAction(
+              text: "Cancel",
+              onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
+            ),
+            BBDialogAction(
+              text: "Send Location",
+              isDefault: true,
+              onPressed: () {
+                send = true;
+                Navigator.of(Get.context!, rootNavigator: true).pop();
+              },
+            ),
+          ],
+        );
+      }
+    }
     if (kIsDesktop || kIsWeb) {
       cvc(chat).showingOverlays = false;
     }
@@ -232,7 +244,7 @@ class Share {
       uti: "public.vlocation",
       bytes: bytes,
       transferName: fileName,
-      totalBytes: bytes!.length,
+      totalBytes: bytes.length,
     );
 
     OutgoingMsgHandler.queue(

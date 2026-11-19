@@ -188,12 +188,22 @@ class FilterOptionGroup {
   const FilterOptionGroup({this.orders = const []});
 }
 
+class ThumbnailSize {
+  final int width;
+  final int height;
+  const ThumbnailSize(this.width, this.height);
+  const ThumbnailSize.square(int size)
+      : width = size,
+        height = size;
+}
+
 class AssetEntity {
   String get id => '';
   AssetType get type => AssetType.other;
   String? get mimeType => null;
   DateTime get modifiedDateTime => DateTime.fromMillisecondsSinceEpoch(0);
   Future<File?> get file async => null;
+  Future<Uint8List?> thumbnailDataWithSize(ThumbnailSize size) async => null;
 }
 
 class AssetPathEntity {

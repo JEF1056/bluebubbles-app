@@ -682,12 +682,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
         connect(serverURL, password);
       }
     } catch (e) {
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return FailedToScanDialog(title: "Error", exception: e.toString());
-        },
-      );
+      FailedToScanDialog.show(context, title: "Error", exception: e.toString());
     }
   }
 
@@ -720,22 +715,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
-        return PopScope(
-          canPop: false,
-          child: AlertDialog(
-            title: Text(
-              "Fetching server info...",
-              style: context.theme.textTheme.titleLarge,
-            ),
-            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            content: LinearProgressIndicator(
-              backgroundColor: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.2),
-              valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-            ),
-          ),
-        );
-      },
+      builder: (context) => const PopScope(
+        canPop: false,
+        child: BBProgressDialog(title: "Fetching server info..."),
+      ),
     );
 
     dio.Response? serverResponse;
@@ -784,12 +767,14 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
           showBBDialog(
             context: Get.context!,
             barrierDismissible: false,
+            icon: Icons.notifications_off_outlined,
             title: "No Firebase Detected",
             body:
                 "We couldn't find a Firebase setup on your server. To receive notifications, please enable the background service option from Settings > Misc & Advanced.",
             actions: [
               BBDialogAction(
                 text: "Close",
+                isDefault: true,
                 onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
               ),
             ],

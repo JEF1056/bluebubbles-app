@@ -63,19 +63,16 @@ class _SetupViewState extends State<SetupView> {
           !SettingsSvc.settings.finishedSetup.value &&
           controller.pageController.hasClients &&
           controller.currentPage > controller.pageOfNoReturn) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) => FailedToConnectDialog(
-            onDismiss: () {
-              controller.pageController.animateToPage(
-                controller.pageOfNoReturn - 1,
-                duration: const Duration(milliseconds: 500),
-                curve: Curves.easeInOut,
-              );
-              Navigator.of(context).pop();
-            },
-          ),
+        FailedToConnectDialog.show(
+          context,
+          onDismiss: () {
+            controller.pageController.animateToPage(
+              controller.pageOfNoReturn - 1,
+              duration: const Duration(milliseconds: 500),
+              curve: Curves.easeInOut,
+            );
+            Navigator.of(context, rootNavigator: true).pop();
+          },
         );
       }
     });

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/live_photo_mixin.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/dialogs/metadata_dialog.dart';
 import 'package:bluebubbles/utils/share.dart';
@@ -383,37 +384,33 @@ class _FullscreenImageState extends State<FullscreenImage>
                   ),
                 ),
               ),
-            // Bottom FABs (Material style)
-            if (widget.showInteractions && material)
+            // Floating M3E dark tonal bottom action pill (!iOS)
+            if (widget.showInteractions && !iOS)
               Positioned(
-                left: 16,
-                bottom: 16,
-                child: AnimatedOpacity(
-                  opacity: showOverlay ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 200),
-                  child: SafeArea(
-                    top: false,
-                    child: Row(
-                      children: [
-                        FloatingActionButton(
-                          backgroundColor: context.theme.colorScheme.secondary,
-                          child: Icon(Icons.file_download_outlined, color: context.theme.colorScheme.onSecondary),
-                          onPressed: () => AttachmentsSvc.saveToDisk(widget.file),
-                        ),
-                        if (!kIsWeb && !kIsDesktop)
-                          Padding(
-                            padding: const EdgeInsets.only(left: 16.0),
-                            child: FloatingActionButton(
-                              backgroundColor: context.theme.colorScheme.secondary,
-                              child: Icon(Icons.share_outlined, color: context.theme.colorScheme.onSecondary),
-                              onPressed: () {
-                                if (widget.file.path != null) {
-                                  Share.files([widget.file.path!]);
+                left: 0,
+                right: 0,
+                bottom: 20,
+                child: IgnorePointer(
+                  ignoring: !showOverlay,
+                  child: AnimatedOpacity(
+                    opacity: showOverlay ? 1.0 : 0.0,
+                    duration: M3EMotion.effectsFast.duration,
+                    curve: M3EMotion.effectsFast.curve,
+                    child: SafeArea(
+                      top: false,
+                      child: Center(
+                        child: FullscreenMediaActionPill(
+                          onSave: () => AttachmentsSvc.saveToDisk(widget.file),
+                          onShare: (!kIsWeb && !kIsDesktop)
+                              ? () {
+                                  if (widget.file.path != null) {
+                                    Share.files([widget.file.path!]);
+                                  }
                                 }
-                              },
-                            ),
-                          ),
-                      ],
+                              : null,
+                          onDetails: () => showMetadataDialog(widget.attachment, context),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -426,4 +423,105 @@ class _FullscreenImageState extends State<FullscreenImage>
 
   @override
   bool get wantKeepAlive => true;
+}
+
+class FullscreenMediaActionPill extends StatelessWidget {
+  const FullscreenMediaActionPill({
+    super.key,
+    required this.onSave,
+    this.onShare,
+    required this.onDetails,
+  });
+
+  final VoidCallback onSave;
+  final VoidCallback? onShare;
+  final VoidCallback onDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final darkScheme = scheme.brightness == Brightness.dark
+        ? scheme
+        : ColorScheme.fromSeed(seedColor: scheme.primary, brightness: Brightness.dark);
+
+    return Material(
+      color: darkScheme.surfaceContainerHigh.withValues(alpha: 0.92),
+      borderRadius: M3EShapes.radiusXl,
+      elevation: 6,
+      shadowColor: Colors.black54,
+      clipBehavior: Clip.antiAlias,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: M3EShapes.radiusXl,
+          border: Border.all(
+            color: darkScheme.outlineVariant.withValues(alpha: 0.28),
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PillActionButton(
+              icon: Icons.file_download_outlined,
+              label: 'Save',
+              color: darkScheme.onSurface,
+              onPressed: onSave,
+            ),
+            if (onShare != null)
+              _PillActionButton(
+                icon: Icons.share_outlined,
+                label: 'Share',
+                color: darkScheme.onSurface,
+                onPressed: onShare!,
+              ),
+            _PillActionButton(
+              icon: Icons.info_outline,
+              label: 'Details',
+              color: darkScheme.onSurface,
+              onPressed: onDetails,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PillActionButton extends StatelessWidget {
+  const _PillActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: M3EShapes.radiusXl,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 20, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.w500,
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

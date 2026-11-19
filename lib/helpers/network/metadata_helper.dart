@@ -230,7 +230,7 @@ abstract final class MetadataHelper {
       map[slot.imageHashKey] = downloaded.hash;
     }
     message.metadata = map;
-    if (message.id != null) unawaited(message.saveAsync());
+    MessageMetadataStore.scheduleSave(message);
 
     return downloaded;
   }

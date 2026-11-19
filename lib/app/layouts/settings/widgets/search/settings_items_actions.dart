@@ -31,7 +31,7 @@ class SettingsItemsActions {
 
     void closeDialog() {
       Get.closeAllSnackbars();
-      if (dialogCtx != null) {
+      if (dialogCtx != null && dialogCtx!.mounted) {
         Navigator.of(dialogCtx!).pop();
       }
       Future.delayed(const Duration(milliseconds: 400), () {

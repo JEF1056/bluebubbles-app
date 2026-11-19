@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/scheduling/scheduled_messages_panel.dart';
@@ -123,7 +124,10 @@ class IntentsService {
         } else if (intent.extra?["callUuid"] != null) {
           await StartupTasks.waitForUI();
           if (intent.extra?["answer"] == true) {
-            await answerFaceTime(intent.extra?["callUuid"]!);
+            await answerFaceTime(
+              intent.extra?["callUuid"]!,
+              audioOnly: intent.extra?["audioOnly"] == true,
+            );
           } else {
             await showFaceTimeOverlay(intent.extra?["callUuid"], intent.extra?["caller"], null, false);
           }
@@ -131,30 +135,19 @@ class IntentsService {
     }
   }
 
-  Future<void> answerFaceTime(String callUuid) async {
-    if (Get.context != null) {
-      showDialog(
-          context: Get.context!,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-              title: Text(
-                "Generating link for call...",
-                style: context.theme.textTheme.titleLarge,
-              ),
-              content: SizedBox(
-                height: 70,
-                child: Center(
-                  child: CircularProgressIndicator(
-                    backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                    valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                  ),
-                ),
-              ),
-            );
-          });
-      hideFaceTimeOverlay(callUuid);
-    }
+  Future<void> answerFaceTime(String callUuid, {bool audioOnly = false}) async {
+    final prevState = ActiveCallController.instance.state;
+    final matchesPrev = prevState.callUuid == callUuid;
+    final callerName = matchesPrev && prevState.callerName.isNotEmpty ? prevState.callerName : "FaceTime Call";
+    final avatarBytes = matchesPrev ? prevState.avatarBytes : null;
+    final wasVideo = matchesPrev ? prevState.isVideo : !audioOnly;
+
+    await showFaceTimeConnectingOverlay(
+      callUuid,
+      caller: callerName,
+      chatIcon: avatarBytes,
+      isAudio: audioOnly || !wasVideo,
+    );
 
     String? link;
     try {
@@ -163,12 +156,25 @@ class IntentsService {
     } catch (e, s) {
       Logger.warn("Failed to fetch FaceTime answer link", error: e, trace: s, tag: 'IntentsService');
     }
-    if (Get.context != null) {
-      Navigator.of(Get.context!, rootNavigator: true).pop();
-    }
+
+    final current = ActiveCallController.instance.state;
+    final stillConnecting = current.callUuid == callUuid && current.phase == ActiveCallPhase.connecting;
+
+    hideFaceTimeOverlay(callUuid, keepCallState: true);
+    if (!stillConnecting) return;
+
     if (link == null) {
+      ActiveCallController.instance.clearPendingIfMatches(callUuid);
       return showSnackbar("Failed to answer FaceTime", "Unable to generate FaceTime link!", type: SnackbarType.error);
     }
+
+    ActiveCallController.instance.startOngoing(
+      callUuid: callUuid,
+      callerName: callerName,
+      avatarBytes: avatarBytes,
+      isVideo: !audioOnly && wasVideo,
+      joinLink: link,
+    );
 
     await openFaceTimeJoinLink(link, context: Get.context);
   }

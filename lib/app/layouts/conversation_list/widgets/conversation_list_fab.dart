@@ -1,5 +1,6 @@
+import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
-import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -215,41 +216,80 @@ class _MaterialFAB extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 250),
+      duration: M3EMotion.spatialFast.duration,
+      switchInCurve: M3EMotion.spatialFast.curve,
+      switchOutCurve: M3EMotion.effectsFast.curve,
       child: controller.selectedChats.isNotEmpty
           ? const SizedBox.shrink()
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (!controller.showMaterialFABText) ...[
-                  _ScrollToTopFAB(
-                    controller: controller,
-                    onPressed: onScrollToTop,
-                  ),
-                  const SizedBox(height: 10),
-                ],
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _MaterialSearchFAB(context: context),
-                    const SizedBox(width: 10),
-                    _MaterialComposeFAB(controller: controller),
+          : Obx(() {
+              NavigationSvc.listener.value;
+              final avatarOnly = NavigationSvc.isAvatarOnly(context);
+              final showFindMy = SettingsSvc.serverDetails.isMinCatalina && !avatarOnly;
+              final fabCluster = Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: avatarOnly ? CrossAxisAlignment.center : CrossAxisAlignment.end,
+                children: [
+                  if (!controller.showMaterialFABText) ...[
+                    SizedBox(
+                      width: 56,
+                      child: Center(
+                        child: _ScrollToTopFAB(
+                          controller: controller,
+                          onPressed: onScrollToTop,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: M3ESpacing.md),
                   ],
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (showFindMy) ...[
+                        _MaterialActionFAB(
+                          tooltip: 'Find My',
+                          icon: Icons.location_on_outlined,
+                          onPressed: () => goToFindMy(context),
+                        ),
+                        const SizedBox(width: M3ESpacing.md),
+                      ],
+                      _MaterialComposeFAB(controller: controller),
+                    ],
+                  ),
+                ],
+              );
+
+              if (avatarOnly) {
+                return fabCluster;
+              }
+              return SizedBox(
+                width: double.infinity,
+                child: Padding(
+                  // Scaffold.centerFloat adds 16dp bottom margin; +8dp yields a 24dp right/bottom margin.
+                  padding: const EdgeInsets.only(left: 24, right: 24, bottom: 8),
+                  child: Align(
+                    alignment: Alignment.bottomRight,
+                    child: fabCluster,
+                  ),
                 ),
-              ],
-            ),
+              );
+            }),
     );
   }
 }
 
-class _MaterialSearchFAB extends StatelessWidget {
-  const _MaterialSearchFAB({required this.context});
+class _MaterialActionFAB extends StatelessWidget {
+  const _MaterialActionFAB({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
 
-  final BuildContext context;
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
 
   @override
-  Widget build(BuildContext _) {
+  Widget build(BuildContext context) {
     return SizedBox(
       width: 48,
       height: 48,
@@ -259,11 +299,9 @@ class _MaterialSearchFAB extends StatelessWidget {
         shape: const CircleBorder(),
         backgroundColor: context.theme.colorScheme.surfaceContainerHigh,
         foregroundColor: context.theme.colorScheme.onSurface,
-        tooltip: 'Search',
-        onPressed: () {
-          NavigationSvc.pushLeft(context, const SearchView());
-        },
-        child: const Icon(Icons.search_rounded),
+        tooltip: tooltip,
+        onPressed: onPressed,
+        child: Icon(icon),
       ),
     );
   }
@@ -306,10 +344,15 @@ class _MaterialComposeFAB extends StatelessWidget {
           SettingsSvc.settings.cameraFAB.value && !kIsWeb && !kIsDesktop ? () => controller.openCamera(context) : null,
       child: FloatingActionButton.extended(
         heroTag: null,
+        tooltip: 'Start chat',
         shape: const StadiumBorder(),
         backgroundColor: context.theme.colorScheme.primaryContainer,
         foregroundColor: context.theme.colorScheme.onPrimaryContainer,
         isExtended: controller.showMaterialFABText,
+        // Override M3's asymmetric (16, 20) extendedPadding which stays applied when collapsed.
+        extendedPadding: controller.showMaterialFABText
+            ? const EdgeInsets.symmetric(horizontal: 18)
+            : const EdgeInsets.symmetric(horizontal: 16),
         onPressed: () => controller.openNewChatCreator(context),
         icon: const Icon(Icons.chat_outlined),
         label: const Text('Start chat'),

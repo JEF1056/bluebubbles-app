@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_ca
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
+import 'package:bluebubbles/app/components/wallpaper/chat_wallpaper_type.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
@@ -18,6 +19,41 @@ import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+const double _kTopBarCurveRadius = 26.0;
+
+/// Clips the Material top bar background to include the downward-curving
+/// corner ears that sit above the rounded conversation sheet edge.
+class CurvedTopBarClipper extends CustomClipper<Path> {
+  const CurvedTopBarClipper({required this.radius});
+
+  final double radius;
+
+  @override
+  Path getClip(Size size) {
+    final r = radius.clamp(0.0, size.width / 2).clamp(0.0, size.height);
+    final barBottom = size.height - r;
+    return Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width, size.height)
+      ..arcToPoint(
+        Offset(size.width - r, barBottom),
+        radius: Radius.circular(r),
+        clockwise: false,
+      )
+      ..lineTo(r, barBottom)
+      ..arcToPoint(
+        Offset(0, size.height),
+        radius: Radius.circular(r),
+        clockwise: false,
+      )
+      ..close();
+  }
+
+  @override
+  bool shouldReclip(CurvedTopBarClipper oldClipper) => oldClipper.radius != radius;
+}
+
 class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
   const MaterialHeader({super.key, required this.controller});
 
@@ -28,20 +64,23 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
     final Color _foregroundColor = context.theme.colorScheme.onSurface;
     final hasWindowEffect = kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled;
 
-    return Stack(children: [
+    return Stack(clipBehavior: Clip.none, children: [
       Obx(() {
-        final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ??
-            ChatsSvc.getChatState(controller.chat.guid)?.hasCustomWallpaper ??
-            false;
+        final hasCurve = SettingsSvc.settings.skin.value == Skins.Material;
+        final chatState = ChatStateScope.maybeOf(context) ?? ChatsSvc.getChatState(controller.chat.guid);
+        final hasDynamicWallpaper = chatState?.wallpaperType.value == ChatWallpaperType.dynamic;
+        final hasWallpaper = chatState?.hasCustomWallpaper ?? false;
+        final useBlur = !SettingsSvc.settings.highPerfMode.value && !hasDynamicWallpaper;
         final backgroundColor = context.theme.colorScheme.surfaceContainer.withValues(
-          alpha: hasWindowEffect ? 0.4 : 1.0,
+          alpha: hasWindowEffect ? 0.4 : ((hasCurve || hasWallpaper) ? 0.86 : 1.0),
         );
         final appBar = AppBar(
-          backgroundColor: backgroundColor,
+          backgroundColor: hasCurve ? Colors.transparent : backgroundColor,
+          elevation: 0,
           surfaceTintColor: Colors.transparent,
           scrolledUnderElevation: 0,
           systemOverlayStyle: context.systemUiOverlayStyle(
-            statusBarColor: hasWallpaper ? Colors.transparent : backgroundColor,
+            statusBarColor: (hasCurve || hasWallpaper) ? Colors.transparent : backgroundColor,
             backgroundBrightness: ThemeData.estimateBrightnessForColor(backgroundColor),
           ),
             automaticallyImplyLeading: false,
@@ -231,7 +270,34 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
               )
             ],
           );
-        if (hasWallpaper && !SettingsSvc.settings.highPerfMode.value) {
+        if (hasCurve) {
+          Widget curvedSurface = ColoredBox(color: backgroundColor);
+          if (useBlur) {
+            curvedSurface = BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: curvedSurface,
+            );
+          }
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: -_kTopBarCurveRadius,
+                child: IgnorePointer(
+                  child: ClipPath(
+                    clipper: const CurvedTopBarClipper(radius: _kTopBarCurveRadius),
+                    child: curvedSurface,
+                  ),
+                ),
+              ),
+              appBar,
+            ],
+          );
+        }
+        if (hasWallpaper && useBlur) {
           return ClipRect(
             child: BackdropFilter(
               filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),

@@ -6,6 +6,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_picker_file.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_library_tile.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/gmsg_camera_gallery_sheet.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/database/global/platform_file.dart';
@@ -305,17 +306,11 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
     if (kIsDesktop || kIsWeb) return;
     final List<XFile> files = await ImagePicker().pickMultiImage();
     for (final file in files) {
-      final size = await file.length();
-      if (size / 1024000 > 1000) {
-        showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.", type: SnackbarType.error);
-        continue;
-      }
-      controller.pickedAttachments.add(PlatformFile(
+      await addPickedAttachmentIfUnderLimit(
+        controller,
         path: file.path,
-        name: file.path.split('/').last,
-        size: size,
-        bytes: null,
-      ));
+        size: await file.length(),
+      );
     }
   }
 
@@ -449,24 +444,12 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
             onTap: () async {
               final file = await element.file;
               if (file == null) return;
-
-              if ((await file.length()) / 1024000 > 1000) {
-                showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.",
-                    type: SnackbarType.error);
-                return;
-              }
-
-              if (controller.pickedAttachments.firstWhereOrNull((e) => e.path == file.path) != null) {
-                controller.pickedAttachments.removeWhere((e) => e.path == file.path);
-              } else {
-                // Don't preload bytes - only store the path
-                controller.pickedAttachments.add(PlatformFile(
-                  path: file.path,
-                  name: file.path.split('/').last,
-                  size: await file.length(),
-                  bytes: null, // Will be loaded when actually sending
-                ));
-              }
+              await addPickedAttachmentIfUnderLimit(
+                controller,
+                path: file.path,
+                size: await file.length(),
+                toggleIfPresent: true,
+              );
             },
           );
         },

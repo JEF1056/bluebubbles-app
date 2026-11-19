@@ -205,7 +205,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
           // The body extends behind the header, whose height is in the top padding
           Builder(
             builder: (context) => Positioned(
-              top: !iOS && !samsung ? 0 : MediaQuery.paddingOf(context).top,
+              top: MediaQuery.paddingOf(context).top,
               left: 0,
               right: 0,
               child: SharedContactBanner(chat: chat),
@@ -216,15 +216,11 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     );
     if (iOS || samsung) return content;
     return Builder(
-      builder: (context) => ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-        clipBehavior: Clip.antiAlias,
-        child: Material(
-          color: SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-              ? Colors.transparent
-              : context.theme.colorScheme.surface,
-          child: content,
-        ),
+      builder: (context) => Material(
+        color: SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+            ? Colors.transparent
+            : context.theme.colorScheme.surface,
+        child: content,
       ),
     );
   }
@@ -342,12 +338,14 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
             child: BBScaffold(
               backgroundColor: windowEffect != WindowEffect.disabled
                   ? Colors.transparent
-                  : (iOS || samsung ? colorScheme.surface : colorScheme.surfaceContainer),
-              extendBodyBehindAppBar: iOS || samsung,
+                  : colorScheme.surface,
+              extendBodyBehindAppBar: true,
               appBar: _appBar,
-              body: Actions(
-                actions: _actionsMap,
-                child: _bodyContent,
+              body: RepaintBoundary(
+                child: Actions(
+                  actions: _actionsMap,
+                  child: _bodyContent,
+                ),
               ),
             ),
           ),

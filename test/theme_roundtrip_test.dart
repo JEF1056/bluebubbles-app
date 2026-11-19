@@ -33,4 +33,41 @@ void main() {
       }
     }
   });
+
+  test('Default themes resolve to GoogleSans while preserving explicit Theme Studio font overrides', () {
+    TestWidgetsFlutterBinding.ensureInitialized();
+
+    final presetThemes = <ThemeData>[
+      ThemesService.whiteLightTheme,
+      ThemesService.oledDarkTheme,
+      ThemesService.nordDarkTheme,
+      ThemesService.materialYouTheme(Brightness.light),
+      ThemesService.materialYouTheme(Brightness.dark),
+      ...ThemesService.defaultThemes.map((t) => t.data),
+    ];
+
+    for (final data in presetThemes) {
+      expect(data.textTheme.bodyMedium?.fontFamily, kDefaultAppFontFamily);
+      expect(data.textTheme.titleLarge?.fontFamily, kDefaultAppFontFamily);
+      expect(data.extension<BubbleText>()?.bubbleText.fontFamily, kDefaultAppFontFamily);
+    }
+
+    final defaultMap = ThemeStruct(name: 'Default Test', themeData: ThemesService.whiteLightTheme).toMap();
+    final roundTrippedDefault = ThemeStruct.fromMap(defaultMap);
+    expect(roundTrippedDefault.googleFont, 'Default');
+    expect(roundTrippedDefault.data.textTheme.bodyMedium?.fontFamily, kDefaultAppFontFamily);
+    expect(roundTrippedDefault.data.textTheme.displayLarge?.fontFamily, kDefaultAppFontFamily);
+    expect(roundTrippedDefault.data.extension<BubbleText>()?.bubbleText.fontFamily, kDefaultAppFontFamily);
+
+    final overrideMap = ThemeStruct(
+      name: 'Override Test',
+      googleFont: 'Roboto',
+      themeData: ThemesService.whiteLightTheme,
+    ).toMap();
+    final roundTrippedOverride = ThemeStruct.fromMap(overrideMap);
+    expect(roundTrippedOverride.googleFont, 'Roboto');
+    expect(roundTrippedOverride.data.textTheme.bodyMedium?.fontFamily, isNot(equals(kDefaultAppFontFamily)));
+    expect(roundTrippedOverride.data.textTheme.bodyMedium?.fontFamily, contains('Roboto'));
+    expect(roundTrippedOverride.data.extension<BubbleText>()?.bubbleText.fontFamily, contains('Roboto'));
+  });
 }

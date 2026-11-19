@@ -1,3 +1,5 @@
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -10,10 +12,33 @@ class SendButton extends StatefulWidget {
     super.key,
     required this.onLongPress,
     required this.sendMessage,
+    this.chat,
+    this.isScheduled,
   });
 
   final Function() onLongPress;
   final Function() sendMessage;
+  final Chat? chat;
+  final bool? isScheduled;
+
+  /// Resolves the Material transport container fill, foreground color, and compact badge label.
+  static ({Color container, Color foreground, String? badge}) resolveMaterialStyle(
+    ColorScheme scheme, {
+    required bool isIMessage,
+    required bool isRCS,
+    bool hasChat = true,
+  }) {
+    if (!hasChat) {
+      return (container: scheme.primaryContainer, foreground: scheme.onPrimaryContainer, badge: null);
+    }
+    if (isRCS) {
+      return (container: scheme.tertiaryContainer, foreground: scheme.onTertiaryContainer, badge: 'RCS');
+    }
+    if (isIMessage) {
+      return (container: scheme.primaryContainer, foreground: scheme.onPrimaryContainer, badge: 'iMsg');
+    }
+    return (container: scheme.secondaryContainer, foreground: scheme.onSecondaryContainer, badge: 'SMS');
+  }
 
   @override
   SendButtonState createState() => SendButtonState();
@@ -79,7 +104,7 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
         ),
         child: AnimatedBuilder(
           animation: controller,
-          builder: (context, widget) {
+          builder: (context, child) {
             return _SendButtonIcon(
               animationValue: controller.value,
               baseColor: baseColor,
@@ -87,6 +112,8 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
               iosOnPrimary: _iosOnPrimary,
               materialSecondary: _materialIconColor,
               onError: _onError,
+              chat: widget.chat,
+              isScheduled: widget.isScheduled,
             );
           },
         ),
@@ -121,6 +148,8 @@ class _SendButtonIcon extends StatelessWidget {
     required this.iosOnPrimary,
     required this.materialSecondary,
     required this.onError,
+    this.chat,
+    this.isScheduled,
   });
 
   final double animationValue;
@@ -129,12 +158,74 @@ class _SendButtonIcon extends StatelessWidget {
   final Color iosOnPrimary;
   final Color materialSecondary;
   final Color onError;
+  final Chat? chat;
+  final bool? isScheduled;
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
+      final skin = SettingsSvc.settings.skin.value;
+      final isIOS = skin == Skins.iOS;
+      final isMaterial = skin == Skins.Material;
       final isAnimating = animationValue != 0;
+
+      final effectiveChat = chat ?? ChatStateScope.maybeChatOf(context);
+      final cvcController = effectiveChat != null && Get.isRegistered<ConversationViewController>(tag: effectiveChat.guid)
+          ? Get.find<ConversationViewController>(tag: effectiveChat.guid)
+          : null;
+      final scheduled = isScheduled ?? (cvcController?.scheduledDate.value != null);
+
+      final materialStyle = isMaterial
+          ? SendButton.resolveMaterialStyle(
+              context.theme.colorScheme,
+              isIMessage: effectiveChat?.isIMessage ?? false,
+              isRCS: effectiveChat?.isRCS ?? false,
+              hasChat: effectiveChat != null,
+            )
+          : null;
+      final effectiveBaseColor = materialStyle?.container ?? baseColor;
+      final effectiveForeground = materialStyle?.foreground ?? materialSecondary;
+
+      Widget iconContent;
+      if (isAnimating) {
+        iconContent = Icon(
+          isIOS ? CupertinoIcons.xmark : Icons.close,
+          color: onError,
+          size: isIOS ? 20 : 22,
+        );
+      } else if (isMaterial && (materialStyle?.badge != null || scheduled)) {
+        final badge = materialStyle?.badge ?? 'Later';
+        iconContent = Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              scheduled ? Icons.schedule_send_rounded : Icons.send_rounded,
+              color: effectiveForeground,
+              size: 18,
+            ),
+            Text(
+              badge,
+              maxLines: 1,
+              style: TextStyle(
+                color: effectiveForeground,
+                fontSize: 8.5,
+                fontWeight: FontWeight.w700,
+                height: 1.0,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ],
+        );
+      } else {
+        iconContent = Icon(
+          isIOS
+              ? CupertinoIcons.arrow_up
+              : (scheduled ? Icons.schedule_send_rounded : Icons.send_rounded),
+          color: isIOS ? iosOnPrimary : effectiveForeground,
+          size: isIOS ? 20 : 22,
+        );
+      }
 
       return Container(
         width: isIOS ? null : 48,
@@ -142,24 +233,18 @@ class _SendButtonIcon extends StatelessWidget {
         constraints: isIOS ? const BoxConstraints(minHeight: 32, minWidth: 32) : null,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: (!isIOS && !isAnimating) ? baseColor : null,
+          color: (!isIOS && !isAnimating) ? effectiveBaseColor : null,
           gradient: isIOS || isAnimating
               ? LinearGradient(
                   begin: Alignment.bottomCenter,
                   end: Alignment.topCenter,
-                  colors: [baseColor, baseColor, errorColor, errorColor],
+                  colors: [effectiveBaseColor, effectiveBaseColor, errorColor, errorColor],
                   stops: [0.0, 1 - animationValue, 1 - animationValue, 1.0],
                 )
               : null,
         ),
         alignment: Alignment.center,
-        child: Icon(
-          animationValue == 0
-              ? (isIOS ? CupertinoIcons.arrow_up : Icons.send_rounded)
-              : (isIOS ? CupertinoIcons.xmark : Icons.close),
-          color: animationValue == 0 ? (isIOS ? iosOnPrimary : materialSecondary) : onError,
-          size: isIOS ? 20 : 22,
-        ),
+        child: iconContent,
       );
     });
   }

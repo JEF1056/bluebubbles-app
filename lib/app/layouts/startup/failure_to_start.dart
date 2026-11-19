@@ -1,4 +1,5 @@
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
+import 'package:bluebubbles/helpers/ui/theme_helpers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -12,6 +13,7 @@ class FailureToStart extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'BlueBubbles',
+      theme: ThemeData(fontFamily: kDefaultAppFontFamily, brightness: Brightness.dark),
       home: AnnotatedRegion<SystemUiOverlayStyle>(
         value: const SystemUiOverlayStyle(
           systemNavigationBarColor: Colors.black,

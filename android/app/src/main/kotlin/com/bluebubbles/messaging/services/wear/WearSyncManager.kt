@@ -11,7 +11,6 @@ import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.SettingsHelper
-import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.PutDataMapRequest
@@ -41,6 +40,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.URLEncoder
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 object WearSyncManager {
@@ -49,7 +49,6 @@ object WearSyncManager {
     private const val PREFS_NAME = "wear_sync_prefs"
     private const val KEY_WATCH_CONNECTED = "watch_connected"
     private const val KEY_WATCH_CHECKED_AT = "watch_checked_at"
-    private const val CACHE_TTL_MS = 30_000L
     private const val SOCKET_IDLE_TIMEOUT_MS = 120_000L
 
     const val PATH_CREDENTIALS = "/bb/credentials"
@@ -70,8 +69,20 @@ object WearSyncManager {
     const val PATH_AVATAR_PREFIX = "/bb/avatar/"
     const val PATH_MARK_READ = "/bb/mark-read"
     const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
-    const val PATH_TYPING = "/bb/typing"
     const val PATH_WATCH_ACTIVE = "/bb/watch-active"
+    const val PATH_INCOMING_CALL = "/bb/incoming-call"
+    const val PATH_CALL_ENDED = "/bb/call-ended"
+    const val PATH_ANSWER_CALL_AUDIO = "/bb/answer-call-audio"
+    const val PATH_DECLINE_CALL = "/bb/decline-call"
+    const val PATH_OPEN_CHAT = "/bb/open-chat"
+
+    private data class IncomingCallMeta(
+        val callerName: String,
+        val callerAddress: String?,
+        val isVideo: Boolean
+    )
+
+    private val incomingCalls = ConcurrentHashMap<String, IncomingCallMeta>()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gson = Gson()
@@ -86,42 +97,6 @@ object WearSyncManager {
     @Volatile
     private var relaySocket: Socket? = null
     private var socketTimeoutJob: Job? = null
-
-    @JvmStatic
-    fun isWatchConnected(context: Context): Boolean {
-        val now = System.currentTimeMillis()
-        val cached = cachedConnected
-        if (cached != null && now - lastCheckedAt < CACHE_TTL_MS) {
-            return cached
-        }
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val persisted = prefs.getBoolean(KEY_WATCH_CONNECTED, false)
-        val persistedAt = prefs.getLong(KEY_WATCH_CHECKED_AT, 0L)
-        if (now - persistedAt < CACHE_TTL_MS) {
-            cachedConnected = persisted
-            lastCheckedAt = persistedAt
-            return persisted
-        }
-        // Avoid blocking main thread; trigger async refresh and return last known state.
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            scope.launch { refreshWatchConnected(context) }
-            return persisted
-        }
-        return try {
-            val capInfo = Tasks.await(
-                Wearable.getCapabilityClient(context)
-                    .getCapability(WATCH_CAPABILITY, CapabilityClient.FILTER_REACHABLE),
-                300,
-                TimeUnit.MILLISECONDS
-            )
-            val connected = capInfo.nodes.any { it.isNearby } || capInfo.nodes.isNotEmpty()
-            updateWatchConnectedCache(context, connected)
-            connected
-        } catch (_: Exception) {
-            scope.launch { refreshWatchConnected(context) }
-            persisted
-        }
-    }
 
     @JvmStatic
     fun updateWatchConnectedCache(context: Context, connected: Boolean) {
@@ -162,6 +137,117 @@ object WearSyncManager {
         }
     }
 
+    @JvmStatic
+    fun notifyIncomingCall(
+        context: Context,
+        callUuid: String,
+        callerName: String,
+        callerAddress: String?,
+        isVideo: Boolean
+    ) {
+        if (callUuid.isBlank()) return
+        incomingCalls[callUuid] = IncomingCallMeta(callerName, callerAddress, isVideo)
+        scope.launch {
+            val payload = JsonObject().apply {
+                addProperty("callUuid", callUuid)
+                addProperty("callerName", callerName)
+                if (!callerAddress.isNullOrBlank()) {
+                    addProperty("callerAddress", callerAddress)
+                }
+                addProperty("isVideo", isVideo)
+            }.toString()
+            sendMessageToWatchNodes(context, PATH_INCOMING_CALL, payload.toByteArray())
+        }
+    }
+
+    @JvmStatic
+    fun notifyCallEnded(context: Context, callUuid: String) {
+        if (callUuid.isBlank()) return
+        incomingCalls.remove(callUuid)
+        scope.launch {
+            val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString()
+            sendMessageToWatchNodes(context, PATH_CALL_ENDED, payload.toByteArray())
+        }
+    }
+
+    fun handleAnswerCallAudioFromWatch(
+        context: Context,
+        callUuid: String,
+        callerNameArg: String? = null,
+        callerAddressArg: String? = null
+    ) {
+        if (callUuid.isBlank()) return
+        val cached = incomingCalls.remove(callUuid)
+        val callerName = callerNameArg?.takeIf { it.isNotBlank() }
+            ?: cached?.callerName
+            ?: "Unknown Caller"
+        val callerAddress = callerAddressArg?.takeIf { it.isNotBlank() } ?: cached?.callerAddress
+        cancelCallNotifications(context, callUuid)
+        val routed = com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.addIncomingCall(
+            context = context,
+            callUuid = callUuid,
+            callerName = callerName,
+            address = callerAddress,
+            autoAnswer = true
+        )
+        if (!routed) {
+            val launch = android.content.Intent(context, com.bluebubbles.messaging.MainActivity::class.java).apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra("callUuid", callUuid)
+                putExtra("answer", true)
+                putExtra("audioOnly", true)
+                putExtra("caller", callerName)
+                type = "AnswerFaceTime"
+            }
+            context.startActivity(launch)
+        }
+    }
+
+    fun handleDeclineCallFromWatch(context: Context, callUuid: String) {
+        if (callUuid.isBlank()) return
+        incomingCalls.remove(callUuid)
+        cancelCallNotifications(context, callUuid)
+        com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.endCall(callUuid)
+        notifyCallEnded(context, callUuid)
+        if (com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid)) {
+            com.bluebubbles.messaging.services.network.HttpService(context).declineFaceTimeCall(
+                callUuid = callUuid,
+                onSuccess = {},
+                onError = {}
+            )
+        }
+    }
+
+    fun handleOpenChatFromWatch(context: Context, chatGuid: String) {
+        if (chatGuid.isBlank()) return
+        val launch = android.content.Intent(context, com.bluebubbles.messaging.MainActivity::class.java).apply {
+            addFlags(
+                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
+            putExtra("chatGuid", chatGuid)
+            putExtra("bubble", false)
+            type = "OpenChat"
+        }
+        context.startActivity(launch)
+    }
+
+    private fun cancelCallNotifications(context: Context, callUuid: String) {
+        try {
+            val nm = context.getSystemService(NotificationManager::class.java) ?: return
+            for (sbn in nm.activeNotifications) {
+                if (sbn.tag == Constants.newFaceTimeNotificationTag &&
+                    sbn.notification.extras?.getString("callUuid") == callUuid
+                ) {
+                    nm.cancel(sbn.tag, sbn.id)
+                }
+            }
+        } catch (e: Exception) {
+            PersistentLog.w(context, TAG, "cancelCallNotifications failed: ${e.message}")
+        }
+    }
+
     fun syncCredentials(context: Context, targetNodeId: String? = null) {
         scope.launch {
             try {
@@ -176,7 +262,6 @@ object WearSyncManager {
                     dataMap.putString("password", password)
                     dataMap.putString("customHeadersJson", headersJson)
                     dataMap.putBoolean("privateApiSend", privateApiSend)
-                    dataMap.putLong("updatedAt", System.currentTimeMillis())
                 }.asPutDataRequest().setUrgent()
                 Wearable.getDataClient(context).putDataItem(putReq).await()
 
@@ -186,11 +271,7 @@ object WearSyncManager {
                     addProperty("customHeadersJson", headersJson)
                     addProperty("privateApiSend", privateApiSend)
                 }.toString().toByteArray()
-                if (targetNodeId != null) {
-                    Wearable.getMessageClient(context).sendMessage(targetNodeId, PATH_CREDENTIALS, msgJson).await()
-                } else {
-                    sendMessageToWatchNodes(context, PATH_CREDENTIALS, msgJson)
-                }
+                sendToWatch(context, targetNodeId, PATH_CREDENTIALS, msgJson)
             } catch (e: Exception) {
                 PersistentLog.e(context, TAG, "syncCredentials failed: ${e.message}")
             }
@@ -805,25 +886,6 @@ object WearSyncManager {
         cancelNotificationsForChat(context, chatGuid)
     }
 
-    fun forwardTyping(context: Context, chatGuid: String, isTyping: Boolean) {
-        if (chatGuid.isBlank()) return
-        scope.launch {
-            try {
-                val settings = SettingsHelper(context)
-                if (!settings.hasServerUrl() || !settings.hasAuthKey()) return@launch
-                val client = buildOkHttpClient(settings)
-                val url = "${settings.apiRoot}/chat/${encode(chatGuid)}/typing?password=${encode(settings.guidAuthKey)}"
-                val req = if (isTyping) {
-                    Request.Builder().url(url).post("{}".toRequestBody(jsonMediaType)).build()
-                } else {
-                    Request.Builder().url(url).delete().build()
-                }
-                client.newCall(req).execute().close()
-            } catch (_: Exception) {
-            }
-        }
-    }
-
     fun setWatchActive(context: Context, active: Boolean) {
         if (active) {
             startSocketRelay(context.applicationContext)
@@ -839,7 +901,7 @@ object WearSyncManager {
             delay(SOCKET_IDLE_TIMEOUT_MS)
             stopSocketRelay()
         }
-        if (relaySocket?.connected() == true) return
+        if (relaySocket != null) return
         val settings = SettingsHelper(context)
         if (!settings.hasServerUrl() || !settings.hasAuthKey()) return
         try {
@@ -854,22 +916,15 @@ object WearSyncManager {
                 .setExtraHeaders(extraHeaders)
                 .build()
             val sock = IO.socket(settings.origin, opts)
-            sock.on("new-message") { args ->
-                val raw = args.firstOrNull() as? JSONObject ?: return@on
-                scope.launch {
-                    val obj = JsonParser.parseString(raw.toString()).asObjOrNull() ?: return@launch
-                    val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid") ?: return@launch
-                    val dto = mapMessageToRelayJson(obj, chatGuid)
-                    sendMessageToWatchNodes(context, PATH_NEW_MESSAGE, dto.toString().toByteArray())
-                }
-            }
-            sock.on("updated-message") { args ->
-                val raw = args.firstOrNull() as? JSONObject ?: return@on
-                scope.launch {
-                    val obj = JsonParser.parseString(raw.toString()).asObjOrNull() ?: return@launch
-                    val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid") ?: return@launch
-                    val dto = mapMessageToRelayJson(obj, chatGuid)
-                    sendMessageToWatchNodes(context, PATH_UPDATED_MESSAGE, dto.toString().toByteArray())
+            listOf("new-message" to PATH_NEW_MESSAGE, "updated-message" to PATH_UPDATED_MESSAGE).forEach { (event, path) ->
+                sock.on(event) { args ->
+                    val raw = args.firstOrNull() as? JSONObject ?: return@on
+                    scope.launch {
+                        val obj = JsonParser.parseString(raw.toString()).asObjOrNull() ?: return@launch
+                        val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid") ?: return@launch
+                        val dto = mapMessageToRelayJson(obj, chatGuid)
+                        sendMessageToWatchNodes(context, path, dto.toString().toByteArray())
+                    }
                 }
             }
             sock.on("typing-indicator") { args ->
@@ -943,7 +998,6 @@ object WearSyncManager {
         val req = PutDataMapRequest.create("$PATH_AVATAR_PREFIX$safeKey").apply {
             dataMap.putString("key", normalizedKey)
             dataMap.putAsset("avatar", Asset.createFromBytes(bytes))
-            dataMap.putLong("updatedAt", System.currentTimeMillis())
         }.asPutDataRequest()
         Wearable.getDataClient(context).putDataItem(req).await()
     }
@@ -995,7 +1049,9 @@ object WearSyncManager {
         }
     }
 
-    private fun buildOkHttpClient(settings: SettingsHelper, minReadTimeoutMs: Long = 15_000L): OkHttpClient {
+    private val baseOkHttpClient: OkHttpClient by lazy { OkHttpClient() }
+
+    internal fun buildOkHttpClient(settings: SettingsHelper, minReadTimeoutMs: Long = 15_000L): OkHttpClient {
         val timeout = settings.apiTimeout.toLong().coerceAtLeast(15_000L)
         val readTimeout = timeout.coerceAtLeast(minReadTimeoutMs)
         val headersInterceptor = Interceptor { chain ->
@@ -1003,7 +1059,7 @@ object WearSyncManager {
             settings.getAllHeaders().forEach { (k, v) -> builder.addHeader(k, v) }
             chain.proceed(builder.build())
         }
-        return OkHttpClient.Builder()
+        return baseOkHttpClient.newBuilder()
             .connectTimeout(timeout, TimeUnit.MILLISECONDS)
             .readTimeout(readTimeout, TimeUnit.MILLISECONDS)
             .writeTimeout(timeout, TimeUnit.MILLISECONDS)
@@ -1017,6 +1073,7 @@ object WearSyncManager {
         return JsonObject().apply {
             addProperty("guid", msg.str("guid") ?: UUID.randomUUID().toString())
             addProperty("chatGuid", chatGuid)
+            msg.str("tempGuid")?.let { addProperty("tempGuid", it) }
             addProperty("text", msg.str("text"))
             addProperty("isFromMe", msg.bool("isFromMe") ?: false)
             addProperty("dateCreated", msg.long("dateCreated") ?: System.currentTimeMillis())
@@ -1027,6 +1084,7 @@ object WearSyncManager {
             addProperty("attachmentMimeType", firstAtt?.str("mimeType"))
             addProperty("associatedMessageGuid", msg.str("associatedMessageGuid"))
             addProperty("associatedMessageType", msg.str("associatedMessageType"))
+            addProperty("associatedMessageEmoji", msg.str("associatedMessageEmoji"))
         }
     }
 

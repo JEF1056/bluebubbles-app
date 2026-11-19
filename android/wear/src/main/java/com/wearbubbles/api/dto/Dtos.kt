@@ -72,6 +72,7 @@ data class HandleDto(
 
 data class MessageDto(
     val guid: String,
+    val tempGuid: String? = null,
     val text: String? = null,
     val isFromMe: Boolean = false,
     val dateCreated: Long = 0,
@@ -128,6 +129,7 @@ data class ChatRelayDto(
 data class MessageRelayDto(
     val guid: String,
     val chatGuid: String,
+    val tempGuid: String? = null,
     val text: String? = null,
     val isFromMe: Boolean = false,
     val dateCreated: Long = 0L,

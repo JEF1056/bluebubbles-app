@@ -492,8 +492,8 @@ class ExpressiveChatOptions extends StatelessWidget {
                   onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
                 ),
                 BBDialogAction(
-                  text: "Yes",
-                  isDefault: true,
+                  text: "Clear",
+                  isDestructive: true,
                   onPressed: () async {
                     Navigator.of(context, rootNavigator: true).pop();
                     chat.clearTranscript();
@@ -563,6 +563,7 @@ class ExpressiveChatOptions extends StatelessWidget {
           "Are you sure you want to leave this chat? You will no longer receive messages from this group."),
       yesText: "Leave",
       yesColor: context.theme.colorScheme.error,
+      yesIsDestructive: true,
       onNo: () => Navigator.of(context, rootNavigator: true).pop(),
       onYes: () async {
         Navigator.of(context, rootNavigator: true).pop();

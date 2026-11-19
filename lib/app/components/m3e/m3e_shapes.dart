@@ -7,11 +7,15 @@ abstract final class M3EShapes {
   static const double sm = 8;
   static const double md = 12;
   static const double lg = 16;
+  static const double lgIncreased = 20;
   static const double xl = 28;
+  static const double xlIncreased = 32;
   static const double xxl = 48;
 
   static const BorderRadius radiusLg = BorderRadius.all(Radius.circular(lg));
+  static const BorderRadius radiusLgIncreased = BorderRadius.all(Radius.circular(lgIncreased));
   static const BorderRadius radiusXl = BorderRadius.all(Radius.circular(xl));
+  static const BorderRadius radiusXlIncreased = BorderRadius.all(Radius.circular(xlIncreased));
 
   /// Connected-group corners: outer corners of the group are [outer], the seams between
   /// adjacent children are [inner]. A single child is fully [outer].

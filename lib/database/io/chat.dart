@@ -305,6 +305,7 @@ class Chat {
     bool updateCustomThemes = false,
     bool updateWallpaperSettings = false,
     bool updateKnownGroupPhotoGuid = false,
+    bool updateServiceName = false,
   }) async {
     if (kIsWeb) return this;
 
@@ -333,6 +334,7 @@ class Chat {
         'updateCustomThemes': updateCustomThemes,
         'updateWallpaperSettings': updateWallpaperSettings,
         'updateKnownGroupPhotoGuid': updateKnownGroupPhotoGuid,
+        'updateServiceName': updateServiceName,
       },
     );
 
@@ -1008,9 +1010,35 @@ class Chat {
     }
   }
 
+  static final Map<String, String?> _cachedServerBgGuids = {};
+  static final Map<String, Future<void>> _inFlightBgSyncs = {};
+
+  static String? cachedServerBackgroundGuid(String guid) {
+    if (_cachedServerBgGuids.containsKey(guid)) {
+      return _cachedServerBgGuids[guid];
+    }
+    final bgGuid = serverBackgroundGuidFromPath(FilesystemSvc.getExistingChatBackgroundPath(guid));
+    _cachedServerBgGuids[guid] = bgGuid;
+    return bgGuid;
+  }
+
+  static void invalidateServerBackgroundGuidCache(String guid, [String? bgGuid]) {
+    _cachedServerBgGuids[guid] = bgGuid;
+  }
+
   /// Syncs this chat's iOS/macOS wallpaper (`serverBackgroundGuid`) from the server
   /// without clobbering locally-picked image or dynamic wallpapers.
-  static Future<void> syncBackground(Chat c, {Chat? targetChat}) async {
+  static Future<void> syncBackground(Chat c, {Chat? targetChat}) {
+    final existing = _inFlightBgSyncs[c.guid];
+    if (existing != null) return existing;
+    final future = _syncBackgroundImpl(c, targetChat: targetChat).whenComplete(() {
+      _inFlightBgSyncs.remove(c.guid);
+    });
+    _inFlightBgSyncs[c.guid] = future;
+    return future;
+  }
+
+  static Future<void> _syncBackgroundImpl(Chat c, {Chat? targetChat}) async {
     final serverGuid = c.serverBackgroundGuid;
     final existingPath = FilesystemSvc.getExistingChatBackgroundPath(c.guid);
     final target = targetChat ?? c;
@@ -1022,11 +1050,13 @@ class Chat {
       existingPath: existingPath,
       wallpaperType: currentWallpaperType,
     )) {
+      _cachedServerBgGuids[c.guid] = serverBackgroundGuidFromPath(existingPath);
       return;
     }
 
     if (serverGuid == null) {
       await ChatsSvc.clearChatWallpaper(target);
+      _cachedServerBgGuids[c.guid] = null;
       return;
     }
 
@@ -1052,6 +1082,7 @@ class Chat {
     await file.create(recursive: true);
     await file.writeAsBytes(response.data);
     await ChatsSvc.setChatCustomBackgroundPath(target, file.path);
+    _cachedServerBgGuids[c.guid] = serverGuid;
   }
 
   Map<String, dynamic> toMap() {

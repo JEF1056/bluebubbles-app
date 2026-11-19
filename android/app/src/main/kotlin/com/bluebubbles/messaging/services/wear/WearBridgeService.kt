@@ -96,16 +96,28 @@ class WearBridgeService : WearableListenerService() {
                 val chatGuid = parseJson(dataStr)?.str("chatGuid") ?: return
                 WearSyncManager.handleDismissFromWatch(applicationContext, chatGuid)
             }
-            WearSyncManager.PATH_TYPING -> {
-                val obj = parseJson(dataStr) ?: return
-                val chatGuid = obj.str("chatGuid") ?: return
-                val isTyping = obj.has("isTyping") && !obj.get("isTyping").isJsonNull && obj.get("isTyping").asBoolean
-                WearSyncManager.forwardTyping(applicationContext, chatGuid, isTyping)
-            }
             WearSyncManager.PATH_WATCH_ACTIVE -> {
                 val obj = parseJson(dataStr)
                 val active = obj != null && obj.has("active") && obj.get("active").asBoolean
                 WearSyncManager.setWatchActive(applicationContext, active)
+            }
+            WearSyncManager.PATH_ANSWER_CALL_AUDIO -> {
+                val obj = parseJson(dataStr) ?: return
+                val callUuid = obj.str("callUuid") ?: return
+                WearSyncManager.handleAnswerCallAudioFromWatch(
+                    context = applicationContext,
+                    callUuid = callUuid,
+                    callerNameArg = obj.str("callerName"),
+                    callerAddressArg = obj.str("callerAddress")
+                )
+            }
+            WearSyncManager.PATH_DECLINE_CALL -> {
+                val callUuid = parseJson(dataStr)?.str("callUuid") ?: return
+                WearSyncManager.handleDeclineCallFromWatch(applicationContext, callUuid)
+            }
+            WearSyncManager.PATH_OPEN_CHAT -> {
+                val chatGuid = parseJson(dataStr)?.str("chatGuid") ?: return
+                WearSyncManager.handleOpenChatFromWatch(applicationContext, chatGuid)
             }
         }
     }

@@ -307,23 +307,6 @@ class HttpService(private val context: Context) {
             onError = onError
         )
     }
-
-    fun setFaceTimeMuted(
-        callUuid: String,
-        muted: Boolean,
-        onSuccess: (() -> Unit)? = null,
-        onError: ((String) -> Unit)? = null
-    ) {
-        if (!validateConnection()) {
-            onError?.invoke("No server URL configured")
-            return
-        }
-        executeApiCall(
-            call = api.setFaceTimeMuted(callUuid, settings.guidAuthKey, FaceTimeSetMutedRequest(muted)),
-            onSuccess = { onSuccess?.invoke() },
-            onError = onError
-        )
-    }
     
     /**
      * Execute an API call with error handling and optional retry for Cloudflare

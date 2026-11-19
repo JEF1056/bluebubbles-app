@@ -43,20 +43,3 @@ Future<String> requestWebNotificationPermission() async {
   final result = await web.Notification.requestPermission().toDart;
   return result.toDart;
 }
-
-void showWebNotification({
-  required String title,
-  String? body,
-  String? icon,
-  String? tag,
-  void Function()? onClick,
-}) {
-  final options = web.NotificationOptions();
-  if (body != null) options.body = body;
-  if (icon != null) options.icon = icon;
-  if (tag != null) options.tag = tag;
-  final notif = web.Notification(title, options);
-  if (onClick != null) {
-    notif.onclick = ((web.Event _) => onClick()).toJS;
-  }
-}

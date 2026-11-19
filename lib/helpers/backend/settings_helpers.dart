@@ -3,6 +3,7 @@ import 'package:bluebubbles/helpers/network/network_helpers.dart';
 import 'package:bluebubbles/helpers/network/network_tasks.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
 
@@ -76,7 +77,7 @@ Future<void> clearServerUrl(
 /// concept, so everywhere else reports true — callers use this to decide whether to
 /// nag the user, and a check that can never pass would nag forever.
 Future<bool> isBatteryOptimizationDisabled() async {
-  if (!Platform.isAndroid) return true;
+  if (kIsWeb || !Platform.isAndroid) return true;
   return await Permission.ignoreBatteryOptimizations.isGranted;
 }
 

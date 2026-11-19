@@ -239,6 +239,7 @@ class Chat {
     bool updateCustomThemes = false,
     bool updateWallpaperSettings = false,
     bool updateKnownGroupPhotoGuid = false,
+    bool updateServiceName = false,
   }) async {
     await ChatInterface.saveChat(
       guid: guid,
@@ -265,6 +266,7 @@ class Chat {
         'updateCustomThemes': updateCustomThemes,
         'updateWallpaperSettings': updateWallpaperSettings,
         'updateKnownGroupPhotoGuid': updateKnownGroupPhotoGuid,
+        'updateServiceName': updateServiceName,
       },
     );
     (WebListeners.notifyChat as dynamic)(this);
@@ -793,6 +795,10 @@ class Chat {
   }
 
   static Future<void> getIcon(Chat c, {bool force = false}) async {}
+
+  static String? cachedServerBackgroundGuid(String guid) => null;
+
+  static void invalidateServerBackgroundGuidCache(String guid, [String? bgGuid]) {}
 
   static Future<void> syncBackground(Chat c, {Chat? targetChat}) async {}
 

@@ -17,8 +17,6 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.LinkOff
@@ -42,25 +40,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.ListHeader
 import androidx.wear.compose.material.Switch
 import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.dialog.Alert
-import androidx.wear.compose.material.dialog.Dialog
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.BuildConfig
+import com.wearbubbles.ui.components.WearConfirmModal
 import com.wearbubbles.ui.theme.ErrorColor
-import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
-import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.SuccessColor
 import com.wearbubbles.ui.theme.WearPillButton
 import com.wearbubbles.ui.theme.centeredTextStyle
@@ -287,61 +280,18 @@ fun SettingsScreen(
         }
     }
 
-    Dialog(
-        showDialog = showResetConfirm,
-        onDismissRequest = { showResetConfirm = false }
-    ) {
-        Alert(
-            backgroundColor = palette.canvas,
-            title = {
-                Text(
-                    text = "Reset watch?",
-                    style = centeredTextStyle(15.sp, 20.sp, FontWeight.SemiBold),
-                    color = palette.onSurface,
-                    textAlign = TextAlign.Center
-                )
-            },
-            content = {
-                Text(
-                    text = "Clears saved server credentials and local message cache.",
-                    style = centeredTextStyle(12.sp, 16.sp),
-                    color = palette.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            },
-            negativeButton = {
-                Button(
-                    onClick = { showResetConfirm = false },
-                    colors = ButtonDefaults.secondaryButtonColors(
-                        backgroundColor = palette.surfaceContainerHigh,
-                        contentColor = palette.onSurface
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Cancel",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            },
-            positiveButton = {
-                Button(
-                    onClick = {
-                        showResetConfirm = false
-                        viewModel.resetSetup()
-                    },
-                    colors = ButtonDefaults.primaryButtonColors(
-                        backgroundColor = ErrorContainer,
-                        contentColor = OnErrorContainer
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Check,
-                        contentDescription = "Reset",
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-        )
-    }
+    WearConfirmModal(
+        show = showResetConfirm,
+        onDismiss = { showResetConfirm = false },
+        title = "Reset watch?",
+        message = "Clears saved server credentials and local messages.",
+        confirmLabel = "Reset watch",
+        onConfirm = {
+            showResetConfirm = false
+            viewModel.resetSetup()
+        },
+        dismissLabel = "Keep setup",
+        icon = Icons.Rounded.LinkOff,
+        destructive = true
+    )
 }

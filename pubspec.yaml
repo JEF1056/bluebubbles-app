@@ -251,6 +251,8 @@ dev_dependencies:
   build_runner: ^2.7.1
   flutter_test:
     sdk: flutter
+  integration_test:
+    sdk: flutter
   flutter_launcher_icons: ^0.14.3
   flutter_lints: ^6.0.0
   peanut: ^6.0.0
@@ -284,10 +286,12 @@ objectbox:
 
 # The following section is specific to Flutter.
 flutter:
-  # fonts:
-  # - family: AppleColorEmoji
-  #   fonts:
-  #     - asset: assets/fonts/AppleColorEmoji.ttf
+  fonts:
+    - family: GoogleSans
+      fonts:
+        - asset: assets/fonts/GoogleSans-Variable.ttf
+        - asset: assets/fonts/GoogleSans-Italic-Variable.ttf
+          style: italic
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
@@ -326,6 +330,7 @@ flutter:
     - assets/badges/badge-8.ico
     - assets/badges/badge-9.ico
     - assets/badges/badge-10.ico
+    - assets/fonts/OFL.txt
     - .env
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/assets-and-images/#resolution-aware.

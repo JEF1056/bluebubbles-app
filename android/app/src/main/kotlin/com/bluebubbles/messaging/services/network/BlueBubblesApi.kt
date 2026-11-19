@@ -51,11 +51,4 @@ interface BlueBubblesApi {
         @Path("callUuid") callUuid: String,
         @Query("guid") guid: String
     ): Call<ApiResponse>
-
-    @POST("facetime/set-muted/{callUuid}")
-    fun setFaceTimeMuted(
-        @Path("callUuid") callUuid: String,
-        @Query("guid") guid: String,
-        @Body request: FaceTimeSetMutedRequest
-    ): Call<ApiResponse>
 }

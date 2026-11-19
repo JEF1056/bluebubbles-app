@@ -127,6 +127,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     fun deleteChat(guid: String) {
         viewModelScope.launch {
             chatRepo.deleteLocalChat(guid)
+            messageRepo.deleteMessagesForChat(guid)
         }
     }
 
@@ -155,12 +156,11 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 val headers = settings.getCustomHeaders()
                 if (url.isBlank() || pass.isBlank()) return@launch
                 val recent = db.messageDao().getRecentImageMessages(15)
-                val loader = coil.ImageLoader(getApplication())
-                val normalized = url.trimEnd('/')
+                val loader = coil.Coil.imageLoader(getApplication())
                 for (msg in recent) {
                     val attGuid = msg.attachmentGuid ?: continue
                     val reqBuilder = coil.request.ImageRequest.Builder(getApplication())
-                        .data("$normalized/api/v1/attachment/$attGuid/download?password=$pass")
+                        .data(com.wearbubbles.api.ApiClient.getAttachmentUrl(url, pass, attGuid))
                         .size(250, 250)
                     headers.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
                     loader.enqueue(reqBuilder.build())

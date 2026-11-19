@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/reply_bubble_section.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/reply_holder.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -450,6 +452,483 @@ void main() {
 
       expect(cvController.replyToMessage?.message.guid, 'rh-orig');
       expect(cvController.replyToMessage?.partIndex, 1);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    test('Material ReplyQuoteHookPainter aligns stem on reply side and midY with quoted bubble center', () {
+      const size = Size(300, 48); // 40dp quoted bubble + 8dp bottom gap
+      const quotedH = 40.0;
+
+      // Left-side row replying to right-side bubble: stem at x=18, top arm at midY=20 pointing right.
+      final leftToRight = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: true,
+        replyFromMe: false,
+        quotedBubbleWidth: 120,
+        quotedBubbleHeight: quotedH,
+      ).getBounds();
+      expect(leftToRight.left, closeTo(18.0, 0.01));
+      expect(leftToRight.right, closeTo(18.0 + 28.0, 0.01));
+      expect(leftToRight.top, closeTo(quotedH / 2.0, 0.01));
+      expect(leftToRight.bottom, closeTo(size.height, 0.01));
+
+      // Narrow width clamping: arm stops 6dp before quoted bubble left edge (300 - 260 - 6 = 34).
+      final clampedLeftToRight = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: true,
+        replyFromMe: false,
+        quotedBubbleWidth: 260,
+        quotedBubbleHeight: quotedH,
+      ).getBounds();
+      expect(clampedLeftToRight.right, lessThanOrEqualTo(300 - 260 - 6.0 + 0.01));
+
+      // Mirrored isFromMe reply: stem at x=300-18, top arm at midY=20 pointing left.
+      final rightToLeft = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: false,
+        replyFromMe: true,
+        quotedBubbleWidth: 120,
+        quotedBubbleHeight: quotedH,
+      ).getBounds();
+      expect(rightToLeft.right, closeTo(300 - 18.0, 0.01));
+      expect(rightToLeft.left, closeTo(300 - 18.0 - 28.0, 0.01));
+      expect(rightToLeft.top, closeTo(quotedH / 2.0, 0.01));
+      expect(rightToLeft.bottom, closeTo(size.height, 0.01));
+
+      // Narrow width clamping for isFromMe reply: arm stops 6dp after quoted bubble right edge (260 + 6 = 266).
+      final clampedRightToLeft = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: false,
+        replyFromMe: true,
+        quotedBubbleWidth: 260,
+        quotedBubbleHeight: quotedH,
+      ).getBounds();
+      expect(clampedRightToLeft.left, greaterThanOrEqualTo(260 + 6.0 - 0.01));
+
+      // Same-side replies draw a short vertical stem below the quoted bubble on the reply side.
+      final sameLeft = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: false,
+        replyFromMe: false,
+        quotedBubbleHeight: quotedH,
+      ).getBounds();
+      expect(sameLeft.left, closeTo(18.0, 0.01));
+      expect(sameLeft.right, closeTo(18.0, 0.01));
+      expect(sameLeft.top, closeTo(quotedH, 0.01));
+      expect(sameLeft.bottom, closeTo(size.height, 0.01));
+
+      final sameRight = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: true,
+        replyFromMe: true,
+        quotedBubbleHeight: quotedH,
+      ).getBounds();
+      expect(sameRight.left, closeTo(300 - 18.0, 0.01));
+      expect(sameRight.right, closeTo(300 - 18.0, 0.01));
+      expect(sameRight.top, closeTo(quotedH, 0.01));
+      expect(sameRight.bottom, closeTo(size.height, 0.01));
+    });
+
+    testWidgets('Material: right-side quoted reply bubble uses reduced opacity and renders hook box', (tester) async {
+      final chat = Chat(guid: 'iMessage;-;mat-reply-opacity', chatIdentifier: 'mat-reply-opacity');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+      if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+        Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      }
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+
+      final t0 = DateTime(2026, 11, 18, 15, 0, 0);
+      final orig = _msg(guid: 'mo-orig', text: 'My original message', createdAt: t0, isFromMe: true);
+      final reply = _msg(
+        guid: 'mo-reply',
+        text: 'Incoming reply',
+        createdAt: t0.add(const Duration(minutes: 2)),
+        isFromMe: false,
+        threadOriginatorGuid: 'mo-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      service.struct.addMessages([orig, reply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: MessageHolder(
+            cvController: cvController,
+            message: reply,
+            oldMessage: null,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final sectionFinder = find.byType(ReplyBubbleSection);
+      expect(sectionFinder, findsOneWidget);
+
+      final decoratedBox = tester.widget<DecoratedBox>(
+        find.descendant(of: sectionFinder, matching: find.byType(DecoratedBox)).first,
+      );
+      final boxDec = decoratedBox.decoration as BoxDecoration;
+      expect(boxDec.color!.a, closeTo(0.72, 0.02));
+
+      final align = tester.widget<Align>(
+        find.descendant(of: sectionFinder, matching: find.byType(Align)).first,
+      );
+      expect(align.alignment, Alignment.centerRight);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('Tapping out of reply thread view (backdrop, row side, or bubble) dismisses without jumpToMessage',
+        (tester) async {
+      final chat = Chat(guid: 'iMessage;-;thread-dismiss-nojump', chatIdentifier: 'thread-dismiss-nojump');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+      if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+        Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      }
+
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+      final jumpedGuids = <String>[];
+      service.jumpToMessage = jumpedGuids.add;
+
+      final t0 = DateTime(2026, 11, 18, 16, 0, 0);
+      final orig = _msg(guid: 'td-orig', text: 'Originator message', createdAt: t0, isFromMe: false);
+      final reply = _msg(
+        guid: 'td-reply',
+        text: 'Short reply',
+        createdAt: t0.add(const Duration(minutes: 1)),
+        isFromMe: true,
+        threadOriginatorGuid: 'td-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      service.struct.addMessages([orig, reply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () => showReplyThread(
+                  context,
+                  orig,
+                  MessagePart(part: 0, text: orig.text),
+                  service,
+                  cvController,
+                ),
+                child: const Text('Open Thread'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Tap the empty space on the left side of the sent reply row (previously caught by row AbsorbPointer).
+      await tester.tap(find.text('Open Thread'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+
+      final replyTextRect = tester.getRect(find.textContaining('Short reply', findRichText: true).last);
+      await tester.tapAt(Offset(16, replyTextRect.center.dy));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Close thread'), findsNothing);
+      expect(jumpedGuids, isEmpty);
+
+      // 2. Tap directly on a message bubble inside the thread view.
+      await tester.tap(find.text('Open Thread'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+
+      final origRect = tester.getRect(find.textContaining('Originator message', findRichText: true).last);
+      await tester.tapAt(origRect.center);
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Close thread'), findsNothing);
+      expect(jumpedGuids, isEmpty);
+
+      // 3. Tap the blurred backdrop above the message list.
+      await tester.tap(find.text('Open Thread'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+
+      await tester.tapAt(const Offset(100, 90));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Close thread'), findsNothing);
+      expect(jumpedGuids, isEmpty);
+
+      // 4. Vertical drag inside a scrollable thread scrolls without dismissing or jumping.
+      final manyReplies = List.generate(
+        18,
+        (i) => _msg(
+          guid: 'td-many-$i',
+          text: 'Scrollable reply item $i with extra text to fill space',
+          createdAt: t0.add(Duration(minutes: 2 + i)),
+          isFromMe: i.isEven,
+          threadOriginatorGuid: 'td-orig',
+          threadOriginatorPart: '0:0:0',
+        ),
+      );
+      service.struct.addMessages(manyReplies);
+
+      await tester.tap(find.text('Open Thread'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+
+      final scrollView = find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(SingleChildScrollView),
+      );
+      final scrollableFinder = scrollView.evaluate().isNotEmpty ? scrollView : find.byType(SingleChildScrollView);
+      await tester.drag(scrollableFinder.first, const Offset(0, 200));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      expect(jumpedGuids, isEmpty);
+
+      // Dismiss cleanly via close button.
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+      expect(jumpedGuids, isEmpty);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('Tapping Material L-hook and quote-hook bars opens thread without hijacking bubble/empty/select taps',
+        (tester) async {
+      final chat = Chat(guid: 'iMessage;-;tap-bars-material', chatIdentifier: 'tap-bars-material');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+      if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+        Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      }
+
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+
+      final t0 = DateTime(2026, 11, 18, 17, 0, 0);
+      final orig = _msg(guid: 'bar-orig', text: 'Originator question', createdAt: t0, isFromMe: false);
+      final directReply = _msg(
+        guid: 'bar-direct-reply',
+        text: 'Direct reply',
+        createdAt: t0.add(const Duration(minutes: 1)),
+        isFromMe: true,
+        threadOriginatorGuid: 'bar-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      final unrelated = _msg(
+        guid: 'bar-unrelated',
+        text: 'Unrelated message',
+        createdAt: t0.add(const Duration(minutes: 2)),
+        isFromMe: false,
+      );
+      final quotedReply = _msg(
+        guid: 'bar-quoted-reply',
+        text: 'Quoted reply',
+        createdAt: t0.add(const Duration(minutes: 3)),
+        isFromMe: true,
+        threadOriginatorGuid: 'bar-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      service.struct.addMessages([orig, directReply, unrelated, quotedReply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: ListView(
+            children: [
+              MessageHolder(cvController: cvController, message: orig, newMessage: directReply),
+              MessageHolder(
+                cvController: cvController,
+                message: directReply,
+                oldMessage: orig,
+                newMessage: unrelated,
+              ),
+              MessageHolder(
+                cvController: cvController,
+                message: unrelated,
+                oldMessage: directReply,
+                newMessage: quotedReply,
+              ),
+              MessageHolder(
+                cvController: cvController,
+                message: quotedReply,
+                oldMessage: unrelated,
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Tap the Material L-hook bar on directReply (isFromMe=true => hook sits at left margin x ~ 18..46).
+      final directHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'bar-direct-reply');
+      final directLineBox = find.descendant(of: directHolder, matching: find.byType(ReplyLineBox));
+      final directRect = tester.getRect(directLineBox);
+
+      // Tapping empty space in the middle of the row should NOT open thread view.
+      await tester.tapAt(Offset(directRect.center.dx, directRect.center.dy));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
+
+      // Tapping the message bubble itself should NOT open thread view.
+      await tester.tap(find.textContaining('Direct reply', findRichText: true).first);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
+
+      // Tapping the white L-hook bar opens thread view.
+      await tester.tapAt(Offset(directRect.left + 20, directRect.top + 12));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
+
+      // 2. Tap the Material quote-hook bar on quotedReply (quotedFromMe=false, replyFromMe=true => hook on right).
+      final quotedHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'bar-quoted-reply');
+      final sectionRect = tester.getRect(find.descendant(of: quotedHolder, matching: find.byType(ReplyBubbleSection)));
+
+      // Tapping empty center of the quote row should NOT open thread view.
+      await tester.tapAt(Offset(sectionRect.center.dx, sectionRect.center.dy));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
+
+      // Tapping the white curved quote hook on the right side opens thread view.
+      await tester.tapAt(Offset(sectionRect.right - 20, sectionRect.bottom - 10));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+
+      // 3. In select mode, tapping the L-hook selects the message instead of opening thread view.
+      cvController.inSelectMode.value = true;
+      await tester.pump();
+      await tester.tapAt(Offset(directRect.left + 20, directRect.top + 12));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
+      expect(cvController.isSelected('bar-direct-reply'), isTrue);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('iOS: tapping thread connector bar opens thread without hijacking bubble tap', (tester) async {
+      final chat = Chat(guid: 'iMessage;-;tap-bars-ios', chatIdentifier: 'tap-bars-ios');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+      if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+        Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      }
+
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+
+      final t0 = DateTime(2026, 11, 18, 18, 0, 0);
+      final orig = _msg(guid: 'ios-orig', text: 'iOS originator', createdAt: t0, isFromMe: true);
+      final reply = _msg(
+        guid: 'ios-reply',
+        text: 'iOS reply',
+        createdAt: t0.add(const Duration(minutes: 1)),
+        isFromMe: true,
+        threadOriginatorGuid: 'ios-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      service.struct.addMessages([orig, reply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.iOS,
+          child: ListView(
+            children: [
+              MessageHolder(cvController: cvController, message: orig, newMessage: reply),
+              MessageHolder(cvController: cvController, message: reply, oldMessage: orig),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final replyHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'ios-reply');
+      final replyLineRect = tester.getRect(find.descendant(of: replyHolder, matching: find.byType(ReplyLineBox)));
+
+      // Tapping the bubble itself should NOT open thread view.
+      await tester.tap(find.textContaining('iOS reply', findRichText: true).first);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
+
+      // Tapping the iOS vertical connector line at x ~ 35 opens thread view.
+      await tester.tapAt(Offset(replyLineRect.left + 35, replyLineRect.center.dy));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+
+      // Tapping the iOS originator's lower connector line also opens thread view.
+      final origHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'ios-orig');
+      final origLineRect = tester.getRect(find.descendant(of: origHolder, matching: find.byType(ReplyLineBox)));
+      await tester.tapAt(Offset(origLineRect.left + 35, origLineRect.center.dy));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+
+      // Tapping the iOS connector line beside a quoted same-side ReplyBubbleSection also opens thread view.
+      final unrelated = _msg(
+        guid: 'ios-unrelated',
+        text: 'Middle message',
+        createdAt: t0.add(const Duration(minutes: 2)),
+        isFromMe: false,
+      );
+      final quotedReply = _msg(
+        guid: 'ios-quoted-reply',
+        text: 'Later reply',
+        createdAt: t0.add(const Duration(minutes: 3)),
+        isFromMe: true,
+        threadOriginatorGuid: 'ios-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      service.struct.addMessages([unrelated, quotedReply]);
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.iOS,
+          child: ListView(
+            children: [
+              MessageHolder(cvController: cvController, message: orig, newMessage: reply),
+              MessageHolder(cvController: cvController, message: reply, oldMessage: orig, newMessage: unrelated),
+              MessageHolder(cvController: cvController, message: unrelated, oldMessage: reply, newMessage: quotedReply),
+              MessageHolder(cvController: cvController, message: quotedReply, oldMessage: unrelated),
+            ],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final quotedHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'ios-quoted-reply');
+      final quotedSectionRect =
+          tester.getRect(find.descendant(of: quotedHolder, matching: find.byType(ReplyBubbleSection)));
+      await tester.tapAt(Offset(quotedSectionRect.left + 35, quotedSectionRect.center.dy));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
 
       Get.delete<ConversationViewController>(tag: chat.guid, force: true);
       Get.delete<MessagesService>(tag: chat.guid, force: true);

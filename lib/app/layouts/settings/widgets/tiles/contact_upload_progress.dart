@@ -20,55 +20,45 @@ class ContactUploadProgress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      title: Text("Uploading contacts...", style: context.theme.textTheme.titleLarge),
-      content: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Obx(
-            () => Text(
-              '${progress.value != null && totalSize.value != null ? (progress.value! * totalSize.value! / 1000).getFriendlySize(withSuffix: false) : ""} / ${((totalSize.value ?? 0).toDouble() / 1000).getFriendlySize()} (${((progress.value ?? 0) * 100).floor()}%)',
-              style: context.theme.textTheme.bodyLarge,
-            ),
-          ),
-          const SizedBox(height: 10.0),
-          Obx(
-            () => LinearProgressIndicator(
-              backgroundColor: context.theme.colorScheme.outline,
-              value: progress.value,
-              minHeight: 5,
-              valueColor: AlwaysStoppedAnimation<Color>(
-                context.theme.colorScheme.primary,
+    return Obx(() => BBProgressDialog(
+          title: progress.value == 1 ? "Upload Complete" : "Uploading contacts...",
+          body: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(
+                '${progress.value != null && totalSize.value != null ? (progress.value! * totalSize.value! / 1000).getFriendlySize(withSuffix: false) : ""} / ${((totalSize.value ?? 0).toDouble() / 1000).getFriendlySize()} (${((progress.value ?? 0) * 100).floor()}%)',
+                style: context.theme.textTheme.bodyMedium,
               ),
-            ),
-          ),
-          const SizedBox(height: 15.0),
-          Obx(
-            () => Text(
-              progress.value == 1
-                  ? "Upload Complete!"
-                  : "You can close this dialog. Contacts will continue to upload in the background.",
-              textAlign: TextAlign.center,
-              style: context.theme.textTheme.bodyLarge,
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        Obx(
-          () => uploadingContacts.value
-              ? const SizedBox.shrink()
-              : TextButton(
-                  onPressed: onClose,
-                  child: Text(
-                    "Close",
-                    style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary),
+              const SizedBox(height: 12.0),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
+                  value: progress.value,
+                  minHeight: 6,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    context.theme.colorScheme.primary,
                   ),
                 ),
-        ),
-      ],
-    );
+              ),
+              const SizedBox(height: 12.0),
+              Text(
+                progress.value == 1
+                    ? "Upload Complete!"
+                    : "You can close this dialog. Contacts will continue to upload in the background.",
+                textAlign: TextAlign.center,
+                style: context.theme.textTheme.bodyMedium,
+              ),
+            ],
+          ),
+          actions: [
+            if (!uploadingContacts.value)
+              BBDialogAction(
+                text: "Close",
+                isDefault: true,
+                onPressed: onClose,
+              ),
+          ],
+        ));
   }
 }

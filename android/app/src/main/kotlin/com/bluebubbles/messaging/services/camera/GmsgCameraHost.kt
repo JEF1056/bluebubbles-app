@@ -30,6 +30,8 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import com.bluebubbles.messaging.Constants
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -66,15 +68,12 @@ class GmsgCameraHost private constructor(
     private val previewViews = HashMap<Int, PreviewView>()
     private var activeViewId: Int? = null
     private var cameraProvider: ProcessCameraProvider? = null
-    private var extensionsManager: ExtensionsManager? = null
     private var camera: Camera? = null
-    private var preview: Preview? = null
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
     private var pendingStopResult: MethodChannel.Result? = null
     private var currentVideoMode = false
-    private var currentFlashMode = "off"
     private var initGeneration = 0
 
     private val orientationListener = object : OrientationEventListener(activity) {
@@ -89,6 +88,22 @@ class GmsgCameraHost private constructor(
             imageCapture?.targetRotation = rotation
             videoCapture?.targetRotation = rotation
         }
+    }
+
+    private val lifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            if (camera != null && orientationListener.canDetectOrientation()) {
+                orientationListener.enable()
+            }
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            orientationListener.disable()
+        }
+    }
+
+    init {
+        activity.lifecycle.addObserver(lifecycleObserver)
     }
 
     private inner class ViewFactory : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
@@ -190,7 +205,6 @@ class GmsgCameraHost private constructor(
                     Log.w(Constants.logTag, "CameraX ExtensionsManager unavailable, falling back to MAXIMIZE_QUALITY", e)
                     null
                 }
-                extensionsManager = extMgr
                 bindCamera(provider, extMgr, viewId, previewView, requestedLens, videoMode, flashMode, result)
             }, mainExecutor)
         }, mainExecutor)
@@ -303,10 +317,8 @@ class GmsgCameraHost private constructor(
             }
 
             activeViewId = viewId
-            preview = previewUseCase
             camera = boundCamera
             currentVideoMode = videoMode
-            currentFlashMode = flashMode
             if (orientationListener.canDetectOrientation()) {
                 orientationListener.enable()
             }
@@ -345,7 +357,6 @@ class GmsgCameraHost private constructor(
             result.error("no_flash", "Camera has no flash unit", null)
             return
         }
-        currentFlashMode = mode
         imageCapture?.flashMode = mapFlashMode(mode)
         if (currentVideoMode) {
             cam.cameraControl.enableTorch(mode == "always")
@@ -465,7 +476,6 @@ class GmsgCameraHost private constructor(
         runCatching { cameraProvider?.unbindAll() }
         activeViewId = null
         camera = null
-        preview = null
         imageCapture = null
         videoCapture = null
     }

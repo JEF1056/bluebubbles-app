@@ -229,30 +229,21 @@ class AttachmentActions {
     );
     canvas = kIsDesktop ? SizedBox.square(dimension: 380, child: canvas) : AspectRatio(aspectRatio: 1, child: canvas);
 
-    await showDialog(
+    await showBBDialog(
       context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text("Draw Handwriten Message", style: context.theme.textTheme.titleLarge),
-          content: canvas,
-          actions: [
-            TextButton(
-              child: Text(
-                "Cancel",
-                style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
-              ),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: Text(
-                "OK",
-                style: context.theme.textTheme.bodyLarge!.copyWith(color: Get.context!.theme.colorScheme.primary),
-              ),
-              onPressed: () async {
-                Navigator.of(context).pop();
-                final bytes = await control.toImage(height: 512, fit: false);
+      title: "Draw Handwriten Message",
+      content: canvas,
+      actions: [
+        BBDialogAction(
+          text: "Cancel",
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
+        BBDialogAction(
+          text: "OK",
+          isDefault: true,
+          onPressed: () async {
+            Navigator.of(context, rootNavigator: true).pop();
+            final bytes = await control.toImage(height: 512, fit: false);
                 if (bytes != null) {
                   final uint8 = bytes.buffer.asUint8List();
                   controller.pickedAttachments.add(
@@ -268,10 +259,7 @@ class AttachmentActions {
               },
             ),
           ],
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
         );
-      },
-    );
   }
 
   // ---------------------------------------------------------------------------

@@ -554,62 +554,54 @@ class _ThemingPanelState extends CustomState<ThemingPanel, void, ThemingPanelCon
                             bool dialogOpen = true;
                             showDialog(
                               context: context,
-                              builder: (context) => AlertDialog(
-                                backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                                title: Text("Downloading font file...", style: context.theme.textTheme.titleLarge),
-                                content: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: <Widget>[
-                                      Obx(
-                                        () => Text(
-                                            '${HttpSvc.fontDownloadProgress.value != null && HttpSvc.fontDownloadTotalSize.value != null ? (HttpSvc.fontDownloadProgress.value! * HttpSvc.fontDownloadTotalSize.value!).getFriendlySize(withSuffix: false) : ""} / ${(HttpSvc.fontDownloadTotalSize.value ?? 0).toDouble().getFriendlySize()} (${((HttpSvc.fontDownloadProgress.value ?? 0) * 100).floor()}%)',
-                                            style: context.theme.textTheme.bodyLarge),
-                                      ),
-                                      const SizedBox(height: 10.0),
-                                      Obx(
-                                        () => ClipRRect(
-                                          borderRadius: BorderRadius.circular(20),
+                              builder: (dialogContext) => Obx(() => BBProgressDialog(
+                                    title: HttpSvc.fontDownloadProgress.value == 1
+                                        ? "Download Complete"
+                                        : "Downloading font file...",
+                                    body: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: <Widget>[
+                                        Text(
+                                          '${HttpSvc.fontDownloadProgress.value != null && HttpSvc.fontDownloadTotalSize.value != null ? (HttpSvc.fontDownloadProgress.value! * HttpSvc.fontDownloadTotalSize.value!).getFriendlySize(withSuffix: false) : ""} / ${(HttpSvc.fontDownloadTotalSize.value ?? 0).toDouble().getFriendlySize()} (${((HttpSvc.fontDownloadProgress.value ?? 0) * 100).floor()}%)',
+                                          style: dialogContext.theme.textTheme.bodyMedium,
+                                        ),
+                                        const SizedBox(height: 12.0),
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(4),
                                           child: LinearProgressIndicator(
-                                            backgroundColor: context.theme.colorScheme.outline,
-                                            valueColor:
-                                                AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
+                                            backgroundColor: dialogContext.theme.colorScheme.surfaceContainerHighest,
+                                            valueColor: AlwaysStoppedAnimation<Color>(
+                                                dialogContext.theme.colorScheme.primary),
                                             value: HttpSvc.fontDownloadProgress.value,
-                                            minHeight: 5,
+                                            minHeight: 6,
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(
-                                        height: 15.0,
-                                      ),
-                                      Obx(() => Text(
-                                            HttpSvc.fontDownloadProgress.value == 1
-                                                ? "Download Complete!"
-                                                : "You can close this dialog. The font will continue to download in the background.",
-                                            textAlign: TextAlign.center,
-                                            style: context.theme.textTheme.bodyLarge,
-                                          )),
-                                    ]),
-                                actions: [
-                                  Obx(
-                                    () => HttpSvc.downloadingFont.value
-                                        ? const SizedBox(height: 0, width: 0)
-                                        : TextButton(
-                                            child: Text("Close",
-                                                style: context.theme.textTheme.bodyLarge!
-                                                    .copyWith(color: context.theme.colorScheme.primary)),
-                                            onPressed: () async {
-                                              Get.closeAllSnackbars();
-                                              Navigator.of(context, rootNavigator: true).pop();
-                                              Future.delayed(const Duration(milliseconds: 400), () {
-                                                HttpSvc.fontDownloadProgress.value = null;
-                                                HttpSvc.fontDownloadTotalSize.value = null;
-                                              });
-                                            },
-                                          ),
-                                  ),
-                                ],
-                              ),
+                                        const SizedBox(height: 12.0),
+                                        Text(
+                                          HttpSvc.fontDownloadProgress.value == 1
+                                              ? "Download Complete!"
+                                              : "You can close this dialog. The font will continue to download in the background.",
+                                          textAlign: TextAlign.center,
+                                          style: dialogContext.theme.textTheme.bodyMedium,
+                                        ),
+                                      ],
+                                    ),
+                                    actions: [
+                                      if (!HttpSvc.downloadingFont.value)
+                                        BBDialogAction(
+                                          text: "Close",
+                                          isDefault: true,
+                                          onPressed: () {
+                                            Get.closeAllSnackbars();
+                                            Navigator.of(dialogContext, rootNavigator: true).pop();
+                                            Future.delayed(const Duration(milliseconds: 400), () {
+                                              HttpSvc.fontDownloadProgress.value = null;
+                                              HttpSvc.fontDownloadTotalSize.value = null;
+                                            });
+                                          },
+                                        ),
+                                    ],
+                                  )),
                             ).then((_) => dialogOpen = false);
 
                             await HttpSvc.downloadAppleEmojiFont();
@@ -651,23 +643,19 @@ class _ThemingPanelState extends CustomState<ThemingPanel, void, ThemingPanelCon
   }
 
   void showMonetDialog(BuildContext context) {
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: Text("Monet Theming Info", style: context.theme.textTheme.titleLarge),
-              backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-              content: Text(
-                "Off - Uses your selected static preset/custom themes.\r\n"
-                "Full - Uses dynamic Material You preset themes that follow your system colors.\r\n",
-                style: context.theme.textTheme.bodyLarge,
-              ),
-              actions: [
-                TextButton(
-                  child: Text("OK",
-                      style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ));
+    showBBDialog(
+      context: context,
+      title: "Monet Theming Info",
+      icon: SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.paintbrush : Icons.palette_outlined,
+      body: "Off - Uses your selected static preset/custom themes.\n"
+          "Full - Uses dynamic Material You preset themes that follow your system colors.",
+      actions: [
+        BBDialogAction(
+          text: "Got It",
+          isDefault: true,
+          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+        ),
+      ],
+    );
   }
 }

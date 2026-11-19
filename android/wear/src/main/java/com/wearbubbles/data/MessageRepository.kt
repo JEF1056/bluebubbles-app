@@ -13,7 +13,10 @@ import com.wearbubbles.db.MessageDao
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.MessageEntity
 import com.wearbubbles.relay.PhoneRelayClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -30,6 +33,16 @@ class MessageRepository(
 
     fun getMessages(chatGuid: String): Flow<List<MessageEntity>> =
         messageDao.getMessagesForChat(chatGuid)
+
+    suspend fun deleteMessage(guid: String) = messageDao.deleteByGuid(guid)
+
+    suspend fun deleteFailedMessages(chatGuid: String) = messageDao.deleteFailedForChat(chatGuid)
+
+    suspend fun deleteMessagesForChat(chatGuid: String) = messageDao.deleteMessagesForChat(chatGuid)
+
+    suspend fun markStalePendingFailed(chatGuid: String, nowMs: Long = System.currentTimeMillis()) {
+        messageDao.markStalePendingFailed(chatGuid, nowMs - MessageDao.STALE_PENDING_TIMEOUT_MS)
+    }
 
     suspend fun refreshMessages(chatGuid: String): Result<Unit> {
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
@@ -50,7 +63,8 @@ class MessageRepository(
             )
             val messages = response.data ?: emptyList()
             val entities = messages.map { it.toEntity(chatGuid) }
-            messageDao.upsertAndPrune(entities)
+            val staleCutoff = System.currentTimeMillis() - MessageDao.STALE_PENDING_TIMEOUT_MS
+            messageDao.upsertAndReconcileBatch(chatGuid, entities, staleCutoff)
         }
     }
 
@@ -150,12 +164,15 @@ class MessageRepository(
                 )
             )
             val sentDto = response.data
-            val realEntity = sentDto?.toEntity(chatGuid) ?: tempEntity
+            val realEntity = sentDto?.toEntity(chatGuid) ?: tempEntity.copy(guid = "sent-$tempGuid")
             messageDao.replaceTempMessage(tempGuid, realEntity)
             updateChatLastMessage(chatGuid, text, realEntity.dateCreated)
             realEntity
-        }.onFailure {
-            messageDao.markSendFailed(tempGuid)
+        }.onFailure { err ->
+            withContext(NonCancellable) {
+                messageDao.markSendFailed(tempGuid)
+            }
+            if (err is CancellationException) throw err
         }
     }
 
@@ -190,7 +207,7 @@ class MessageRepository(
                         dateDelivered = it.dateDelivered,
                         dateRead = it.dateRead
                     )
-                } ?: tempEntity
+                } ?: tempEntity.copy(guid = "sent-$tempGuid")
                 messageDao.replaceTempMessage(tempGuid, realEntity)
                 updateChatLastMessage(chatGuid, "Audio Message", realEntity.dateCreated)
                 return Result.success(realEntity)
@@ -224,12 +241,15 @@ class MessageRepository(
                 attachment = part
             )
             val sentDto = response.data
-            val realEntity = sentDto?.toEntity(chatGuid) ?: tempEntity
+            val realEntity = sentDto?.toEntity(chatGuid) ?: tempEntity.copy(guid = "sent-$tempGuid")
             messageDao.replaceTempMessage(tempGuid, realEntity)
             updateChatLastMessage(chatGuid, "Audio Message", realEntity.dateCreated)
             realEntity
-        }.onFailure {
-            messageDao.markSendFailed(tempGuid)
+        }.onFailure { err ->
+            withContext(NonCancellable) {
+                messageDao.markSendFailed(tempGuid)
+            }
+            if (err is CancellationException) throw err
         }
     }
 
@@ -282,36 +302,10 @@ class MessageRepository(
         }
     }
 
-    fun setTyping(chatGuid: String, isTyping: Boolean) {
-        if (phoneRelay != null && phoneRelay.isPhoneConnected.value) {
-            phoneRelay.sendTyping(chatGuid, isTyping)
-        }
-    }
-
-    suspend fun setTypingDirect(chatGuid: String, isTyping: Boolean) {
-        if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
-            phoneRelay.sendTyping(chatGuid, isTyping)
-            return
-        }
-        try {
-            val serverUrl = settings.getServerUrl()
-            val password = settings.getPassword()
-            if (serverUrl.isBlank() || password.isBlank()) return
-            val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
-            if (isTyping) api.startTyping(chatGuid, password) else api.stopTyping(chatGuid, password)
-        } catch (_: Exception) {
-        }
-    }
-
-    suspend fun retrySendMessage(failedMsg: MessageEntity): Result<MessageEntity> {
-        messageDao.deleteFailedMessage(failedMsg.guid)
-        return sendMessage(failedMsg.chatGuid, failedMsg.text ?: "")
-    }
-
     suspend fun handleIncomingSocketMessage(dto: MessageDto) {
         val chatGuid = dto.chats?.firstOrNull()?.guid ?: return
         val entity = dto.toEntity(chatGuid)
-        messageDao.upsert(entity)
+        messageDao.upsertAndReconcile(entity, tempGuid = dto.tempGuid)
 
         val existingChat = chatDao.getChat(chatGuid)
         val firstAttachment = dto.attachments?.firstOrNull()

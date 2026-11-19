@@ -5,10 +5,12 @@ import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/wrappers/trackpad_bug_wrapper.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_marker_popup/flutter_map_marker_popup.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -92,11 +94,10 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
     final latTween = Tween<double>(begin: startCenter.latitude, end: targetCenter.latitude);
     final lngTween = Tween<double>(begin: startCenter.longitude, end: targetCenter.longitude);
     final zoomTween = Tween<double>(begin: startZoom, end: targetZoom);
-    final curve = CurvedAnimation(parent: _cameraAnim, curve: Curves.easeOutCubic);
 
     _activeCameraListener = () {
       if (!mounted) return;
-      final t = curve.value;
+      final t = Curves.easeOutCubic.transform(_cameraAnim.value);
       try {
         controller.mapController.move(
           LatLng(latTween.transform(t), lngTween.transform(t)),
@@ -125,11 +126,10 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
     anim.stop();
     final latTween = Tween<double>(begin: from.latitude, end: to.latitude);
     final lngTween = Tween<double>(begin: from.longitude, end: to.longitude);
-    final curve = CurvedAnimation(parent: anim, curve: Curves.easeInOutCubic);
 
     void listener() {
       if (!mounted) return;
-      final t = curve.value;
+      final t = Curves.easeInOutCubic.transform(anim.value);
       onStep(LatLng(latTween.transform(t), lngTween.transform(t)));
     }
 
@@ -457,42 +457,37 @@ class _FloatingMapControls extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = context.theme.colorScheme;
-    return ClipRRect(
-      key: const ValueKey('findmy-map-controls'),
-      borderRadius: BorderRadius.circular(22),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          width: 44,
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerHigh.withValues(alpha: 0.86),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.38)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.22),
-                blurRadius: 10,
-                offset: const Offset(0, 3),
-              ),
-            ],
+    final controls = Container(
+      width: 44,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh.withValues(alpha: 0.86),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.38)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.22),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Obx(() {
-                final currentStyle = controller.mapStyle.value;
-                return PopupMenuButton<String>(
-                  key: const ValueKey('findmy-map-style'),
-                  tooltip: 'Map Layers',
-                  padding: EdgeInsets.zero,
-                  onSelected: (value) {
-                    if (value == 'fit-all') {
-                      controller.fitAllPins();
-                      return;
-                    }
-                    final picked = FindMyMapStyle.values.firstWhereOrNull((s) => s.name == value);
-                    if (picked != null) controller.setMapStyle(picked);
-                  },
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Obx(() {
+            final currentStyle = controller.mapStyle.value;
+            return PopupMenuButton<String>(
+              key: const ValueKey('findmy-map-style'),
+              tooltip: 'Map Layers',
+              padding: EdgeInsets.zero,
+              onSelected: (value) {
+                if (value == 'fit-all') {
+                  controller.fitAllPins();
+                  return;
+                }
+                final picked = FindMyMapStyle.values.firstWhereOrNull((s) => s.name == value);
+                if (picked != null) controller.setMapStyle(picked);
+              },
                   itemBuilder: (context) => [
                     ...FindMyMapStyle.values.map(
                       (style) => PopupMenuItem<String>(
@@ -542,8 +537,17 @@ class _FloatingMapControls extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
+        );
+    final highPerf = GetIt.I.isRegistered<SettingsService>() && SettingsSvc.settings.highPerfMode.value;
+    return ClipRRect(
+      key: const ValueKey('findmy-map-controls'),
+      borderRadius: BorderRadius.circular(22),
+      child: highPerf
+          ? controls
+          : BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: controls,
+            ),
     );
   }
 }

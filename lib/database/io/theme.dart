@@ -225,7 +225,11 @@ class ThemeStruct {
   factory ThemeStruct.fromMap(Map<String, dynamic> json) {
     final map = json["data"];
     final brightness = Brightness.values[map["colorScheme"]["brightness"]];
-    final font = GoogleFonts.asMap()[map["textTheme"]["font"]] ??
+    final fontName = map["textTheme"]["font"] as String?;
+    final useBundledGoogleSans =
+        fontName == null || fontName.isEmpty || fontName == 'Default' || fontName == 'Google Sans';
+    final resolvedGoogleFont = useBundledGoogleSans ? null : GoogleFonts.asMap()[fontName];
+    final font = resolvedGoogleFont ??
         ({
           TextStyle? textStyle,
           Color? color,
@@ -247,12 +251,13 @@ class ThemeStruct {
           TextDecorationStyle? decorationStyle,
           double? decorationThickness,
         }) {
-          return textStyle!;
+          return textStyle!.copyWith(fontFamily: kDefaultAppFontFamily);
         };
     final typography = brightness == Brightness.light
         ? Typography.englishLike2021.merge(Typography.blackMountainView)
         : Typography.englishLike2021.merge(Typography.whiteMountainView);
     final baseFlexTheme = FlexColorScheme(
+      fontFamily: resolvedGoogleFont == null ? kDefaultAppFontFamily : null,
       textTheme: typography.copyWith(
         titleLarge: font(
             textStyle: typography.titleLarge!
@@ -358,6 +363,7 @@ class ThemeStruct {
         id: json["ROWID"],
         name: json["name"],
         gradientBg: json["gradientBg"] == 1,
+        googleFont: (fontName != null && fontName.isNotEmpty) ? fontName : 'Default',
         themeData: baseTheme.copyWith(splashFactory: InkSparkle.splashFactory, extensions: [
           BubbleColors(
             iMessageBubbleColor:

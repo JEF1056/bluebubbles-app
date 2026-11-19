@@ -1482,5 +1482,25 @@ void main() {
       expect(controller.selectedFriendId.value, isNull);
       expect(controller.friendsController.offset, 0);
     });
+
+    test('repeated onAppPaused + single onAppResumed resumes locationSub', () async {
+      final controller = FindMyController(autoFetch: false);
+      final streamController = StreamController<Position>();
+      addTearDown(() async {
+        controller.onClose();
+        await streamController.close();
+      });
+
+      controller.locationSub = streamController.stream.listen((_) {});
+      expect(controller.locationSub!.isPaused, isFalse);
+
+      controller.onAppPaused();
+      controller.onAppPaused();
+      controller.onAppPaused();
+      expect(controller.locationSub!.isPaused, isTrue);
+
+      controller.onAppResumed();
+      expect(controller.locationSub!.isPaused, isFalse);
+    });
   });
 }

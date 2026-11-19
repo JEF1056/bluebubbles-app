@@ -125,7 +125,8 @@ class _AnimatedDropdownMenuState extends State<AnimatedDropdownMenu> with Single
 
   OverlayEntry _buildOverlayEntry() {
     return OverlayEntry(
-      builder: (overlayContext) {
+      builder: (_) {
+        if (!mounted) return const SizedBox.shrink();
         return Stack(
           children: [
             Positioned.fill(
@@ -145,7 +146,8 @@ class _AnimatedDropdownMenuState extends State<AnimatedDropdownMenu> with Single
                 alignment: _followerAnchor,
                 child: FadeTransition(
                   opacity: _fadeAnimation,
-                  child: widget.menuBuilder(overlayContext, _hideMenu),
+                  // Pass the anchor's context so async actions run after hideMenu() keep a mounted context.
+                  child: widget.menuBuilder(context, _hideMenu),
                 ),
               ),
             ),

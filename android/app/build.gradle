@@ -301,4 +301,6 @@ dependencies {
     implementation 'io.github.webrtc-sdk:android:125.6422.06'
 
     testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
 }

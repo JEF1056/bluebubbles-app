@@ -18,7 +18,6 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
@@ -799,14 +798,12 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                           SliverPadding(
                             padding: (iOS || samsung)
                                 ? const EdgeInsets.all(70)
-                                : (ChatsSvc.getChatState(controller.chat.guid)?.hasCustomWallpaper ?? false)
-                                    ? EdgeInsets.only(
-                                        top: MediaQuery.paddingOf(context).top + 12,
-                                        left: 12,
-                                        right: 12,
-                                        bottom: 12,
-                                      )
-                                    : const EdgeInsets.all(12),
+                                : EdgeInsets.only(
+                                    top: MediaQuery.paddingOf(context).top + 12,
+                                    left: 12,
+                                    right: 12,
+                                    bottom: 12,
+                                  ),
                           ),
                         ],
                       ),

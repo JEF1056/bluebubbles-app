@@ -18,11 +18,13 @@ class StartNotificationListenerHandler: MethodCallHandlerImpl() {
         result: MethodChannel.Result,
         context: Context
     ) {
-        val hasPermission = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners").contains(context.packageName);
+        val enabledListeners = Settings.Secure.getString(context.contentResolver, "enabled_notification_listeners")
+        val hasPermission = enabledListeners?.contains(context.packageName) == true
         if (hasPermission) {
             PersistentLog.d(context, Constants.logTag, "Notification listener permission found, starting listener")
             NotificationListener.init(context)
             return result.success(true)
         }
+        result.success(false)
     }
 }

@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
+import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/typing/typing_clipper.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -91,56 +93,73 @@ class _TypingIndicatorState extends State<TypingIndicator> with SingleTickerProv
   }
 
   Widget _buildBubble(BuildContext context) {
-    return iOS || ChatStateScope.maybeChatOf(context) == null
-        ? ClipPath(
-            clipper: const TypingClipper(),
-            child: Container(
-              height: 50,
-              width: 80,
-              color: context.theme.colorScheme.surfaceContainerHighest,
-              child: const Stack(
-                alignment: Alignment.center,
-                children: [
-                  Positioned(
-                    top: 15,
-                    right: 12,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        AnimatedDot(index: 2),
-                        AnimatedDot(index: 1),
-                        AnimatedDot(index: 0),
-                      ],
-                    ),
-                  )
-                ],
-              ),
+    if (iOS || ChatStateScope.maybeChatOf(context) == null) {
+      return ClipPath(
+        clipper: const TypingClipper(),
+        child: Container(
+          height: 50,
+          width: 80,
+          color: context.theme.colorScheme.surfaceContainerHighest,
+          child: const Stack(
+            alignment: Alignment.center,
+            children: [
+              Positioned(
+                top: 15,
+                right: 12,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedDot(index: 2),
+                    AnimatedDot(index: 1),
+                    AnimatedDot(index: 0),
+                  ],
+                ),
+              )
+            ],
+          ),
+        ),
+      );
+    }
+
+    final handles = ChatStateScope.chatOf(context).handles;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (handles.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 10, right: 8),
+            child: ContactAvatarWidget(
+              handle: handles.first,
+              size: 28,
+              fontSize: context.theme.textTheme.bodyMedium!.fontSize!,
+              borderThickness: 0.1,
             ),
-          )
-        : Row(
+          ),
+        Container(
+          constraints: const BoxConstraints(minHeight: 38),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: context.theme.colorScheme.surfaceContainerHigh,
+            borderRadius: M3EShapes.radiusLgIncreased,
+          ),
+          child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Padding(
-                padding: const EdgeInsets.only(left: 10, right: 10),
-                child: ContactAvatarWidget(
-                  handle: ChatStateScope.chatOf(context).handles.first,
-                  size: 25,
-                  fontSize: context.theme.textTheme.bodyMedium!.fontSize!,
-                  borderThickness: 0.1,
-                ),
-              ),
-              const AnimatedDot(index: 2),
-              const AnimatedDot(index: 1),
-              const AnimatedDot(index: 0),
+              AnimatedDot(index: 2),
+              AnimatedDot(index: 1),
+              AnimatedDot(index: 0),
             ],
-          );
+          ),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedSize(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOut,
+      duration: iOS ? const Duration(milliseconds: 200) : M3EMotion.spatialFast.duration,
+      curve: iOS ? Curves.easeOut : M3EMotion.spatialFast.curve,
       child: _isShowing
           ? ScaleTransition(
               scale: _scaleAnimation,
@@ -217,17 +236,17 @@ class _AnimatedDotState extends State<AnimatedDot> with SingleTickerProviderStat
       return AnimatedBuilder(
         animation: animation,
         builder: (context, child) {
-          return Padding(
-            padding: EdgeInsets.only(
-                bottom: (math.sin(animation.value + (widget.index) * math.pi / 4).abs() * 20).clamp(1, 20).toDouble()),
+          final phase = math.sin(animation.value + widget.index * math.pi / 4).abs();
+          return Transform.translate(
+            offset: Offset(0, 1.5 - phase * 4.5),
             child: Container(
               decoration: BoxDecoration(
-                color: context.theme.colorScheme.surfaceContainerHighest,
+                color: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.45 + 0.55 * phase),
                 shape: BoxShape.circle,
               ),
-              width: 4,
-              height: 4,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
+              width: 6.5,
+              height: 6.5,
+              margin: const EdgeInsets.symmetric(horizontal: 2.5),
             ),
           );
         },

@@ -49,18 +49,17 @@ class _AdvancedThemingContentState extends State<AdvancedThemingContent> with Th
     editable.value = !currentTheme.isPreset;
 
     widget.controller.stream.listen((event) {
-      BuildContext _context = context;
-      showDialog(
-          context: context,
-          builder: (context) => CreateNewThemeDialog(_context, widget.isDarkMode, currentTheme, (newTheme) async {
-                allThemes.add(newTheme);
-                currentTheme = newTheme;
-                if (widget.isDarkMode) {
-                  await ThemeSvc.changeTheme(_context, dark: currentTheme);
-                } else {
-                  await ThemeSvc.changeTheme(_context, light: currentTheme);
-                }
-              }));
+      if (!mounted) return;
+      showCreateNewThemeDialog(context, widget.isDarkMode, currentTheme, (newTheme) async {
+        allThemes.add(newTheme);
+        currentTheme = newTheme;
+        if (!mounted) return;
+        if (widget.isDarkMode) {
+          await ThemeSvc.changeTheme(context, dark: currentTheme);
+        } else {
+          await ThemeSvc.changeTheme(context, light: currentTheme);
+        }
+      });
     });
   }
 
@@ -377,7 +376,7 @@ class _AdvancedThemingContentState extends State<AdvancedThemingContent> with Th
                   options: ['Default', ...GoogleFonts.asMap().keys],
                   secondaryColor: headerColor,
                   useCupertino: false,
-                  textProcessing: (str) => str,
+                  textProcessing: (str) => str == 'Default' ? 'Default (Google Sans)' : str,
                   onChanged: (value) async {
                     currentTheme.googleFont = value!;
                     final map = currentTheme.toMap();

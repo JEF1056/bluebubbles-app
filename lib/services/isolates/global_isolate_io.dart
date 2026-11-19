@@ -58,9 +58,6 @@ class GlobalIsolate {
   /// Set to null to disable auto-shutdown
   final Duration? idleTimeout;
 
-  /// Stream of outputs from the isolate
-  Stream<dynamic> get outputStream => _controller.stream;
-
   /// Whether the isolate is currently running
   bool get isRunning => _isRunning;
 

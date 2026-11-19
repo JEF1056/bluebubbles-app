@@ -8,6 +8,7 @@ import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -51,50 +52,21 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
     setState(() {});
   }
 
-  void updateName() async {
-    final nameController = TextEditingController(text: SettingsSvc.settings.userName.value);
-    done() async {
-      if (nameController.text.isEmpty) {
-        showSnackbar("Error", "Enter a name!", type: SnackbarType.error);
-        return;
-      }
-      Navigator.of(context, rootNavigator: true).pop();
-      SettingsSvc.settings.userName.value = nameController.text;
-      await SettingsSvc.settings.saveOneAsync("userName");
-      setState(() {});
-    }
-
-    await showDialog(
-        context: context,
-        builder: (_) {
-          return AlertDialog(
-            actions: [
-              TextButton(
-                child: Text("Cancel",
-                    style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
-                onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-              ),
-              TextButton(
-                child: Text("OK",
-                    style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
-                onPressed: () async {
-                  done.call();
-                },
-              ),
-            ],
-            content: TextField(
-              controller: nameController,
-              onSubmitted: (_) => done.call(),
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: "Name",
-                border: OutlineInputBorder(),
-              ),
-            ),
-            title: Text("User Profile Name", style: context.theme.textTheme.titleLarge),
-            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-          );
-        });
+  Future<void> updateName() async {
+    final name = await showBBInputDialog(
+      context: context,
+      title: "User Profile Name",
+      icon: iOS ? CupertinoIcons.person : Icons.person_outline,
+      initialValue: SettingsSvc.settings.userName.value,
+      labelText: "Name",
+      confirmText: "Save Name",
+      textCapitalization: TextCapitalization.words,
+      validator: (value) => (value == null || value.isEmpty) ? "Enter a name!" : null,
+    );
+    if (name == null) return;
+    SettingsSvc.settings.userName.value = name;
+    await SettingsSvc.settings.saveOneAsync("userName");
+    if (mounted) setState(() {});
   }
 
   void updatePhoto() async {

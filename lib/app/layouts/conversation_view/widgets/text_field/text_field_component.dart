@@ -216,13 +216,15 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     if (widget.hintText != null) return widget.hintText!;
     if (isChatCreator) return material ? "Text message" : "New Message";
     if (isRecording) return "";
+    final currentChat = chat;
+    if (currentChat == null) return material ? "Text message" : "iMessage";
     if (SettingsSvc.settings.recipientAsPlaceholder.value) {
-      return ChatsSvc.getChatState(chat!.guid)?.title.value ?? chat!.getTitle();
+      return ChatsSvc.getChatState(currentChat.guid)?.title.value ?? currentChat.getTitle();
     }
     return hintTextForService(
       material: material,
-      isRCS: chat!.isRCS,
-      isIMessage: chat!.isIMessage,
+      isRCS: currentChat.isRCS,
+      isIMessage: currentChat.isIMessage,
     );
   }
 

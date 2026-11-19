@@ -75,12 +75,14 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
             child: MaterialHeader(parentController: controller),
           ),
           backgroundColor: backdropColor,
-          extendBodyBehindAppBar: false,
+          extendBodyBehindAppBar: true,
           floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
           floatingActionButton: !showArchived && !showUnknown
               ? ConversationListFAB(parentController: controller)
               : const SizedBox.shrink(),
-          body: Obx(() {
+          body: RepaintBoundary(
+            child: Builder(
+              builder: (bodyContext) => Obx(() {
             // Force reactivity by accessing observable values first
             final loaded = ChatsSvc.loadedFirstChatBatch.value;
             // Observe chat list version to trigger rebuild when order changes
@@ -101,42 +103,45 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                 : _chats;
 
             if (!loaded || _chats.isEmpty) {
-              return Material(
-                color: sheetColor,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  children: [
-                    if (!showArchived && !showUnknown)
-                      const CustomGroupFilterChipRow(
-                        padding: EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
-                      ),
-                    Expanded(
-                      child: Center(
-                        child: Padding(
-                          padding: const EdgeInsets.only(top: 100),
-                          child: loaded
-                              ? buildEmptyChatListState(context,
-                                  showArchived: showArchived,
-                                  showUnknown: showUnknown,
-                                  filters: ChatsSvc.chatListFilters.value)
-                              : Column(
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.all(8.0),
-                                      child: Text(
-                                        "Loading chats...",
-                                        style: context.theme.textTheme.labelLarge,
-                                        textAlign: TextAlign.center,
+              return Padding(
+                padding: EdgeInsets.only(top: MediaQuery.paddingOf(bodyContext).top),
+                child: Material(
+                  color: sheetColor,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    children: [
+                      if (!showArchived && !showUnknown)
+                        const CustomGroupFilterChipRow(
+                          padding: EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
+                        ),
+                      Expanded(
+                        child: Center(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 100),
+                            child: loaded
+                                ? buildEmptyChatListState(context,
+                                    showArchived: showArchived,
+                                    showUnknown: showUnknown,
+                                    filters: ChatsSvc.chatListFilters.value)
+                                : Column(
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.all(8.0),
+                                        child: Text(
+                                          "Loading chats...",
+                                          style: context.theme.textTheme.labelLarge,
+                                          textAlign: TextAlign.center,
+                                        ),
                                       ),
-                                    ),
-                                    buildProgressIndicator(context, size: 15),
-                                  ],
-                                ),
+                                      buildProgressIndicator(context, size: 15),
+                                    ],
+                                  ),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               );
             }
@@ -155,6 +160,9 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                   controller: controller.materialScrollController,
                   physics: ThemeSwitcher.getScrollPhysics(),
                   slivers: [
+                    SliverToBoxAdapter(
+                      child: SizedBox(height: MediaQuery.paddingOf(bodyContext).top),
+                    ),
                     if (pinnedChats.isNotEmpty)
                       SliverToBoxAdapter(
                         child: _MaterialPinnedSection(
@@ -208,7 +216,9 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                 ),
               ),
             );
-          }),
+            }),
+            ),
+          ),
         ),
       ),
     );

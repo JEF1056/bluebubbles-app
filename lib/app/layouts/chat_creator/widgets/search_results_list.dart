@@ -74,7 +74,7 @@ class SearchResultsList extends StatelessWidget {
       final selected = controller.selectedContacts.toList();
       final showFallback = _shouldShowFallback(query, contacts, selected);
       final isEmpty = chatsLoaded && chats.isEmpty && contacts.isEmpty && !showFallback;
-      final showEmails = controller.selectedService.value.isIMessageService;
+      const showEmails = true;
       final hideInfo = SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value;
 
       // Build grouped Material contact entries (alphabet header + M3E grouped cards)

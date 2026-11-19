@@ -201,6 +201,14 @@ class NotificationsService {
         messageData: chat == null ? null : DesktopMessageData(chatGuid: chat.guid, messageGuid: message?.guid),
       );
     }
+    var scheduleMode = AndroidScheduleMode.exactAllowWhileIdle;
+    if (!kIsWeb && Platform.isAndroid) {
+      final androidPlugin = flnp.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      final canScheduleExact = await androidPlugin?.canScheduleExactNotifications() ?? false;
+      if (!canScheduleExact) {
+        scheduleMode = AndroidScheduleMode.inexactAllowWhileIdle;
+      }
+    }
     await flnp.zonedSchedule(
       id: id,
       title: title,
@@ -217,7 +225,7 @@ class NotificationsService {
         ),
       ),
       payload: "${time.millisecondsSinceEpoch}",
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      androidScheduleMode: scheduleMode,
     );
     return true;
   }
@@ -318,6 +326,31 @@ class NotificationsService {
           }
         }
 
+        final bool isEdit = message.dateEdited != null;
+        final List<Map<String, dynamic>> historicMessages = hideContent
+            ? const <Map<String, dynamic>>[]
+            : Chat.getMessages(chat, limit: 10)
+                .where((m) =>
+                    m.guid != message.guid &&
+                    m.dateCreated != null &&
+                    !m.dateCreated!.isAfter(message.dateCreated!))
+                .map((m) {
+                  final hHandle = m.handleRelation.target;
+                  return <String, dynamic>{
+                    'text': m.getNotificationText(),
+                    'date': m.dateCreated!.millisecondsSinceEpoch,
+                    'is_from_me': m.isFromMe ?? false,
+                    'sender_name': hHandle?.displayName,
+                    'sender_key': hHandle?.address,
+                    'sender_uri': ContactV2.personUriForAddress(hHandle?.address),
+                  };
+                })
+                .where((h) => (h['text'] as String).trim().isNotEmpty)
+                .take(5)
+                .toList()
+                .reversed
+                .toList();
+
         await GetIt.I.isReady<MethodChannelService>();
         await MethodChannelSvc.invokeMethod('create-incoming-message-notification', {
           'channel_id': NEW_MESSAGE_CHANNEL,
@@ -334,12 +367,16 @@ class NotificationsService {
           'you_name': SettingsSvc.settings.userName.value,
           'you_key': 'me',
           'participants': participants,
+          'historic_messages': historicMessages,
           'attachment_path': attachmentPath,
           'attachment_mime': attachmentMime,
           'message_guid': message.guid!,
           'message_text': text,
           'message_date': message.dateCreated!.millisecondsSinceEpoch,
           'message_is_from_me': false,
+          'is_reaction': isReaction,
+          'is_edit': isEdit,
+          'only_alert_once': isReaction || isEdit,
           'show_reaction_action': showReactionAction,
           'reaction_type': reactionType,
         });
@@ -427,6 +464,7 @@ class NotificationsService {
       MethodChannelSvc.actions.deleteNotification(
         notificationId: int.parse(numeric.substring(0, min(8, numeric.length))),
         tag: NEW_FACETIME_TAG,
+        callUuid: callUuid,
       );
     }
   }

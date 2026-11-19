@@ -1085,6 +1085,9 @@ class Message {
     }
     threadOriginatorGuid = incoming.threadOriginatorGuid ?? threadOriginatorGuid;
     threadOriginatorPart = incoming.threadOriginatorPart ?? threadOriginatorPart;
+    associatedMessageEmoji = incoming.associatedMessageEmoji ?? associatedMessageEmoji;
+    associatedMessagePart = incoming.associatedMessagePart ?? associatedMessagePart;
+    service = incoming.service ?? service;
     datePlayed = incoming.datePlayed ?? datePlayed;
     country = incoming.country ?? country;
   }
@@ -1098,6 +1101,8 @@ class Message {
       (payloadData.hasAppSession && !stored.payloadData.hasAppSession) ||
       (threadOriginatorGuid != null && stored.threadOriginatorGuid == null) ||
       (threadOriginatorPart != null && stored.threadOriginatorPart == null) ||
+      (associatedMessageEmoji != null && stored.associatedMessageEmoji == null) ||
+      (service != null && stored.service == null) ||
       (datePlayed != null && stored.datePlayed == null) ||
       (country != null && stored.country == null);
 

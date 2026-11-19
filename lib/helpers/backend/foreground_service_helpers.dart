@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/services/services.dart';
@@ -5,6 +6,7 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 
 Future<void> runForegroundService() async {
   try {
+    if (kIsWeb) return;
     if (Platform.isAndroid && SettingsSvc.settings.keepAppAlive.value && !LifecycleSvc.isAlive) {
       await MethodChannelSvc.actions.startForegroundService();
     } else if (Platform.isAndroid && !SettingsSvc.settings.keepAppAlive.value) {
@@ -17,6 +19,7 @@ Future<void> runForegroundService() async {
 
 Future<void> restartForegroundService() async {
   try {
+    if (kIsWeb) return;
     if (Platform.isAndroid && SettingsSvc.settings.keepAppAlive.value && !LifecycleSvc.isAlive) {
       await MethodChannelSvc.actions.stopForegroundService();
       await MethodChannelSvc.actions.startForegroundService();

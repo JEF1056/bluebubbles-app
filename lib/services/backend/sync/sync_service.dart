@@ -63,7 +63,7 @@ class SyncService {
     await _manager!.start();
     if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.headless) {
       unawaited(SettingsSvc.refreshServerDetails());
-      unawaited(ChatsSvc.syncPinnedChatsFromServer());
+      unawaited(ChatsSvc.syncPinnedChatsFromServer(forceFlagsSync: true));
     }
   }
 
@@ -293,7 +293,7 @@ class SyncService {
   Future<bool> performContactSyncToServer() async {
     try {
       // Auto upload contacts if requested
-      if (Platform.isAndroid && SettingsSvc.settings.syncContactsAutomatically.value) {
+      if (!kIsWeb && Platform.isAndroid && SettingsSvc.settings.syncContactsAutomatically.value) {
         Logger.debug("Starting contact upload to server...", tag: "Contact Upload");
         final contactUploadStopwatch = Stopwatch()..start();
         // Get all contacts from ContactServiceV2

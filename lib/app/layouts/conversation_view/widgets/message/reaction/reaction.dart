@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/reaction_details.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -13,6 +14,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:defer_pointer/defer_pointer.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/tapback_icon.dart';
 import 'package:get/get.dart';
 
@@ -46,7 +48,43 @@ class ReactionWidget extends StatefulWidget {
   ReactionWidgetState createState() => ReactionWidgetState();
 }
 
-class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
+class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProviderStateMixin, ThemeHelpers {
+  late final AnimationController _springController;
+  String? _lastReactionSignature;
+
+  String _signatureFor(Message r) => '${r.associatedMessageType ?? ''}|${r.associatedMessageEmoji ?? ''}';
+
+  void _triggerSpringBurst({double from = 0.65}) {
+    if (!mounted) return;
+    _springController.stop();
+    _springController.animateWith(
+      SpringSimulation(M3EMotion.springSpatialFast, from, 1.0, 2.5),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _springController = AnimationController.unbounded(vsync: this, value: 1.0);
+    _lastReactionSignature = _signatureFor(widget.reaction);
+    _triggerSpringBurst(from: 0.65);
+  }
+
+  @override
+  void didUpdateWidget(covariant ReactionWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextSig = _signatureFor(widget.reaction);
+    if (nextSig != _lastReactionSignature) {
+      _lastReactionSignature = nextSig;
+      _triggerSpringBurst(from: 0.72);
+    }
+  }
+
+  @override
+  void dispose() {
+    _springController.dispose();
+    super.dispose();
+  }
   List<Message>? get reactions => widget.reactions;
 
   /// Parent [Message] resolved live from the nearest [MessageStateScope].
@@ -71,7 +109,7 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
           associated.firstWhereOrNull((m) =>
               m.associatedMessageType == widget.reaction.associatedMessageType &&
               m.associatedMessageEmoji == widget.reaction.associatedMessageEmoji &&
-              m.associatedMessagePart == widget.reaction.associatedMessagePart &&
+              (m.associatedMessagePart ?? 0) == (widget.reaction.associatedMessagePart ?? 0) &&
               m.isFromMe == widget.reaction.isFromMe);
       if (found != null) return found;
     }
@@ -131,7 +169,10 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
     // no observables causes GetX to emit "improper use" and suppresses the render.
     // Use a plain Builder for this case so we just render the reaction statically.
     if (_parentMessage == null) {
-      return _buildStatic(context, widget.reaction);
+      return ScaleTransition(
+        scale: _springController,
+        child: _buildStatic(context, widget.reaction),
+      );
     }
 
     // Full conversation-view path: wrap in Obx so we reactively follow any
@@ -139,14 +180,21 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
     return Obx(() {
       // Reading `reaction` subscribes to MessageState.associatedMessages so the
       // widget rebuilds when the reaction changes (temp→real GUID, error state…).
-      final _ = reaction;
+      final current = reaction;
+      final signature = _signatureFor(current);
+      if (signature != _lastReactionSignature) {
+        _lastReactionSignature = signature;
+        WidgetsBinding.instance.addPostFrameCallback((_) => _triggerSpringBurst(from: 0.72));
+      }
 
       // Guard: if the reaction type is unknown we cannot render the SVG asset safely.
       if (reactionType.isEmpty) return const SizedBox.shrink();
 
       if (SettingsSvc.settings.skin.value != Skins.iOS) {
         final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
-        return Container(
+        return ScaleTransition(
+          scale: _springController,
+          child: Container(
             width: isMaterial ? null : 30,
             height: isMaterial ? 26 : 30,
             constraints: isMaterial ? const BoxConstraints(minWidth: 34) : null,
@@ -178,13 +226,18 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                 Navigator.push(
                   context,
                   PageRouteBuilder(
-                    transitionDuration: const Duration(milliseconds: 500),
+                    transitionDuration: M3EMotion.spatialDefault.duration,
+                    reverseTransitionDuration: M3EMotion.spatialFast.duration,
                     pageBuilder: (routeCtx, animation, secondaryAnimation) {
                       return SlideTransition(
                         position: Tween<Offset>(
                           begin: const Offset(0.0, 1.0),
                           end: Offset.zero,
-                        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
+                        ).animate(CurvedAnimation(
+                          parent: animation,
+                          curve: M3EMotion.spatialDefault.curve,
+                          reverseCurve: M3EMotion.effectsFast.curve,
+                        )),
                         child: Theme(
                           data: capturedTheme.copyWith(
                             // in case some components still use legacy theming
@@ -241,9 +294,12 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                   return text;
                 }),
               ),
-            ));
+            )),
+        );
       }
-      return Stack(
+      return ScaleTransition(
+        scale: _springController,
+        child: Stack(
         alignment: _alignToEnd ? Alignment.centerRight : Alignment.centerLeft,
         fit: StackFit.passthrough,
         clipBehavior: Clip.none,
@@ -322,21 +378,19 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
                           _parentMessage;
                       if (selected == null) return;
 
-                      showDialog(
-                        context: context,
-                        builder: (BuildContext context) => MessageErrorDialog(
-                          errorCode: errorCode,
-                          errorText: errorText,
-                          chatId: chat.id!,
-                          onRetry: () => retryReaction(
-                            reaction: reaction,
-                            chat: chat,
-                            selected: selected,
-                          ),
-                          onRemove: () => removeReaction(
-                            reaction: reaction,
-                            chat: chat,
-                          ),
+                      showMessageErrorDialog(
+                        context,
+                        errorCode: errorCode,
+                        errorText: errorText,
+                        chatId: chat.id!,
+                        onRetry: () => retryReaction(
+                          reaction: reaction,
+                          chat: chat,
+                          selected: selected,
+                        ),
+                        onRemove: () => removeReaction(
+                          reaction: reaction,
+                          chat: chat,
                         ),
                       );
                     },
@@ -347,6 +401,7 @@ class ReactionWidgetState extends State<ReactionWidget> with ThemeHelpers {
             }),
           )
         ],
+      ),
       );
     }); // Close outer Obx
   }

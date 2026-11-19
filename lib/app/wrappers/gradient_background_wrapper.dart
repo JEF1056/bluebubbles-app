@@ -47,6 +47,7 @@ class _GradientBackgroundState extends CustomState<GradientBackground, void, Con
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _resizeDebounce?.cancel();
     super.dispose();
   }

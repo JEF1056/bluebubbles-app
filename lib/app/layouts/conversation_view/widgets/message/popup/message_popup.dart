@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
 
+import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
+import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/actions/media_actions.dart'
     as popup_media_actions;
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/actions/message_actions.dart'
@@ -16,7 +18,6 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/emoji_tapback_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/reaction_details.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_pin_clipper.dart';
-import 'package:bluebubbles/app/wrappers/bb_app_bar.dart';
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
@@ -28,12 +29,12 @@ import 'package:collection/collection.dart';
 import 'package:flutter/cupertino.dart' as cupertino;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide BackButton;
+import 'package:flutter/physics.dart';
 import 'package:bluebubbles/database/models.dart' hide PayloadType;
 import 'package:flutter/services.dart';
 import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/tapback_icon.dart';
 import 'package:get/get.dart';
-import 'package:sprung/sprung.dart';
 import 'package:universal_io/io.dart';
 
 export 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_action_context.dart'
@@ -67,11 +68,19 @@ class MessagePopup extends StatefulWidget {
   State<StatefulWidget> createState() => _MessagePopupState();
 }
 
-class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderStateMixin, ThemeHelpers {
+class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMixin, ThemeHelpers {
   late final AnimationController controller = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 150),
+    duration: M3EMotion.effectsFast.duration,
     animationBehavior: AnimationBehavior.preserve,
+  );
+  late final AnimationController _tapbackSpringController = AnimationController.unbounded(
+    vsync: this,
+    value: 1.0,
+  );
+  late final AnimationController _toolbarController = AnimationController(
+    vsync: this,
+    duration: M3EMotion.spatialDefault.duration,
   );
   final double itemHeight = kIsDesktop || kIsWeb ? 56 : 48;
 
@@ -151,6 +160,10 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
   void initState() {
     super.initState();
     controller.forward();
+    if (!iOS) {
+      _toolbarController.forward();
+    }
+    _triggerTapbackSpring();
     if (iOS) {
       _fitMenu();
     } else {
@@ -159,6 +172,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final measuredSize = _childKey.currentContext?.size;
       currentlySelectedReaction = null;
       reactions = getUniqueReactionMessages(message.associatedMessages
@@ -174,11 +188,11 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
         currentlySelectedReaction = selfReaction;
       }
       setState(() {
+        if (measuredSize != null) {
+          _measuredChildHeight = measuredSize.height;
+          _measuredChildWidth = measuredSize.width;
+        }
         if (iOS) {
-          if (measuredSize != null) {
-            _measuredChildHeight = measuredSize.height;
-            _measuredChildWidth = measuredSize.width;
-          }
           _measuredMenuHeight = _menuKey.currentContext?.size?.height;
           _fitMenu();
           messageOffset = _messageOffset();
@@ -196,6 +210,22 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
         });
       }
     });
+  }
+
+  void _triggerTapbackSpring({double from = 0.72}) {
+    if (!mounted) return;
+    _tapbackSpringController.stop();
+    _tapbackSpringController.animateWith(
+      SpringSimulation(M3EMotion.springSpatialFast, from, 1.0, 2.0),
+    );
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    _tapbackSpringController.dispose();
+    _toolbarController.dispose();
+    super.dispose();
   }
 
   /// How many actions fit under the message on iOS without covering the reaction details; the rest go under "More...".
@@ -412,6 +442,18 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
             preferredLeft: clampedLayout?.clampedChildLeft ?? widget.childPosition.dx,
           );
 
+    final double screenHeight = MediaQuery.sizeOf(context).height;
+    final double topSafe = MediaQuery.paddingOf(context).top + (kIsDesktop ? 40.0 : 12.0);
+    final bool showTapbacks = SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && _supportsTapbackAndReply;
+    final double tapbackReserved = showTapbacks ? (narrowScreen ? 108.0 : 64.0) : 0.0;
+    final double bottomReserved = MediaQuery.paddingOf(context).bottom + 92.0;
+    final double bubbleHeight = _measuredChildHeight ?? widget.size.height;
+    final double minBubbleTop = topSafe + tapbackReserved;
+    final double maxBubbleTop = max(minBubbleTop, screenHeight - bottomReserved - bubbleHeight);
+    final double clampedMaterialBubbleTop = materialOffset.clamp(minBubbleTop, maxBubbleTop).toDouble();
+    final double maxMaterialBubbleHeight = max(80.0, screenHeight - bottomReserved - minBubbleTop);
+    final double maxMaterialBubbleWidth = max(widget.size.width, popupWidth * 0.78);
+
     return Theme(
       data: context.theme.copyWith(
         // in case some components still use legacy theming
@@ -432,6 +474,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
               extendBodyBehindAppBar: true,
               safeAreaLeft: false,
               safeAreaRight: false,
+              safeAreaBottom: iOS ? null : false,
               // The popup opens over a still-collapsing keyboard. Keep the body
               // full-screen and its bottom edge fixed so Positioned offsets are
               // screen-anchored and don't ride the inset animation down.
@@ -440,29 +483,12 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
               backgroundColor: kIsDesktop && iOS && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
                   ? context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.6)
                   : Colors.transparent,
-              appBar: iOS
-                  ? null
-                  : BBAppBar(
-                      backgroundColor: context.theme.colorScheme.surface.oppositeLightenOrDarken(5),
-                      automaticallyImplyLeading: false,
-                      leadingWidth: 40,
-                      toolbarHeight: kIsDesktop ? 80 : kToolbarHeight,
-                      leading: Padding(
-                        padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0, left: 10.0),
-                        child: BackButton(
-                          color: context.theme.colorScheme.onSurface,
-                          onPressed: () {
-                            popDetails();
-                            return true;
-                          },
-                        ),
-                      ),
-                      actions: buildMaterialDetailsMenu(context),
-                    ),
+              appBar: null,
               body: Stack(
                 fit: StackFit.expand,
                 children: [
                   GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: popDetails,
                     child: iOS
                         ? (SettingsSvc.settings.highPerfMode.value
@@ -481,19 +507,24 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                                   color: Colors.transparent.withValues(alpha: 0.1),
                                 ),
                               ))
-                        : null,
+                        : FadeTransition(
+                            opacity: controller,
+                            child: Container(
+                              color: context.theme.colorScheme.scrim.withValues(alpha: 0.45),
+                            ),
+                          ),
                   ),
                   if (iOS)
                     AnimatedPositioned(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeOutBack,
+                      duration: M3EMotion.spatialFast.duration,
+                      curve: M3EMotion.spatialOvershoot,
                       left: previewLeft,
                       right: previewRight,
                       bottom: messageOffset,
                       child: TweenAnimationBuilder<double>(
                         tween: Tween<double>(begin: 0.8, end: 1),
-                        curve: Curves.easeOutBack,
-                        duration: const Duration(milliseconds: 500),
+                        curve: M3EMotion.spatialOvershoot,
+                        duration: M3EMotion.spatialDefault.duration,
                         child: NotificationListener<SizeChangedLayoutNotification>(
                           onNotification: (_) {
                             _remeasureChild();
@@ -530,29 +561,73 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                         },
                       ),
                     ),
+                  if (!iOS)
+                    AnimatedPositioned(
+                      duration: M3EMotion.spatialFast.duration,
+                      curve: M3EMotion.spatialOvershoot,
+                      left: previewLeft,
+                      right: previewRight,
+                      top: clampedMaterialBubbleTop,
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween<double>(begin: 0.94, end: 1.0),
+                        curve: M3EMotion.spatialOvershoot,
+                        duration: M3EMotion.spatialDefault.duration,
+                        builder: (context, scale, child) {
+                          return Transform.scale(
+                            scale: scale,
+                            alignment: isFromMe ? Alignment.centerRight : Alignment.centerLeft,
+                            child: child,
+                          );
+                        },
+                        child: NotificationListener<SizeChangedLayoutNotification>(
+                          onNotification: (_) {
+                            _remeasureChild();
+                            return false;
+                          },
+                          child: SizeChangedLayoutNotifier(
+                            child: ConstrainedBox(
+                              key: _childKey,
+                              constraints: BoxConstraints(
+                                maxWidth: maxMaterialBubbleWidth,
+                                maxHeight: maxMaterialBubbleHeight,
+                              ),
+                              child: SingleChildScrollView(
+                                physics: const ClampingScrollPhysics(),
+                                child: MessageCloneScope(
+                                  child: MessageStateScope(
+                                    messageState: widget.controller,
+                                    child: widget.child,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   if (iOS)
                     Positioned(
                       top: 40,
                       left: 15,
                       right: 15,
                       child: AnimatedSize(
-                        duration: const Duration(milliseconds: 500),
-                        curve: Sprung.underDamped,
+                        duration: M3EMotion.spatialDefault.duration,
+                        curve: M3EMotion.spatialOvershoot,
                         alignment: Alignment.center,
                         child: reactions.isNotEmpty
                             ? KeyedSubtree(key: _detailsKey, child: ReactionDetails(reactions: reactions))
                             : const SizedBox.shrink(),
                       ),
                     ),
-                  if (SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && _supportsTapbackAndReply)
+                  if (showTapbacks && iOS)
                     Positioned(
                       bottom: _pickerBottom(context, narrowScreen),
                       right: isFromMe ? 15 : null,
                       left: !isFromMe ? clampedOverlayLeft : null,
                       child: AnimatedSize(
-                        curve: Curves.easeInOut,
+                        curve: M3EMotion.spatialFast.curve,
                         alignment: isFromMe ? Alignment.centerRight : Alignment.centerLeft,
-                        duration: const Duration(milliseconds: 250),
+                        duration: M3EMotion.spatialFast.duration,
                         child: currentlySelectedReaction == "init"
                             ? const SizedBox(height: 80)
                             : _withAddEmojiCircle(
@@ -582,17 +657,15 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                                                   .map((e) {
                                                 final isEmoji = !ReactionTypes.toList().contains(e);
                                                 return Padding(
-                                                  padding: iOS
-                                                      ? const EdgeInsets.all(5.0)
-                                                      : const EdgeInsets.symmetric(horizontal: 5),
+                                                  padding: const EdgeInsets.all(5.0),
                                                   child: Material(
                                                     color: (isEmoji ? e == ownEmoji : currentlySelectedReaction == e)
                                                         ? context.theme.colorScheme.primary
                                                         : Colors.transparent,
                                                     borderRadius: BorderRadius.circular(20),
                                                     child: SizedBox(
-                                                      width: iOS ? 35 : null,
-                                                      height: iOS ? 35 : null,
+                                                      width: 35,
+                                                      height: 35,
                                                       child: InkWell(
                                                         borderRadius: BorderRadius.circular(20),
                                                         onTap: () async {
@@ -613,28 +686,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                                                               .add(EdgeInsets.only(right: e == "emphasize" ? 2.5 : 0)),
                                                           child: isEmoji
                                                               ? Center(child: _emojiTapbackGlyph(e))
-                                                              : iOS
-                                                              ? TapbackIcon(e)
-                                                              : Center(
-                                                                  child: Builder(builder: (context) {
-                                                                    final text = Text(
-                                                                      ReactionTypes.reactionToEmoji[e] ?? "X",
-                                                                      style: const TextStyle(
-                                                                          fontSize: 18,
-                                                                          fontFamily: 'Apple Color Emoji'),
-                                                                      textAlign: TextAlign.center,
-                                                                    );
-                                                                    // rotate thumbs down to match iOS
-                                                                    if (e == "dislike") {
-                                                                      return Transform(
-                                                                        transform: Matrix4.identity()..rotateY(pi),
-                                                                        alignment: FractionalOffset.center,
-                                                                        child: text,
-                                                                      );
-                                                                    }
-                                                                    return text;
-                                                                  }),
-                                                                ),
+                                                              : TapbackIcon(e),
                                                         ),
                                                       ),
                                                     ),
@@ -655,6 +707,25 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                                 )),
                       ),
                     ),
+                  if (showTapbacks && !iOS)
+                    Positioned(
+                      bottom: (screenHeight - clampedMaterialBubbleTop + 10.0)
+                          .clamp(0.0, max(0.0, screenHeight - 64.0)),
+                      right: isFromMe ? 15 : null,
+                      left: !isFromMe ? clampedOverlayLeft : null,
+                      child: ScaleTransition(
+                        scale: _tapbackSpringController,
+                        alignment: isFromMe ? Alignment.bottomRight : Alignment.bottomLeft,
+                        child: _buildMaterialTapbackPill(
+                          context,
+                          narrowScreen: narrowScreen,
+                          emojiTapbacks: emojiTapbacks,
+                          ownEmoji: ownEmoji,
+                          tapbackItems: tapbackItems,
+                          emojiRowMaxWidth: emojiRowMaxWidth,
+                        ),
+                      ),
+                    ),
                   if (iOS)
                     Positioned(
                       right: isFromMe ? 15 : null,
@@ -662,13 +733,13 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                       bottom: 30,
                       child: TweenAnimationBuilder<double>(
                         tween: Tween<double>(begin: 0.8, end: 1),
-                        curve: Curves.easeOutBack,
-                        duration: const Duration(milliseconds: 400),
+                        curve: M3EMotion.spatialOvershoot,
+                        duration: M3EMotion.spatialDefault.duration,
                         child: FadeTransition(
                           opacity: CurvedAnimation(
                             parent: controller,
-                            curve: const Interval(0.0, .9, curve: Curves.ease),
-                            reverseCurve: Curves.easeInCubic,
+                            curve: Interval(0.0, .9, curve: M3EMotion.effectsFast.curve),
+                            reverseCurve: Easing.standardAccelerate,
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -686,30 +757,30 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                         },
                       ),
                     ),
-                  if (!iOS &&
-                      SettingsSvc.settings.enablePrivateAPI.value &&
-                      minBigSur &&
-                      _supportsTapbackAndReply &&
-                      isSent)
+                  if (!iOS)
                     Positioned(
-                      left: (!message.isFromMe!
-                              ? widget.childPosition.dx + widget.size.width + (reactions.isNotEmpty ? 20 : 5)
-                              : widget.childPosition.dx - 55)
-                          .clamp(8.0, max(8.0, widthContext.width - 43.0)),
-                      top: materialOffset.clamp(
-                        MediaQuery.paddingOf(context).top + (kIsDesktop ? 80 : 50) + 8.0,
-                        max(MediaQuery.paddingOf(context).top + (kIsDesktop ? 80 : 50) + 8.0, context.height - 45.0),
-                      ),
-                      child: Material(
-                        color: context.theme.colorScheme.primary,
-                        borderRadius: BorderRadius.circular(20),
-                        child: SizedBox(
-                          width: 35,
-                          height: 35,
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(20),
-                            onTap: () => popup_navigation_actions.reply(_buildActionContext(DetailsMenuAction.Reply)),
-                            child: const Center(child: Icon(Icons.reply, size: 20)),
+                      left: 12,
+                      right: 12,
+                      bottom: MediaQuery.paddingOf(context).bottom + 12,
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 520),
+                          child: FadeTransition(
+                            opacity: CurvedAnimation(
+                              parent: _toolbarController,
+                              curve: M3EMotion.effectsFast.curve,
+                            ),
+                            child: SlideTransition(
+                              position: Tween<Offset>(
+                                begin: const Offset(0, 0.28),
+                                end: Offset.zero,
+                              ).animate(CurvedAnimation(
+                                parent: _toolbarController,
+                                curve: M3EMotion.spatialOvershoot,
+                              )),
+                              child: _buildMaterialDockedToolbar(context),
+                            ),
                           ),
                         ),
                       ),
@@ -941,53 +1012,272 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
     );
   }
 
-  List<Widget> buildMaterialDetailsMenu(BuildContext context) {
-    List<DetailsMenuActionWidget> allActions = _allActions;
+  Widget _buildMaterialTapbackPill(
+    BuildContext context, {
+    required bool narrowScreen,
+    required bool emojiTapbacks,
+    required String? ownEmoji,
+    required List<String> tapbackItems,
+    required double emojiRowMaxWidth,
+  }) {
+    if (currentlySelectedReaction == "init") {
+      return const SizedBox(height: 52);
+    }
 
-    return [
-      ...allActions.slice(0, numberToShow - 1).map((action) {
-        bool isDisabled = false;
-        if (action.action == DetailsMenuAction.Edit) {
-          isDisabled = !((message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 15) ?? false));
-        }
-
-        Color color = isDisabled
-            ? context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)
-            : context.theme.colorScheme.onSurfaceVariant;
-        return Padding(
-            padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
-            child: IconButton(
-              icon: Icon(action.nonIosIcon, color: color),
-              onPressed: isDisabled ? null : action.onTap,
-              tooltip: action.title,
-            ));
-      }),
-      Padding(
-          padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
-          child: PopupMenuButton<int>(
-              color: _hasCustomWallpaper
-                  ? context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.90)
-                  : context.theme.colorScheme.surfaceContainerHighest,
-              shape: SettingsSvc.settings.skin.value != Skins.Material
-                  ? const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(20.0)),
-                    )
-                  : null,
-              onSelected: (int value) {
-                allActions[value + numberToShow - 1].onTap?.call();
-              },
-              itemBuilder: (context) {
-                return allActions.slice(numberToShow - 1).mapIndexed((index, action) {
-                  return PopupMenuItem(
-                    value: index,
-                    child: Text(
-                      action.title,
-                      style: context.textTheme.bodyLarge!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+    final colorScheme = context.theme.colorScheme;
+    final rows = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: message.isFromMe! ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: List.generate(narrowScreen ? 2 : 1, (index) {
+        final row = Row(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.start,
+          children: tapbackItems
+              .slice(narrowScreen && index == 1 ? 3 : 0, narrowScreen && index == 0 ? 3 : null)
+              .map((e) {
+            final isEmoji = !ReactionTypes.toList().contains(e);
+            final isSelected = isEmoji ? e == ownEmoji : currentlySelectedReaction == e;
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: AnimatedScale(
+                scale: isSelected ? 1.12 : 1.0,
+                duration: M3EMotion.spatialFast.duration,
+                curve: M3EMotion.spatialOvershoot,
+                child: AnimatedContainer(
+                  duration: M3EMotion.effectsFast.duration,
+                  curve: M3EMotion.effectsFast.curve,
+                  decoration: BoxDecoration(
+                    color: isSelected ? colorScheme.primaryContainer : Colors.transparent,
+                    borderRadius: BorderRadius.circular(M3EShapes.xl),
+                    border: isSelected ? Border.all(color: colorScheme.primary, width: 1.5) : null,
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(M3EShapes.xl),
+                      onTap: () async {
+                        if (isEmoji) return _sendEmojiTapback(e);
+                        setState(() {
+                          currentlySelectedReaction = currentlySelectedReaction == e ? null : e;
+                        });
+                        HapticFeedback.lightImpact();
+                        widget.sendTapback(selfReaction == e ? "-$e" : e, part.part);
+                        popDetails();
+                      },
+                      child: SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: Center(
+                          child: isEmoji
+                              ? _emojiTapbackGlyph(e)
+                              : Builder(builder: (context) {
+                                  final text = Text(
+                                    ReactionTypes.reactionToEmoji[e] ?? "X",
+                                    style: const TextStyle(fontSize: 20, fontFamily: 'Apple Color Emoji'),
+                                    textAlign: TextAlign.center,
+                                  );
+                                  // rotate thumbs down to match iOS
+                                  if (e == "dislike") {
+                                    return Transform(
+                                      transform: Matrix4.identity()..rotateY(pi),
+                                      alignment: FractionalOffset.center,
+                                      child: text,
+                                    );
+                                  }
+                                  return text;
+                                }),
+                        ),
+                      ),
                     ),
-                  );
-                }).toList();
-              }))
-    ];
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        );
+        if (!emojiTapbacks) return row;
+        return ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: emojiRowMaxWidth),
+          child: _fadeScrollEdges(SingleChildScrollView(scrollDirection: Axis.horizontal, child: row)),
+        );
+      }),
+    );
+
+    return Material(
+      color: _hasCustomWallpaper
+          ? colorScheme.surfaceContainerHigh.withValues(alpha: 0.94)
+          : colorScheme.surfaceContainerHigh,
+      elevation: 6,
+      shadowColor: colorScheme.shadow.withValues(alpha: 0.22),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(M3EShapes.xl),
+        side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.35)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            rows,
+            if (emojiTapbacks) ...[
+              Container(
+                width: 1,
+                height: 24,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                color: colorScheme.outlineVariant.withValues(alpha: 0.4),
+              ),
+              Tooltip(
+                message: 'More reactions',
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(M3EShapes.xl),
+                    onTap: _pickEmojiTapback,
+                    child: SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Icon(Icons.add_reaction_outlined, size: 22, color: colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMaterialDockedToolbar(BuildContext context) {
+    final List<DetailsMenuActionWidget> allActions = _allActions;
+    if (allActions.isEmpty) return const SizedBox.shrink();
+
+    final colorScheme = context.theme.colorScheme;
+    final bool hasOverflow = allActions.length > 5;
+    final List<DetailsMenuActionWidget> visibleActions = hasOverflow ? allActions.sublist(0, 4) : allActions;
+    final List<DetailsMenuActionWidget> overflowActions =
+        hasOverflow ? allActions.sublist(4) : const <DetailsMenuActionWidget>[];
+
+    return Material(
+      color: _hasCustomWallpaper
+          ? colorScheme.surfaceContainerHigh.withValues(alpha: 0.94)
+          : colorScheme.surfaceContainerHigh,
+      elevation: 6,
+      shadowColor: colorScheme.shadow.withValues(alpha: 0.25),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(M3EShapes.xl),
+        side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.35)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          children: [
+            ...visibleActions.map((action) {
+              final bool isDisabled = action.shouldDisableBtn ?? false;
+              final Color itemColor = isDisabled
+                  ? colorScheme.onSurfaceVariant.withValues(alpha: 0.38)
+                  : action.action == DetailsMenuAction.Delete
+                      ? colorScheme.error
+                      : colorScheme.onSurfaceVariant;
+              return Expanded(
+                child: Tooltip(
+                  message: action.title,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(M3EShapes.lg),
+                      onTap: isDisabled ? null : action.onTap,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(action.nonIosIcon, size: 22, color: itemColor),
+                            const SizedBox(height: 4),
+                            Text(
+                              action.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                              style: context.theme.textTheme.labelSmall?.copyWith(
+                                color: itemColor,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }),
+            if (overflowActions.isNotEmpty)
+              Expanded(
+                child: PopupMenuButton<int>(
+                  tooltip: 'More actions',
+                  color: _hasCustomWallpaper
+                      ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.94)
+                      : colorScheme.surfaceContainerHighest,
+                  shape: const RoundedRectangleBorder(borderRadius: M3EShapes.radiusLg),
+                  onSelected: (int index) {
+                    final selected = overflowActions[index];
+                    if (!(selected.shouldDisableBtn ?? false)) {
+                      selected.onTap?.call();
+                    }
+                  },
+                  itemBuilder: (context) {
+                    return overflowActions.mapIndexed((index, action) {
+                      final bool isDisabled = action.shouldDisableBtn ?? false;
+                      final Color itemColor = isDisabled
+                          ? colorScheme.onSurfaceVariant.withValues(alpha: 0.38)
+                          : action.action == DetailsMenuAction.Delete
+                              ? colorScheme.error
+                              : colorScheme.onSurfaceVariant;
+                      return PopupMenuItem<int>(
+                        value: index,
+                        enabled: !isDisabled,
+                        child: Row(
+                          children: [
+                            Icon(action.nonIosIcon, size: 20, color: itemColor),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                action.title,
+                                style: context.textTheme.bodyMedium?.copyWith(color: itemColor),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList();
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.more_horiz, size: 22, color: colorScheme.onSurfaceVariant),
+                        const SizedBox(height: 4),
+                        Text(
+                          'More',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: context.theme.textTheme.labelSmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

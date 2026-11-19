@@ -530,15 +530,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
             if (date == null) return;
             showDialog(
               context: context,
-              builder: (context) => AlertDialog(
-                title: Text("Generating document...", style: context.theme.textTheme.titleLarge),
-                content: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[const SizedBox(height: 15.0), buildProgressIndicator(context)],
-                ),
-                backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-              ),
+              builder: (context) => const BBProgressDialog(title: "Generating document..."),
               barrierDismissible: false,
             );
             final messages = (await Chat.getMessagesAsync(
@@ -576,15 +568,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
             if (date == null) return;
             showDialog(
               context: context,
-              builder: (context) => AlertDialog(
-                title: Text("Generating PDF...", style: context.theme.textTheme.titleLarge),
-                content: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[const SizedBox(height: 15.0), buildProgressIndicator(context)],
-                ),
-                backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-              ),
+              builder: (context) => const BBProgressDialog(title: "Generating PDF..."),
               barrierDismissible: false,
             );
             final messages = (await Chat.getMessagesAsync(
@@ -719,8 +703,8 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
               actions: [
                 BBDialogAction(text: "Cancel", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
                 BBDialogAction(
-                  text: "Yes",
-                  isDefault: true,
+                  text: "Clear",
+                  isDestructive: true,
                   onPressed: () async {
                     Navigator.of(context, rootNavigator: true).pop();
                     chat.clearTranscript();
@@ -775,6 +759,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
       ),
       yesText: "Leave",
       yesColor: context.theme.colorScheme.error,
+      yesIsDestructive: true,
       onNo: () => Navigator.of(context, rootNavigator: true).pop(),
       onYes: () async {
         Navigator.of(context, rootNavigator: true).pop();

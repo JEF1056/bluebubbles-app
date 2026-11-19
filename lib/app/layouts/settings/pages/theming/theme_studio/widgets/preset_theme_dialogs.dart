@@ -18,130 +18,83 @@ class PresetThemeDialogs {
 
   void showContextMenu(BuildContext context, ThemeStruct theme) {
     final isCustom = !theme.isPreset;
-    showModalBottomSheet(
+    showBBBottomSheet<void>(
       context: context,
-      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                child: Row(
-                  children: [
-                    const Icon(Icons.palette_outlined, size: 18),
-                    const SizedBox(width: 8),
-                    Text(
-                      theme.name,
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 8),
-              ListTile(
-                leading: const Icon(Icons.copy_outlined),
-                title: const Text(PresetThemeActions.cloneLabel),
-                subtitle: const Text("Create a copy of this theme"),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  showCloneDialog(context, theme);
-                },
-              ),
-              if (isCustom) ...[
-                ListTile(
-                  leading: const Icon(Icons.edit_outlined),
-                  title: const Text(PresetThemeActions.renameLabel),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    showRenameDialog(context, theme);
-                  },
-                ),
-                ListTile(
-                  leading: Icon(Icons.delete_outline, color: Theme.of(context).colorScheme.error),
-                  title: Text(PresetThemeActions.deleteLabel,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    confirmDelete(context, theme);
-                  },
-                ),
-              ],
-              const SizedBox(height: 8),
-            ],
+      title: theme.name,
+      icon: Icons.palette_outlined,
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text(PresetThemeActions.cloneLabel),
+            subtitle: const Text("Create a copy of this theme"),
+            onTap: () {
+              Navigator.of(ctx, rootNavigator: true).pop();
+              showCloneDialog(context, theme);
+            },
           ),
-        );
-      },
+          if (isCustom) ...[
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text(PresetThemeActions.renameLabel),
+              onTap: () {
+                Navigator.of(ctx, rootNavigator: true).pop();
+                showRenameDialog(context, theme);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete_outline, color: Theme.of(ctx).colorScheme.error),
+              title: Text(PresetThemeActions.deleteLabel,
+                  style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+              onTap: () {
+                Navigator.of(ctx, rootNavigator: true).pop();
+                confirmDelete(context, theme);
+              },
+            ),
+          ],
+        ],
+      ),
     );
   }
 
-  void showCloneDialog(BuildContext context, ThemeStruct source) {
-    final textController = TextEditingController(text: "${source.name} Copy");
-    showBBDialog(
+  Future<void> showCloneDialog(BuildContext context, ThemeStruct source) async {
+    final name = await showBBInputDialog(
       context: context,
       title: "Clone \"${source.name}\"",
-      content: TextField(
-        controller: textController,
-        autofocus: true,
-        decoration: InputDecoration(
-          labelText: "New Theme Name",
-          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Theme.of(context).colorScheme.outline)),
-          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Theme.of(context).colorScheme.primary)),
-        ),
-        onSubmitted: (_) => _doClone(context, source, textController.text),
-      ),
-      actions: [
-        BBDialogAction(
-          text: "Cancel",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
-        BBDialogAction(
-          text: "Clone",
-          isDefault: true,
-          onPressed: () => _doClone(context, source, textController.text),
-        ),
-      ],
+      icon: Icons.copy_outlined,
+      initialValue: "${source.name} Copy",
+      labelText: "New Theme Name",
+      confirmText: "Clone",
+      validator: (v) => PresetThemeActions.validateThemeName(v ?? ""),
     );
+    if (name == null) return;
+    controller.cloneTheme(name.trim(), source);
   }
 
-  void showRenameDialog(BuildContext context, ThemeStruct theme) {
+  Future<void> showRenameDialog(BuildContext context, ThemeStruct theme) async {
     controller.applyTheme(context, theme);
-    final textController = TextEditingController(text: theme.name);
-    showBBDialog(
+    final newName = await showBBInputDialog(
       context: context,
       title: "Rename \"${theme.name}\"",
-      content: TextField(
-        controller: textController,
-        autofocus: true,
-        decoration: InputDecoration(
-          labelText: "New Name",
-          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Theme.of(context).colorScheme.outline)),
-          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Theme.of(context).colorScheme.primary)),
-        ),
-        onSubmitted: (_) => _doRename(context, context, textController.text),
-      ),
-      actions: [
-        BBDialogAction(
-          text: "Cancel",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
-        BBDialogAction(
-          text: "Rename",
-          isDefault: true,
-          onPressed: () => _doRename(context, context, textController.text),
-        ),
-      ],
+      icon: Icons.edit_outlined,
+      initialValue: theme.name,
+      labelText: "New Name",
+      confirmText: "Rename",
+      validator: (v) => (v == null || v.trim().isEmpty) ? "Name cannot be empty" : null,
     );
+    if (newName == null || !context.mounted) return;
+    final ok = await controller.renameTheme(context, newName.trim());
+    if (!ok) showSnackbar("Error", "Could not rename — name is empty or already taken", type: SnackbarType.error);
   }
 
   void confirmDelete(BuildContext context, ThemeStruct theme) {
     showBBDialog(
       context: context,
       title: "Delete Theme",
+      icon: Icons.delete_outline,
+      iconColor: Theme.of(context).colorScheme.error,
       body: "Delete \"${theme.name}\"? This cannot be undone.",
       actions: [
         BBDialogAction(
@@ -162,59 +115,17 @@ class PresetThemeDialogs {
     );
   }
 
-  void showCreateDialog(BuildContext context) {
-    final textController = TextEditingController();
-    showBBDialog(
+  Future<void> showCreateDialog(BuildContext context) async {
+    final name = await showBBInputDialog(
       context: context,
       title: "New ${isForDark ? 'Dark' : 'Light'} Theme",
-      content: TextField(
-        controller: textController,
-        autofocus: true,
-        decoration: InputDecoration(
-          labelText: "Theme Name",
-          hintText: "e.g. My Custom Theme",
-          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: Theme.of(context).colorScheme.outline)),
-          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Theme.of(context).colorScheme.primary)),
-        ),
-        onSubmitted: (_) => _doCreate(context, context, textController.text),
-      ),
-      actions: [
-        BBDialogAction(
-          text: "Cancel",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
-        BBDialogAction(
-          text: "Create",
-          isDefault: true,
-          onPressed: () => _doCreate(context, context, textController.text),
-        ),
-      ],
+      icon: Icons.palette_outlined,
+      labelText: "Theme Name",
+      hintText: "e.g. My Custom Theme",
+      confirmText: "Create",
+      validator: (v) => PresetThemeActions.validateThemeName(v ?? ""),
     );
-  }
-
-  void _doClone(BuildContext context, ThemeStruct source, String name) {
-    final err = PresetThemeActions.validateThemeName(name);
-    if (err != null) {
-      showSnackbar("Error", err, type: SnackbarType.error);
-      return;
-    }
-    Navigator.of(context, rootNavigator: true).pop();
-    controller.cloneTheme(name.trim(), source);
-  }
-
-  Future<void> _doRename(BuildContext context, BuildContext pageCtx, String newName) async {
-    Navigator.of(context, rootNavigator: true).pop();
-    final ok = await controller.renameTheme(pageCtx, newName.trim());
-    if (!ok) showSnackbar("Error", "Could not rename — name is empty or already taken", type: SnackbarType.error);
-  }
-
-  void _doCreate(BuildContext context, BuildContext pageCtx, String name) {
-    final err = PresetThemeActions.validateThemeName(name);
-    if (err != null) {
-      showSnackbar("Error", err, type: SnackbarType.error);
-      return;
-    }
-    Navigator.of(context, rootNavigator: true).pop();
-    controller.createTheme(pageCtx, name.trim(), forDark: isForDark);
+    if (name == null || !context.mounted) return;
+    controller.createTheme(context, name.trim(), forDark: isForDark);
   }
 }

@@ -245,4 +245,58 @@ class NotificationLogicTest {
             )
         )
     }
+
+    @Test
+    fun `sortKeyForTimestamp orders newer timestamps earlier lexicographically`() {
+        val older = CreateIncomingMessageNotification.sortKeyForTimestamp(1_700_000_000_000L)
+        val newer = CreateIncomingMessageNotification.sortKeyForTimestamp(1_700_000_010_000L)
+        assertTrue(newer < older)
+    }
+
+    @Test
+    fun `shouldShowPhoneMuteAction moves Mute off phone when reactions enabled`() {
+        assertFalse(CreateIncomingMessageNotification.shouldShowPhoneMuteAction(showReactionAction = true))
+        assertTrue(CreateIncomingMessageNotification.shouldShowPhoneMuteAction(showReactionAction = false))
+    }
+
+    @Test
+    fun `channel group routing maps messages, calls, and other channels cleanly`() {
+        assertEquals(
+            NotificationChannelHandler.GROUP_MESSAGES,
+            NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.NEW_MESSAGES_CHANNEL_ID)
+        )
+        assertEquals(
+            NotificationChannelHandler.GROUP_CALLS,
+            NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.FACETIME_CHANNEL_ID)
+        )
+        assertEquals(
+            NotificationChannelHandler.GROUP_OTHER,
+            NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.FOREGROUND_SERVICE_CHANNEL_ID)
+        )
+    }
+
+    @Test
+    fun `computeInboxSummary keeps count and caps visible lines at 5`() {
+        val (count, lines) = DeleteNotificationHandler.computeInboxSummary(
+            listOf("A: 1", "B: 2", " ", "C: 3", "D: 4", "E: 5", "F: 6")
+        )
+        assertEquals(7, count)
+        assertEquals(listOf("B: 2", "C: 3", "D: 4", "E: 5", "F: 6"), lines)
+    }
+
+    @Test
+    fun `formatCallerUri adds tel or mailto scheme when missing`() {
+        assertEquals("tel:+15551234567", CreateIncomingFaceTimeNotification.formatCallerUri("+15551234567"))
+        assertEquals("mailto:alice@example.com", CreateIncomingFaceTimeNotification.formatCallerUri("alice@example.com"))
+        assertEquals("tel:+15551234567", CreateIncomingFaceTimeNotification.formatCallerUri("tel:+15551234567"))
+        assertEquals(null, CreateIncomingFaceTimeNotification.formatCallerUri("  "))
+    }
+
+    @Test
+    fun `extensionForMime maps common image types and falls back to jpg`() {
+        assertEquals("png", InternalIntentReceiver.extensionForMime("image/png"))
+        assertEquals("gif", InternalIntentReceiver.extensionForMime("image/gif"))
+        assertEquals("webp", InternalIntentReceiver.extensionForMime("image/webp"))
+        assertEquals("jpg", InternalIntentReceiver.extensionForMime("image/jpeg"))
+    }
 }

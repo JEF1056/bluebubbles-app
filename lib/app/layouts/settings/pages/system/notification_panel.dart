@@ -102,13 +102,12 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
                     await SettingsSvc.settings.saveOneAsync('globalTextDetection');
                     return;
                   }
-                  final TextEditingController controller = TextEditingController();
-                  controller.text = SettingsSvc.settings.globalTextDetection.value;
-                  await showDialog(
-                    context: context,
-                    builder: (context) => TextDetectionDialog(controller),
+                  final result = await showTextDetectionDialog(
+                    context,
+                    initialText: SettingsSvc.settings.globalTextDetection.value,
                   );
-                  SettingsSvc.settings.globalTextDetection.value = controller.text;
+                  if (result == null) return;
+                  SettingsSvc.settings.globalTextDetection.value = result;
                   await SettingsSvc.settings.saveOneAsync('globalTextDetection');
                 },
                 backgroundColor: tileColor,
@@ -123,13 +122,12 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
                     containerColor: Colors.teal,
                   ),
                   onTap: () async {
-                    final TextEditingController controller = TextEditingController();
-                    controller.text = SettingsSvc.settings.globalTextDetection.value;
-                    await showDialog(
-                      context: context,
-                      builder: (context) => TextDetectionDialog(controller),
+                    final result = await showTextDetectionDialog(
+                      context,
+                      initialText: SettingsSvc.settings.globalTextDetection.value,
                     );
-                    SettingsSvc.settings.globalTextDetection.value = controller.text;
+                    if (result == null) return;
+                    SettingsSvc.settings.globalTextDetection.value = result;
                     await SettingsSvc.settings.saveOneAsync('globalTextDetection');
                   },
                 ),
@@ -464,12 +462,9 @@ class ChatListState extends State<ChatList> with ThemeHelpers {
                                 .copyWith(color: context.theme.colorScheme.onSurfaceVariant),
                           ),
                           onSelect: (_) async {
-                            await showDialog(
-                              context: context,
-                              builder: (context) => NotificationSettingsDialog(chat, () {
-                                setState(() {});
-                              }),
-                            );
+                            await showNotificationSettingsDialog(context, chat, () {
+                              setState(() {});
+                            });
                           },
                         );
                       },

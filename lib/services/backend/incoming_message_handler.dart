@@ -489,7 +489,7 @@ class IncomingMessageHandler {
 
     // 10.6. Per-chat wallpaper sync when the incoming chat payload carries a changed or cleared background.
     if (!isIsolate && (payload.chat.serverBackgroundGuid != null || payload.chat.hasServerProperties)) {
-      final localBgGuid = serverBackgroundGuidFromPath(FilesystemSvc.getExistingChatBackgroundPath(c.guid));
+      final localBgGuid = Chat.cachedServerBackgroundGuid(c.guid);
       if (localBgGuid != payload.chat.serverBackgroundGuid) {
         unawaited(Chat.syncBackground(payload.chat, targetChat: c));
       }
@@ -620,6 +620,15 @@ class IncomingMessageHandler {
       // If we have a local copy and the local copy has participants, use it — no need to fetch.
       final local = Chat.findOne(guid: partial.guid);
       if (local != null && local.handles.isNotEmpty) {
+        final effectiveService = (m.service?.trim().isNotEmpty == true ? m.service : partial.serviceName)?.trim();
+        if (effectiveService != null &&
+            effectiveService.isNotEmpty &&
+            local.guid.startsWith('any;') &&
+            local.serviceName != effectiveService) {
+          local.serviceName = effectiveService;
+          ChatsSvc.getChatState(local.guid)?.chat.serviceName = effectiveService;
+          await local.saveAsync(updateServiceName: true);
+        }
         return (chat: local, affectedHandleIds: <int>[]);
         // Cases to fetch from the server:
         // * Local chat exists but has no participants (incomplete data).

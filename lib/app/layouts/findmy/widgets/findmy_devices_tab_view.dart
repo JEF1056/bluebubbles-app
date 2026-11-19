@@ -11,6 +11,16 @@ class FindMyDevicesTabView extends StatelessWidget {
 
   const FindMyDevicesTabView({super.key, required this.controller});
 
+  @override
+  Widget build(BuildContext context) => FindMyDeviceCategoryTabView(controller: controller, isItem: false);
+}
+
+class FindMyDeviceCategoryTabView extends StatelessWidget {
+  final FindMyController controller;
+  final bool isItem;
+
+  const FindMyDeviceCategoryTabView({super.key, required this.controller, required this.isItem});
+
   static bool _hasLocation(dynamic item) =>
       (item.address?.label ?? item.address?.mapItemFullAddress) != null ||
       (item.location?.latitude != null && item.location?.longitude != null);
@@ -18,57 +28,28 @@ class FindMyDevicesTabView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final allDevices = controller.devices.where((item) => !item.isConsideredAccessory).toList();
+      final allEntries = controller.devices.where((d) => d.isConsideredAccessory == isItem).toList();
       final selectedId = controller.selectedDeviceId.value;
       final cs = context.theme.colorScheme;
       final tt = context.theme.textTheme;
 
-      final devicesWithLocation = allDevices.where(_hasLocation).toList();
+      final withLocation = allEntries.where(_hasLocation).toList();
       if (selectedId != null) {
-        final idx = devicesWithLocation.indexWhere((d) => d.id == selectedId);
+        final idx = withLocation.indexWhere((d) => d.id == selectedId);
         if (idx > 0) {
-          final picked = devicesWithLocation.removeAt(idx);
-          devicesWithLocation.insert(0, picked);
+          final picked = withLocation.removeAt(idx);
+          withLocation.insert(0, picked);
         }
       }
-
-      final devicesWithoutLocation = allDevices.where((item) => !_hasLocation(item)).toList();
+      final withoutLocation = allEntries.where((item) => !_hasLocation(item)).toList();
 
       return SliverList(
         delegate: SliverChildListDelegate([
-          if (allDevices.isEmpty &&
-              (controller.fetching.value == null ||
-                  controller.fetching.value == true ||
-                  controller.fetching.value == false))
-            _buildEmptyState(context),
-          if (devicesWithLocation.isNotEmpty)
-            Material(
-              color: Colors.transparent,
-              child: ListView.separated(
-                physics: const NeverScrollableScrollPhysics(),
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: devicesWithLocation.length,
-                separatorBuilder: (context, i) {
-                  final current = devicesWithLocation[i];
-                  if (selectedId != null && current.id == selectedId) {
-                    return const SizedBox(height: 2);
-                  }
-                  return Divider(
-                    height: 1,
-                    indent: 70,
-                    endIndent: 16,
-                    color: cs.outlineVariant.withValues(alpha: 0.35),
-                  );
-                },
-                itemBuilder: (context, i) => FindMyDeviceListTile(
-                  item: devicesWithLocation[i],
-                  controller: controller,
-                ),
-              ),
-            ),
-          if (devicesWithoutLocation.isNotEmpty) ...[
-            if (devicesWithLocation.isNotEmpty)
+          if (allEntries.isEmpty) _buildEmptyState(context),
+          if (withLocation.isNotEmpty)
+            _buildSectionList(withLocation, selectedId: selectedId, dividerColor: cs.outlineVariant.withValues(alpha: 0.35)),
+          if (withoutLocation.isNotEmpty) ...[
+            if (withLocation.isNotEmpty)
               Divider(
                 height: 1,
                 indent: 16,
@@ -85,30 +66,40 @@ class FindMyDevicesTabView extends StatelessWidget {
                 ),
               ),
             ),
-            Material(
-              color: Colors.transparent,
-              child: ListView.separated(
-                physics: const NeverScrollableScrollPhysics(),
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: devicesWithoutLocation.length,
-                separatorBuilder: (context, i) => Divider(
-                  height: 1,
-                  indent: 70,
-                  endIndent: 16,
-                  color: cs.outlineVariant.withValues(alpha: 0.35),
-                ),
-                itemBuilder: (context, i) => FindMyDeviceListTile(
-                  item: devicesWithoutLocation[i],
-                  controller: controller,
-                ),
-              ),
-            ),
+            _buildSectionList(withoutLocation, dividerColor: cs.outlineVariant.withValues(alpha: 0.35)),
           ],
           const SizedBox(height: 92),
         ]),
       );
     });
+  }
+
+  Widget _buildSectionList(List items, {String? selectedId, required Color dividerColor}) {
+    return Material(
+      color: Colors.transparent,
+      child: ListView.separated(
+        physics: const NeverScrollableScrollPhysics(),
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        itemCount: items.length,
+        separatorBuilder: (context, i) {
+          if (selectedId != null && items[i].id == selectedId) {
+            return const SizedBox(height: 2);
+          }
+          return Divider(
+            height: 1,
+            indent: 70,
+            endIndent: 16,
+            color: dividerColor,
+          );
+        },
+        itemBuilder: (context, i) => FindMyDeviceListTile(
+          item: items[i],
+          controller: controller,
+          isItem: isItem,
+        ),
+      ),
+    );
   }
 
   Widget _buildEmptyState(BuildContext context) {
@@ -124,17 +115,25 @@ class FindMyDevicesTabView extends StatelessWidget {
               radius: 26,
               backgroundColor: cs.surfaceContainerHigh,
               foregroundColor: cs.onSurfaceVariant,
-              child: const Icon(Icons.devices_outlined, size: 26),
+              child: Icon(isItem ? Icons.adjust_rounded : Icons.devices_outlined, size: 26),
             ),
             const SizedBox(height: 12),
             Text(
               controller.fetching.value == null
                   ? "Something went wrong!"
                   : controller.fetching.value == false
-                      ? "No Devices Found"
+                      ? (isItem ? "No Items Found" : "No Devices Found")
                       : "Getting Find My data...",
               style: tt.titleSmall?.copyWith(fontWeight: FontWeight.w600),
             ),
+            if (isItem && controller.fetching.value == false) ...[
+              const SizedBox(height: 4),
+              Text(
+                "AirTags and Find My accessories will appear here.",
+                textAlign: TextAlign.center,
+                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+            ],
             if (controller.fetching.value == true) ...[
               const SizedBox(height: 12),
               GetIt.I.isRegistered<SettingsService>()

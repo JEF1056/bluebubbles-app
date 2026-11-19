@@ -52,7 +52,16 @@ class ChatsService {
   set activeChat(ChatState? value) {
     _activeChat = value;
     final guid = value?.chat.guid;
-    if (activeChatGuid.value != guid) activeChatGuid.value = guid;
+    if (activeChatGuid.value != guid) {
+      activeChatGuid.value = guid;
+      _syncLocusContext(guid);
+    }
+  }
+
+  void _syncLocusContext(String? chatGuid) {
+    if (kIsWeb || !Platform.isAndroid) return;
+    if (!GetIt.I.isRegistered<MethodChannelService>()) return;
+    unawaited(MethodChannelSvc.actions.setLocusContext(chatGuid));
   }
 
   /// Reactive guid of the active chat. Tiles observe this for highlighting instead
@@ -879,7 +888,7 @@ class ChatsService {
   }
 
   Future<void> updateShareTargets() async {
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       StartupTasks.waitForUI().then((_) async {
         // Create a snapshot to avoid concurrent modification during iteration
         final chatList = getSortedChats();
@@ -1051,12 +1060,14 @@ class ChatsService {
   void setActiveToDead() {
     Logger.debug('Setting active chat to dead: ${activeChat?.chat.guid}');
     activeChat?.updateAliveInternal(false);
+    _syncLocusContext(null);
   }
 
   /// Set the active chat to alive
   void setActiveToAlive() {
     Logger.info('Setting active chat to alive: ${activeChat?.chat.guid}');
     activeChat?.updateAliveInternal(true);
+    _syncLocusContext(activeChat?.chat.guid);
   }
 
   /// Check if a chat is currently active (both active and alive)
@@ -1359,9 +1370,12 @@ class ChatsService {
     return updates;
   }
 
+  DateTime? _lastServerChatFlagsSync;
+  static const Duration _serverChatFlagsCooldown = Duration(minutes: 10);
+
   /// Fetch pinned chat GUIDs from `GET /api/v1/chat/pinned` and sync local ObjectBox / UI order,
   /// plus iOS filtered/archived status and per-chat read receipt overrides.
-  Future<void> syncPinnedChatsFromServer() async {
+  Future<void> syncPinnedChatsFromServer({bool forceFlagsSync = false}) async {
     if (headless || !SettingsSvc.settings.finishedSetup.value) return;
     try {
       final resp = await HttpSvc.chat.getPinned();
@@ -1372,14 +1386,20 @@ class ChatsService {
     } catch (e) {
       Logger.debug("Pinned chat sync skipped/failed: $e", tag: "ChatsService");
     }
-    await _syncServerChatFlags();
+    await _syncServerChatFlags(force: forceFlagsSync);
   }
 
   /// Reconcile server-side iOS filter/archive flags and per-chat
   /// `EnableReadReceiptForChat` overrides onto already-synced local chats.
-  Future<void> _syncServerChatFlags() async {
+  Future<void> _syncServerChatFlags({bool force = false}) async {
     if (headless || !SettingsSvc.settings.finishedSetup.value) return;
     if (!GetIt.I.isRegistered<HttpService>()) return;
+    final now = DateTime.now();
+    if (!force &&
+        _lastServerChatFlagsSync != null &&
+        now.difference(_lastServerChatFlagsSync!) < _serverChatFlagsCooldown) {
+      return;
+    }
     if (hasChats.value && !loadedAllChats.isCompleted) {
       try {
         await loadedAllChats.future.timeout(const Duration(seconds: 10));
@@ -1387,6 +1407,7 @@ class ChatsService {
     }
     try {
       final resp = await HttpSvc.chat.query(withQuery: const [], offset: 0, limit: 500);
+      _lastServerChatFlagsSync = DateTime.now();
       final data = resp.data is Map ? (resp.data as Map)['data'] : null;
       if (data is! List) return;
 
@@ -1410,10 +1431,17 @@ class ChatsService {
         final archiveNeedsUpdate = shouldArchive && state.chat.isArchived != true;
         final readReceiptsNeedsUpdate =
             hasReadReceiptsInfo && state.chat.autoSendReadReceipts != serverReadReceipts;
+        final serverServiceName = (raw['serviceName'] as String?)?.trim();
+        final serviceNameNeedsUpdate = serverServiceName != null &&
+            serverServiceName.isNotEmpty &&
+            state.chat.serviceName != serverServiceName;
         if (raw.containsKey('properties')) {
-          unawaited(Chat.syncBackground(Chat.fromMap(raw), targetChat: state.chat).catchError((_) {}));
+          final parsedChat = Chat.fromMap(raw);
+          if (Chat.cachedServerBackgroundGuid(guid) != parsedChat.serverBackgroundGuid) {
+            unawaited(Chat.syncBackground(parsedChat, targetChat: state.chat).catchError((_) {}));
+          }
         }
-        if (!archiveNeedsUpdate && !readReceiptsNeedsUpdate) continue;
+        if (!archiveNeedsUpdate && !readReceiptsNeedsUpdate && !serviceNameNeedsUpdate) continue;
 
         if (archiveNeedsUpdate) {
           state.chat.isArchived = true;
@@ -1424,9 +1452,13 @@ class ChatsService {
           state.chat.autoSendReadReceipts = serverReadReceipts;
           state.updateAutoSendReadReceiptsInternal(serverReadReceipts);
         }
+        if (serviceNameNeedsUpdate) {
+          state.chat.serviceName = serverServiceName;
+        }
         await state.chat.saveAsync(
           updateIsArchived: archiveNeedsUpdate,
           updateAutoSendReadReceipts: readReceiptsNeedsUpdate,
+          updateServiceName: serviceNameNeedsUpdate,
         );
       }
 
@@ -1704,6 +1736,7 @@ class ChatsService {
       chatToUpdate.dynamicWallpaperConfig = null;
     }
     await chatToUpdate.saveAsync(updateWallpaperSettings: true);
+    Chat.invalidateServerBackgroundGuidCache(chatToUpdate.guid);
   }
 
   /// Selects a dynamic (animated) wallpaper for [chat] — sets
@@ -1747,6 +1780,7 @@ class ChatsService {
     chatToUpdate.dynamicWallpaperId = null;
     chatToUpdate.dynamicWallpaperConfig = null;
     await chatToUpdate.saveAsync(updateWallpaperSettings: true);
+    Chat.invalidateServerBackgroundGuidCache(chatToUpdate.guid);
   }
 
   /// Set the custom light and dark themes for a specific chat.

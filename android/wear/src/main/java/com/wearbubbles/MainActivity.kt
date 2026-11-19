@@ -10,12 +10,20 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.ui.WearApp
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val initialChatGuid = mutableStateOf<String?>(null)
+    private var pausedActiveChatGuid: String? = null
+    private var activeHeartbeatJob: Job? = null
+    private var bridgingObserverJob: Job? = null
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -25,28 +33,65 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         initialChatGuid.value = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_GUID)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
+        requestNotificationPermissionIfNeeded()
 
         setContent {
             WearApp(initialChatGuid = initialChatGuid.value)
         }
     }
 
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val status = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+        if (status != PackageManager.PERMISSION_GRANTED &&
+            !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        (applicationContext as WearBubblesApp).phoneRelayClient.notifyWatchActive(true)
+        val pendingRestore = pausedActiveChatGuid
+        pausedActiveChatGuid = null
+        if (pendingRestore != null && NotificationHelper.activeChatGuid.value == null) {
+            NotificationHelper.setActiveChat(pendingRestore, this)
+        } else {
+            NotificationHelper.updateBridgingExclusion(this, NotificationHelper.activeChatGuid.value)
+        }
+
+        bridgingObserverJob?.cancel()
+        bridgingObserverJob = lifecycleScope.launch {
+            NotificationHelper.activeChatGuid.collect { guid ->
+                NotificationHelper.updateBridgingExclusion(this@MainActivity, guid)
+                if (guid != null) {
+                    NotificationHelper.cancelNotification(this@MainActivity, guid)
+                }
+            }
+        }
+
+        val relay = (applicationContext as WearBubblesApp).phoneRelayClient
+        activeHeartbeatJob?.cancel()
+        activeHeartbeatJob = lifecycleScope.launch {
+            while (isActive) {
+                relay.notifyWatchActive(true)
+                delay(60_000L)
+            }
+        }
     }
 
     override fun onPause() {
+        bridgingObserverJob?.cancel()
+        bridgingObserverJob = null
+        val currentActive = NotificationHelper.activeChatGuid.value
+        if (currentActive != null) {
+            pausedActiveChatGuid = currentActive
+            NotificationHelper.setActiveChat(null, this)
+        } else {
+            NotificationHelper.updateBridgingExclusion(this, null)
+        }
+        activeHeartbeatJob?.cancel()
+        activeHeartbeatJob = null
         (applicationContext as WearBubblesApp).phoneRelayClient.notifyWatchActive(false)
         super.onPause()
     }
@@ -55,6 +100,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         val guid = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_GUID)
         if (!guid.isNullOrBlank()) {
+            pausedActiveChatGuid = guid
             initialChatGuid.value = guid
         }
     }

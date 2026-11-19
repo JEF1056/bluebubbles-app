@@ -279,7 +279,8 @@ class MaterialAvatarMenu extends StatelessWidget {
                 label: 'Unknown Senders',
                 onTap: () => hideMenu().then((_) => goToUnknownSenders(overlayContext)),
               ),
-            if (SettingsSvc.serverDetails.isMinCatalina)
+            if (SettingsSvc.serverDetails.isMinCatalina &&
+                (extraItems || SettingsSvc.settings.skin.value != Skins.Material))
               MenuItemRow(
                 icon: Icons.location_on_outlined,
                 label: 'Find My',

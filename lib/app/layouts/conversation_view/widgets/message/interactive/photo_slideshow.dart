@@ -5,7 +5,6 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/shared
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
-import 'package:bluebubbles/services/backend/filesystem/web_media_cache.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';

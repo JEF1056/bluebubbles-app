@@ -501,8 +501,8 @@ void main() {
         await tester.pumpAndSettle();
 
         if (testCase.expectReplyAndTapbacks) {
-          // Floating Material Reply button + DetailsMenuAction.Reply in BBAppBar + tapback picker
-          expect(find.byIcon(Icons.reply), findsNWidgets(2));
+          // Bottom M3E DockedToolbar Reply action + tapback picker
+          expect(find.byIcon(Icons.reply), findsOneWidget);
           expect(find.byTooltip('Reply'), findsOneWidget);
           expect(find.text('❤️'), findsOneWidget);
         } else {
@@ -541,6 +541,7 @@ void main() {
           guid: 'quick-tapback-${testCase.serviceName}',
           text: 'Double tap ${testCase.serviceName}',
           createdAt: DateTime(2026, 11, 18, 12, 0),
+          service: testCase.serviceName,
           isFromMe: false,
         );
         service.struct.addMessages([msg]);

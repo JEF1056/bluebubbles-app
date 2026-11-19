@@ -136,6 +136,7 @@ class ThemeManagementSection extends StatelessWidget {
                         message:
                             "This will overwrite all color customizations in \"${controller.activeTheme.name}\" with the built-in defaults. This cannot be undone.",
                         confirmLabel: "Reset",
+                        isDestructive: true,
                         onConfirm: () => controller.resetToDefault(context),
                       ),
                     ),
@@ -170,47 +171,23 @@ class ThemeManagementSection extends StatelessWidget {
 
   // ── Action handlers ──────────────────────────────────────────────────────────
 
-  void _showRenameDialog(BuildContext context) {
-    final textController = TextEditingController(text: controller.activeTheme.name);
-    showBBDialog(
+  Future<void> _showRenameDialog(BuildContext context) async {
+    final name = await showBBInputDialog(
       context: context,
       title: "Rename Theme",
-      content: TextField(
-        controller: textController,
-        autofocus: true,
-        decoration: InputDecoration(
-          labelText: "New Name",
-          enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: context.theme.colorScheme.outline)),
-          focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: context.theme.colorScheme.primary)),
-        ),
-        onSubmitted: (v) => _doRename(context, context, v),
-      ),
-      actions: [
-        BBDialogAction(
-          text: "Cancel",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
-        BBDialogAction(
-          text: "Rename",
-          isDefault: true,
-          onPressed: () => _doRename(context, context, textController.text),
-        ),
-      ],
+      icon: Icons.edit_outlined,
+      initialValue: controller.activeTheme.name,
+      labelText: "New Name",
+      confirmText: "Rename",
+      validator: (v) {
+        final trimmed = v?.trim() ?? '';
+        if (trimmed.isEmpty) return "Name cannot be empty";
+        if (ThemeStruct.findOne(trimmed) != null) return "A theme named \"$trimmed\" already exists";
+        return null;
+      },
     );
-  }
-
-  Future<void> _doRename(BuildContext dialogCtx, BuildContext pageCtx, String name) async {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) {
-      showSnackbar("Error", "Name cannot be empty", type: SnackbarType.error);
-      return;
-    }
-    if (ThemeStruct.findOne(trimmed) != null) {
-      showSnackbar("Error", "A theme named \"$trimmed\" already exists", type: SnackbarType.error);
-      return;
-    }
-    Navigator.of(dialogCtx, rootNavigator: true).pop();
-    await controller.renameTheme(pageCtx, trimmed);
+    if (name == null || !context.mounted) return;
+    await controller.renameTheme(context, name.trim());
   }
 
   Future<void> _exportTheme(BuildContext context) async {
@@ -223,9 +200,59 @@ class ThemeManagementSection extends StatelessWidget {
     } else if (kIsDesktop) {
       // Desktop: show JSON in a dialog so the user can copy it, since share_plus
       // does not support file sharing on desktop.
-      showDialog(
+      showBBDialog(
         context: context,
-        builder: (_) => _ExportDialog(json: json, themeName: themeName),
+        title: "Export — $themeName",
+        icon: Icons.ios_share_outlined,
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 440),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                "Copy the JSON below to share this theme. Import it on another device using the Import button in the Presets section.",
+                style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 200),
+                decoration: BoxDecoration(
+                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: context.theme.colorScheme.outline.withValues(alpha: 0.3)),
+                ),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(12),
+                  child: SelectableText(
+                    json,
+                    style: context.theme.textTheme.bodySmall?.copyWith(
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          BBDialogAction(
+            text: "Close",
+            onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+          ),
+          BBDialogAction(
+            text: "Copy JSON",
+            isDefault: true,
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: json));
+              if (context.mounted) {
+                showCopiedToast("Theme JSON copied to clipboard");
+                Navigator.of(context, rootNavigator: true).pop();
+              }
+            },
+          ),
+        ],
       );
     } else {
       try {
@@ -283,71 +310,6 @@ class ThemeManagementSection extends StatelessWidget {
             Navigator.of(context, rootNavigator: true).pop();
             onConfirm();
           },
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Export dialog (desktop) ───────────────────────────────────────────────────
-
-class _ExportDialog extends StatelessWidget {
-  const _ExportDialog({required this.json, required this.themeName});
-  final String json;
-  final String themeName;
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-      title: Text("Export — $themeName", style: context.theme.textTheme.titleLarge),
-      content: SizedBox(
-        width: 440,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              "Copy the JSON below to share this theme. Import it on another device using the Import button in the Presets section.",
-              style: context.theme.textTheme.bodySmall?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              constraints: const BoxConstraints(maxHeight: 200),
-              decoration: BoxDecoration(
-                color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: context.theme.colorScheme.outline.withValues(alpha: 0.3)),
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(12),
-                child: SelectableText(
-                  json,
-                  style: context.theme.textTheme.bodySmall?.copyWith(
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                    fontFamily: 'monospace',
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: Text("Close", style: TextStyle(color: context.theme.colorScheme.primary)),
-        ),
-        FilledButton.icon(
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: json));
-            if (context.mounted) {
-              showCopiedToast("Theme JSON copied to clipboard");
-              Navigator.of(context).pop();
-            }
-          },
-          icon: const Icon(Icons.copy),
-          label: const Text("Copy"),
         ),
       ],
     );

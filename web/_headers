@@ -16,8 +16,9 @@
 /version.json
   Cache-Control: no-cache
 
+# Unhashed Flutter assets (FontManifest, AssetManifest, icons) must revalidate on deploy
 /assets/*
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=0, must-revalidate
 
 /canvaskit/*
   Cache-Control: public, max-age=31536000, immutable

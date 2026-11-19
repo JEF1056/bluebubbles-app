@@ -22,6 +22,14 @@ class TextBubble extends StatefulWidget {
   final MessagePart message;
   final bool subjectOnly;
 
+  /// Returns a 2-stop tonal gradient for Material outgoing bubbles that preserves
+  /// `onBubble` / `onPrimary` contrast in both light and dark themes.
+  static List<Color> outgoingTonalGradient(Color base, {double alpha = 1.0}) {
+    final isDark = ThemeData.estimateBrightnessForColor(base) == Brightness.dark;
+    final stop2 = isDark ? base.darkenAmount(0.05) : base.lightenAmount(0.04);
+    return [base.withValues(alpha: alpha), stop2.withValues(alpha: alpha)];
+  }
+
   @override
   State<StatefulWidget> createState() => _TextBubbleState();
 }
@@ -195,18 +203,38 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
       final material = !iOS && !samsung;
       final tailGutter = iOS && !message.isBigEmoji ? 10.0 : 0.0;
       final useGradient = !isFromMe && !message.isBigEmoji && SettingsSvc.settings.colorfulBubbles.value;
+      final useOutgoingGradient = material && isFromMe && !message.isBigEmoji && !selected;
       final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
       final bubbleAlpha = hasWallpaper ? 0.86 : 1.0;
 
       Color? resolvedColor;
+      BoxDecoration? resolvedDecoration;
       if (isFromMe && !message.isBigEmoji) {
         final base = selected
             ? context.theme.colorScheme.tertiaryContainer
             : context.theme.colorScheme
                 .bubble(context, message.chat.target?.isIMessage ?? true)
                 .darkenAmount(isTempMessage ? 0.2 : 0);
-        resolvedColor = base.withValues(alpha: bubbleAlpha);
-      } else if (!isFromMe && !message.isBigEmoji && !useGradient) {
+        if (useOutgoingGradient) {
+          resolvedDecoration = BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: TextBubble.outgoingTonalGradient(base, alpha: bubbleAlpha),
+            ),
+          );
+        } else {
+          resolvedColor = base.withValues(alpha: bubbleAlpha);
+        }
+      } else if (!isFromMe && !message.isBigEmoji && useGradient) {
+        resolvedDecoration = BoxDecoration(
+          gradient: LinearGradient(
+            begin: AlignmentDirectional.bottomCenter,
+            end: AlignmentDirectional.topCenter,
+            colors: getBubbleColors(selected).map((c) => c.withValues(alpha: bubbleAlpha)).toList(),
+          ),
+        );
+      } else if (!isFromMe && !message.isBigEmoji) {
         resolvedColor = getBubbleColors(selected).first.withValues(alpha: bubbleAlpha);
       }
 
@@ -220,15 +248,7 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
         padding: EdgeInsets.symmetric(vertical: material ? 9 : 8, horizontal: material ? 16 : 15)
             .add(EdgeInsets.only(left: isFromMe ? 0 : tailGutter, right: isFromMe ? tailGutter : 0)),
         color: resolvedColor,
-        decoration: useGradient
-            ? BoxDecoration(
-                gradient: LinearGradient(
-                  begin: AlignmentDirectional.bottomCenter,
-                  end: AlignmentDirectional.topCenter,
-                  colors: getBubbleColors(selected).map((c) => c.withValues(alpha: bubbleAlpha)).toList(),
-                ),
-              )
-            : null,
+        decoration: resolvedDecoration,
         // alignment: Alignment.center,
         child: FutureBuilder<List<InlineSpan>>(
             future: buildEnrichedMessageSpans(

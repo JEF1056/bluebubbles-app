@@ -50,80 +50,88 @@ class Database {
   static final Completer<void> initComplete = Completer();
 
   static Future<void> init() async {
-    if (kIsWeb) {
-      store = await Future<Store>.value(openStore());
-      if (_webLifecycleObserver == null) {
-        registerWebPagehideFlush(Database.flushWebPersistence);
+    try {
+      if (kIsWeb) {
+        store = await Future<Store>.value(openStore());
+        if (_webLifecycleObserver == null) {
+          registerWebPagehideFlush(Database.flushWebPersistence);
+          try {
+            final observer = _WebPersistenceLifecycleObserver();
+            WidgetsBinding.instance.addObserver(observer);
+            _webLifecycleObserver = observer;
+          } catch (_) {
+            // WidgetsBinding may be uninitialized in headless Dart tests.
+          }
+        }
+      } else if (!kIsDesktop) {
+        await _initDatabaseMobile();
+      } else {
+        await _initDatabaseDesktop();
+      }
+
+      try {
+        Database.attachments = store.box<Attachment>();
+        Database.chats = store.box<Chat>();
+        Database.contactsV2 = store.box<ContactV2>();
+        Database.customGroups = store.box<CustomGroup>();
+        Database.fcmData = store.box<FCMData>();
+        Database.handles = store.box<Handle>();
+        Database.messages = store.box<Message>();
+        Database.themes = store.box<ThemeStruct>();
+        Database.themeEntries = store.box<ThemeEntry>();
+        // ignore: deprecated_member_use_from_same_package
+        themeObjects = store.box<ThemeObject>();
+
+        // Wait for SettingsService to be fully initialized before accessing settings.
+        // This _shouldn't_ be needed, but we're going to do it just in case...
+        bool setupFinished = false;
+        if (GetIt.I.isRegistered<SettingsService>()) {
+          await SettingsSvc.initCompleted.future;
+          setupFinished = SettingsSvc.settings.finishedSetup.value;
+        }
+
+        bool setupFinished2 = PrefsSvc.database.getFinishedSetup();
+        Logger.info(
+            "Database init: SettingsSvc.finishedSetup = $setupFinished, PrefsSvc.finishedSetup = $setupFinished2");
+
+        // Setup only ever runs on main, so only main may act on an unfinished one.
+        if (!setupFinished && !isIsolate) {
+          Logger.warn("Clearing database because setup is not finished...");
+
+          Database.attachments.removeAll();
+          Database.chats.removeAll();
+          Database.contactsV2.removeAll();
+          Database.fcmData.removeAll();
+          Database.handles.removeAll();
+          Database.messages.removeAll();
+          Database.themes.removeAll();
+          Database.themeEntries.removeAll();
+          themeObjects.removeAll();
+        }
+      } catch (e, s) {
+        Logger.error("Failed to setup ObjectBox boxes!", error: e, trace: s);
+      }
+
+      try {
+        await _performDatabaseMigrations();
+        await PrefsSvc.database.setDbVersion(version);
+      } catch (e, s) {
+        Logger.error("Failed to perform database migrations!", error: e, trace: s);
+      }
+
+      await seedThemes();
+      if (kIsWeb) {
         try {
-          final observer = _WebPersistenceLifecycleObserver();
-          WidgetsBinding.instance.addObserver(observer);
-          _webLifecycleObserver = observer;
-        } catch (_) {
-          // WidgetsBinding may be uninitialized in headless Dart tests.
+          await flushWebPersistence();
+        } catch (e, s) {
+          Logger.error("Initial web persistence flush failed!", error: e, trace: s);
         }
       }
-    } else if (!kIsDesktop) {
-      await _initDatabaseMobile();
-    } else {
-      await _initDatabaseDesktop();
-    }
-
-    try {
-      Database.attachments = store.box<Attachment>();
-      Database.chats = store.box<Chat>();
-      Database.contactsV2 = store.box<ContactV2>();
-      Database.customGroups = store.box<CustomGroup>();
-      Database.fcmData = store.box<FCMData>();
-      Database.handles = store.box<Handle>();
-      Database.messages = store.box<Message>();
-      Database.themes = store.box<ThemeStruct>();
-      Database.themeEntries = store.box<ThemeEntry>();
-      // ignore: deprecated_member_use_from_same_package
-      themeObjects = store.box<ThemeObject>();
-
-      // Wait for SettingsService to be fully initialized before accessing settings.
-      // This _shouldn't_ be needed, but we're going to do it just in case...
-      bool setupFinished = false;
-      if (GetIt.I.isRegistered<SettingsService>()) {
-        await SettingsSvc.initCompleted.future;
-        setupFinished = SettingsSvc.settings.finishedSetup.value;
+    } finally {
+      if (!initComplete.isCompleted) {
+        initComplete.complete();
       }
-
-      bool setupFinished2 = PrefsSvc.database.getFinishedSetup();
-      Logger.info(
-          "Database init: SettingsSvc.finishedSetup = $setupFinished, PrefsSvc.finishedSetup = $setupFinished2");
-
-      // Setup only ever runs on main, so only main may act on an unfinished one.
-      if (!setupFinished && !isIsolate) {
-        Logger.warn("Clearing database because setup is not finished...");
-
-        Database.attachments.removeAll();
-        Database.chats.removeAll();
-        Database.contactsV2.removeAll();
-        Database.fcmData.removeAll();
-        Database.handles.removeAll();
-        Database.messages.removeAll();
-        Database.themes.removeAll();
-        Database.themeEntries.removeAll();
-        themeObjects.removeAll();
-      }
-    } catch (e, s) {
-      Logger.error("Failed to setup ObjectBox boxes!", error: e, trace: s);
     }
-
-    try {
-      await _performDatabaseMigrations();
-      await PrefsSvc.database.setDbVersion(version);
-    } catch (e, s) {
-      Logger.error("Failed to perform database migrations!", error: e, trace: s);
-    }
-
-    await seedThemes();
-    if (kIsWeb) {
-      await flushWebPersistence();
-    }
-
-    initComplete.complete();
   }
 
   static Future<void> waitForInit() async {

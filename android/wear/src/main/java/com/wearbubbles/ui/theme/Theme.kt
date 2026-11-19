@@ -9,8 +9,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.TextUnit
@@ -18,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.Colors
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Typography
+import com.wearbubbles.R
 
 // Wear OS 6 Material 3 tonal dark palette (pure #000000 canvas)
 val Primary = Color(0xFFDCE2EE)
@@ -48,11 +54,8 @@ val OnErrorContainer = Color(0xFFF9DEDC)
 
 val SuccessColor = Color(0xFF6DD58C)
 val OnSuccess = Color(0xFF0A3818)
-val SuccessContainer = Color(0xFF0F5223)
-val OnSuccessContainer = Color(0xFFC4EED0)
 
 val GroupAvatar = Color(0xFF24374D)
-val SingleAvatar = Color(0xFF32353A)
 
 @Immutable
 data class WearPalette(
@@ -176,6 +179,55 @@ fun resolveWearPalette(context: Context, dynamicColor: Boolean): WearPalette {
     }.getOrDefault(DefaultWearPalette)
 }
 
+// Official OFL Google Sans bundled in res/font/ to match Google Messages on Wear OS.
+@OptIn(ExperimentalTextApi::class)
+val GoogleSansFontFamily = FontFamily(
+    Font(
+        resId = R.font.google_sans,
+        weight = FontWeight.Normal,
+        variationSettings = FontVariation.Settings(FontVariation.weight(400)),
+    ),
+    Font(
+        resId = R.font.google_sans,
+        weight = FontWeight.Medium,
+        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
+    ),
+    Font(
+        resId = R.font.google_sans,
+        weight = FontWeight.SemiBold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(600)),
+    ),
+    Font(
+        resId = R.font.google_sans,
+        weight = FontWeight.Bold,
+        variationSettings = FontVariation.Settings(FontVariation.weight(700)),
+    ),
+    Font(
+        resId = R.font.google_sans_italic,
+        weight = FontWeight.Normal,
+        style = FontStyle.Italic,
+        variationSettings = FontVariation.Settings(FontVariation.weight(400)),
+    ),
+    Font(
+        resId = R.font.google_sans_italic,
+        weight = FontWeight.Medium,
+        style = FontStyle.Italic,
+        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
+    ),
+    Font(
+        resId = R.font.google_sans_italic,
+        weight = FontWeight.SemiBold,
+        style = FontStyle.Italic,
+        variationSettings = FontVariation.Settings(FontVariation.weight(600)),
+    ),
+    Font(
+        resId = R.font.google_sans_italic,
+        weight = FontWeight.Bold,
+        style = FontStyle.Italic,
+        variationSettings = FontVariation.Settings(FontVariation.weight(700)),
+    ),
+)
+
 // Disables legacy Android font ascent/descent padding and trims leading top/bottom so text sits
 // optically centered inside pills, bubbles, chips, and circular avatars.
 val CenteredPlatformStyle = PlatformTextStyle(includeFontPadding = false)
@@ -190,6 +242,7 @@ fun centeredTextStyle(
     fontWeight: FontWeight = FontWeight.Normal,
     letterSpacing: TextUnit = TextUnit.Unspecified
 ): TextStyle = TextStyle(
+    fontFamily = GoogleSansFontFamily,
     fontSize = fontSize,
     lineHeight = lineHeight,
     fontWeight = fontWeight,
@@ -203,7 +256,7 @@ private fun TextStyle.withOpticalCentering(): TextStyle = copy(
     lineHeightStyle = CenteredLineHeightStyle
 )
 
-private val BaseWearTypography = Typography()
+private val BaseWearTypography = Typography(defaultFontFamily = GoogleSansFontFamily)
 val WearTypography = Typography(
     display1 = BaseWearTypography.display1.withOpticalCentering(),
     display2 = BaseWearTypography.display2.withOpticalCentering(),

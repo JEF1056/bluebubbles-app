@@ -15,6 +15,7 @@ import com.google.gson.JsonParser
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.service.MessageListenerService
@@ -58,7 +59,11 @@ class DataLayerListenerService : WearableListenerService() {
                 scope.launch {
                     val settings = SettingsDataStore(applicationContext)
                     if (settings.isConfigured.first()) {
-                        MessageListenerService.start(applicationContext)
+                        try {
+                            MessageListenerService.start(applicationContext)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Unable to start MessageListenerService from background: ${e.message}")
+                        }
                     }
                 }
             }
@@ -164,6 +169,35 @@ class DataLayerListenerService : WearableListenerService() {
                 if (!chatGuid.isNullOrBlank()) {
                     NotificationHelper.cancelNotification(applicationContext, chatGuid)
                     scope.launch { AppDatabase.getInstance(applicationContext).chatDao().markRead(chatGuid) }
+                }
+            }
+            PhoneRelayClient.PATH_INCOMING_CALL -> {
+                try {
+                    val obj = JsonParser.parseString(dataStr).asJsonObject
+                    val callUuid = obj.get("callUuid")?.asString ?: return
+                    val callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString ?: "FaceTime"
+                    val callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                    val isVideo = obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+                    CallNotificationHelper.showIncomingCall(
+                        context = applicationContext,
+                        callUuid = callUuid,
+                        callerName = callerName,
+                        callerAddress = callerAddress,
+                        isVideo = isVideo,
+                        fromPhoneRelay = true
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to parse incoming call: ${e.message}")
+                }
+            }
+            PhoneRelayClient.PATH_CALL_ENDED -> {
+                val callUuid = try {
+                    JsonParser.parseString(dataStr).asJsonObject.get("callUuid")?.asString
+                } catch (_: Exception) {
+                    null
+                }
+                if (!callUuid.isNullOrBlank()) {
+                    CallNotificationHelper.endCall(applicationContext, callUuid)
                 }
             }
 

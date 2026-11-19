@@ -43,9 +43,27 @@ abstract final class M3EMotion {
   static const effectsFast = M3EMotionSpec(Durations.short3, Easing.standard);
   static const effectsDefault = M3EMotionSpec(Durations.medium1, Easing.standard);
 
-  // Physics — for AnimationController-driven overshoot (M3E spring model).
-  static const SpringDescription springFast = SpringDescription(mass: 1, stiffness: 1400, damping: 46);
-  static const SpringDescription springDefault = SpringDescription(mass: 1, stiffness: 700, damping: 40);
+  // Physics — M3E dimensionless springs (damping ratio + stiffness) for SpringSimulation.
+  static final SpringDescription springSpatialFast =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 800, ratio: 0.6);
+  static final SpringDescription springSpatialDefault =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 380, ratio: 0.8);
+  static final SpringDescription springSpatialSlow =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 200, ratio: 0.8);
+
+  static final SpringDescription springEffectsFast =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 3800, ratio: 1.0);
+  static final SpringDescription springEffectsDefault =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 1600, ratio: 1.0);
+  static final SpringDescription springEffectsSlow =
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 800, ratio: 1.0);
+
+  static final SpringDescription springFast = springSpatialFast;
+  static final SpringDescription springDefault = springSpatialDefault;
+  static final SpringDescription springSlow = springSpatialSlow;
+
+  /// M3E expressive spatial overshoot curve (`expressive_spatial_interpolator.xml`).
+  static const Curve spatialOvershoot = Cubic(0.38, 1.21, 0.22, 1.0);
 
   /// The Material 3 "emphasized" easing curve. The Flutter SDK pinned by this repo (3.44.6)
   /// only ships the accelerate/decelerate halves (`Easing.emphasizedAccelerate` /

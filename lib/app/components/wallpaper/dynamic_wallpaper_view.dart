@@ -52,7 +52,9 @@ class _DynamicWallpaperViewState extends State<DynamicWallpaperView> {
     final tickersEnabled = !reducedMotion && !(kIsWeb && _webHidden);
     return TickerMode(
       enabled: tickersEnabled,
-      child: IgnorePointer(child: definition.buildView(context, resolvedConfig)),
+      child: RepaintBoundary(
+        child: IgnorePointer(child: definition.buildView(context, resolvedConfig)),
+      ),
     );
   }
 }

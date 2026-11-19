@@ -6,6 +6,7 @@ import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:async_task/async_task_extension.dart';
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
 import 'package:bluebubbles/app/components/custom/custom_error_box.dart';
+import 'package:bluebubbles/app/components/facetime/ongoing_call_pill.dart';
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -137,6 +138,7 @@ Future<Null> initApp(bool bubble, List<String> arguments) async {
         runApp(MaterialApp(
             home: const SplashScreen(shouldNavigate: false),
             theme: ThemeData(
+              fontFamily: kDefaultAppFontFamily,
               colorScheme: ColorScheme.fromSwatch(
                   backgroundColor:
                       PlatformDispatcher.instance.platformBrightness == Brightness.dark ? Colors.black : Colors.white),
@@ -398,7 +400,15 @@ class Main extends StatelessWidget {
           // event, which breaks window close/hide once the app is past setup.
           // Bypass the secure wrapper entirely on Linux.
           child: Platform.isLinux
-              ? TitleBarWrapper(child: child ?? Container())
+              ? TitleBarWrapper(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      child ?? Container(),
+                      const OngoingCallPillOverlay(),
+                    ],
+                  ),
+                )
               : SecureApplication(
                   child: Builder(
                     builder: (context) {
@@ -484,7 +494,13 @@ class Main extends StatelessWidget {
                               ),
                             );
                           },
-                          child: child ?? Container(),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              child ?? Container(),
+                              const OngoingCallPillOverlay(),
+                            ],
+                          ),
                         ),
                       );
                     },

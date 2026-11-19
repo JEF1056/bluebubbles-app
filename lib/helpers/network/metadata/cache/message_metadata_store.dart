@@ -187,12 +187,32 @@ abstract final class MessageMetadataStore {
     map[slot.attemptedAtKey] = DateTime.now().millisecondsSinceEpoch;
   }
 
+  static final Map<int, Message> _pendingSaves = {};
+  static bool _saveFlushScheduled = false;
+
+  /// Coalesces multiple synchronous/microtask metadata updates on the same
+  /// message into a single DB write and UI notification.
+  static void scheduleSave(Message message) {
+    final id = message.id;
+    if (id == null) return;
+    _pendingSaves[id] = message;
+    if (_saveFlushScheduled) return;
+    _saveFlushScheduled = true;
+    scheduleMicrotask(() {
+      _saveFlushScheduled = false;
+      final batch = _pendingSaves.values.toList(growable: false);
+      _pendingSaves.clear();
+      for (final msg in batch) {
+        // Off the main isolate: a synchronous write waits out any write transaction a sync holds, which on Windows
+        // also blocks keyboard input since the main isolate shares the platform thread.
+        unawaited(msg.saveAsync());
+      }
+    });
+  }
+
   static void _save(Message message, Map<String, dynamic> map) {
     message.metadata = map;
-    if (message.id == null) return;
-    // Off the main isolate: a synchronous write waits out any write transaction a sync holds, which on Windows
-    // also blocks keyboard input since the main isolate shares the platform thread.
-    unawaited(message.saveAsync());
+    scheduleSave(message);
   }
 
   static String? _string(dynamic value) => value is String && value.isNotEmpty ? value : null;

@@ -47,6 +47,7 @@ android {
         // Offset from :app versionCode (20002000+) so mobile & wear APKs do not collide on Play Console.
         versionCode 30002000 + flutterVersionCode.toInteger()
         versionName flutterVersionName
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -159,6 +160,8 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.wear:wear-input:1.2.0-alpha02'
     implementation 'androidx.wear:wear-remote-interactions:1.1.0'
+    implementation 'androidx.wear:wear-ongoing:1.0.0'
+    implementation 'androidx.wear:wear-phone-interactions:1.0.1'
 
     // Room
     implementation 'androidx.room:room-runtime:2.7.1'
@@ -189,4 +192,12 @@ dependencies {
 
     // Unit Tests
     testImplementation 'junit:junit:4.13.2'
+
+    // Instrumentation Tests
+    androidTestImplementation composeBom
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
 }

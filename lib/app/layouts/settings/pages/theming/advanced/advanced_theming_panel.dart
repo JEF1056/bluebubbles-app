@@ -57,12 +57,11 @@ class _AdvancedThemingPanelState extends State<AdvancedThemingPanel> with Single
               child: Text("View Old",
                   style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
               onPressed: () {
-                showDialog(
-                    context: context,
-                    builder: (context) => OldThemesDialog(
-                          oldThemes,
-                          clearOld,
-                        ));
+                showOldThemesDialog(
+                  context,
+                  oldThemes,
+                  clearOld,
+                );
               },
             ),
         ],

@@ -70,24 +70,7 @@ mixin CreateScheduledMixin<T extends StatefulWidget> on State<T> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-          title: Text(
-            "Scheduling message...",
-            style: context.theme.textTheme.titleLarge,
-          ),
-          content: SizedBox(
-            height: 70,
-            child: Center(
-              child: CircularProgressIndicator(
-                backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-              ),
-            ),
-          ),
-        );
-      },
+      builder: (BuildContext context) => const BBProgressDialog(title: "Scheduling message..."),
     );
 
     final scheduleMap = schedule.value == "once"

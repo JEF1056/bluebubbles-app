@@ -8,7 +8,9 @@ import com.wearbubbles.api.dto.AddressNormalizer
 import com.wearbubbles.db.ContactDao
 import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.relay.PhoneRelayClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -39,27 +41,27 @@ class ContactRepository(
         loaded = true
     }
 
-    suspend fun refreshContacts(force: Boolean = false) {
+    suspend fun refreshContacts(force: Boolean = false): Unit = withContext(Dispatchers.IO) {
         if (!loaded) loadFromDb()
-        if (!force && contactDao.getCount() > 0) return
+        if (!force && contactDao.getCount() > 0) return@withContext
 
         // Primary: Phone Relay when tethered
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
             if (phoneRelay.requestContactsSync()) {
                 loadFromDb()
-                return
+                return@withContext
             }
         }
 
         // Fallback: Direct Server
         val serverUrl = settings.getServerUrl()
         val password = settings.getPassword()
-        if (serverUrl.isBlank() || password.isBlank()) return
+        if (serverUrl.isBlank() || password.isBlank()) return@withContext
 
         try {
             val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
             val response = api.getContacts(password)
-            val contacts = response.data ?: return
+            val contacts = response.data ?: return@withContext
             val avatarsDir = File(context.filesDir, "avatars").apply { mkdirs() }
 
             val entities = mutableListOf<ContactEntity>()
@@ -148,6 +150,4 @@ class ContactRepository(
         }
         return resolveDisplayName(chatIdentifier)
     }
-
-    fun formatAddress(address: String): String = AddressNormalizer.format(address)
 }

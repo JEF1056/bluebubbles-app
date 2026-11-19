@@ -290,27 +290,11 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       }
       showDialog(
         context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-            title: Text(
-              "Scheduling message...",
-              style: context.theme.textTheme.titleLarge,
-            ),
-            content: SizedBox(
-              height: 70,
-              child: Center(
-                child: CircularProgressIndicator(
-                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                  valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                ),
-              ),
-            ),
-          );
-        },
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) => const BBProgressDialog(title: "Scheduling message..."),
       );
       final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
-      Navigator.of(context).pop();
+      if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
       if (response.statusCode == 200 && response.data != null) {
         showSnackbar("Notice", "Message scheduled successfully for ${buildFullDate(date)}");
       } else {
@@ -352,13 +336,15 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             break;
         }
       }
+      final replyTarget = controller.replyToMessage;
+      final isNestedReply = replyTarget?.message.threadOriginatorGuid != null;
       await controller.send(SendData(
         attachments: controller.pickedAttachments,
         text: text,
         runs: controller.textController.sendableRuns,
         subject: controller.subjectTextController.text,
-        replyGuid: controller.replyToMessage?.message.threadOriginatorGuid ?? controller.replyToMessage?.message.guid,
-        replyPart: controller.replyToMessage?.partIndex,
+        replyGuid: replyTarget?.message.threadOriginatorGuid ?? replyTarget?.message.guid,
+        replyPart: isNestedReply ? replyTarget!.message.normalizedThreadPart : replyTarget?.partIndex,
         effectId: effect,
       ));
     }

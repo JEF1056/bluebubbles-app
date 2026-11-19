@@ -15,6 +15,7 @@ import com.wearbubbles.data.ContactRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.NotificationHelper
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
 class MessageSyncWorker(
@@ -81,6 +82,7 @@ class MessageSyncWorker(
                 latestChat.collect { chats ->
                     if (!notified) {
                         notified = true
+                        val haptic = settings.hapticEnabled.first()
                         chats.filter { it.hasUnreadMessage && it.lastMessageDate > prevLastTime }
                             .take(3)
                             .forEach { chat ->
@@ -89,13 +91,21 @@ class MessageSyncWorker(
                                     chat.chatIdentifier,
                                     chat.participantAddresses
                                 )
+                                val avatarPath = contactRepo.resolveAvatarForChat(
+                                    chat.guid,
+                                    chat.participantAddresses
+                                )
                                 NotificationHelper.showMessageNotification(
                                     context = applicationContext,
                                     chatGuid = chat.guid,
                                     senderName = title,
                                     messageText = chat.lastMessageText ?: "New message",
                                     isGroup = chat.isGroup,
-                                    groupTitle = chat.displayName
+                                    groupTitle = chat.displayName,
+                                    hapticEnabled = haptic,
+                                    timestamp = chat.lastMessageDate,
+                                    senderAddress = chat.chatIdentifier,
+                                    senderAvatarPath = avatarPath
                                 )
                             }
                     }

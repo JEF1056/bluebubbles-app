@@ -1,5 +1,9 @@
 package com.bluebubbles.messaging
 
+import android.content.Intent
+import android.content.LocusId
+import android.os.Build
+import android.os.Bundle
 import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -20,6 +24,24 @@ class BubbleActivity : FlutterFragmentActivity() {
             synchronized(engineLock) {
                 _engine = newEngine
             }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        updateLocusContext(intent?.getStringExtra("chatGuid"))
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        updateLocusContext(intent.getStringExtra("chatGuid"))
+    }
+
+    private fun updateLocusContext(chatGuid: String?) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val locusId = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }?.let(::LocusId)
+            setLocusContext(locusId, null)
         }
     }
 

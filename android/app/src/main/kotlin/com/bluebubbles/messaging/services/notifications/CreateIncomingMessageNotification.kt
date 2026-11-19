@@ -29,6 +29,7 @@ import com.bluebubbles.messaging.utils.Utils
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.Locale
 
 class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
     companion object {
@@ -88,6 +89,11 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             isEdit: Boolean,
             explicitOnlyAlertOnce: Boolean
         ): Boolean = messageIsFromMe || isReaction || isEdit || explicitOnlyAlertOnce
+
+        internal fun sortKeyForTimestamp(timestampMs: Long): String =
+            String.format(Locale.US, "%019d", Long.MAX_VALUE - timestampMs.coerceAtLeast(0L))
+
+        internal fun shouldShowPhoneMuteAction(showReactionAction: Boolean): Boolean = !showReactionAction
     }
 
     override fun handleMethodCall(
@@ -147,17 +153,6 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             PersistentLog.w(context, Constants.logTag, "POST_NOTIFICATIONS permission not granted; skipping message notification")
             return result.success(null)
         }
-        
-        // Synchronize to prevent duplicate notifications from concurrent calls; snapshot activeNotifications once.
-        val activeNotifications = synchronized(notificationLock) {
-            val active = notificationManager.activeNotifications
-            val notificationPostedAlready = active.firstOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("messageGuid") == messageGuid } != null
-            if (notificationPostedAlready) return result.success(null)
-            active
-        }
-        
-        // this is used to copy the style, since the notification already exists
-        val chatNotification = activeNotifications.lastOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("channelId") == channelId }
 
         // Route to conversation-specific channel on Android 11+ when present
         val targetChannelId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -184,317 +179,353 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             rawParticipants = rawParticipants
         )
 
-        // get or create a messaging style
-        val extractedStyle = chatNotification?.let {
-            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it.notification)
-        }
-        val style = extractedStyle ?: run {
-            val newStyle = NotificationCompat.MessagingStyle(youPerson)
-            rawHistoricMessages?.forEach { h ->
-                val hText = h["text"] as? String ?: return@forEach
-                val hDate = (h["date"] as? Number)?.toLong() ?: return@forEach
-                val hFromMe = h["is_from_me"] as? Boolean ?: false
-                val hSender = if (hFromMe) {
-                    youPerson
-                } else {
-                    val hName = (h["sender_name"] as? String)?.takeIf { it.isNotBlank() } ?: contactName
-                    val hKey = h["sender_key"] as? String ?: contactKey
-                    val hUri = h["sender_uri"] as? String ?: resolvedSenderUri
-                    buildPerson(hName, null, hUri, hKey, true)
-                }
-                newStyle.addHistoricMessage(NotificationCompat.MessagingStyle.Message(hText, hDate, hSender))
+        // Hold notificationLock across activeNotifications snapshot, MessagingStyle merge, and notify()
+        // so concurrent messages for the same chat cannot overwrite each other's style.
+        synchronized(notificationLock) {
+            val activeNotifications = notificationManager.activeNotifications
+            val notificationPostedAlready = activeNotifications.firstOrNull {
+                it.notification.extras.getString("chatGuid") == chatGuid &&
+                    it.notification.extras.getString("messageGuid") == messageGuid
+            } != null
+            if (notificationPostedAlready) {
+                result.success(null)
+                return
             }
-            newStyle
-        }
-        if (chatIsGroup) {
-            style.isGroupConversation = true
-            style.conversationTitle = chatTitle
-        }
-        // add the new message (with optional image/sticker FileProvider URI) to the style
-        val styleMessage = NotificationCompat.MessagingStyle.Message(
-            messageText,
-            messageDate,
-            sender
-        )
-        if (!attachmentPath.isNullOrEmpty() && !attachmentMime.isNullOrEmpty()) {
-            try {
-                val attachmentFile = File(attachmentPath)
-                if (attachmentFile.exists()) {
-                    val contentUri = FileProvider.getUriForFile(
-                        context,
-                        context.getString(R.string.file_provider),
-                        attachmentFile
-                    )
-                    context.grantUriPermission(
-                        "com.android.systemui",
-                        contentUri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
-                    styleMessage.setData(attachmentMime, contentUri)
-                }
-            } catch (e: Exception) {
-                PersistentLog.w(context, Constants.logTag, "Failed to attach media URI to notification: ${e.message}")
+
+            // this is used to copy the style, since the notification already exists
+            val chatNotification = activeNotifications.lastOrNull {
+                it.notification.extras.getString("chatGuid") == chatGuid &&
+                    it.notification.extras.getString("channelId") == channelId
             }
-        }
-        style.addMessage(styleMessage)
 
-        // create a bundle for extra info
-        val extras = Bundle()
-        extras.putString("chatGuid", chatGuid)
-        extras.putString("messageGuid", messageGuid)
-        extras.putString("channelId", channelId)
-        extras.putString("tag", Constants.newMessageNotificationTag)
-        extras.putBoolean("reactionSent", false) // Track if reaction has been sent
-
-        // intent to open the conversation in-app
-        val openConversationIntent = PendingIntent.getActivity(
-            context,
-            notificationId + Constants.pendingIntentOpenChatOffset,
-            Intent(context, MainActivity::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .putExtra("bubble", false)
-                .setType("OpenChat"),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        // intent to swipe away the notification
-        val deleteNotificationIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId + Constants.pendingIntentDeleteNotificationOffset,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .setType("DeleteNotification"),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        // intent and action for 'mark as read'
-        val markAsReadIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId + Constants.pendingIntentMarkReadOffset,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .setType("MarkChatRead"),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val markAsReadAction = NotificationCompat.Action.Builder(0, "Mark As Read", markAsReadIntent)
-            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
-            .setShowsUserInterface(false)
-            .build()
-
-        // intent and action for quick reply
-        val replyIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .setType("ReplyChat"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val replyAction = NotificationCompat.Action.Builder(0, "Reply", replyIntent)
-            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
-            .setShowsUserInterface(false)
-            .setAllowGeneratedReplies(true)
-            .extend(NotificationCompat.Action.WearableExtender().setHintDisplayActionInline(true))
-            .addRemoteInput(
-                RemoteInput.Builder("text_reply")
-                    .setLabel("Reply")
-                    .setChoices(QUICK_REPLY_CHOICES)
-                    .build()
+            // get or create a messaging style
+            val extractedStyle = chatNotification?.let {
+                NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it.notification)
+            }
+            val style = extractedStyle ?: run {
+                val newStyle = NotificationCompat.MessagingStyle(youPerson)
+                rawHistoricMessages?.forEach { h ->
+                    val hText = h["text"] as? String ?: return@forEach
+                    val hDate = (h["date"] as? Number)?.toLong() ?: return@forEach
+                    val hFromMe = h["is_from_me"] as? Boolean ?: false
+                    val hSender = if (hFromMe) {
+                        youPerson
+                    } else {
+                        val hName = (h["sender_name"] as? String)?.takeIf { it.isNotBlank() } ?: contactName
+                        val hKey = h["sender_key"] as? String ?: contactKey
+                        val hUri = h["sender_uri"] as? String ?: resolvedSenderUri
+                        buildPerson(hName, null, hUri, hKey, true)
+                    }
+                    newStyle.addHistoricMessage(NotificationCompat.MessagingStyle.Message(hText, hDate, hSender))
+                }
+                newStyle
+            }
+            if (chatIsGroup) {
+                style.isGroupConversation = true
+                style.conversationTitle = chatTitle
+            }
+            // add the new message (with optional image/sticker FileProvider URI) to the style
+            val styleMessage = NotificationCompat.MessagingStyle.Message(
+                messageText,
+                messageDate,
+                sender
             )
-            .build()
-
-        // intent and action for 'like'
-        val likeIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId + PENDING_INTENT_LIKE_OFFSET,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .putExtra("messageText", messageText)
-                .putExtra("reactionType", reactionType)
-                .setType("LikeMessage"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val likeActionTitle = if (reactionType == "love") "Love" else "Like"
-        val likeAction = NotificationCompat.Action.Builder(0, likeActionTitle, likeIntent)
-            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_THUMBS_UP)
-            .setShowsUserInterface(false)
-            .build()
-
-        // intent and action for 'mute'
-        val muteIntent = PendingIntent.getBroadcast(
-            context,
-            notificationId + PENDING_INTENT_MUTE_OFFSET,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .setType("MuteChat"),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val muteAction = NotificationCompat.Action.Builder(0, "Mute", muteIntent)
-            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MUTE)
-            .setShowsUserInterface(false)
-            .build()
-
-        // intent for bubbling (create it even if not used, for future compatibility)
-        val bubbleIntent = PendingIntent.getActivity(
-            context,
-            notificationId + Constants.pendingIntentOpenBubbleOffset,
-            Intent(context, BubbleActivity::class.java)
-                .putExtras(extras)
-                .putExtra("notificationId", notificationId)
-                .putExtra("bubble", true)
-                .setType("OpenChat"),
-            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val onlyAlertOnce = shouldOnlyAlertOnce(messageIsFromMe, isReaction, isEdit, explicitOnlyAlertOnce)
-        val publicNotification = NotificationCompat.Builder(context, targetChannelId)
-            .setSmallIcon(R.mipmap.ic_stat_icon)
-            .setContentTitle(context.getString(R.string.app_name_en))
-            .setContentText("New message")
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setColor(4888294)
-            .setNumber(1)
-            .build()
-
-        // Build the notification
-        // Keep bridged to Wear OS when paired (localOnly=false); Wear's MessageListenerService
-        // only posts standalone notifications when disconnected from the phone.
-        val notificationBuilder = NotificationCompat.Builder(context, targetChannelId)
-            .setSmallIcon(R.mipmap.ic_stat_icon)
-            .setGroup(Constants.notificationGroupKey)
-            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
-            .setOnlyAlertOnce(onlyAlertOnce)
-            .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(publicNotification)
-            .setContentIntent(openConversationIntent)
-            .setDeleteIntent(deleteNotificationIntent)
-            .setStyle(style)
-            .setAllowSystemGeneratedContextualActions(true)
-            .setColor(4888294)
-            .addAction(markAsReadAction)
-            .addAction(replyAction)
-            .addExtras(extras)
-
-        notificationBuilder.addPerson(sender)
-        rawParticipants?.forEach { p ->
-            val pName = p["name"] as? String ?: return@forEach
-            val pKey = p["key"] as? String
-            if (pKey != null && pKey == sender.key) return@forEach
-            val pUri = PushShareTargetsHandler.resolveContactLookupUriIfCached(
-                p["native_contact_id"] as? String,
-                p["uri"] as? String
-            ) ?: (p["uri"] as? String)
-            notificationBuilder.addPerson(buildPerson(pName, null, pUri, pKey, true))
-        }
-
-        val existingHistory = chatNotification?.notification?.extras?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
-        if (!existingHistory.isNullOrEmpty()) {
-            notificationBuilder.setRemoteInputHistory(existingHistory)
-        }
-
-        // Conditionally add reaction action if enabled
-        if (showReactionAction) {
-            notificationBuilder.addAction(likeAction)
-        }
-        notificationBuilder.addAction(muteAction)
-
-        // Build wearable extender
-        val wearableExtender = NotificationCompat.WearableExtender()
-            .setBridgeTag(chatGuid)
-            .setDismissalId(chatGuid)
-            .addAction(markAsReadAction)
-            .addAction(replyAction)
-        if (showReactionAction) {
-            wearableExtender.addAction(likeAction)
-        }
-        wearableExtender.addAction(muteAction)
-        notificationBuilder.extend(wearableExtender)
-
-        // Set bubble metadata on API 29+ using bubbleIntent (BubbleActivity) + shortcutId below
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val bubbleMetadata = NotificationCompat.BubbleMetadata.Builder(bubbleIntent, chatBitmap ?: IconCompat.createWithResource(context, R.mipmap.ic_stat_icon))
-                .setDesiredHeight(600)
-                .setDeleteIntent(deleteNotificationIntent)
-                .build()
-            notificationBuilder.setBubbleMetadata(bubbleMetadata)
-        }
-
-        // Set shortcut ID and LocusId on API 29+ for Conversations & Bubbles
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            notificationBuilder.setShortcutId(chatGuid)
-            notificationBuilder.setLocusId(LocusIdCompat(chatGuid))
-        }
-
-        // intent to open the main app
-        val openSummaryIntent = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java)
-                .putExtra("chatGuid", "-1")
-                .putExtra("notificationId", 0)
-                .putExtra("bubble", false)
-                .setType("OpenSummary"),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val activeChildren = activeNotifications.filter {
-            it.tag == Constants.newMessageNotificationTag && it.id != 0 && it.id != notificationId
-        }
-        val existingLines = activeChildren.mapNotNull { sbn ->
-            val childStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(sbn.notification)
-            val lastMsg = childStyle?.messages?.lastOrNull()
-            if (lastMsg != null) {
-                val author = lastMsg.person?.name?.toString()?.takeIf { it.isNotBlank() }
-                if (author != null) "$author: ${lastMsg.text}" else lastMsg.text.toString()
-            } else {
-                null
+            if (!attachmentPath.isNullOrEmpty() && !attachmentMime.isNullOrEmpty()) {
+                try {
+                    val attachmentFile = File(attachmentPath)
+                    if (attachmentFile.exists()) {
+                        val contentUri = FileProvider.getUriForFile(
+                            context,
+                            context.getString(R.string.file_provider),
+                            attachmentFile
+                        )
+                        context.grantUriPermission(
+                            "com.android.systemui",
+                            contentUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                        styleMessage.setData(attachmentMime, contentUri)
+                    }
+                } catch (e: Exception) {
+                    PersistentLog.w(context, Constants.logTag, "Failed to attach media URI to notification: ${e.message}")
+                }
             }
+            style.addMessage(styleMessage)
+
+            // create a bundle for extra info
+            val extras = Bundle()
+            extras.putString("chatGuid", chatGuid)
+            extras.putString("messageGuid", messageGuid)
+            extras.putString("channelId", channelId)
+            extras.putString("tag", Constants.newMessageNotificationTag)
+            extras.putBoolean("reactionSent", false) // Track if reaction has been sent
+
+            // intent to open the conversation in-app
+            val openConversationIntent = PendingIntent.getActivity(
+                context,
+                notificationId + Constants.pendingIntentOpenChatOffset,
+                Intent(context, MainActivity::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .putExtra("bubble", false)
+                    .setType("OpenChat"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            // intent to swipe away the notification
+            val deleteNotificationIntent = PendingIntent.getBroadcast(
+                context,
+                notificationId + Constants.pendingIntentDeleteNotificationOffset,
+                Intent(context, InternalIntentReceiver::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .setType("DeleteNotification"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            // intent and action for 'mark as read'
+            val markAsReadIntent = PendingIntent.getBroadcast(
+                context,
+                notificationId + Constants.pendingIntentMarkReadOffset,
+                Intent(context, InternalIntentReceiver::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .setType("MarkChatRead"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val markAsReadAction = NotificationCompat.Action.Builder(0, "Mark As Read", markAsReadIntent)
+                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+                .setShowsUserInterface(false)
+                .build()
+
+            // intent and action for quick reply
+            val replyIntent = PendingIntent.getBroadcast(
+                context,
+                notificationId,
+                Intent(context, InternalIntentReceiver::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .setType("ReplyChat"),
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val replyAction = NotificationCompat.Action.Builder(0, "Reply", replyIntent)
+                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+                .setShowsUserInterface(false)
+                .setAllowGeneratedReplies(true)
+                .extend(NotificationCompat.Action.WearableExtender().setHintDisplayActionInline(true))
+                .addRemoteInput(
+                    RemoteInput.Builder("text_reply")
+                        .setLabel("Reply")
+                        .setChoices(QUICK_REPLY_CHOICES)
+                        .setAllowDataType("image/*", true)
+                        .build()
+                )
+                .build()
+
+            // intent and action for 'like'
+            val likeIntent = PendingIntent.getBroadcast(
+                context,
+                notificationId + PENDING_INTENT_LIKE_OFFSET,
+                Intent(context, InternalIntentReceiver::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .putExtra("messageText", messageText)
+                    .putExtra("reactionType", reactionType)
+                    .setType("LikeMessage"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val likeActionTitle = if (reactionType == "love") "Love" else "Like"
+            val likeAction = NotificationCompat.Action.Builder(0, likeActionTitle, likeIntent)
+                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_THUMBS_UP)
+                .setShowsUserInterface(false)
+                .build()
+
+            // intent and action for 'mute'
+            val muteIntent = PendingIntent.getBroadcast(
+                context,
+                notificationId + PENDING_INTENT_MUTE_OFFSET,
+                Intent(context, InternalIntentReceiver::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .setType("MuteChat"),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val muteAction = NotificationCompat.Action.Builder(0, "Mute", muteIntent)
+                .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MUTE)
+                .setShowsUserInterface(false)
+                .build()
+
+            // intent for bubbling on API 29 fallback
+            val bubbleIntent = PendingIntent.getActivity(
+                context,
+                notificationId + Constants.pendingIntentOpenBubbleOffset,
+                Intent(context, BubbleActivity::class.java)
+                    .putExtras(extras)
+                    .putExtra("notificationId", notificationId)
+                    .putExtra("bubble", true)
+                    .setType("OpenChat"),
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+
+            val onlyAlertOnce = shouldOnlyAlertOnce(messageIsFromMe, isReaction, isEdit, explicitOnlyAlertOnce)
+            val unreadMessageCount = style.messages.size.coerceAtLeast(1)
+            val publicNotification = NotificationCompat.Builder(context, targetChannelId)
+                .setSmallIcon(R.mipmap.ic_stat_icon)
+                .setContentTitle(context.getString(R.string.app_name_en))
+                .setContentText("New message")
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setColor(4888294)
+                .setNumber(unreadMessageCount)
+                .build()
+
+            // Build the notification
+            // Keep bridged to Wear OS when paired (localOnly=false); Wear's MessageListenerService
+            // only posts standalone notifications when disconnected from the phone.
+            val notificationBuilder = NotificationCompat.Builder(context, targetChannelId)
+                .setSmallIcon(R.mipmap.ic_stat_icon)
+                .setGroup(Constants.notificationGroupKey)
+                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+                .setOnlyAlertOnce(onlyAlertOnce)
+                .setAutoCancel(true)
+                .setWhen(messageDate)
+                .setShowWhen(true)
+                .setSortKey(sortKeyForTimestamp(messageDate))
+                .setNumber(unreadMessageCount)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(publicNotification)
+                .setContentIntent(openConversationIntent)
+                .setDeleteIntent(deleteNotificationIntent)
+                .setStyle(style)
+                .setAllowSystemGeneratedContextualActions(true)
+                .setColor(4888294)
+                .addAction(markAsReadAction)
+                .addAction(replyAction)
+                .addExtras(extras)
+
+            notificationBuilder.addPerson(sender)
+            rawParticipants?.forEach { p ->
+                val pName = p["name"] as? String ?: return@forEach
+                val pKey = p["key"] as? String
+                if (pKey != null && pKey == sender.key) return@forEach
+                val pUri = PushShareTargetsHandler.resolveContactLookupUriIfCached(
+                    p["native_contact_id"] as? String,
+                    p["uri"] as? String
+                ) ?: (p["uri"] as? String)
+                notificationBuilder.addPerson(buildPerson(pName, null, pUri, pKey, true))
+            }
+
+            val existingHistory = chatNotification?.notification?.extras?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
+            if (!existingHistory.isNullOrEmpty()) {
+                notificationBuilder.setRemoteInputHistory(existingHistory)
+            }
+
+            // Keep 3 phone actions: Like when reactions enabled, Mute as 3rd phone action only when reactions disabled.
+            if (showReactionAction) {
+                notificationBuilder.addAction(likeAction)
+            } else if (shouldShowPhoneMuteAction(showReactionAction)) {
+                notificationBuilder.addAction(muteAction)
+            }
+
+            // Build wearable extender (Mute always available on watch)
+            val wearableExtender = NotificationCompat.WearableExtender()
+                .setBridgeTag(chatGuid)
+                .setDismissalId(chatGuid)
+                .addAction(markAsReadAction)
+                .addAction(replyAction)
+            if (showReactionAction) {
+                wearableExtender.addAction(likeAction)
+            }
+            wearableExtender.addAction(muteAction)
+            notificationBuilder.extend(wearableExtender)
+
+            // Set shortcut-backed BubbleMetadata on API 30+, falling back to API 29 intent+icon constructor.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val bubbleMetadata = NotificationCompat.BubbleMetadata.Builder(chatGuid)
+                    .setDesiredHeight(600)
+                    .setDeleteIntent(deleteNotificationIntent)
+                    .build()
+                notificationBuilder.setBubbleMetadata(bubbleMetadata)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val bubbleMetadata = NotificationCompat.BubbleMetadata.Builder(
+                    bubbleIntent,
+                    chatBitmap ?: IconCompat.createWithResource(context, R.mipmap.ic_stat_icon)
+                )
+                    .setDesiredHeight(600)
+                    .setDeleteIntent(deleteNotificationIntent)
+                    .build()
+                notificationBuilder.setBubbleMetadata(bubbleMetadata)
+            }
+
+            // Set shortcut ID and LocusId on API 29+ for Conversations & Bubbles
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                notificationBuilder.setShortcutId(chatGuid)
+                notificationBuilder.setLocusId(LocusIdCompat(chatGuid))
+            }
+
+            // intent to open the main app
+            val openSummaryIntent = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java)
+                    .putExtra("chatGuid", "-1")
+                    .putExtra("notificationId", 0)
+                    .putExtra("bubble", false)
+                    .setType("OpenSummary"),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val activeChildren = activeNotifications.filter {
+                it.tag == Constants.newMessageNotificationTag && it.id != 0 && it.id != notificationId
+            }
+            val existingLines = activeChildren.mapNotNull { sbn ->
+                val childStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(sbn.notification)
+                val lastMsg = childStyle?.messages?.lastOrNull()
+                if (lastMsg != null) {
+                    val author = lastMsg.person?.name?.toString()?.takeIf { it.isNotBlank() }
+                    if (author != null) "$author: ${lastMsg.text}" else lastMsg.text.toString()
+                } else {
+                    null
+                }
+            }
+            val newSummaryLine = if (chatIsGroup) "$chatTitle ($contactName): $messageText" else "$contactName: $messageText"
+            val summaryLines = buildSummaryLines(existingLines, newSummaryLine)
+            val totalConversations = activeChildren.size + 1
+            val inboxStyle = NotificationCompat.InboxStyle()
+                .setBigContentTitle("$totalConversations active ${if (totalConversations == 1) "conversation" else "conversations"}")
+                .setSummaryText("$totalConversations ${if (totalConversations == 1) "chat" else "chats"}")
+            summaryLines.forEach { inboxStyle.addLine(it) }
+
+            val publicSummaryNotification = NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(R.mipmap.ic_stat_icon)
+                .setContentTitle(context.getString(R.string.app_name_en))
+                .setContentText("$totalConversations new ${if (totalConversations == 1) "message" else "messages"}")
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setColor(4888294)
+                .setNumber(totalConversations)
+                .build()
+
+            val summaryNotificationBuilder = NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(R.mipmap.ic_stat_icon)
+                .setGroup(Constants.notificationGroupKey)
+                .setGroupSummary(true)
+                .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(publicSummaryNotification)
+                .setContentIntent(openSummaryIntent)
+                .setStyle(inboxStyle)
+                .setNumber(totalConversations)
+                .setColor(4888294)
+
+            // Post child notification first so heads-up and Wear OS native bridge trigger immediately.
+            notificationManager.notify(Constants.newMessageNotificationTag, notificationId, notificationBuilder.build())
+            notificationManager.notify(Constants.newMessageNotificationTag, 0, summaryNotificationBuilder.build())
+            result.success(null)
         }
-        val newSummaryLine = if (chatIsGroup) "$chatTitle ($contactName): $messageText" else "$contactName: $messageText"
-        val summaryLines = buildSummaryLines(existingLines, newSummaryLine)
-        val totalConversations = activeChildren.size + 1
-        val inboxStyle = NotificationCompat.InboxStyle()
-            .setBigContentTitle("$totalConversations active ${if (totalConversations == 1) "conversation" else "conversations"}")
-            .setSummaryText("$totalConversations ${if (totalConversations == 1) "chat" else "chats"}")
-        summaryLines.forEach { inboxStyle.addLine(it) }
-
-        val publicSummaryNotification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_stat_icon)
-            .setContentTitle(context.getString(R.string.app_name_en))
-            .setContentText("$totalConversations new ${if (totalConversations == 1) "message" else "messages"}")
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setColor(4888294)
-            .setNumber(totalConversations)
-            .build()
-
-        val summaryNotificationBuilder = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(R.mipmap.ic_stat_icon)
-            .setGroup(Constants.notificationGroupKey)
-            .setGroupSummary(true)
-            .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
-            .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(publicSummaryNotification)
-            .setContentIntent(openSummaryIntent)
-            .setStyle(inboxStyle)
-            .setNumber(totalConversations)
-            .setColor(4888294)
-
-        // Post child notification first so heads-up and Wear OS native bridge trigger immediately.
-        notificationManager.notify(Constants.newMessageNotificationTag, notificationId, notificationBuilder.build())
-        notificationManager.notify(Constants.newMessageNotificationTag, 0, summaryNotificationBuilder.build())
-        result.success(null)
     }
 }

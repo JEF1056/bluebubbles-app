@@ -166,7 +166,7 @@ class LifecycleService with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       // If we resumed before the pause-initiated isolate drain finished, cancel
       // it so foreground sends/receives aren't rejected (Android-only drain).
-      if (Platform.isAndroid && GetIt.I.isRegistered<GlobalIsolate>()) {
+      if (!kIsWeb && Platform.isAndroid && GetIt.I.isRegistered<GlobalIsolate>()) {
         GetIt.I<GlobalIsolate>().cancelDrain();
       }
 
@@ -224,7 +224,7 @@ class LifecycleService with WidgetsBindingObserver {
 
     // Read live from the reactive settings value so toggling the setting during
     // a session takes effect immediately without requiring an app restart.
-    if (Platform.isAndroid && SettingsSvc.settings.keepAppAlive.value) {
+    if (!kIsWeb && Platform.isAndroid && SettingsSvc.settings.keepAppAlive.value) {
       // We only want the foreground service to run when the app is not active
       if (state == AppLifecycleState.resumed) {
         Logger.info(tag: "LifecycleService", "Stopping foreground service");
@@ -271,7 +271,7 @@ class LifecycleService with WidgetsBindingObserver {
     // (share sheet, file picker) hide the activity without the user leaving
     // the app, and we don't want liveness or sync behavior to change for those.
     final backgrounded = triggerState == AppLifecycleState.paused || triggerState == AppLifecycleState.detached;
-    if (Platform.isAndroid && backgrounded) {
+    if (!kIsWeb && Platform.isAndroid && backgrounded) {
       IsolateNameServer.removePortNameMapping('bg_isolate');
     }
 
@@ -311,7 +311,8 @@ class LifecycleService with WidgetsBindingObserver {
     // Only stop the isolate and disconnect if the app is actually backgrounded
     // (paused, or detached when the activity is destroyed). If it's inactive or
     // hidden, the app may still technically be in the foreground, just obscured.
-    if (Platform.isAndroid &&
+    if (!kIsWeb &&
+        Platform.isAndroid &&
         (triggerState == AppLifecycleState.paused || triggerState == AppLifecycleState.detached)) {
       // The awaits above can span an entire background → foreground bounce (a slow
       // or hanging stopAllTyping() request is enough). Tearing the socket and the

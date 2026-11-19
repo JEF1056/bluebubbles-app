@@ -13,7 +13,6 @@ import com.wearbubbles.api.dto.SendMessageRequest
 import okhttp3.MultipartBody
 import okhttp3.RequestBody
 import retrofit2.http.Body
-import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.Multipart
 import retrofit2.http.POST
@@ -77,18 +76,6 @@ interface BlueBubblesApi {
 
     @POST("/api/v1/chat/{guid}/read")
     suspend fun markChatRead(
-        @Path("guid") guid: String,
-        @Query("password") password: String
-    ): ApiResponse<Any>
-
-    @POST("/api/v1/chat/{guid}/typing")
-    suspend fun startTyping(
-        @Path("guid") guid: String,
-        @Query("password") password: String
-    ): ApiResponse<Any>
-
-    @DELETE("/api/v1/chat/{guid}/typing")
-    suspend fun stopTyping(
         @Path("guid") guid: String,
         @Query("password") password: String
     ): ApiResponse<Any>

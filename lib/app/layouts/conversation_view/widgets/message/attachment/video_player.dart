@@ -49,6 +49,25 @@ Widget _boundedAspectRatio({required double ratio, required Widget child}) {
   );
 }
 
+Future<void> configureAndroidVideoColorPipeline(Player player, {String logPrefix = 'VideoPlayer'}) async {
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+  final platform = player.platform;
+  if (platform is! NativePlayer) return;
+
+  try {
+    // Force conservative HDR->SDR conversion for iPhone HDR clips, which can
+    // otherwise appear over-bright on some Android GPU + mpv combinations.
+    await platform.setProperty('target-colorspace-hint', 'yes');
+    await platform.setProperty('target-prim', 'bt.709');
+    await platform.setProperty('target-trc', 'srgb');
+    await platform.setProperty('tone-mapping', 'hable');
+    await platform.setProperty('target-peak', '203');
+    await platform.setProperty('hdr-compute-peak', 'no');
+  } catch (e, s) {
+    Logger.error('$logPrefix: Failed to apply Android video color pipeline!', error: e, trace: s);
+  }
+}
+
 class VideoPlayer extends StatefulWidget {
   final PlatformFile file;
   final Attachment attachment;
@@ -367,7 +386,7 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
     videoController = VideoController(player);
     await videoController!.player.setPlaylistMode(PlaylistMode.none);
     await videoController!.player.open(media, play: false);
-    await _configureAndroidVideoColorPipeline(videoController!.player);
+    await configureAndroidVideoColorPipeline(videoController!.player);
     await videoController!.player.setVolume(muted.value ? 0 : 100);
     createListener(videoController!);
 
@@ -378,25 +397,6 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
 
     if (mounted) {
       setState(() {});
-    }
-  }
-
-  Future<void> _configureAndroidVideoColorPipeline(Player player) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
-    final platform = player.platform;
-    if (platform is! NativePlayer) return;
-
-    try {
-      // Force conservative HDR->SDR conversion for iPhone HDR clips, which can
-      // otherwise appear over-bright on some Android GPU + mpv combinations.
-      await platform.setProperty('target-colorspace-hint', 'yes');
-      await platform.setProperty('target-prim', 'bt.709');
-      await platform.setProperty('target-trc', 'srgb');
-      await platform.setProperty('tone-mapping', 'hable');
-      await platform.setProperty('target-peak', '203');
-      await platform.setProperty('hdr-compute-peak', 'no');
-    } catch (e, s) {
-      Logger.error('VideoPlayer: Failed to apply Android video color pipeline!', error: e, trace: s);
     }
   }
 

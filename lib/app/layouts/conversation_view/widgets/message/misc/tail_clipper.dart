@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -50,8 +51,8 @@ class TailClipper extends CustomClipper<Path> {
     final skin = SettingsSvc.settings.skin.value;
     final isIOS = skin == Skins.iOS;
     final isMaterial = skin == Skins.Material;
-    final double r = min(size.height / 2, isMaterial ? 20.0 : 22.0);
-    final double cr = min(size.height / 2, isMaterial ? 4.0 : 5.0);
+    final double r = min(size.height / 2, isMaterial ? M3EShapes.lgIncreased : 22.0);
+    final double cr = min(size.height / 2, isMaterial ? M3EShapes.xs : 5.0);
     final double start = isIOS ? (isFromMe ? 0 : 10) : 0;
     final double end = isIOS ? (isFromMe ? size.width - 10 : size.width) : size.width;
     path.moveTo(start, r);
@@ -140,7 +141,7 @@ class TailPainter extends CustomPainter {
     final skin = SettingsSvc.settings.skin.value;
     final isIOS = skin == Skins.iOS;
     final isMaterial = skin == Skins.Material;
-    final double r = min(size.height / 2, isMaterial ? 20.0 : 22.0);
+    final double r = min(size.height / 2, isMaterial ? M3EShapes.lgIncreased : 22.0);
     final double start = isIOS ? (isFromMe ? 0 : 10) : 0;
     final double end = isIOS ? (isFromMe ? size.width - 10 : size.width) : size.width;
     path.moveTo(start, r);

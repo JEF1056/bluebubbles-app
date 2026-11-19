@@ -23,10 +23,11 @@ void showAttachmentFiltersSheet(
 }) {
   HapticFeedback.lightImpact();
   const chipRadius = M3EShapes.radiusLg;
-  showModalBottomSheet<void>(
+  showBBBottomSheet<void>(
     context: context,
-    backgroundColor: Colors.transparent,
     isScrollControlled: true,
+    showDragHandle: true,
+    padding: const EdgeInsets.only(left: 10, right: 10, bottom: 20, top: 8),
     builder: (sheetContext) {
       var currentFilters = filters;
 
@@ -68,13 +69,8 @@ void showAttachmentFiltersSheet(
           final showParticipants = currentFilters.senderFilter.kind != MediaSenderFilterKind.fromYou &&
               currentFilters.senderFilter.kind != MediaSenderFilterKind.fromOthers;
 
-          return Container(
+          return ConstrainedBox(
             constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.75),
-            decoration: BoxDecoration(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              color: tileColor,
-            ),
-            padding: const EdgeInsets.only(left: 10, right: 10, bottom: 20, top: 20),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,

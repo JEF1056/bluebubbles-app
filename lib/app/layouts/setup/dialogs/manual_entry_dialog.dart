@@ -25,6 +25,13 @@ class _ManualEntryDialogState extends State<ManualEntryDialog> {
   final TextEditingController passwordController = TextEditingController();
   final error = Rx<String?>(null);
 
+  @override
+  void dispose() {
+    urlController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
   void connect(String url, String password) async {
     if (url.endsWith("/")) {
       url = url.substring(0, url.length - 1);
@@ -82,11 +89,27 @@ class _ManualEntryDialogState extends State<ManualEntryDialog> {
     return Obx(() {
       if (!connecting.value) {
         return AlertDialog(
+          backgroundColor: context.theme.colorScheme.surfaceContainerHigh,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          icon: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: context.theme.colorScheme.primary.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.dns_outlined,
+              color: context.theme.colorScheme.primary,
+              size: 24,
+            ),
+          ),
           title: Text(
             "Enter Server Details",
-            style: context.theme.textTheme.titleLarge,
+            style: context.theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w600),
+            textAlign: TextAlign.center,
           ),
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
           content: AutofillGroup(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -160,13 +183,21 @@ class _ManualEntryDialogState extends State<ManualEntryDialog> {
           ),
           actions: [
             TextButton(
+              style: TextButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                shape: const StadiumBorder(),
+              ),
               onPressed: widget.onClose,
-              child: Text("Cancel",
-                  style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
+              child: const Text("Cancel"),
             ),
-            TextButton(
-              child: Text("OK",
-                  style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: const StadiumBorder(),
+              ),
+              child: const Text("Connect"),
               onPressed: () {
                 connect(urlController.text, passwordController.text);
                 connecting.value = true;

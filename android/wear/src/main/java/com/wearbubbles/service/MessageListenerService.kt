@@ -1,5 +1,6 @@
 package com.wearbubbles.service
 
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -7,6 +8,9 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.wear.ongoing.OngoingActivity
+import androidx.wear.ongoing.Status
+import com.wearbubbles.MainActivity
 import com.wearbubbles.R
 import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.dto.TapbackType
@@ -15,6 +19,7 @@ import com.wearbubbles.data.ContactRepository
 import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.socket.SocketEvent
 import kotlinx.coroutines.CoroutineScope
@@ -47,17 +52,45 @@ class MessageListenerService : Service() {
     override fun onCreate() {
         super.onCreate()
         NotificationHelper.createChannels(this)
-        val notification = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_SERVICE)
+        val touchIntent = PendingIntent.getActivity(
+            this,
+            SERVICE_NOTIFICATION_ID,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notificationBuilder = NotificationCompat.Builder(this, NotificationHelper.CHANNEL_SERVICE)
             .setSmallIcon(R.drawable.ic_stat_icon)
             .setContentTitle("BlueBubbles")
             .setContentText("Standalone connection active")
+            .setContentIntent(touchIntent)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setSilent(true)
             .setOngoing(true)
-            .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(SERVICE_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        try {
+            val status = Status.Builder()
+                .addTemplate("Connected")
+                .build()
+            OngoingActivity.Builder(applicationContext, SERVICE_NOTIFICATION_ID, notificationBuilder)
+                .setStaticIcon(R.drawable.ic_stat_icon)
+                .setTouchIntent(touchIntent)
+                .setStatus(status)
+                .build()
+                .apply(applicationContext)
+        } catch (_: Throwable) {
+        }
+
+        val notification = notificationBuilder.build()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                SERVICE_NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+            )
         } else {
             startForeground(SERVICE_NOTIFICATION_ID, notification)
         }
@@ -103,8 +136,13 @@ class MessageListenerService : Service() {
                             val chat = db.chatDao().getChat(chatGuid)
                             val senderAddr = msg.handle?.address ?: chat?.chatIdentifier ?: "Message"
                             val senderName = contactRepo.resolveDisplayName(senderAddr)
+                            val senderAvatar = contactRepo.resolveAvatarPath(senderAddr)
+                            val firstAttachment = msg.attachments?.firstOrNull()
+                            val cachedImagePath = firstAttachment
+                                ?.takeIf { it.mimeType?.startsWith("image/") == true }
+                                ?.let { relay.getCachedAttachmentFile(it.guid)?.absolutePath }
                             val bodyText = msg.text?.takeIf { it.isNotBlank() }
-                                ?: msg.attachments?.firstOrNull()?.let { att ->
+                                ?: firstAttachment?.let { att ->
                                     when {
                                         att.mimeType?.startsWith("image/") == true -> "Sent an image"
                                         att.mimeType?.startsWith("video/") == true -> "Sent a video"
@@ -121,7 +159,13 @@ class MessageListenerService : Service() {
                                 messageText = bodyText,
                                 isGroup = chat?.isGroup ?: false,
                                 groupTitle = chat?.displayName,
-                                hapticEnabled = haptic
+                                hapticEnabled = haptic,
+                                timestamp = msg.dateCreated,
+                                senderAddress = senderAddr,
+                                senderAvatarPath = senderAvatar,
+                                isTapback = false,
+                                attachmentPath = cachedImagePath,
+                                attachmentMimeType = firstAttachment?.mimeType
                             )
                         } else if (!msg.isFromMe && TapbackUtils.isTapbackCode(msg.associatedMessageType)) {
                             val reactionLabel = TapbackType.fromAddCode(msg.associatedMessageType)?.label
@@ -129,6 +173,7 @@ class MessageListenerService : Service() {
                                 val chat = db.chatDao().getChat(chatGuid)
                                 val senderAddr = msg.handle?.address ?: chat?.chatIdentifier ?: "Someone"
                                 val senderName = contactRepo.resolveDisplayName(senderAddr)
+                                val senderAvatar = contactRepo.resolveAvatarPath(senderAddr)
                                 val haptic = settings.hapticEnabled.first()
                                 NotificationHelper.showMessageNotification(
                                     context = this@MessageListenerService,
@@ -137,7 +182,11 @@ class MessageListenerService : Service() {
                                     messageText = "$reactionLabel a message",
                                     isGroup = chat?.isGroup ?: false,
                                     groupTitle = chat?.displayName,
-                                    hapticEnabled = haptic
+                                    hapticEnabled = haptic,
+                                    timestamp = msg.dateCreated,
+                                    senderAddress = senderAddr,
+                                    senderAvatarPath = senderAvatar,
+                                    isTapback = true
                                 )
                             }
                         }
@@ -145,6 +194,26 @@ class MessageListenerService : Service() {
 
                     is SocketEvent.UpdatedMessage -> {
                         messageRepo.handleIncomingSocketMessage(event.message)
+                    }
+
+                    is SocketEvent.IncomingFaceTime -> {
+                        val resolvedName = if (event.callerAddress.isNotBlank()) {
+                            contactRepo.resolveDisplayName(event.callerAddress)
+                        } else {
+                            event.callerName
+                        }
+                        CallNotificationHelper.showIncomingCall(
+                            context = this@MessageListenerService,
+                            callUuid = event.callUuid,
+                            callerName = resolvedName,
+                            callerAddress = event.callerAddress,
+                            isVideo = event.isVideo,
+                            fromPhoneRelay = false
+                        )
+                    }
+
+                    is SocketEvent.FaceTimeCallEnded -> {
+                        CallNotificationHelper.endCall(this@MessageListenerService, event.callUuid)
                     }
 
                     else -> {}

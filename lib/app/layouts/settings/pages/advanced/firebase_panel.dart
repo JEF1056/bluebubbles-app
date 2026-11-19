@@ -168,48 +168,26 @@ class _FirebasePanelState extends State<FirebasePanel> with ThemeHelpers {
 
                           showDialog(
                             context: context,
-                            builder: (BuildContext context) {
-                              return AlertDialog(
-                                  backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-                                  title: Obx(() => Text(
-                                      error.value != null
-                                          ? "Error!"
-                                          : isLoading.value
-                                              ? "Loading..."
-                                              : "Done!",
-                                      style: context.theme.textTheme.titleLarge)),
-                                  content: Obx(() {
-                                    if (isLoading.value) {
-                                      return SizedBox(
-                                        height: 70,
-                                        width: 70,
-                                        child: Center(
-                                          child: CircularProgressIndicator(
-                                            valueColor:
-                                                AlwaysStoppedAnimation<Color>(context.theme.colorScheme.primary),
-                                          ),
-                                        ),
-                                      );
-                                    } else {
-                                      return Text(
-                                        error.value ?? "Successfully loaded Firebase Configurations!",
-                                        style: context.theme.textTheme.bodyLarge,
-                                      );
-                                    }
-                                  }),
-                                  actions: <Widget>[
-                                    Obx(() => (isLoading.value == true)
-                                        ? const SizedBox.shrink()
-                                        : TextButton(
-                                            child: Text("Close",
-                                                style: context.theme.textTheme.bodyLarge!
-                                                    .copyWith(color: context.theme.colorScheme.primary)),
-                                            onPressed: () {
-                                              Navigator.of(context).pop();
-                                            },
-                                          )),
-                                  ]);
-                            },
+                            builder: (BuildContext dialogContext) => Obx(() {
+                              if (isLoading.value) {
+                                return const BBProgressDialog(title: "Loading Firebase config...");
+                              }
+                              return BBProgressDialog(
+                                title: error.value != null ? "Error!" : "Done!",
+                                body: Text(
+                                  error.value ?? "Successfully loaded Firebase Configurations!",
+                                  textAlign: TextAlign.center,
+                                  style: dialogContext.theme.textTheme.bodyMedium,
+                                ),
+                                actions: [
+                                  BBDialogAction(
+                                    text: "Close",
+                                    isDefault: true,
+                                    onPressed: () => Navigator.of(dialogContext).pop(),
+                                  ),
+                                ],
+                              );
+                            }),
                           );
                         },
                       ),

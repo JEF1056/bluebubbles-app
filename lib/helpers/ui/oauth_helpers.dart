@@ -117,6 +117,82 @@ class GoogleOAuthFlowController {
   }
 }
 
+Future<void>? _googleSignInInitFuture;
+
+@visibleForTesting
+void resetGoogleSignInInitForTest() {
+  _googleSignInInitFuture = null;
+}
+
+@visibleForTesting
+Future<void> ensureGoogleSignInInitialized({
+  String? clientId,
+  String? serverClientId,
+  Future<void> Function({String? clientId, String? serverClientId})? initializer,
+}) {
+  final initFn = initializer ?? GoogleSignIn.instance.initialize;
+  return _googleSignInInitFuture ??= initFn(
+    clientId: clientId,
+    serverClientId: serverClientId,
+  ).catchError((Object error, StackTrace stack) {
+    _googleSignInInitFuture = null;
+    Error.throwWithStackTrace(error, stack);
+  });
+}
+
+@visibleForTesting
+Future<String> obtainGoogleAccessToken(
+  GoogleSignIn gsi, {
+  required List<String> scopes,
+  bool forceAccountPicker = false,
+  GoogleOAuthStageCallback? onStage,
+}) async {
+  GoogleSignInClientAuthorization? authorization;
+  if (!gsi.supportsAuthenticate()) {
+    // Web google_sign_in_web throws UnimplementedError from authenticate();
+    // request OAuth2 access tokens via authorizationClient instead, including userinfo.profile for getGoogleInfo.
+    final webScopes = [
+      ...scopes,
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ];
+    if (forceAccountPicker) {
+      onStage?.call("Resetting Google session");
+      await gsi.signOut();
+    } else {
+      onStage?.call("Checking for an existing Google session");
+      authorization = await gsi.authorizationClient.authorizationForScopes(webScopes);
+    }
+    if (authorization == null) {
+      onStage?.call("Opening Google sign-in popup");
+      authorization = await gsi.authorizationClient.authorizeScopes(webScopes);
+    }
+  } else {
+    GoogleSignInAccount? account;
+    if (!forceAccountPicker) {
+      onStage?.call("Checking for an existing Google session");
+      account = await gsi.attemptLightweightAuthentication();
+    }
+    if (account == null) {
+      // Reset the cached SDK session before interactive auth so the account
+      // chooser can appear when the user explicitly requests a different account.
+      onStage?.call(forceAccountPicker ? "Resetting Google session" : "Preparing Google account chooser");
+      await gsi.signOut();
+      onStage?.call("Opening Google sign-in popup");
+      account = await gsi.authenticate(scopeHint: scopes);
+    }
+
+    onStage?.call("Authorizing Google API scopes");
+    authorization = await account.authorizationClient.authorizationForScopes(scopes);
+    authorization ??= await account.authorizationClient.authorizeScopes(scopes);
+  }
+
+  final token = authorization.accessToken;
+  if (token.isEmpty) {
+    throw Exception("No access token!");
+  }
+  return token;
+}
+
 Future<String?> googleOAuth(
   BuildContext context, {
   GoogleOAuthStageCallback? onStageChanged,
@@ -137,7 +213,7 @@ Future<String?> googleOAuth(
   }
 
   // android / web implementation
-  if (Platform.isAndroid || kIsWeb) {
+  if (kIsWeb || Platform.isAndroid) {
     // on web, show a dialog to make sure users allow scopes
     if (kIsWeb) {
       await showBBDialog(
@@ -167,33 +243,16 @@ Future<String?> googleOAuth(
     final gsi = GoogleSignIn.instance;
     try {
       reportStage("Initializing Google Sign-In");
-      await gsi.initialize(
+      await ensureGoogleSignInInitialized(
         clientId: webClientId,
         serverClientId: !kIsWeb && Platform.isAndroid ? fdb.getServerClientId() : null,
       );
-      GoogleSignInAccount? account;
-      if (!forceAccountPicker) {
-        reportStage("Checking for an existing Google session");
-        account = await gsi.attemptLightweightAuthentication();
-      }
-      if (account == null) {
-        // Reset the cached SDK session before interactive auth so the account
-        // chooser can appear when the user explicitly requests a different account.
-        reportStage(forceAccountPicker ? "Resetting Google session" : "Preparing Google account chooser");
-        await gsi.signOut();
-        reportStage("Opening Google sign-in popup");
-        account = await gsi.authenticate(scopeHint: defaultScopes);
-      }
-
-      reportStage("Authorizing Google API scopes");
-      GoogleSignInClientAuthorization? authorization =
-          await account.authorizationClient.authorizationForScopes(defaultScopes);
-      authorization ??= await account.authorizationClient.authorizeScopes(defaultScopes);
-
-      token = authorization.accessToken;
-      if (token.isEmpty) {
-        throw Exception("No access token!");
-      }
+      token = await obtainGoogleAccessToken(
+        gsi,
+        scopes: defaultScopes,
+        forceAccountPicker: forceAccountPicker,
+        onStage: reportStage,
+      );
     } catch (e, stack) {
       // Self-signed Android forks fail Play Services SHA-1 verification; fall back to browser loopback OAuth.
       if (!kIsWeb && Platform.isAndroid && shouldFallbackToLoopbackOAuth(e)) {
@@ -202,6 +261,12 @@ Future<String?> googleOAuth(
         token = await _androidLoopbackGoogleOAuth(
           scopes: defaultScopes,
           forceAccountPicker: forceAccountPicker,
+        );
+      } else if (e is GoogleSignInException && e.code == GoogleSignInExceptionCode.uiUnavailable) {
+        Logger.error("Google sign-in popup unavailable (Web/Android)", error: e, trace: stack);
+        throw const GoogleOAuthException(
+          userMessage: "Google sign-in popup was blocked or unavailable. Allow popups for this site and try again.",
+          technicalMessage: "Google sign-in UI unavailable.",
         );
       } else {
         Logger.error("Failed to sign in with Google (Android/Web)", error: e, trace: stack);
@@ -246,16 +311,15 @@ Future<String?> googleOAuth(
 }
 
 Future<void> forgetGoogleOAuthSession() async {
-  if (Platform.isAndroid || kIsWeb) {
+  if (kIsWeb || Platform.isAndroid) {
     final webClientId = kIsWeb ? fdb.getClientId() : null;
     if (kIsWeb && (webClientId == null || webClientId.isEmpty)) return;
     try {
-      final gsi = GoogleSignIn.instance;
-      await gsi.initialize(
+      await ensureGoogleSignInInitialized(
         clientId: webClientId,
         serverClientId: !kIsWeb && Platform.isAndroid ? fdb.getServerClientId() : null,
       );
-      await gsi.signOut();
+      await GoogleSignIn.instance.signOut();
     } catch (e, stack) {
       Logger.error("Failed to forget Google session", error: e, trace: stack);
     }
@@ -395,18 +459,32 @@ Future<String> _androidLoopbackGoogleOAuth({
       return;
     }
     if (req.uri.path == '/oauth/token' && req.method == 'POST') {
-      final body = await utf8.decoder.bind(req).join();
+      const maxBodyBytes = 64 * 1024;
       String? token;
       Object? parseError;
       try {
+        if (req.contentLength > maxBodyBytes) {
+          throw const FormatException('OAuth callback body too large');
+        }
+        final chunks = <int>[];
+        await for (final chunk in req) {
+          if (chunks.length + chunk.length > maxBodyBytes) {
+            throw const FormatException('OAuth callback body too large');
+          }
+          chunks.addAll(chunk);
+        }
+        final body = utf8.decode(chunks);
         token = parseLoopbackOAuthCallback(body, state);
       } catch (e) {
         parseError = e;
+      } finally {
+        try {
+          req.response
+            ..statusCode = parseError == null ? io.HttpStatus.ok : io.HttpStatus.badRequest
+            ..write(parseError == null ? 'ok' : 'error');
+          await req.response.close();
+        } catch (_) {}
       }
-      req.response
-        ..statusCode = parseError == null ? io.HttpStatus.ok : io.HttpStatus.badRequest
-        ..write(parseError == null ? 'ok' : 'error');
-      await req.response.close();
       if (!completer.isCompleted) {
         if (token != null) {
           completer.complete(token);
@@ -515,73 +593,19 @@ Future<List<Map>> fetchFirebaseProjects(String token) async {
 
 Future<void> requestPassword(
     BuildContext context, String serverUrl, Future<void> Function(String url, String password) connect) async {
-  final TextEditingController passController = TextEditingController();
-  final RxBool enabled = false.obs;
-  final submitted = await showDialog<bool>(
-    barrierDismissible: false,
+  final password = await showBBInputDialog(
     context: context,
-    builder: (_) {
-      return Obx(
-        () => AlertDialog(
-          actions: [
-            TextButton(
-              child: Text("Cancel",
-                  style: context.theme.textTheme.bodyLarge!.copyWith(color: context.theme.colorScheme.primary)),
-              onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-            ),
-            AnimatedContainer(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-              ),
-              duration: const Duration(milliseconds: 100),
-              child: AbsorbPointer(
-                absorbing: !enabled.value,
-                child: TextButton(
-                  child: Text(
-                    "OK",
-                    style: context.theme.textTheme.bodyLarge!.copyWith(
-                      color: enabled.value ? context.theme.colorScheme.primary : context.theme.disabledColor,
-                    ),
-                  ),
-                  onPressed: () async {
-                    if (passController.text.isEmpty) {
-                      return;
-                    }
-                    Navigator.of(context, rootNavigator: true).pop(true);
-                  },
-                ),
-              ),
-            ),
-          ],
-          content: TextField(
-            controller: passController,
-            decoration: const InputDecoration(
-              labelText: "Password",
-              border: OutlineInputBorder(),
-            ),
-            autofocus: true,
-            obscureText: true,
-            autofillHints: [AutofillHints.password],
-            onChanged: (str) {
-              if (enabled.value ^ str.isNotEmpty) {
-                enabled.value = str.isNotEmpty;
-              }
-            },
-            onSubmitted: (str) {
-              if (passController.text.isEmpty) {
-                return;
-              }
-              Navigator.of(context, rootNavigator: true).pop(true);
-            },
-          ),
-          title: Text("Enter Server Password", style: context.theme.textTheme.titleLarge),
-          backgroundColor: context.theme.colorScheme.surfaceContainerHighest,
-        ),
-      );
-    },
+    title: "Enter Server Password",
+    labelText: "Password",
+    icon: Icons.lock_outline_rounded,
+    confirmText: "Connect",
+    cancelText: "Cancel",
+    obscureText: true,
+    barrierDismissible: false,
+    validator: (val) => (val == null || val.isEmpty) ? "Password is required" : null,
   );
 
   // Cancel closes the dialog without a result; don't try to connect with an empty password
-  if (submitted != true) return;
-  await connect(serverUrl, passController.text);
+  if (password == null || password.isEmpty) return;
+  await connect(serverUrl, password);
 }

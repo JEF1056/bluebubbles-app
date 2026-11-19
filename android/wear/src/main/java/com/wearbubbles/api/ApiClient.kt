@@ -43,8 +43,6 @@ object ApiClient {
         currentHeaders = merged
     }
 
-    fun getHeadersMap(): Map<String, String> = currentHeaders
-
     fun getApi(serverUrl: String, customHeaders: Map<String, String> = currentHeaders): BlueBubblesApi {
         val normalized = serverUrl.trim().trimEnd('/') + "/"
         configureHeaders(normalized, customHeaders)
