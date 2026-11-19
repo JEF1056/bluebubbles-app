@@ -84,16 +84,15 @@ List<Widget> buildSettingItemList({
         ],
       ),
     ),
-    if (!kIsWeb)
-      SearchableSettingItem(
-        title: "Server & Message Management",
-        child: SettingsHeader(
-          height: 40,
-          iosSubtitle: iosSubtitle,
-          materialSubtitle: materialSubtitle,
-          text: "Server & Message Management",
-        ),
+    SearchableSettingItem(
+      title: "Server & Message Management",
+      child: SettingsHeader(
+        height: 40,
+        iosSubtitle: iosSubtitle,
+        materialSubtitle: materialSubtitle,
+        text: "Server & Message Management",
       ),
+    ),
     SearchableSettingItem(
       title: "Connection & Server",
       searchTags: [
@@ -591,58 +590,56 @@ List<Widget> buildSettingItemList({
         ),
 
         // Contacts Management Tile
-        if (!kIsWeb)
-          SearchableSettingItem(
-            title: "Contacts Management",
-            searchTags: const [
-              "Contacts Permission",
-              "Refresh Contacts",
-              "Sync From Account",
-              "Contact Accounts",
-              "GrapheneOS",
-            ],
+        SearchableSettingItem(
+          title: "Contacts Management",
+          searchTags: const [
+            "Contacts Permission",
+            "Refresh Contacts",
+            "Sync From Account",
+            "Contact Accounts",
+            "GrapheneOS",
+          ],
+          onTap: () {
+            ns.pushAndRemoveSettingsUntil(context, const ContactsManagementPanel(), (Route route) => route.isFirst);
+          },
+          child: SettingsTile(
+            backgroundColor: tileColor,
             onTap: () {
               ns.pushAndRemoveSettingsUntil(context, const ContactsManagementPanel(), (Route route) => route.isFirst);
             },
-            child: SettingsTile(
-              backgroundColor: tileColor,
-              onTap: () {
-                ns.pushAndRemoveSettingsUntil(context, const ContactsManagementPanel(), (Route route) => route.isFirst);
-              },
-              leading: const SettingsLeadingIcon(
-                iosIcon: CupertinoIcons.person_crop_circle_badge_checkmark,
-                materialIcon: Icons.contacts_rounded,
-                containerColor: Colors.green,
-              ),
-              title: "Contacts Management",
-              activePage: ContactsManagementPanel,
-              trailing: const NextButton(),
+            leading: const SettingsLeadingIcon(
+              iosIcon: CupertinoIcons.person_crop_circle_badge_checkmark,
+              materialIcon: Icons.contacts_rounded,
+              containerColor: Colors.green,
             ),
+            title: "Contacts Management",
+            activePage: ContactsManagementPanel,
+            trailing: const NextButton(),
           ),
+        ),
 
         // Storage Analyzer Tile
-        if (!kIsWeb)
-          SearchableSettingItem(
-            title: "Storage Analyzer",
-            searchTags: const ["Delete Attachments", "Free Up Space", "Manage Storage", "Clear Cache"],
+        SearchableSettingItem(
+          title: "Storage Analyzer",
+          searchTags: const ["Delete Attachments", "Free Up Space", "Manage Storage", "Clear Cache"],
+          onTap: () {
+            ns.pushAndRemoveSettingsUntil(context, const StorageAnalyzerPanel(), (Route route) => route.isFirst);
+          },
+          child: SettingsTile(
+            backgroundColor: tileColor,
             onTap: () {
               ns.pushAndRemoveSettingsUntil(context, const StorageAnalyzerPanel(), (Route route) => route.isFirst);
             },
-            child: SettingsTile(
-              backgroundColor: tileColor,
-              onTap: () {
-                ns.pushAndRemoveSettingsUntil(context, const StorageAnalyzerPanel(), (Route route) => route.isFirst);
-              },
-              leading: SettingsLeadingIcon(
-                iosIcon: CupertinoIcons.chart_pie_fill,
-                materialIcon: Icons.pie_chart_outline,
-                containerColor: Colors.red[700],
-              ),
-              title: "Storage Analyzer",
-              activePage: StorageAnalyzerPanel,
-              trailing: const NextButton(),
+            leading: SettingsLeadingIcon(
+              iosIcon: CupertinoIcons.chart_pie_fill,
+              materialIcon: Icons.pie_chart_outline,
+              containerColor: Colors.red[700],
             ),
+            title: "Storage Analyzer",
+            activePage: StorageAnalyzerPanel,
+            trailing: const NextButton(),
           ),
+        ),
 
         // Developer Tools Tile
         SearchableSettingItem(
@@ -790,36 +787,36 @@ List<Widget> buildSettingItemList({
         ),
 
         // Danger Zone Section
-        if (!kIsWeb)
-          SearchableSettingItem(
-            title: "Reset App", // Title to search
-            child: SettingsTile(
-              backgroundColor: tileColor,
-              onTap: () {
-                showBBDialog(
-                  barrierDismissible: false,
-                  context: context,
-                  title: "Are you sure?",
-                  body:
-                      "This will delete all app data, including your settings, messages, attachments, and more. This action cannot be undone. It is recommended that you take a backup of your settings before proceeding. This will also close the app once the process is complete.",
-                  actions: [
-                    BBDialogAction(text: "No", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
-                    BBDialogAction(
-                      text: "Yes",
-                      isDefault: true,
-                      onPressed: () => SettingsItemsActions.resetApp(),
-                    ),
-                  ],
-                );
-              },
-              leading: SettingsLeadingIcon(
-                iosIcon: CupertinoIcons.refresh_circled_solid,
-                materialIcon: Icons.refresh_rounded,
-                containerColor: Colors.red[700],
-              ),
-              title: kIsWeb ? "Logout" : "Reset App",
+        SearchableSettingItem(
+          title: kIsWeb ? "Logout" : "Reset App", // Title to search
+          searchTags: const ["Reset App", "Logout", "Clear Data"],
+          child: SettingsTile(
+            backgroundColor: tileColor,
+            onTap: () {
+              showBBDialog(
+                barrierDismissible: false,
+                context: context,
+                title: "Are you sure?",
+                body:
+                    "This will delete all app data, including your settings, messages, attachments, and more. This action cannot be undone. It is recommended that you take a backup of your settings before proceeding. ${kIsWeb ? "This will return you to the setup screen once the process is complete." : "This will also close the app once the process is complete."}",
+                actions: [
+                  BBDialogAction(text: "No", onPressed: () => Navigator.of(context, rootNavigator: true).pop()),
+                  BBDialogAction(
+                    text: "Yes",
+                    isDefault: true,
+                    onPressed: () => SettingsItemsActions.resetApp(),
+                  ),
+                ],
+              );
+            },
+            leading: SettingsLeadingIcon(
+              iosIcon: CupertinoIcons.refresh_circled_solid,
+              materialIcon: Icons.refresh_rounded,
+              containerColor: Colors.red[700],
             ),
+            title: kIsWeb ? "Logout" : "Reset App",
           ),
+        ),
       ],
     ),
     const SizedBox(height: 16.0),

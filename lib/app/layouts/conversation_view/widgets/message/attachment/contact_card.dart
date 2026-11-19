@@ -7,10 +7,10 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
+import 'package:bluebubbles/platform/shims/native_misc.dart' show OpenFilex;
 import 'package:get/get.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart';
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
 
 class ContactCard extends StatefulWidget {
@@ -97,10 +97,7 @@ class _ContactCardState extends State<ContactCard> with AutomaticKeepAliveClient
         child: InkWell(
           onTap: () async {
             if (kIsWeb || widget.file.path == null) {
-              final content = base64.encode(widget.file.bytes!);
-              html.AnchorElement(href: "data:application/octet-stream;charset=utf-16le;base64,$content")
-                ..setAttribute("download", widget.file.name)
-                ..click();
+              downloadBytes(widget.file.bytes!, widget.file.name);
             } else {
               await OpenFilex.open(
                   join(FilesystemSvc.attachmentsPath, widget.attachment.guid!, basename(widget.file.path!)),

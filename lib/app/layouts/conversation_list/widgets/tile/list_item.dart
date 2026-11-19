@@ -99,8 +99,8 @@ class ListItem extends StatelessWidget {
 
     if (SettingsSvc.settings.swipableConversationTiles.value) {
       return Dismissible(
-        background: (kIsDesktop || kIsWeb) ? null : Obx(() => slideBackground(chat, false)),
-        secondaryBackground: (kIsDesktop || kIsWeb) ? null : Obx(() => slideBackground(chat, true)),
+        background: kIsDesktop ? null : Obx(() => slideBackground(chat, false)),
+        secondaryBackground: kIsDesktop ? null : Obx(() => slideBackground(chat, true)),
         key: UniqueKey(),
         onDismissed: (direction) {
           MaterialSwipeAction action;

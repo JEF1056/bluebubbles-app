@@ -66,12 +66,10 @@ class ThemesService {
 
     // Re-save preset themes so any stale DB values (e.g. old surfaceContainerHighest)
     // are always overwritten with the current static definitions.
-    if (!kIsWeb) {
-      for (final preset in defaultThemes) {
-        preset.save(updateIfNotAbsent: true);
-      }
-      _refreshMaterialYouThemePresets();
+    for (final preset in defaultThemes) {
+      preset.save(updateIfNotAbsent: true);
     }
+    _refreshMaterialYouThemePresets();
   }
 
   /// Linux-only: dynamic-color fetch deferred out of [init]; call post-splash.
@@ -569,7 +567,6 @@ class ThemesService {
   }
 
   void _refreshMaterialYouThemePresets() {
-    if (kIsWeb) return;
     for (final variant in MaterialYouVariant.values) {
       final light = ThemeStruct.findOne(materialYouThemeName(variant, Brightness.light));
       if (light != null) {
@@ -623,14 +620,36 @@ class ThemesService {
   /// Results are cached by file path; call [clearAdaptiveThemeCache] when the
   /// background image is replaced.
   static Future<Map<MaterialYouVariant, ({ThemeData light, ThemeData dark})>> generateAdaptiveThemesFromImage(
-    String imagePath,
-  ) async {
+    String imagePath, {
+    Uint8List? imageBytes,
+  }) async {
     if (_adaptiveThemeCache.containsKey(imagePath)) {
       return _adaptiveThemeCache[imagePath]!;
     }
 
     // Extract the dominant color via Flutter's built-in quantizer.
-    final provider = FileImage(File(imagePath));
+    final ImageProvider provider;
+    if (imageBytes != null) {
+      provider = MemoryImage(imageBytes);
+    } else if (kIsWeb) {
+      final basePath = FilesystemService.stripWebPathVersion(imagePath);
+      Uint8List? resolvedBytes = await WebMediaCache.instance.get(WebMediaCache.chatBackgroundsStore, basePath);
+      if (resolvedBytes == null && basePath.startsWith('web-bg://')) {
+        final entries = await WebMediaCache.instance.getAllEntries(WebMediaCache.chatBackgroundsStore);
+        for (final entry in entries.entries) {
+          if ('web-bg://${FilesystemService.sanitizeGuid(entry.key)}' == basePath) {
+            resolvedBytes = entry.value;
+            break;
+          }
+        }
+        if (resolvedBytes == null) {
+          throw StateError('Cached web background not found for $imagePath');
+        }
+      }
+      provider = resolvedBytes != null ? MemoryImage(resolvedBytes) : NetworkImage(imagePath);
+    } else {
+      provider = FileImage(File(imagePath));
+    }
     final lightScheme = await ColorScheme.fromImageProvider(
       provider: provider,
       brightness: Brightness.light,
@@ -656,7 +675,8 @@ class ThemesService {
     String imagePath, {
     required String scopeKey,
   }) async {
-    final generated = await generateAdaptiveThemesFromImage(imagePath);
+    final webBytes = kIsWeb ? await FilesystemSvc.loadChatBackground(scopeKey) : null;
+    final generated = await generateAdaptiveThemesFromImage(imagePath, imageBytes: webBytes);
     final results = <ThemeStruct>[];
 
     for (final variant in MaterialYouVariant.values) {

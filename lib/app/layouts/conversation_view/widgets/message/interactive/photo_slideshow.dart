@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/shared
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/backend/filesystem/web_media_cache.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -35,6 +36,7 @@ class _PhotoSlideshowState extends State<PhotoSlideshow> with AutomaticKeepAlive
   iMessageAppData get data => widget.data;
 
   String? _previewImagePath;
+  Uint8List? _previewImageBytes;
   bool _previewFetchStarted = false;
   bool _previewFetchFailed = false;
 
@@ -100,10 +102,19 @@ class _PhotoSlideshowState extends State<PhotoSlideshow> with AutomaticKeepAlive
     // Already cached on disk from a previous fetch.
     final storedMd5 = MessageMetadataStore.imageHash(message, slot);
     if (storedMd5 != null) {
-      final cachedPath = FilesystemSvc.urlPreviewImagePath(storedMd5);
-      if (await File(cachedPath).exists()) {
-        if (mounted) setState(() => _previewImagePath = cachedPath);
-        return;
+      if (kIsWeb) {
+        final cachedBytes =
+            await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, 'url_preview_$storedMd5');
+        if (cachedBytes != null) {
+          if (mounted) setState(() => _previewImageBytes = cachedBytes);
+          return;
+        }
+      } else {
+        final cachedPath = FilesystemSvc.urlPreviewImagePath(storedMd5);
+        if (await File(cachedPath).exists()) {
+          if (mounted) setState(() => _previewImagePath = cachedPath);
+          return;
+        }
       }
     }
 
@@ -134,7 +145,12 @@ class _PhotoSlideshowState extends State<PhotoSlideshow> with AutomaticKeepAlive
       final image = await MetadataHelper.resolveCachedImage(message, imageUrl, slot: slot);
       if (image != null) {
         MessageMetadataStore.write(message, result.metadata!, slot: slot, imageHash: image.hash);
-        if (mounted) setState(() => _previewImagePath = image.path);
+        if (mounted) {
+          setState(() {
+            _previewImagePath = image.path.isEmpty ? null : image.path;
+            _previewImageBytes = image.bytes;
+          });
+        }
         return;
       }
     }
@@ -147,7 +163,7 @@ class _PhotoSlideshowState extends State<PhotoSlideshow> with AutomaticKeepAlive
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    if (_previewImagePath == null && !_previewFetchStarted) {
+    if (_previewImagePath == null && _previewImageBytes == null && !_previewFetchStarted) {
       _previewFetchStarted = true;
       final manual = _refreshRequested;
       _refreshRequested = false;
@@ -163,7 +179,20 @@ class _PhotoSlideshowState extends State<PhotoSlideshow> with AutomaticKeepAlive
         Stack(
           alignment: Alignment.bottomLeft,
           children: [
-            if (_previewImagePath != null)
+            if (_previewImageBytes != null)
+              Image.memory(
+                _previewImageBytes!,
+                gaplessPlayback: true,
+                filterQuality: FilterQuality.none,
+                errorBuilder: (context, object, stacktrace) => SizedBox(
+                  width: 200,
+                  height: 150,
+                  child: Center(
+                    child: Text("Failed to display image", style: context.theme.textTheme.bodyLarge),
+                  ),
+                ),
+              )
+            else if (_previewImagePath != null)
               Image.file(
                 File(_previewImagePath!),
                 gaplessPlayback: true,
@@ -176,7 +205,7 @@ class _PhotoSlideshowState extends State<PhotoSlideshow> with AutomaticKeepAlive
                   ),
                 ),
               ),
-            if (_previewImagePath == null && _needsManualLoad)
+            if (_previewImagePath == null && _previewImageBytes == null && _needsManualLoad)
               SizedBox(
                 width: 200,
                 height: 150,

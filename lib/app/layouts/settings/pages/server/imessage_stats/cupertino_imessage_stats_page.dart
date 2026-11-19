@@ -2,7 +2,6 @@ import 'package:bluebubbles/app/layouts/settings/pages/server/imessage_stats/ime
 import 'package:bluebubbles/app/layouts/settings/pages/server/server_management_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -145,31 +144,20 @@ class _CupertinoIMessageStatsPageState
                   child: Text(
                     "Local DB",
                     style: TextStyle(
-                      color: kIsWeb
-                          ? context.theme.colorScheme.outline
-                          : controller.selectedStatsSource.value == IMessageStatsSource.local
-                              ? context.theme.colorScheme.onPrimary
-                              : null,
+                      color: controller.selectedStatsSource.value == IMessageStatsSource.local
+                          ? context.theme.colorScheme.onPrimary
+                          : null,
                     ),
                   ),
                 ),
               },
               onValueChanged: (value) {
                 if (value == null) return;
-                if (value == IMessageStatsSource.local && kIsWeb) return;
                 controller.setStatsSource(value);
               },
             ),
           ),
         ),
-        if (kIsWeb)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-            child: Text(
-              "Local DB stats are unavailable on web builds.",
-              style: context.theme.textTheme.bodySmall,
-            ),
-          ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),

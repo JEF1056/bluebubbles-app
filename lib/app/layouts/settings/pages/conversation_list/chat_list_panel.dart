@@ -90,19 +90,18 @@ class _ChatListPanelState extends State<ChatListPanel> with ThemeHelpers {
                           backgroundColor: tileColor,
                           isThreeLine: true,
                         )),
-                    if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                    if (!kIsWeb)
-                      Obx(() => SettingsSwitch(
-                            onChanged: (bool val) async {
-                              SettingsSvc.settings.unarchiveOnNewMessage.value = val;
-                              await SettingsSvc.settings.saveOneAsync('unarchiveOnNewMessage');
-                            },
-                            initialVal: SettingsSvc.settings.unarchiveOnNewMessage.value,
-                            title: "Unarchive Chats On New Message",
-                            subtitle: "Automatically unarchive chats when a new message is received",
-                            backgroundColor: tileColor,
-                            isThreeLine: true,
-                          )),
+                    const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                    Obx(() => SettingsSwitch(
+                          onChanged: (bool val) async {
+                            SettingsSvc.settings.unarchiveOnNewMessage.value = val;
+                            await SettingsSvc.settings.saveOneAsync('unarchiveOnNewMessage');
+                          },
+                          initialVal: SettingsSvc.settings.unarchiveOnNewMessage.value,
+                          title: "Unarchive Chats On New Message",
+                          subtitle: "Automatically unarchive chats when a new message is received",
+                          backgroundColor: tileColor,
+                          isThreeLine: true,
+                        )),
                   ],
                 ),
                 SettingsHeader(iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "Appearance"),
@@ -219,7 +218,7 @@ class _ChatListPanelState extends State<ChatListPanel> with ThemeHelpers {
                           const SizedBox(width: 20),
                         ],
                       ),
-                    if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                    if (!kIsDesktop && !kIsWeb && iOS) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
                     if (kIsDesktop && iOS)
                       SettingsTile(
                         title:
@@ -400,24 +399,23 @@ class _ChatListPanelState extends State<ChatListPanel> with ThemeHelpers {
                             ],
                           ),
                     if (kIsDesktop && iOS) const SizedBox(height: 24),
-                    if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                    if (!kIsWeb)
-                      SettingsTile(
-                        title: "Pinned Order",
-                        subtitle: "Set the order for your pinned chats",
-                        onTap: () {
-                          NavigationSvc.pushSettings(
-                            context,
-                            const PinnedOrderPanel(),
-                          );
-                        },
-                        trailing: const NextButton(),
-                      ),
+                    if (kIsDesktop && iOS) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                    SettingsTile(
+                      title: "Pinned Order",
+                      subtitle: "Set the order for your pinned chats",
+                      onTap: () {
+                        NavigationSvc.pushSettings(
+                          context,
+                          const PinnedOrderPanel(),
+                        );
+                      },
+                      trailing: const NextButton(),
+                    ),
                   ],
                 )),
-                if (!kIsWeb && !kIsDesktop && !iOS)
+                if (!kIsDesktop && !iOS)
                   SettingsHeader(iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "Swipe Actions"),
-                if (!kIsWeb && !kIsDesktop && !iOS)
+                if (!kIsDesktop && !iOS)
                   Obx(() => SettingsSection(
                     backgroundColor: tileColor,
                     children: [

@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -19,19 +19,18 @@ enum TextFieldButton { Files, Genmoji, Handwritten, Schedule, Location, Gif, Emo
 
 const List<TextFieldButton> defaultTextFieldButtons = [
   TextFieldButton.Gif,
-  TextFieldButton.Emoji,
   TextFieldButton.Location,
 ];
 
 /// (android, windows, linux, web)
 const Map<TextFieldButton, (bool, bool, bool, bool)> _buttonPlatformSupport = {
-  TextFieldButton.Files: (false, true, true, false),
+  TextFieldButton.Files: (false, true, true, true),
   TextFieldButton.Genmoji: (false, true, true, false),
-  TextFieldButton.Handwritten: (false, true, true, false),
-  TextFieldButton.Schedule: (false, true, true, false),
-  TextFieldButton.Location: (false, true, false, false),
-  TextFieldButton.Gif: (false, true, true, false),
-  TextFieldButton.Emoji: (false, true, true, true),
+  TextFieldButton.Handwritten: (false, true, true, true),
+  TextFieldButton.Schedule: (false, true, true, true),
+  TextFieldButton.Location: (false, true, false, true),
+  TextFieldButton.Gif: (false, true, true, true),
+  TextFieldButton.Emoji: (false, false, false, false),
 };
 
 const Map<TextFieldButton, String> _buttonToText = {

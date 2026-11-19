@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/app/state/attachment_state.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
@@ -671,7 +671,7 @@ class MessagesService extends GetxController {
       if (kIsWeb) {
         _webMessageSub = WebListeners.newMessage.listen((tuple) {
           if (tuple.chat?.guid == chat.guid) {
-            _handleNewMessage(tuple.message);
+            unawaited(addNewMessage(tuple.message));
           }
         });
       }
@@ -896,6 +896,7 @@ class MessagesService extends GetxController {
     // buildMessageParts guard would never fire. See the guard below.
     final previousDateEdited = toUpdate.dateEdited;
     final previousDateDeleted = toUpdate.dateDeleted;
+    final previousThreadOriginatorGuid = toUpdate.threadOriginatorGuid;
 
     // Preserve authoritative fields before merging — Message.merge is written for
     // existing(older).merge(newMessage(newer)), but here we call it inverted:
@@ -966,6 +967,21 @@ class MessagesService extends GetxController {
 
     // Trigger granular update for this specific message
     messageUpdateTrigger[updated.guid!] = DateTime.now().millisecondsSinceEpoch;
+
+    // If the update introduced or updated a reply relationship, hydrate any missing
+    // originator and refresh the originator's thread count / UI trigger.
+    if (updated.threadOriginatorGuid != null) {
+      if (struct.getThreadOriginator(updated.threadOriginatorGuid!) == null) {
+        _hydrateThreadOriginators([updated]);
+      }
+      if (previousThreadOriginatorGuid == null && !updated.isReaction) {
+        final originatorState = messageStates[updated.threadOriginatorGuid!];
+        if (originatorState != null) {
+          originatorState.updateThreadReplyCountInternal(originatorState.threadReplyCount.value + 1);
+        }
+        triggerMessageUpdate(updated.threadOriginatorGuid!);
+      }
+    }
 
     // Incrementally update indicator ownership; dates or GUID may have changed.
     _updateIndicatorsForMessage(updated);
@@ -1356,7 +1372,6 @@ class MessagesService extends GetxController {
   /// If [deletedGuid] was the chat's latest message, fetches the new latest from the
   /// database and updates both [ChatState] and the [Chat] DB record.
   Future<void> _updateLatestMessageAfterDeletion(String deletedGuid) async {
-    if (kIsWeb) return;
     final chatState = ChatsSvc.getChatState(tag);
     if (chatState == null || chatState.latestMessage.value?.guid != deletedGuid) return;
     final chat = ChatsSvc.findChatByGuid(tag);
@@ -1600,50 +1615,39 @@ class MessagesService extends GetxController {
           chatData: chat.toMap(),
           messagesData: rawMessages,
         );
-        if (!kIsWeb) {
-          // Prefer the bulk-loaded list (already hydrated via getMany on the main thread)
-          // over a second link-query, which can return 0 for newly-created chats whose
-          // chat.targetId index hasn't yet been flushed to the read snapshot.
-          // If temp is empty (bulk add found nothing new) fall back to the link query.
-          if (syncResult.messages.isNotEmpty) {
-            _messages = syncResult.messages;
-          } else {
-            _messages = await Chat.getMessagesAsync(chat, offset: offset, limit: limit);
-          }
+        // Prefer the bulk-loaded list (already hydrated via getMany on the main thread)
+        // over a second link-query, which can return 0 for newly-created chats whose
+        // chat.targetId index hasn't yet been flushed to the read snapshot.
+        // If temp is empty (bulk add found nothing new) fall back to the link query.
+        if (syncResult.messages.isNotEmpty) {
+          _messages = syncResult.messages;
+        } else {
+          _messages = await Chat.getMessagesAsync(chat, offset: offset, limit: limit);
+        }
 
-          // Sync the chat's latestMessage into ChatState after the server fetch.
-          // Guards:
-          // 1. offset == 0: only the first (newest) page should affect latestMessage.
-          //    Loading older pages must never overwrite a newer latest.
-          // 2. Use ChatState.latestMessage.value (the Rxn<Message>) for the comparison,
-          //    NOT chat.latestMessage.  The Chat.latestMessage getter falls back to
-          //    dbLatestMessage when _latestMessage is null, which queries the DB — and at
-          //    this point the DB now contains the just-bulk-added old messages, so that
-          //    query returns a stale old date and defeats the freshness check entirely.
-          if (offset == 0) {
-            for (final updatedChat in syncResult.chats) {
-              final state = ChatsSvc.getChatState(updatedChat.guid);
-              if (state != null && updatedChat.dbLatestMessage.target?.dateCreated != null) {
-                final currentDate = state.latestMessage.value?.dateCreated;
-                final hasRealCurrent = currentDate != null && currentDate.millisecondsSinceEpoch > 0;
-                final latestMsg = updatedChat.dbLatestMessage.target;
-                if (latestMsg != null &&
-                    (!hasRealCurrent ||
-                        (latestMsg.dateCreated != null && latestMsg.dateCreated!.isAfter(currentDate) == true))) {
-                  ChatsSvc.updateChatLatestMessage(updatedChat.guid, latestMsg);
-                }
+        // Sync the chat's latestMessage into ChatState after the server fetch.
+        // Guards:
+        // 1. offset == 0: only the first (newest) page should affect latestMessage.
+        //    Loading older pages must never overwrite a newer latest.
+        // 2. Use ChatState.latestMessage.value (the Rxn<Message>) for the comparison,
+        //    NOT chat.latestMessage.  The Chat.latestMessage getter falls back to
+        //    dbLatestMessage when _latestMessage is null, which queries the DB — and at
+        //    this point the DB now contains the just-bulk-added old messages, so that
+        //    query returns a stale old date and defeats the freshness check entirely.
+        if (offset == 0) {
+          for (final updatedChat in syncResult.chats) {
+            final state = ChatsSvc.getChatState(updatedChat.guid);
+            if (state != null && updatedChat.dbLatestMessage.target?.dateCreated != null) {
+              final currentDate = state.latestMessage.value?.dateCreated;
+              final hasRealCurrent = currentDate != null && currentDate.millisecondsSinceEpoch > 0;
+              final latestMsg = updatedChat.dbLatestMessage.target;
+              if (latestMsg != null &&
+                  (!hasRealCurrent ||
+                      (latestMsg.dateCreated != null && latestMsg.dateCreated!.isAfter(currentDate) == true))) {
+                ChatsSvc.updateChatLatestMessage(updatedChat.guid, latestMsg);
               }
             }
           }
-        } else {
-          final reactions = syncResult.messages.where((e) => e.isReaction);
-          for (Message m in reactions) {
-            final associatedMessage =
-                syncResult.messages.firstWhereOrNull((element) => element.guid == m.associatedMessageGuid);
-            associatedMessage?.hasReactions = true;
-            associatedMessage?.associatedMessages.add(m);
-          }
-          _messages = syncResult.messages;
         }
       }
     } catch (e, s) {

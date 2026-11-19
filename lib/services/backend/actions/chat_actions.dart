@@ -714,7 +714,7 @@ class ChatActions {
 
     // 5. For any brand-new handles, link matching existing ContactV2 records in one batch
     //    using symmetric phone-variant matching.
-    final List<int> affectedHandleIds = brandNewHandles.isNotEmpty && !kIsWeb
+    final List<int> affectedHandleIds = brandNewHandles.isNotEmpty
         ? Database.runInTransaction(TxMode.write, () => ContactV2Actions.linkHandlesToContactsInTx(brandNewHandles))
         : <int>[];
 

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/widgets/preset_theme_dialogs.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -852,7 +854,8 @@ class _ImportDialogState extends State<_ImportDialog> {
       allowedExtensions: ['json', 'txt'],
     );
     if (result == null) return;
-    _textController.text = await result.xFile.readAsString();
+    final bytes = await result.xFile.readAsBytes();
+    _textController.text = utf8.decode(bytes);
   }
 
   Future<void> _doImport() async {

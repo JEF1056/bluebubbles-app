@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -15,7 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:photo_manager/photo_manager.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:universal_io/io.dart';
 
 /// Optimized attachment picker that avoids loading bytes until absolutely necessary
@@ -36,6 +37,7 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
   List<AssetEntity> _images = <AssetEntity>[];
   bool _isLoadingImages = false;
   bool _permissionDenied = false;
+  bool _isMaterialExpanded = false;
 
   /// The grid shows the Mac's Genmoji library instead of the photo library (see
   /// `ConversationViewController.showGenmojiLibrary`, which the back button also clears).
@@ -52,7 +54,9 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
     _genmojiWorker = ever<bool>(controller.showGenmojiLibrary, (_) {
       if (mounted) setState(() {});
     });
-    getAttachments();
+    if (!CurrentSkin.material) {
+      getAttachments();
+    }
   }
 
   @override
@@ -122,17 +126,19 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
   }
 
   Future<void> openFullCamera({String type = 'camera'}) async {
-    bool granted = (await Permission.camera.request()).isGranted;
-    if (!granted) {
-      showSnackbar("Error", "Camera access was denied!", type: SnackbarType.error);
-      return;
-    }
-
-    if (type == 'video') {
-      final micGranted = (await Permission.microphone.request()).isGranted;
-      if (!micGranted) {
-        showSnackbar("Error", "Microphone access was denied!", type: SnackbarType.error);
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+      bool granted = (await Permission.camera.request()).isGranted;
+      if (!granted) {
+        showSnackbar("Error", "Camera access was denied!", type: SnackbarType.error);
         return;
+      }
+
+      if (type == 'video') {
+        final micGranted = (await Permission.microphone.request()).isGranted;
+        if (!micGranted) {
+          showSnackbar("Error", "Microphone access was denied!", type: SnackbarType.error);
+          return;
+        }
       }
     }
 
@@ -156,6 +162,10 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
+    if (material) {
+      return _buildMaterialDrawer(context);
+    }
+
     return Container(
       color: context.theme.colorScheme.surface,
       child: SizedBox(
@@ -564,6 +574,152 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
       width: 220,
     );
   }
+
+  Widget _buildMaterialDrawer(BuildContext context) {
+    final actions = <GmsgAttachmentAction>[
+      GmsgAttachmentAction(
+        label: 'Gallery',
+        icon: Icons.photo_library_outlined,
+        onTap: _handleGallery,
+      ),
+      GmsgAttachmentAction(
+        label: 'Camera',
+        icon: Icons.photo_camera_outlined,
+        onTap: () => openFullCamera(type: 'camera'),
+      ),
+      GmsgAttachmentAction(
+        label: 'Video',
+        icon: Icons.videocam_outlined,
+        onTap: () => openFullCamera(type: 'video'),
+      ),
+      GmsgAttachmentAction(
+        label: 'GIFs',
+        icon: Icons.gif_box_outlined,
+        onTap: () => AttachmentActions.pickGif(context, controller),
+      ),
+      GmsgAttachmentAction(
+        label: 'Files',
+        icon: Icons.folder_outlined,
+        onTap: () => AttachmentActions.pickFiles(controller),
+      ),
+      if (AttachmentActions.supportsLocation)
+        GmsgAttachmentAction(
+          label: 'Location',
+          icon: Icons.location_on_outlined,
+          onTap: () => AttachmentActions.shareLocation(controller),
+        ),
+      GmsgAttachmentAction(
+        label: 'Schedule Send',
+        icon: Icons.schedule_outlined,
+        onTap: () => AttachmentActions.schedule(context, controller),
+      ),
+      GmsgAttachmentAction(
+        label: 'Handwritten',
+        icon: Icons.draw_outlined,
+        onTap: () => AttachmentActions.handwritten(context, controller),
+      ),
+      if (OpenPigeon.offered && controller.chat.isIMessage)
+        GmsgAttachmentAction(
+          label: 'Games',
+          icon: Icons.sports_esports_outlined,
+          onTap: () => showOpenPigeonPicker(context, controller),
+        ),
+      if (SettingsSvc.getServerDetails().supportsGenmoji)
+        GmsgAttachmentAction(
+          label: 'Genmoji',
+          icon: Icons.add_reaction_outlined,
+          selected: _showGenmoji,
+          onTap: _toggleGenmoji,
+        ),
+    ];
+
+    return GmsgAttachmentDrawer(
+      actions: actions,
+      expanded: _isMaterialExpanded,
+      onExpandedChanged: (expanded) => setState(() => _isMaterialExpanded = expanded),
+      overrideBody: _showGenmoji ? _buildMaterialGenmojiBody(context) : null,
+    );
+  }
+
+  Widget _buildMaterialGenmojiBody(BuildContext context) {
+    final svc = GenmojiLibrarySvc;
+    return Obx(() {
+      final entries = svc.entries.toList();
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Row(
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.arrow_back_rounded, size: 18),
+                  label: const Text('Actions'),
+                  onPressed: () => controller.showGenmojiLibrary.value = false,
+                ),
+                const SizedBox(width: 8),
+                ActionChip(
+                  avatar: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('New Genmoji'),
+                  onPressed: () => AttachmentActions.createGenmoji(context, controller),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: entries.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: !svc.loaded.value || svc.syncing.value
+                          ? const CircularProgressIndicator.adaptive()
+                          : Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  svc.syncError.value ??
+                                      (svc.unavailableReason.value != null
+                                          ? "Your Mac's Genmoji library couldn't be read, but you can still create new ones."
+                                          : 'No Genmoji yet.'),
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                      ),
+                                ),
+                                const SizedBox(height: 12),
+                                FilledButton.tonal(
+                                  onPressed: svc.syncError.value != null
+                                      ? () => svc.sync(force: true)
+                                      : () => AttachmentActions.createGenmoji(context, controller),
+                                  child: Text(svc.syncError.value != null ? 'Retry' : 'Create Genmoji'),
+                                ),
+                              ],
+                            ),
+                    ),
+                  )
+                : GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                    ),
+                    itemCount: entries.length,
+                    itemBuilder: (context, index) {
+                      final entry = entries[index];
+                      return GenmojiLibraryTile(
+                        key: ValueKey("gmsg-genmoji-${entry.identifier}"),
+                        entry: entry,
+                        controller: controller,
+                        onTap: () => AttachmentActions.toggleLibraryGenmoji(controller, entry),
+                        onLongPress: () => AttachmentActions.deleteGenmoji(context, controller, entry),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      );
+    });
+  }
 }
 
 /// Leaves the Genmoji library for the photo grid the picker opens with.
@@ -653,6 +809,134 @@ class _QuickActionItem extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class GmsgAttachmentAction {
+  const GmsgAttachmentAction({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.selected = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool selected;
+}
+
+/// Google Messages-style rounded-top drawer with expand/collapse chevron and 4-column grid.
+class GmsgAttachmentDrawer extends StatelessWidget {
+  const GmsgAttachmentDrawer({
+    super.key,
+    required this.actions,
+    required this.expanded,
+    required this.onExpandedChanged,
+    this.overrideBody,
+  });
+
+  final List<GmsgAttachmentAction> actions;
+  final bool expanded;
+  final ValueChanged<bool> onExpandedChanged;
+  final Widget? overrideBody;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final collapsedHeight = math.min(300.0, screenHeight * 0.42);
+    final expandedHeight = math.max(collapsedHeight + 40.0, (screenHeight * 0.62).clamp(320.0, 560.0));
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOutCubic,
+      height: expanded ? expandedHeight : collapsedHeight,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainer,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragEnd: (details) {
+              final v = details.primaryVelocity ?? 0;
+              if (v < -150 && !expanded) onExpandedChanged(true);
+              if (v > 150 && expanded) onExpandedChanged(false);
+            },
+            child: SizedBox(
+              height: 36,
+              width: double.infinity,
+              child: IconButton(
+                tooltip: expanded ? 'Collapse' : 'Expand',
+                padding: EdgeInsets.zero,
+                icon: Icon(
+                  expanded ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                  color: scheme.onSurfaceVariant,
+                  size: 24,
+                ),
+                onPressed: () => onExpandedChanged(!expanded),
+              ),
+            ),
+          ),
+          Expanded(
+            child: overrideBody ??
+                GridView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 8,
+                    mainAxisExtent: 108,
+                  ),
+                  itemCount: actions.length,
+                  itemBuilder: (context, index) {
+                    final action = actions[index];
+                    return Semantics(
+                      button: true,
+                      label: action.label,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(16),
+                        onTap: action.onTap,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: action.selected ? scheme.primaryContainer : scheme.secondaryContainer,
+                              ),
+                              child: Icon(
+                                action.icon,
+                                size: 24,
+                                color: action.selected ? scheme.onPrimaryContainer : scheme.onSecondaryContainer,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              action.label,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    color: scheme.onSurface,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+          ),
+        ],
       ),
     );
   }

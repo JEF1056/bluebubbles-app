@@ -1,6 +1,6 @@
 import 'dart:ui';
 
-import 'package:bitsdojo_window/bitsdojo_window.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/wrappers/trackpad_bug_wrapper.dart';
 import 'package:bluebubbles/database/models.dart';

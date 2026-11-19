@@ -56,9 +56,11 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
   @override
   void initState() {
     super.initState();
+    NavigationSvc.isSettingsOpen.value = true;
 
     if (showAltLayoutContextless) {
       WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
+        if (!mounted) return;
         NavigationSvc.pushAndRemoveSettingsUntil(
           context,
           widget.initialPage ?? ServerManagementPanel(),
@@ -67,19 +69,51 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
       });
     } else if (widget.initialPage != null) {
       WidgetsBinding.instance.addPostFrameCallback((timeStamp) {
-        NavigationSvc.pushSettings(
+        if (!mounted) return;
+        NavigationSvc.pushAndRemoveSettingsUntil(
           context,
           widget.initialPage!,
+          (route) => route.isFirst,
         );
       });
     }
   }
 
   @override
+  void dispose() {
+    NavigationSvc.isSettingsOpen.value = false;
+    NavigationSvc.activeSettingsPage.value = null;
+    NavigationSvc.activeSettingsWidget = null;
+    NavigationSvc.activeSettingsBinding = null;
+    NavigationSvc.narrowSettingsRoute = null;
+    super.dispose();
+  }
+
+  void _handleNarrowTransition() {
+    final page = NavigationSvc.activeSettingsWidget;
+    if (page == null || NavigationSvc.hasNarrowSettingsRoute) return;
+    NavigationSvc.pushAndRemoveSettingsUntil(
+      context,
+      page,
+      (route) => route.isFirst,
+      binding: NavigationSvc.activeSettingsBinding,
+    );
+  }
+
+  void _handleWideTransition() {
+    final page = NavigationSvc.activeSettingsWidget;
+    if (page == null || !NavigationSvc.hasNarrowSettingsRoute) return;
+    NavigationSvc.pushAndRemoveSettingsUntil(
+      context,
+      page,
+      (route) => route.isFirst,
+      binding: NavigationSvc.activeSettingsBinding,
+    );
+    NavigationSvc.removeNarrowSettingsRoute(context);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (!showAltLayout && NavigationSvc.activeSettingsPage.value != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => NavigationSvc.activeSettingsPage.value = null);
-    }
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onTap: () => FocusScope.of(context).unfocus(),
@@ -94,6 +128,9 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                   minRatio: kIsDesktop || kIsWeb ? 0.2 : 0.33,
                   maxRatio: 0.5,
                   allowResize: true,
+                  enableInspector: false,
+                  onNarrowTransition: _handleNarrowTransition,
+                  onWideTransition: _handleWideTransition,
                   left: SettingsScaffold(
                     title: "Settings",
                     initialHeader: kIsWeb ? "Server & Message Management" : null,

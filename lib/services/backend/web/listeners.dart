@@ -48,4 +48,9 @@ class WebListeners {
       _newChat.add(c);
     }
   }
+
+  static void reset() {
+    _messageGuids.clear();
+    _chatGuids.clear();
+  }
 }

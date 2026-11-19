@@ -3,10 +3,58 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/facetime.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+/// Opens a FaceTime join URL. On Web, opens a new tab and offers a user-gesture
+/// fallback dialog if a browser popup blocker intercepts the post-await launch.
+Future<void> openFaceTimeJoinLink(String link, {BuildContext? context}) async {
+  final uri = Uri.tryParse(link);
+  if (uri == null) {
+    showSnackbar("FaceTime", "Invalid call link", type: SnackbarType.error);
+    return;
+  }
+
+  final opened = await launchUrl(
+    uri,
+    mode: LaunchMode.externalApplication,
+    webOnlyWindowName: kIsWeb ? '_blank' : null,
+  );
+  if (opened) return;
+
+  if (kIsWeb && context != null && context.mounted) {
+    showBBDialog(
+      context: context,
+      title: "FaceTime Link Ready",
+      body: "Your browser blocked opening the FaceTime tab automatically.",
+      actions: [
+        BBDialogAction(
+          text: "Copy Link",
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: link));
+            Navigator.of(context, rootNavigator: true).pop();
+            showSnackbar("FaceTime", "Copied call link");
+          },
+        ),
+        BBDialogAction(
+          text: "Join Call",
+          isDefault: true,
+          onPressed: () {
+            Navigator.of(context, rootNavigator: true).pop();
+            launchUrl(uri, mode: LaunchMode.externalApplication, webOnlyWindowName: '_blank');
+          },
+        ),
+      ],
+    );
+    return;
+  }
+
+  showSnackbar("FaceTime", "Couldn't open the call link", type: SnackbarType.error);
+}
 
 /// Whether the details page offers to FaceTime this chat through the server's Mac: a 1:1 iMessage chat, on a
 /// supported server, with the Private API on. Groups aren't offered: the server dials every address as one 1:1 request.
@@ -111,8 +159,7 @@ Future<void> startFaceTimeCall(
       showSnackbar("FaceTime", "Couldn't get a call link", type: SnackbarType.error);
       return;
     }
-    final opened = await launchUrl(Uri.parse(link), mode: LaunchMode.externalApplication);
-    if (!opened) showSnackbar("FaceTime", "Couldn't open the call link", type: SnackbarType.error);
+    await openFaceTimeJoinLink(link, context: navigator.mounted ? navigator.context : null);
     return;
   }
 

@@ -59,7 +59,8 @@ class ChatRepository(
                     val resolvedPinned = if (pinIndexByGuid != null) resolvedPinIndex != null else (dto.isPinned == true)
                     dto.toEntity(isPinned = resolvedPinned, pinIndex = resolvedPinIndex)
                 }
-            chatDao.replaceAndPrune(entities)
+            val hasPinMetadata = pinnedGuids != null
+            chatDao.replaceAndPrune(entities, preservePins = !hasPinMetadata)
         }
     }
 

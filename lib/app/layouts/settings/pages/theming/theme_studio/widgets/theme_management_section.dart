@@ -1,4 +1,5 @@
-import 'dart:io' as dart_io;
+import 'dart:convert';
+import 'package:universal_io/io.dart' as dart_io;
 
 import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/widgets/color_editor_tile.dart';
@@ -6,7 +7,9 @@ import 'package:bluebubbles/app/layouts/settings/widgets/content/next_button.dar
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -215,7 +218,9 @@ class ThemeManagementSection extends StatelessWidget {
     final themeName = controller.activeTheme.name.replaceAll(RegExp(r'[^\w\s]'), '').trim();
     final fileName = 'bb_theme_${themeName.replaceAll(' ', '_').toLowerCase()}.json';
 
-    if (kIsDesktop) {
+    if (kIsWeb) {
+      downloadBytes(Uint8List.fromList(utf8.encode(json)), fileName, mimeType: 'application/json');
+    } else if (kIsDesktop) {
       // Desktop: show JSON in a dialog so the user can copy it, since share_plus
       // does not support file sharing on desktop.
       showDialog(

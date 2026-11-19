@@ -1,22 +1,27 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:math';
 import 'dart:ui';
 
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:async_task/async_task_extension.dart';
-import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
 import 'package:bluebubbles/app/components/custom/custom_error_box.dart';
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
+import 'package:bluebubbles/platform/shims/native_misc.dart'
+    show SecureApplication, SecureApplicationProvider, SecureGate;
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:bluebubbles/services/network/http_overrides.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/media_kit_hot_restart_fix.dart'
-    if (dart.library.html) 'package:bluebubbles/utils/media_kit_hot_restart_fix_web.dart';
+    if (dart.library.js_interop) 'package:bluebubbles/utils/media_kit_hot_restart_fix_web.dart';
 import 'package:bluebubbles/utils/window_effects.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
+import 'package:bluebubbles/app/layouts/settings/settings_page.dart';
 import 'package:bluebubbles/app/layouts/startup/failure_to_start.dart';
 import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/layouts/startup/splash_screen.dart';
@@ -30,7 +35,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart' hide Priority;
 import 'package:flutter/services.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:get/get.dart';
@@ -40,15 +44,9 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:screen_retriever/screen_retriever.dart';
-import 'package:secure_application/secure_application.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
-import 'package:tray_manager/tray_manager.dart'
-    show ContextMenuTrigger, ImageAsset, Menu, MenuItem, MenuItemClickedEvent, MenuItemType, TrayIcon, TrayIconClickedEvent;
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
-import 'package:window_manager/window_manager.dart';
-import 'package:windows_taskbar/windows_taskbar.dart';
 
 bool isAuthing = false;
 
@@ -108,7 +106,9 @@ Future<Null> initApp(bool bubble, List<String> arguments) async {
     await StartupTasks.initStartupServices(isBubble: bubble);
 
     /* ----- RANDOM STUFF INITIALIZATION ----- */
-    HttpOverrides.global = CustomHttpContext();
+    if (!kIsWeb) {
+      HttpOverrides.global = CustomHttpContext();
+    }
     dynamic exception;
     StackTrace? stacktrace;
 
@@ -354,26 +354,32 @@ class Main extends StatelessWidget {
         navigatorKey: NavigationSvc.key,
         navigatorObservers: [routeObserver],
         scrollBehavior: const MaterialScrollBehavior().copyWith(
-          // Specifically for GNU/Linux & Android-x86 family, where touch isn't interpreted as a drag device by Flutter apparently.
-          dragDevices: Platform.isLinux || Platform.isAndroid ? PointerDeviceKind.values.toSet() : null,
+          // Specifically for GNU/Linux, Android-x86, and Web so mouse/touch/trackpad drag all work consistently.
+          dragDevices:
+              kIsWeb || Platform.isLinux || Platform.isAndroid ? PointerDeviceKind.values.toSet() : null,
           // Prevent scrolling with multiple fingers accelerating the scrolling
           multitouchDragStrategy: MultitouchDragStrategy.latestPointer,
         ),
         home: const Home(),
         shortcuts: {
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.comma): const OpenSettingsIntent(),
+          LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.comma): const OpenSettingsIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyN): const OpenNewChatCreatorIntent(),
           if (kIsDesktop)
             LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyN): const OpenNewChatCreatorIntent(),
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyF): const OpenSearchIntent(),
+          LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyF): const OpenSearchIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyR): const ReplyRecentIntent(),
           if (kIsDesktop) LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyR): const ReplyRecentIntent(),
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.arrowDown): const OpenNextChatIntent(),
+          LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.arrowDown): const OpenNextChatIntent(),
           if (kIsDesktop) LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.tab): const OpenNextChatIntent(),
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.arrowUp): const OpenPreviousChatIntent(),
+          LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.arrowUp): const OpenPreviousChatIntent(),
           if (kIsDesktop)
             LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.tab):
                 const OpenPreviousChatIntent(),
+          LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyI): const ToggleInspectorIntent(),
           LogicalKeySet(LogicalKeyboardKey.escape): const GoBackIntent(),
         },
         // A route only reports its own pop state, so a pushed page could tell Android nothing handles back and the
@@ -492,6 +498,10 @@ class Main extends StatelessWidget {
   }
 }
 
+class ToggleInspectorIntent extends Intent {
+  const ToggleInspectorIntent();
+}
+
 class Home extends StatefulWidget {
   const Home({super.key});
 
@@ -500,9 +510,76 @@ class Home extends StatefulWidget {
 }
 
 class _HomeState extends State<Home> with WidgetsBindingObserver {
-  final ReceivePort port = ReceivePort();
   bool serverCompatible = true;
   bool fullyLoaded = false;
+  Worker? _chatUrlWorker;
+  Worker? _settingsUrlWorker;
+  bool _syncingFromUrl = false;
+  String? _lastPushedHashPath;
+
+  void _pushWebHashRoute({bool replace = false}) {
+    if (!kIsWeb || _syncingFromUrl || !SettingsSvc.settings.finishedSetup.value) return;
+    final uri = buildWebHashRouteUri(
+      settingsOpen: NavigationSvc.isSettingsOpen.value,
+      activeChatGuid: ChatsSvc.activeChatGuid.value,
+    );
+    if (_lastPushedHashPath == uri.path) return;
+    _lastPushedHashPath = uri.path;
+    SystemNavigator.routeInformationUpdated(uri: uri, replace: replace);
+  }
+
+  Future<void> _applyWebHashRoute(String rawLocation) async {
+    if (!kIsWeb || !mounted || !SettingsSvc.settings.finishedSetup.value) return;
+    final navContext = NavigationSvc.key.currentContext ?? context;
+    final target = parseWebHashRoute(rawLocation);
+    _syncingFromUrl = true;
+    try {
+      switch (target.kind) {
+        case WebHashRouteKind.settings:
+          _lastPushedHashPath = '/settings';
+          if (!NavigationSvc.isSettingsOpen.value) {
+            NavigationSvc.closeAllConversationView(navContext);
+            await ChatsSvc.setAllInactive();
+            if (!mounted || !navContext.mounted) return;
+            await NavigationSvc.pushAndRemoveUntil(
+              navContext,
+              const SettingsPage(),
+              (route) => route.isFirst,
+            );
+          }
+          break;
+        case WebHashRouteKind.chat:
+          final guid = target.chatGuid!;
+          _lastPushedHashPath = '/chat/${Uri.encodeComponent(guid)}';
+          if (NavigationSvc.isSettingsOpen.value) {
+            NavigationSvc.closeSettings(navContext);
+          }
+          if (ChatsSvc.activeChatGuid.value != guid) {
+            final chat = Chat.findOne(guid: guid);
+            if (chat != null && mounted) {
+              await NavigationSvc.pushAndRemoveUntil(
+                navContext,
+                ConversationView(chat: chat),
+                (route) => route.isFirst,
+              );
+            }
+          }
+          break;
+        case WebHashRouteKind.home:
+          _lastPushedHashPath = '/';
+          if (NavigationSvc.isSettingsOpen.value) {
+            NavigationSvc.closeSettings(navContext);
+          }
+          if (ChatsSvc.activeChat != null && mounted) {
+            NavigationSvc.closeAllConversationView(navContext);
+            await ChatsSvc.setAllInactive();
+          }
+          break;
+      }
+    } finally {
+      _syncingFromUrl = false;
+    }
+  }
 
   @override
   void initState() {
@@ -541,11 +618,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         }
 
         /* ----- CTRL-F OVERRIDE ----- */
-        html.document.onKeyDown.listen((e) {
-          if (e.keyCode == 114 || (e.ctrlKey && e.keyCode == 70)) {
-            e.preventDefault();
-          }
-        });
+        suppressBrowserFindShortcut();
+
+        /* ----- HASH URL SYNC ----- */
+        _chatUrlWorker = ever(ChatsSvc.activeChatGuid, (_) => _pushWebHashRoute());
+        _settingsUrlWorker = ever(NavigationSvc.isSettingsOpen, (_) => _pushWebHashRoute());
+        final initialFragment = Uri.base.fragment;
+        if (initialFragment.isNotEmpty) {
+          unawaited(ChatsSvc.loadedAllChats.future.then((_) async {
+            if (!mounted) return;
+            await _applyWebHashRoute(initialFragment);
+          }));
+        } else if (ChatsSvc.activeChatGuid.value != null) {
+          _pushWebHashRoute(replace: true);
+        }
       }
 
       if (kIsDesktop) {
@@ -603,10 +689,21 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _chatUrlWorker?.dispose();
+    _settingsUrlWorker?.dispose();
     // Clean up observer when app is fully closed
     WidgetsBinding.instance.removeObserver(this);
     windowManager.removeListener(DesktopWindowListener.instance);
     super.dispose();
+  }
+
+  @override
+  Future<bool> didPushRouteInformation(RouteInformation routeInformation) async {
+    if (kIsWeb && SettingsSvc.settings.finishedSetup.value) {
+      await _applyWebHashRoute(routeInformation.uri.toString());
+      return true;
+    }
+    return super.didPushRouteInformation(routeInformation);
   }
 
   /// Just in case the theme doesn't change automatically
@@ -636,6 +733,12 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         OpenSearchIntent: OpenSearchAction(context),
         OpenNextChatIntent: OpenNextChatAction(context),
         OpenPreviousChatIntent: OpenPreviousChatAction(context),
+        ToggleInspectorIntent: CallbackAction<ToggleInspectorIntent>(
+          onInvoke: (_) {
+            NavigationSvc.toggleInspectorDrawer();
+            return null;
+          },
+        ),
         GoBackIntent: GoBackAction(context),
       },
       child: Obx(() => BBScaffold(

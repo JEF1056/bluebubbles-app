@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 import 'dart:math';
 
 import 'package:animated_size_and_fade/animated_size_and_fade.dart';
@@ -14,7 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart';
 import 'package:reorderables/reorderables.dart';
-import 'package:window_manager/window_manager.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
 
 class DesktopPanel extends StatefulWidget {
   const DesktopPanel({super.key});

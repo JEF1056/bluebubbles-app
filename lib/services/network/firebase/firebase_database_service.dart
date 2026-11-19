@@ -1,12 +1,10 @@
-import 'dart:io' as io;
+import 'package:universal_io/io.dart' as io;
 import 'package:bluebubbles/helpers/backend/settings_helpers.dart';
+import 'package:bluebubbles/platform/shims/firebase_rtdb.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:dio/dio.dart';
-import 'package:firebase_dart/firebase_dart.dart';
-import 'package:firebase_dart/implementation/pure_dart.dart';
-import 'package:firebase_dart/src/firestore.dart' show FirebaseFirestore;
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:bluebubbles/database/models.dart';
@@ -15,26 +13,40 @@ FirebaseDatabaseService fdb = Get.isRegistered<FirebaseDatabaseService>()
     ? Get.find<FirebaseDatabaseService>()
     : Get.put(FirebaseDatabaseService());
 
+const String _kConfiguredGoogleWebClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
+
+@visibleForTesting
+String? resolveGoogleWebClientId({
+  String configuredClientId = _kConfiguredGoogleWebClientId,
+  bool debug = kDebugMode,
+  String? webOrigin,
+}) {
+  final trimmed = configuredClientId.trim();
+  if (trimmed.isNotEmpty) return trimmed;
+  if (debug) {
+    return '500464701389-5u2eogcqls1eljhu3hq825oed6iue1f0.apps.googleusercontent.com';
+  }
+  final origin = webOrigin ?? Uri.base.toString();
+  if (origin.contains('tneotia.github.io')) {
+    return '500464701389-5u2eogcqls1eljhu3hq825oed6iue1f0.apps.googleusercontent.com';
+  }
+  if (origin.contains('app.bluebubbles.app')) {
+    return '500464701389-8trcdkcj7ni5l4dn6n7l795rhb1asnh3.apps.googleusercontent.com';
+  }
+  return null;
+}
+
 class FirebaseDatabaseService extends GetxService {
   @override
   void onInit() {
     super.onInit();
     if (kIsDesktop || kIsWeb) {
-      FirebaseDart.setup(
-        platform: Platform.web(
-          currentUrl: Uri.base.toString(),
-          isMobile: false,
-          isOnline: true,
-        ),
-      );
+      setupFirebaseRtdb();
     }
   }
 
   String? getClientId() {
-    if (kIsWeb && (kDebugMode || Uri.base.toString().contains("tneotia.github.io"))) {
-      return '500464701389-5u2eogcqls1eljhu3hq825oed6iue1f0.apps.googleusercontent.com';
-    }
-    if (kIsWeb) return '500464701389-8trcdkcj7ni5l4dn6n7l795rhb1asnh3.apps.googleusercontent.com';
+    if (kIsWeb) return resolveGoogleWebClientId();
     if (kIsDesktop) return '500464701389-18rfq995s6dqo3e5d3n2e7i3ljr0uc9i.apps.googleusercontent.com';
     return null;
   }
@@ -88,36 +100,16 @@ class FirebaseDatabaseService extends GetxService {
     try {
       String? url;
       Logger.info("Fetching new server URL from Firebase");
-      // Use firebase_dart on web and desktop
+      // Use firebase_dart on desktop and REST fallback on web
       if (kIsWeb || kIsDesktop) {
-        // Instantiate the FirebaseDatabase, and try to access the serverUrl field
-        final defaultOptions = FirebaseOptions(
+        final rawUrl = await fetchFirebaseServerUrl(
           apiKey: SettingsSvc.fcmData.apiKey ?? '',
           appId: SettingsSvc.fcmData.applicationID ?? '',
-          messagingSenderId: '',
           projectId: SettingsSvc.fcmData.projectID ?? '',
-          databaseURL: SettingsSvc.fcmData.firebaseURL,
+          databaseUrl: SettingsSvc.fcmData.firebaseURL,
         );
-
-        late final FirebaseApp app;
-        if (Firebase.apps.isEmpty) {
-          app = await Firebase.initializeApp(options: defaultOptions);
-        } else {
-          app = Firebase.apps.first;
-        }
-
-        if (!isNullOrEmpty(SettingsSvc.fcmData.firebaseURL)) {
-          final FirebaseDatabase db = FirebaseDatabase(app: app);
-          final DatabaseReference ref = db.reference().child('config').child('serverUrl');
-
-          final Event event = await ref.onValue.first;
-          url = sanitizeServerAddress(address: event.snapshot.value);
-        } else {
-          final FirebaseFirestore db = FirebaseFirestore.instanceFor(app: app);
-          final doc = await db.collection("server").doc("config").get();
-          if (doc.data()?['serverUrl'] != null) {
-            url = sanitizeServerAddress(address: doc.data()!['serverUrl']);
-          }
+        if (rawUrl != null) {
+          url = sanitizeServerAddress(address: rawUrl);
         }
       } else {
         // First, try to auth with FCM with the current data

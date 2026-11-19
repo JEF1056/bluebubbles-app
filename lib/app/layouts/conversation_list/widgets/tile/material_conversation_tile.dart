@@ -5,7 +5,6 @@ import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -119,16 +118,15 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
 class MaterialTrailing extends CustomStateful<ConversationTileController> {
   const MaterialTrailing({super.key, required super.parentController});
 
-  @override
-  State<StatefulWidget> createState() => _MaterialTrailingState();
-}
-
-class _MaterialTrailingState extends CustomState<MaterialTrailing, void, ConversationTileController>
-    with TrailingStateMixin<MaterialTrailing> {
-  int _computeUnreadCount(Chat chat, String? lastReadGuid) {
-    if (kIsWeb || chat.id == null) return 1;
+  @visibleForTesting
+  static int computeUnreadCount(
+    Chat chat,
+    String? lastReadGuid, {
+    List<Message> Function(Chat chat, {int limit})? fetchMessages,
+  }) {
+    if (chat.id == null) return 1;
     try {
-      final messages = Chat.getMessages(chat, limit: 25);
+      final messages = (fetchMessages ?? (c, {int limit = 25}) => Chat.getMessages(c, limit: limit))(chat, limit: 25);
       int count = 0;
       for (final m in messages) {
         if (lastReadGuid != null && m.guid == lastReadGuid) break;
@@ -143,6 +141,12 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
   }
 
   @override
+  State<StatefulWidget> createState() => _MaterialTrailingState();
+}
+
+class _MaterialTrailingState extends CustomState<MaterialTrailing, void, ConversationTileController>
+    with TrailingStateMixin<MaterialTrailing> {
+  @override
   Widget build(BuildContext context) {
     final chatState = ChatStateScope.of(context);
     return Padding(
@@ -152,7 +156,7 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
         final hasError = (message?.error ?? 0) > 0;
         final unread = chatState.hasUnreadMessage.value;
         final muteType = chatState.muteType.value;
-        final unreadCount = unread ? _computeUnreadCount(controller.chat, chatState.lastReadMessageGuid.value) : 0;
+        final unreadCount = unread ? MaterialTrailing.computeUnreadCount(controller.chat, chatState.lastReadMessageGuid.value) : 0;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisAlignment: MainAxisAlignment.center,

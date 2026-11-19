@@ -2,8 +2,8 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:get/get.dart';
-import 'package:universal_html/html.dart' as html;
 
 class SettingsTile extends StatelessWidget {
   const SettingsTile({
@@ -52,7 +52,7 @@ class SettingsTile extends StatelessWidget {
         child: GestureDetector(
           onSecondaryTapUp: (details) async {
             if (kIsWeb) {
-              (await html.document.onContextMenu.first).preventDefault();
+              await preventNextContextMenu();
             }
             onLongPress?.call();
           },

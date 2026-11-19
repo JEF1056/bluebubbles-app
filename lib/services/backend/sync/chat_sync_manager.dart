@@ -7,7 +7,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:dio/dio.dart';
 import 'package:bluebubbles/models/models.dart' show ChatSyncPage;
 import 'package:universal_io/io.dart';
-import 'package:windows_taskbar/windows_taskbar.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
 
 class ChatSyncManager extends SyncManager {
   final tag = 'ChatSyncManager';

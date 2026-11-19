@@ -167,6 +167,7 @@ Message _rcsMsg({
   required String guid,
   required String text,
   required DateTime createdAt,
+  String service = 'RCS',
   bool isFromMe = false,
   String? threadOriginatorGuid,
   String? threadOriginatorPart,
@@ -175,7 +176,7 @@ Message _rcsMsg({
   return Message.fromMap({
     'guid': guid,
     'text': text,
-    'service': 'RCS',
+    'service': service,
     'dateCreated': createdAt.millisecondsSinceEpoch,
     'isFromMe': isFromMe,
     'handleId': isFromMe ? 0 : 1,
@@ -468,6 +469,7 @@ void main() {
           guid: 'popup-msg-${testCase.label}',
           text: 'Hello from ${testCase.label}',
           createdAt: DateTime(2026, 11, 18, 12, 0),
+          service: testCase.label,
           isFromMe: false,
         );
         service.struct.addMessages([msg]);
@@ -570,6 +572,277 @@ void main() {
         Get.delete<ConversationViewController>(tag: chat.guid, force: true);
         Get.delete<MessagesService>(tag: chat.guid, force: true);
       }
+    });
+
+    test('Message.merge, takeOmittableFieldsFrom, fillsGapsIn, and updateFromMessage preserve threadOriginatorGuid', () {
+      final pushCopy = Message(
+        guid: '58EDFD76-FBA4-4748-B08D-711635A0600C',
+        text: 'omg ! how did it go?',
+        isFromMe: false,
+        service: 'RCS',
+        threadOriginatorGuid: '5E50001B-F703-4F16-A5BC-F5FE2587CE1E',
+        threadOriginatorPart: null,
+        dateCreated: DateTime.fromMillisecondsSinceEpoch(1792098155620),
+      );
+      final socketCopy = Message(
+        guid: '58EDFD76-FBA4-4748-B08D-711635A0600C',
+        text: 'omg ! how did it go?',
+        isFromMe: false,
+        service: 'RCS',
+        threadOriginatorGuid: '5E50001B-F703-4F16-A5BC-F5FE2587CE1E',
+        threadOriginatorPart: '0:0:45',
+        dateCreated: DateTime.fromMillisecondsSinceEpoch(1792098155620),
+      );
+      final partialNoThread = Message(
+        guid: '58EDFD76-FBA4-4748-B08D-711635A0600C',
+        text: 'omg ! how did it go?',
+        isFromMe: false,
+        service: 'RCS',
+        threadOriginatorGuid: null,
+        threadOriginatorPart: null,
+        dateCreated: DateTime.fromMillisecondsSinceEpoch(1792098155620),
+      );
+
+      expect(socketCopy.fillsGapsIn(partialNoThread), isTrue);
+
+      final merged = Message.merge(partialNoThread, socketCopy);
+      expect(merged.threadOriginatorGuid, '5E50001B-F703-4F16-A5BC-F5FE2587CE1E');
+      expect(merged.threadOriginatorPart, '0:0:45');
+
+      final service = ensureMessagesSvc('any;-;+14084157073-merge-test');
+      final state = service.getOrCreateState(pushCopy);
+      state.updateFromMessage(partialNoThread);
+      expect(state.message.threadOriginatorGuid, '5E50001B-F703-4F16-A5BC-F5FE2587CE1E');
+      expect(state.threadOriginatorGuid.value, '5E50001B-F703-4F16-A5BC-F5FE2587CE1E');
+      Get.delete<MessagesService>(tag: 'any;-;+14084157073-merge-test', force: true);
+    });
+
+    test('MessagesService.updateMessage hydrates missing off-screen originator when update attaches threadOriginatorGuid', () async {
+      final chat = Chat(guid: 'any;-;+14084157073-update-hydrate', chatIdentifier: '+14084157073', serviceName: 'RCS');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+
+      const originatorGuid = '5E50001B-F703-4F16-A5BC-F5FE2587CE1E';
+      const replyGuid = '58EDFD76-FBA4-4748-B08D-711635A0600C';
+      final requestedGuids = <String>[];
+      if (GetIt.I.isRegistered<HttpService>()) {
+        GetIt.I.unregister<HttpService>();
+      }
+      GetIt.I.registerSingleton<HttpService>(_FakeHttpService((guid, withQuery) async {
+        requestedGuids.add(guid);
+        return Response(
+          requestOptions: RequestOptions(path: '/api/v1/message/$guid'),
+          statusCode: 200,
+          data: {
+            'status': 200,
+            'data': {
+              'originalROWID': 65555,
+              'guid': originatorGuid,
+              'text': 'Seeing gail in at work on Wednesday actually!',
+              'isFromMe': true,
+              'service': 'RCS',
+              'dateCreated': 1791866310069,
+              'partCount': 1,
+            },
+          },
+        );
+      }));
+
+      final service = ensureMessagesSvc(chat.guid);
+      service.init(chat, (_) {}, (_, {String? oldGuid}) {}, (_) {}, (_) {}, []);
+      final initialReply = _rcsMsg(
+        guid: replyGuid,
+        text: 'omg ! how did it go?',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1792098155620),
+        isFromMe: false,
+      );
+      await service.addNewMessage(initialReply);
+      expect(service.struct.getThreadOriginator(originatorGuid), isNull);
+
+      final updatedReply = Message.fromMap({
+        'originalROWID': 66008,
+        'guid': replyGuid,
+        'text': 'omg ! how did it go?',
+        'isFromMe': false,
+        'service': 'RCS',
+        'dateCreated': 1792098155620,
+        'threadOriginatorGuid': originatorGuid,
+        'threadOriginatorPart': '0:0:45',
+        'partCount': 1,
+      });
+      service.updateMessage(updatedReply);
+
+      for (var i = 0; i < 20 && service.struct.getThreadOriginator(originatorGuid) == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      expect(requestedGuids, [originatorGuid]);
+      expect(service.struct.getThreadOriginator(originatorGuid)?.text,
+          'Seeing gail in at work on Wednesday actually!');
+      expect(service.messageStates[replyGuid]?.threadOriginatorGuid.value, originatorGuid);
+
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('Real chat.db incoming RCS reply (66008 -> 65555) renders ReplyBubble in Material and updates when threadOriginatorGuid arrives later',
+        variant: TargetPlatformVariant.only(TargetPlatform.android), (tester) async {
+      final chat = Chat(guid: 'any;-;+14084157073-real-shape', chatIdentifier: '+14084157073', serviceName: 'RCS');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+      if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+        Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      }
+
+      final originator = Message.fromMap({
+        'originalROWID': 65555,
+        'guid': '5E50001B-F703-4F16-A5BC-F5FE2587CE1E',
+        'text': 'Seeing gail in at work on Wednesday actually!',
+        'isFromMe': true,
+        'service': 'RCS',
+        'dateCreated': 1791866310069,
+        'partCount': 1,
+        'attributedBody': [
+          {
+            'string': 'Seeing gail in at work on Wednesday actually!',
+            'runs': [
+              {'range': [0, 22], 'attributes': {'__kIMMessagePartAttributeName': 0}},
+              {'range': [22, 9], 'attributes': {'__kIMMessagePartAttributeName': 0, '__kIMCalendarEventAttributeName': true}},
+              {'range': [31, 14], 'attributes': {'__kIMMessagePartAttributeName': 0}},
+            ],
+          }
+        ],
+      });
+      final priorIncoming = _rcsMsg(
+        guid: 'prior-66007',
+        text: 'That sounds so good!',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1792098140000),
+        isFromMe: false,
+      );
+      final initialReply = Message.fromMap({
+        'originalROWID': 66008,
+        'guid': '58EDFD76-FBA4-4748-B08D-711635A0600C',
+        'text': 'omg ! how did it go?',
+        'isFromMe': false,
+        'service': 'RCS',
+        'dateCreated': 1792098155620,
+        'partCount': 1,
+      });
+      final updatedReply = Message.fromMap({
+        'originalROWID': 66008,
+        'guid': '58EDFD76-FBA4-4748-B08D-711635A0600C',
+        'text': 'omg ! how did it go?',
+        'isFromMe': false,
+        'service': 'RCS',
+        'dateCreated': 1792098155620,
+        'threadOriginatorGuid': '5E50001B-F703-4F16-A5BC-F5FE2587CE1E',
+        'threadOriginatorPart': '0:0:45',
+        'partCount': 1,
+      });
+
+      final service = ensureMessagesSvc(chat.guid);
+      service.init(chat, (_) {}, (_, {String? oldGuid}) {}, (_) {}, (_) {}, []);
+      final cvController = cvc(chat);
+      service.struct.addMessages([originator, priorIncoming, initialReply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: SingleChildScrollView(
+            child: MessageHolder(
+              cvController: cvController,
+              message: initialReply,
+              oldMessage: priorIncoming,
+              newMessage: null,
+              isReplyThread: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplyBubble), findsNothing);
+
+      service.updateMessage(updatedReply);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplyBubble), findsOneWidget);
+      expect(find.textContaining('Seeing gail in at work on Wednesday actually!', findRichText: true), findsOneWidget);
+      expect(find.textContaining('omg ! how did it go?', findRichText: true), findsOneWidget);
+      expect(find.text('Failed to parse thread parts!'), findsNothing);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('Real chat.db incoming RCS reply (66008 -> 65555) renders ReplyBubble in iOS skin and refreshes when originator parts update',
+        variant: TargetPlatformVariant.only(TargetPlatform.android), (tester) async {
+      final chat = Chat(guid: 'any;-;+14084157073-ios-shape', chatIdentifier: '+14084157073', serviceName: 'RCS');
+      if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
+        Get.delete<MessagesService>(tag: chat.guid, force: true);
+      }
+      if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+        Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      }
+
+      final originator = Message.fromMap({
+        'originalROWID': 65555,
+        'guid': '5E50001B-F703-4F16-A5BC-F5FE2587CE1E',
+        'text': 'Seeing gail in at work on Wednesday actually!',
+        'isFromMe': true,
+        'service': 'RCS',
+        'dateCreated': 1791866310069,
+        'partCount': 1,
+      });
+      final priorIncoming = _rcsMsg(
+        guid: 'prior-66007-ios',
+        text: 'That sounds so good!',
+        createdAt: DateTime.fromMillisecondsSinceEpoch(1792098140000),
+        isFromMe: false,
+      );
+      final incomingReply = Message.fromMap({
+        'originalROWID': 66008,
+        'guid': '58EDFD76-FBA4-4748-B08D-711635A0600C',
+        'text': 'omg ! how did it go?',
+        'isFromMe': false,
+        'service': 'RCS',
+        'dateCreated': 1792098155620,
+        'threadOriginatorGuid': '5E50001B-F703-4F16-A5BC-F5FE2587CE1E',
+        'threadOriginatorPart': '0:0:45',
+        'partCount': 1,
+      });
+
+      final service = ensureMessagesSvc(chat.guid);
+      service.init(chat, (_) {}, (_, {String? oldGuid}) {}, (_) {}, (_) {}, []);
+      final cvController = cvc(chat);
+      service.struct.addMessages([originator, priorIncoming, incomingReply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.iOS,
+          child: SingleChildScrollView(
+            child: MessageHolder(
+              cvController: cvController,
+              message: incomingReply,
+              oldMessage: priorIncoming,
+              newMessage: null,
+              isReplyThread: false,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReplyBubble), findsOneWidget);
+      expect(find.textContaining('Seeing gail in at work on Wednesday actually!', findRichText: true), findsOneWidget);
+      expect(find.textContaining('omg ! how did it go?', findRichText: true), findsOneWidget);
+      expect(find.text('Failed to parse thread parts!'), findsNothing);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
     });
   });
 }

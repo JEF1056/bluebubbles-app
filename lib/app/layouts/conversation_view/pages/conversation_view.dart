@@ -138,6 +138,41 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
           Builder(
             builder: (context) {
               final bottomInset = MediaQuery.paddingOf(context).bottom;
+              if (!iOS && !samsung) {
+                return Stack(
+                  children: [
+                    Positioned.fill(
+                      child: MessagesView(
+                        key: Key(chat.guid),
+                        customService: widget.customService,
+                        initialScrollToGuid: widget.initialScrollToGuid,
+                        controller: controller,
+                        bottomPadding: 88.0 + bottomInset,
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 88.0 + bottomInset,
+                      child: Align(
+                        alignment: Alignment.bottomCenter,
+                        child: ScrollDownButton(controller: controller),
+                      ),
+                    ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: bottomInset,
+                      child: GestureDetector(
+                        onPanUpdate: _onPanUpdate,
+                        child: ConversationTextField(
+                          parentController: controller,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              }
               return Padding(
                 padding: EdgeInsets.only(bottom: bottomInset),
                 child: Column(
@@ -181,13 +216,15 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     );
     if (iOS || samsung) return content;
     return Builder(
-      builder: (context) => Material(
-        color: SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-            ? Colors.transparent
-            : context.theme.colorScheme.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      builder: (context) => ClipRRect(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
         clipBehavior: Clip.antiAlias,
-        child: content,
+        child: Material(
+          color: SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+              ? Colors.transparent
+              : context.theme.colorScheme.surface,
+          child: content,
+        ),
       ),
     );
   }

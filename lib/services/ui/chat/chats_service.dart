@@ -279,29 +279,23 @@ class ChatsService {
 
   void initDbWatchers() {
     if (headless) return;
-    if (!kIsWeb) {
-      // watch for new chats
-      final countQuery = (Database.chats.query(Chat_.dateDeleted.isNull())..order(Chat_.id, flags: Order.descending))
-          .watch(triggerImmediately: true);
-      countSub = countQuery.listen((event) async {
-        if (!SettingsSvc.settings.finishedSetup.value) return;
-        final newCount = event.count();
-        if (newCount > currentCount && currentCount != 0) {
-          final chat = event.findFirst()!;
-          if (chat.dbOnlyLatestMessageDate == null || chat.dbOnlyLatestMessageDate!.millisecondsSinceEpoch == 0) {
-            // wait for the chat.addMessage to go through
-            await Future.delayed(const Duration(milliseconds: 500));
-          }
-          await addChat(chat, immediate: true);
+    // watch for new chats
+    final countQuery = (Database.chats.query(Chat_.dateDeleted.isNull())..order(Chat_.id, flags: Order.descending))
+        .watch(triggerImmediately: true);
+    countSub = countQuery.listen((event) async {
+      if (!SettingsSvc.settings.finishedSetup.value) return;
+      final newCount = event.count();
+      if (newCount > currentCount && currentCount != 0) {
+        final chat = event.findFirst();
+        if (chat == null) return;
+        if (chat.dbOnlyLatestMessageDate == null || chat.dbOnlyLatestMessageDate!.millisecondsSinceEpoch == 0) {
+          // wait for the chat.addMessage to go through
+          await Future.delayed(const Duration(milliseconds: 500));
         }
-        currentCount = newCount;
-      });
-    } else {
-      countSub = WebListeners.newChat.listen((chat) async {
-        if (!SettingsSvc.settings.finishedSetup.value) return;
         await addChat(chat, immediate: true);
-      });
-    }
+      }
+      currentCount = newCount;
+    });
   }
 
   Future<void> init({bool force = false, bool headless = false}) async {
@@ -1088,8 +1082,6 @@ class ChatsService {
   /// Delete a chat with full UI cleanup and service state management.
   /// Set [deleteHandles] to true to also remove the chat's participant handles.
   Future<void> deleteChat(Chat chat, {bool deleteHandles = false}) async {
-    if (kIsWeb) return;
-
     // Handle active chat cleanup
     if (activeChat?.chat.guid == chat.guid) {
       NavigationSvc.closeAllConversationView(Get.context!);
@@ -1135,8 +1127,6 @@ class ChatsService {
   /// NOT show any confirmation UI — callers must confirm with the user
   /// before invoking this.
   Future<void> deleteAllMessagingData() async {
-    if (kIsWeb) return;
-
     // Close any active conversation view first (mirrors deleteChat() above).
     if (activeChat != null) {
       NavigationSvc.closeAllConversationView(Get.context!);
@@ -1150,6 +1140,7 @@ class ChatsService {
 
     Database.resetMessagingData();
     await FilesystemSvc.deleteCacheDirectories();
+    if (kIsWeb) await Database.flushWebPersistence();
 
     for (final guid in chatGuids) {
       maybeFindMessagesSvc(guid)?.close(force: true);
@@ -1171,8 +1162,6 @@ class ChatsService {
 
   /// Soft delete a chat with full UI cleanup and service state management
   Future<void> softDeleteChat(Chat chat) async {
-    if (kIsWeb) return;
-
     // Handle active chat cleanup
     if (activeChat?.chat.guid == chat.guid) {
       NavigationSvc.closeAllConversationView(Get.context!);
@@ -1200,7 +1189,6 @@ class ChatsService {
 
   /// Undelete a chat
   Future<void> unDeleteChat(Chat chat) async {
-    if (kIsWeb) return;
     await ChatInterface.unDeleteChat(chatData: chat.toMap());
   }
 
@@ -1659,13 +1647,20 @@ class ChatsService {
     // Update state if available
     state?.updateCustomAvatarPathInternal(value);
 
-    if (!kIsWeb && oldPath != null && oldPath != value) {
-      try {
-        final file = File(oldPath);
-        if (await file.exists()) {
-          await file.delete();
+    if (oldPath != null && oldPath != value) {
+      if (kIsWeb) {
+        if (value == null ||
+            FilesystemService.stripWebPathVersion(oldPath) != FilesystemService.stripWebPathVersion(value)) {
+          await FilesystemSvc.deleteWebAvatar(oldPath);
         }
-      } catch (_) {}
+      } else {
+        try {
+          final file = File(oldPath);
+          if (await file.exists()) {
+            await file.delete();
+          }
+        } catch (_) {}
+      }
     }
   }
 

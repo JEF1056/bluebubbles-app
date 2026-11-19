@@ -679,7 +679,7 @@ class MessageState extends StatefulController {
     updateErrorMessageInternal(updatedMessage.errorMessage);
     updateDidNotifyRecipientInternal(updatedMessage.didNotifyRecipient);
     updateWasDeliveredQuietlyInternal(updatedMessage.wasDeliveredQuietly);
-    updateThreadOriginatorGuidInternal(updatedMessage.threadOriginatorGuid);
+    updateThreadOriginatorGuidInternal(message.threadOriginatorGuid);
     updateHasAttachmentsInternal(updatedMessage.hasAttachments);
     updateHasReactionsInternal(updatedMessage.hasReactions);
 

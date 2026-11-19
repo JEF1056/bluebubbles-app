@@ -1,15 +1,18 @@
+import 'dart:math';
+
 import 'package:async_task/async_task_extension.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart';
 import 'package:bluebubbles/services/backend/sync/sync_manager_impl.dart';
+import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/backend/interfaces/sync_interface.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:universal_io/io.dart';
-import 'package:windows_taskbar/windows_taskbar.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
 
 class FullSyncManager extends SyncManager {
   final tag = 'FullSyncManager';
@@ -91,9 +94,12 @@ class FullSyncManager extends SyncManager {
         // 2: For each chat, get the messages.
         // We will stream the messages by page
         for (final chat in chats) {
-          if (kIsWeb || (chat.chatIdentifier ?? "").startsWith("urn:biz")) continue;
+          if ((chat.chatIdentifier ?? "").startsWith("urn:biz")) continue;
           try {
-            await for (final messageEvent in streamChatMessages(chat.guid, messageCount, batchSize: messageCount)) {
+            final batchSize = kIsWeb ? (messageCount > 50 ? 50 : (messageCount > 0 ? messageCount : 25)) : messageCount;
+            bool chatCounted = false;
+            bool hasSyncedMessagesForChat = false;
+            await for (final messageEvent in streamChatMessages(chat.guid, messageCount, batchSize: batchSize)) {
               List<Map<String, dynamic>> newMessages = messageEvent.messages;
               String? displayName = chat.guid;
               if (chat.displayName != null && chat.displayName!.isNotEmpty) {
@@ -114,13 +120,16 @@ class FullSyncManager extends SyncManager {
                 addToOutput('Deleting chat: $displayName (no participants were found)');
                 ChatsSvc.softDeleteChat(chat);
                 deletedChats++;
-                continue;
+                break;
               }
-              if (newMessages.isEmpty && skipEmptyChats) {
+              if (newMessages.isEmpty && !hasSyncedMessagesForChat && skipEmptyChats) {
                 addToOutput('Deleting chat: $displayName (skip empty chats was selected)');
                 ChatsSvc.softDeleteChat(chat);
                 deletedChats++;
-                continue;
+                break;
+              }
+              if (newMessages.isEmpty) {
+                break;
               }
 
               addToOutput('Saving chunk of ${newMessages.length} message(s) for chat: $displayName');
@@ -139,21 +148,27 @@ class FullSyncManager extends SyncManager {
                 messagesData: photos.kept,
               ).then((r) => r.messages);
               messagesSynced += insertedMessages.length;
+              hasSyncedMessagesForChat = true;
 
-              // Fetch group chat icon if available.
-              if (syncGroupChatIcons && chat.isGroup) {
-                await Chat.getIcon(chat).catchError((_) {});
-              }
-              await Chat.syncBackground(chat).catchError((_) {});
+              if (!chatCounted) {
+                chatCounted = true;
+                // Fetch group chat icon if available.
+                if (syncGroupChatIcons && chat.isGroup) {
+                  await Chat.getIcon(chat).catchError((_) {});
+                }
+                await Chat.syncBackground(chat).catchError((_) {});
 
-              // Increment how many chats we've synced, then set the progress
-              completedChats += 1;
-              int adjustedTotal = (totalChats ?? newChats.length) - filteredChatsCount - deletedChats;
-              setProgress(completedChats, adjustedTotal);
-              chatsSynced += 1;
-              if (kIsDesktop && Platform.isWindows) {
-                await WindowsTaskbar.setProgress(completedChats, adjustedTotal);
+                // Increment how many chats we've synced, then set the progress
+                completedChats += 1;
+                int adjustedTotal = (totalChats ?? newChats.length) - filteredChatsCount - deletedChats;
+                setProgress(completedChats, adjustedTotal);
+                chatsSynced += 1;
+                if (kIsDesktop && Platform.isWindows) {
+                  await WindowsTaskbar.setProgress(completedChats, adjustedTotal);
+                }
               }
+              // Yield to browser event loop between chunks on web
+              if (kIsWeb) await Future.delayed(Duration.zero);
               // If we're supposed to be stopping, break out
               if (status.value == SyncStatus.STOPPING) break;
             }
@@ -163,6 +178,7 @@ class FullSyncManager extends SyncManager {
             Logger.debug('Error: ${ex.toString()}', tag: tag);
           }
 
+          if (kIsWeb) await Future.delayed(Duration.zero);
           // If we're supposed to be stopping, break out
           if (status.value == SyncStatus.STOPPING) break;
         }
@@ -262,13 +278,16 @@ class FullSyncManager extends SyncManager {
     }
 
     for (int i = 0; i < batches; i++) {
+      final requestLimit = count == null ? countPerBatch : min(countPerBatch, count - i * countPerBatch);
+      if (requestLimit <= 0) break;
+
       // Fetch the messages and throw an error if we don't get back a good response.
       // Throwing an error should _not_ cancel the sync
       Response messagePage = await HttpSvc.chat.getMessages(chatGuid,
           after: 0,
           before: endTimestamp,
           offset: i * countPerBatch,
-          limit: countPerBatch,
+          limit: requestLimit,
           withQuery: "attachments,handle,message.attributedBody,message.messageSummaryInfo,message.payloadData"
               "${SettingsSvc.serverDetails.isV2Server ? ",message.appPayload" : ""}");
       dynamic data = messagePage.data;
@@ -281,6 +300,7 @@ class FullSyncManager extends SyncManager {
       List<dynamic> messageResponse = data["data"];
       List<Map<String, dynamic>> messages = messageResponse.cast<Map<String, dynamic>>();
       yield MessageSyncPage((i + 1) / batches, messages);
+      if (messages.length < requestLimit) break;
     }
   }
 
@@ -292,6 +312,7 @@ class FullSyncManager extends SyncManager {
 
     ChatsSvc.reset();
     await ChatsSvc.init(force: true);
+    if (kIsWeb) await Database.flushWebPersistence();
     await super.complete();
   }
 }

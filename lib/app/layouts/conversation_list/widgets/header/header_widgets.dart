@@ -4,7 +4,7 @@ import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/filters/chat_list_filters_sheet.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
-import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart' deferred as findmy;
 import 'package:bluebubbles/app/layouts/settings/pages/profile/profile_panel.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
@@ -461,13 +461,15 @@ Future<void> goToSearch(BuildContext context) async {
 }
 
 Future<void> goToFindMy(BuildContext context) async {
+  await findmy.loadLibrary();
+  if (!context.mounted) return;
   final currentChat = ChatsSvc.activeChat?.chat;
   NavigationSvc.closeAllConversationView(context);
   await ChatsSvc.setAllInactive();
   await Navigator.of(Get.context!).push(
     ThemeSwitcher.buildPageRoute(
       builder: (BuildContext context) {
-        return const FindMyPage();
+        return findmy.FindMyPage();
       },
     ),
   );

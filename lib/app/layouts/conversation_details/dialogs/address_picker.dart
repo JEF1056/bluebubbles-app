@@ -1,14 +1,25 @@
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-void launchIntent(bool video, String address) async {
+Future<void> launchIntent(
+  bool video,
+  String address, {
+  bool isWeb = kIsWeb,
+  Future<bool> Function(Uri url)? launchUrlFn,
+}) async {
+  final launcher = launchUrlFn ?? launchUrl;
   if (address.contains("@")) {
-    launchUrl(Uri(scheme: "mailto", path: address));
+    await launcher(Uri(scheme: "mailto", path: address));
+  } else if (isWeb) {
+    if (!video) {
+      await launcher(Uri(scheme: "tel", path: address));
+    }
   } else if (await Permission.phone.request().isGranted) {
     if (video) {
       try {
@@ -17,7 +28,7 @@ void launchIntent(bool video, String address) async {
         showSnackbar("Error", "Something went wrong, Google Duo may not be installed!", type: SnackbarType.error);
       }
     } else {
-      launchUrl(Uri(scheme: "tel", path: address));
+      await launcher(Uri(scheme: "tel", path: address));
     }
   }
 }

@@ -9,7 +9,7 @@ import 'package:bluebubbles/services/backend/interfaces/contact_v2_interface.dar
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_contacts/flutter_contacts.dart' as fc;
+import 'package:bluebubbles/platform/shims/native_misc.dart' as fc;
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -70,6 +70,8 @@ class ContactServiceV2 {
   Map<String, ContactV2>? _emailCache;
   Map<String, ContactV2>? _phoneCache;
 
+  void reset() => _invalidateAddressCache();
+
   void _invalidateAddressCache() {
     _emailCache = null;
     _phoneCache = null;
@@ -80,7 +82,7 @@ class ContactServiceV2 {
   /// in-memory index rebuilt lazily after contact syncs. Safe for transient
   /// `Handle(id: null)` widgets where `HandleState` cannot subscribe by DB ID.
   ContactV2? findContactForAddressSync(String address) {
-    if (kIsWeb || !Database.initComplete.isCompleted) return null;
+    if (!Database.initComplete.isCompleted) return null;
     final trimmed = address.trim();
     if (trimmed.isEmpty) return null;
 
@@ -266,8 +268,8 @@ class ContactServiceV2 {
     if (!headless) {
       await hasContactAccess;
       Logger.info('[ContactServiceV2] Contact access: $_hasContactAccess');
-      // Desktop pulls from the server in the incremental sync that follows launch
-      if (!kIsDesktop) await syncContactsToHandles(wait: false);
+      // Desktop and web pull from the server in the incremental sync that follows launch
+      if (!kIsDesktop && !kIsWeb) await syncContactsToHandles(wait: false);
 
       // Subscribe to device contact change events (mobile only)
       if (!kIsDesktop && !kIsWeb) {
@@ -359,8 +361,6 @@ class ContactServiceV2 {
   /// Get a ContactV2 for a specific handle ID
   /// This retrieves the contact from the isolate/database
   Future<ContactV2?> getContactForHandle(int handleId) async {
-    if (kIsWeb && !(await hasContactAccess)) return null;
-
     try {
       final contacts = await ContactV2Interface.getContactsForHandles(
         handleIds: [handleId],
@@ -376,8 +376,6 @@ class ContactServiceV2 {
 
   /// Get ContactV2 entities for multiple handle IDs
   Future<List<ContactV2>> getContactsForHandles(List<int> handleIds) async {
-    if (kIsWeb && !(await hasContactAccess)) return [];
-
     try {
       return await ContactV2Interface.getContactsForHandles(
         handleIds: handleIds,
@@ -395,16 +393,12 @@ class ContactServiceV2 {
     if (handleIds.isEmpty) return;
 
     // Push refreshed Handle data into the HandleState registry
-    if (!kIsWeb) {
-      final refreshed = handleIds.map((id) => Database.handles.get(id)).whereType<Handle>().toList();
-      if (refreshed.isNotEmpty) HandleSvc.updateHandleStates(refreshed);
-    }
+    final refreshed = handleIds.map((id) => Database.handles.get(id)).whereType<Handle>().toList();
+    if (refreshed.isNotEmpty) HandleSvc.updateHandleStates(refreshed);
 
     // Update chats that have these handles as participants
     // This ensures chat titles and headers reflect the new contact names
-    if (!kIsWeb) {
-      _updateChatsForHandles(handleIds);
-    }
+    _updateChatsForHandles(handleIds);
   }
 
   /// Update chats that contain the affected handles
@@ -450,7 +444,7 @@ class ContactServiceV2 {
   /// Match a handle to its associated contact
   /// Returns the contact if found, null otherwise
   Future<ContactV2?> matchHandleToContact(Handle handle) async {
-    if ((kIsWeb && !_hasContactAccess) || handle.id == null) return null;
+    if (handle.id == null) return null;
 
     try {
       final contact = await getContactForHandle(handle.id!);

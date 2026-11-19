@@ -1,13 +1,16 @@
 import 'package:bluebubbles/app/layouts/settings/widgets/tiles/contact_upload_progress.dart';
+import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
+import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
 import 'package:bluebubbles/database/database.dart';
-import 'package:bluebubbles/database/global/settings.dart';
-import 'package:bluebubbles/database/io/fcm_data.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:get_it/get_it.dart';
 import 'package:in_app_review/in_app_review.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -111,6 +114,10 @@ class SettingsItemsActions {
   /// freshly-written defaults (including `finishedSetup`).
   static Future<void> resetApp() async {
     Database.reset();
+    if (kIsWeb) {
+      await Database.clearWebPersistence();
+      await WebMediaCache.instance.clearAll();
+    }
     await FilesystemSvc.deleteCacheDirectories();
     SocketSvc.forgetConnection();
 
@@ -118,11 +125,29 @@ class SettingsItemsActions {
 
     SettingsSvc.settings = Settings();
     await SettingsSvc.settings.saveAsync();
+    SettingsSvc.fcmData = FCMData();
 
     await PrefsSvc.theme.setSelectedThemes(darkTheme: "OLED Dark", lightTheme: "Bright White");
     Database.themes.putMany(ThemesService.defaultThemes);
 
     await FCMData.deleteFcmData();
+
+    if (kIsWeb) {
+      WebListeners.reset();
+      if (GetIt.I.isRegistered<ChatsService>()) ChatsSvc.reset();
+      if (GetIt.I.isRegistered<HandleService>()) HandleSvc.reset();
+      if (GetIt.I.isRegistered<ContactServiceV2>()) ContactsSvcV2.reset();
+      await Database.flushWebPersistence();
+      Get.offAll(
+        () => const PopScope(
+          canPop: false,
+          child: TitleBarWrapper(child: SetupView()),
+        ),
+        duration: Duration.zero,
+        transition: Transition.noTransition,
+      );
+      return;
+    }
 
     try {
       if (FirebaseSvc.token != null) {

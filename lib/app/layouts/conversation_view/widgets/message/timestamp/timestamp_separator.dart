@@ -72,10 +72,12 @@ class TimestampSeparator extends StatelessWidget {
 
     if (timestamp == null) return const SizedBox.shrink();
 
-    final textColor =
-        hasBackground || isMaterial ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final textColor = hasBackground
+        ? Colors.white.withValues(alpha: 0.88)
+        : (isMaterial ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline);
+    final shadows = hasBackground ? const [Shadow(color: Colors.black54, blurRadius: 3)] : null;
     final baseStyle = (isMaterial ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!)
-        .copyWith(color: textColor, fontWeight: FontWeight.normal);
+        .copyWith(color: textColor, fontWeight: FontWeight.normal, shadows: shadows);
 
     final richText = RichText(
       text: TextSpan(
@@ -95,20 +97,7 @@ class TimestampSeparator extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.all(14.0),
-      child: hasBackground
-          ? Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 10),
-                decoration: BoxDecoration(
-                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.75),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: richText,
-              ),
-            )
-          : isMaterial
-              ? Center(child: richText)
-              : richText,
+      child: hasBackground || isMaterial ? Center(child: richText) : richText,
     );
   }
 }

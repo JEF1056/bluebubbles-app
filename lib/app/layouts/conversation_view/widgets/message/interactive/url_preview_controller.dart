@@ -105,6 +105,8 @@ class UrlPreviewController {
 
   final RxnString previewImagePath = RxnString();
   final RxnString iconImagePath = RxnString();
+  final Rxn<Uint8List> previewImageBytes = Rxn<Uint8List>();
+  final Rxn<Uint8List> iconImageBytes = Rxn<Uint8List>();
 
   /// True when the preview image came off disk, so the card skips the grow-in.
   final RxBool previewImageFromDisk = false.obs;
@@ -197,7 +199,7 @@ class UrlPreviewController {
 
   /// Show the plugin-payload attachment image only when no disk-cached preview
   /// is available.
-  bool get showsAppleImage => previewImagePath.value == null && webImageUrl == null;
+  bool get showsAppleImage => previewImagePath.value == null && previewImageBytes.value == null && webImageUrl == null;
 
   /// True when Apple's payload artwork is on hand **right now** — the file is
   /// downloaded and readable, not merely referenced.
@@ -207,7 +209,7 @@ class UrlPreviewController {
   /// the attachment has had its chance; see the comment there.
   bool get hasPayloadArtwork => resolvedContent?.bytes != null || contentFile != null;
 
-  bool get hasIcon => iconImagePath.value != null || webIconUrl != null;
+  bool get hasIcon => iconImagePath.value != null || iconImageBytes.value != null || webIconUrl != null;
 
   /// True when this card renders inside a reply bubble, which is laid out
   /// compactly and keeps shrink-wrapping rather than taking a stable width.
@@ -220,7 +222,10 @@ class UrlPreviewController {
   /// beside the title, and treating it as a hero image is what produced the
   /// stretched, blurry cards this state machine exists to avoid.
   bool get hasPreviewImage =>
-      previewImagePath.value != null || webImageUrl != null || (showsAppleImage && hasPayloadArtwork);
+      previewImagePath.value != null ||
+      previewImageBytes.value != null ||
+      webImageUrl != null ||
+      (showsAppleImage && hasPayloadArtwork);
 
   /// True when the page supplied something the URL does not already say.
   ///
@@ -414,6 +419,8 @@ class UrlPreviewController {
         fetchedMetadata.value = null;
         previewImagePath.value = null;
         iconImagePath.value = null;
+        previewImageBytes.value = null;
+        iconImageBytes.value = null;
         previewImageFromDisk.value = false;
         iconImageFromDisk.value = false;
         appleImageFromDisk.value = true;
@@ -600,7 +607,8 @@ class UrlPreviewController {
       // sits on a third-party host, so fetching that is an outbound request
       // like any other and is gated the same way. Anything already on disk was
       // returned above without touching the network.
-      final imageStillMissing = data.imageMetadata?.url != null && previewImagePath.value == null && !_inReply;
+      final imageStillMissing =
+          data.imageMetadata?.url != null && previewImagePath.value == null && previewImageBytes.value == null && !_inReply;
       if (!canFetch && imageStillMissing && !_disposed) {
         Logger.debug('Payload image gated by the sender policy; offering tap-to-load for $_logId', tag: _tag);
         needsManualLoad.value = true;
@@ -630,7 +638,8 @@ class UrlPreviewController {
             'Payload is missing metadata (needsMetadata: $_payloadNeedsMetadata, '
             'missingImageWithIcon: $missingImageWithIcon); fetching for $_logId',
             tag: _tag);
-        await _fetchMissingMetadata(msg, canFetch: canFetch, keepPayloadImage: previewImagePath.value != null);
+        await _fetchMissingMetadata(msg,
+            canFetch: canFetch, keepPayloadImage: previewImagePath.value != null || previewImageBytes.value != null);
       }
       return;
     }
@@ -673,7 +682,7 @@ class UrlPreviewController {
               ? 'No preview image resolved for $_logId'
               : 'Preview image resolved for $_logId (fromDisk: ${image.fromDisk})',
           tag: _tag);
-      if (image != null) _setPreviewImage(image.path, fromDisk: image.fromDisk);
+      if (image != null) _setPreviewImage(image.path, bytes: image.bytes, fromDisk: image.fromDisk);
     }
 
     if (data.iconMetadata?.url != null) {
@@ -682,7 +691,7 @@ class UrlPreviewController {
       Logger.debug(
           icon == null ? 'No icon resolved for $_logId' : 'Icon resolved for $_logId (fromDisk: ${icon.fromDisk})',
           tag: _tag);
-      if (icon != null) _setIconImage(icon.path, fromDisk: icon.fromDisk);
+      if (icon != null) _setIconImage(icon.path, bytes: icon.bytes, fromDisk: icon.fromDisk);
     }
   }
 
@@ -793,7 +802,7 @@ class UrlPreviewController {
       final image = await MetadataHelper.resolveCachedImage(msg, imageUrl, bypassGate: bypassGate);
       if (image != null) {
         imageHash = image.hash;
-        _setPreviewImage(image.path, fromDisk: image.fromDisk);
+        _setPreviewImage(image.path, bytes: image.bytes, fromDisk: image.fromDisk);
       }
     }
 
@@ -801,11 +810,11 @@ class UrlPreviewController {
     // metadata applied a moment ago) and is equally good, so it is not fetched
     // twice.
     final iconUrl = metadata.iconUrl;
-    if (iconUrl != null && iconImagePath.value == null) {
+    if (iconUrl != null && iconImagePath.value == null && iconImageBytes.value == null) {
       final icon = await MetadataHelper.resolveCachedImage(msg, iconUrl, isIcon: true, bypassGate: bypassGate);
       if (icon != null) {
         iconHash = icon.hash;
-        _setIconImage(icon.path, fromDisk: icon.fromDisk);
+        _setIconImage(icon.path, bytes: icon.bytes, fromDisk: icon.fromDisk);
       }
     }
 
@@ -816,18 +825,20 @@ class UrlPreviewController {
 
   /// Sets the preview image and starts the grow-in for fresh downloads.
   /// Disk-loaded images are shown immediately without animation.
-  void _setPreviewImage(String path, {required bool fromDisk}) {
+  void _setPreviewImage(String path, {Uint8List? bytes, required bool fromDisk}) {
     if (_disposed) return;
-    previewImagePath.value = path;
+    previewImagePath.value = path.isEmpty ? null : path;
+    previewImageBytes.value = bytes;
     previewImageFromDisk.value = fromDisk;
     if (!fromDisk) imageAnimation.forward(from: 0);
   }
 
   /// Sets the favicon and starts the pop-in for fresh downloads.
   /// Disk-loaded icons are shown immediately without animation.
-  void _setIconImage(String path, {required bool fromDisk}) {
+  void _setIconImage(String path, {Uint8List? bytes, required bool fromDisk}) {
     if (_disposed) return;
-    iconImagePath.value = path;
+    iconImagePath.value = path.isEmpty ? null : path;
+    iconImageBytes.value = bytes;
     iconImageFromDisk.value = fromDisk;
     if (!fromDisk) iconAnimation.forward(from: 0);
   }
@@ -844,6 +855,8 @@ class _CardSnapshot {
     required this.metadata,
     required this.previewImagePath,
     required this.iconImagePath,
+    required this.previewImageBytes,
+    required this.iconImageBytes,
     required this.previewImageFromDisk,
     required this.iconImageFromDisk,
     required this.appleImageFromDisk,
@@ -855,6 +868,8 @@ class _CardSnapshot {
         metadata: c.fetchedMetadata.value,
         previewImagePath: c.previewImagePath.value,
         iconImagePath: c.iconImagePath.value,
+        previewImageBytes: c.previewImageBytes.value,
+        iconImageBytes: c.iconImageBytes.value,
         previewImageFromDisk: c.previewImageFromDisk.value,
         iconImageFromDisk: c.iconImageFromDisk.value,
         appleImageFromDisk: c.appleImageFromDisk.value,
@@ -865,6 +880,8 @@ class _CardSnapshot {
   final UrlMetadata? metadata;
   final String? previewImagePath;
   final String? iconImagePath;
+  final Uint8List? previewImageBytes;
+  final Uint8List? iconImageBytes;
   final bool previewImageFromDisk;
   final bool iconImageFromDisk;
   final bool appleImageFromDisk;
@@ -873,16 +890,24 @@ class _CardSnapshot {
 
   /// Whether there was anything here worth restoring.
   bool get hasContent =>
-      metadata != null || previewImagePath != null || iconImagePath != null || content != null || dataOverride != null;
+      metadata != null ||
+      previewImagePath != null ||
+      iconImagePath != null ||
+      previewImageBytes != null ||
+      iconImageBytes != null ||
+      content != null ||
+      dataOverride != null;
 
   void restoreTo(UrlPreviewController c) {
     c.fetchedMetadata.value = metadata;
     c.previewImagePath.value = previewImagePath;
     c.iconImagePath.value = iconImagePath;
+    c.previewImageBytes.value = previewImageBytes;
+    c.iconImageBytes.value = iconImageBytes;
     // Restored images are already on screen's terms — they came off disk the
     // first time and are not arriving fresh now, so nothing should animate in.
-    c.previewImageFromDisk.value = previewImageFromDisk || previewImagePath != null;
-    c.iconImageFromDisk.value = iconImageFromDisk || iconImagePath != null;
+    c.previewImageFromDisk.value = previewImageFromDisk || previewImagePath != null || previewImageBytes != null;
+    c.iconImageFromDisk.value = iconImageFromDisk || iconImagePath != null || iconImageBytes != null;
     c.appleImageFromDisk.value = true;
     c.content.value = content;
     c.dataOverride.value = dataOverride;

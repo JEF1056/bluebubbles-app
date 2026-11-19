@@ -1,4 +1,7 @@
+import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:get_it/get_it.dart';
 import 'package:universal_io/io.dart';
 
 /// Image provider for a chat's static background, decoded no larger than the
@@ -27,11 +30,20 @@ ImageProvider chatBackgroundImageProvider(String path, BuildContext context) {
 
 /// [chatBackgroundImageProvider] for callers that already know the window size.
 ImageProvider chatBackgroundImageProviderForWindow(String path, Size logicalSize, double devicePixelRatio) {
-  final FileImage file = FileImage(File(path));
+  final ImageProvider base;
+  if (kIsWeb && path.startsWith('web-bg://')) {
+    final bytes = GetIt.I.isRegistered<FilesystemService>()
+        ? FilesystemSvc.getCachedChatBackgroundByPath(path)
+        : null;
+    if (bytes == null) return MemoryImage(FilesystemService.transparent1x1Png);
+    base = MemoryImage(bytes);
+  } else {
+    base = FileImage(File(path));
+  }
   final int widthPx = (logicalSize.width * devicePixelRatio).round();
   final int heightPx = (logicalSize.height * devicePixelRatio).round();
-  if (widthPx <= 0 || heightPx <= 0) return file;
+  if (widthPx <= 0 || heightPx <= 0) return base;
   // One dimension only: ResizeImage scales the other to keep the aspect ratio,
   // and never upscales, so a file smaller than the window decodes as-is.
-  return heightPx >= widthPx ? ResizeImage(file, height: heightPx) : ResizeImage(file, width: widthPx);
+  return heightPx >= widthPx ? ResizeImage(base, height: heightPx) : ResizeImage(base, width: widthPx);
 }

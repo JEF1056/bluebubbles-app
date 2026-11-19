@@ -21,8 +21,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:intl/intl.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:path/path.dart' hide context;
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
 
 class BackupRestorePanel extends StatefulWidget {
@@ -436,11 +436,8 @@ class _BackupRestorePanelState extends State<BackupRestorePanel> with ThemeHelpe
         }
       } else {
         if (kIsWeb) {
-          final bytes = utf8.encode(jsonEncode(json));
-          final content = base64.encode(bytes);
-          html.AnchorElement(href: "data:application/octet-stream;charset=utf-16le;base64,$content")
-            ..setAttribute("download", "BB-Settings-$name.json")
-            ..click();
+          final bytes = Uint8List.fromList(utf8.encode(jsonEncode(json)));
+          downloadBytes(bytes, "BB-Settings-$name.json");
           return;
         }
         final downloadsDir = await FilesystemSvc.downloadsDirectory;
@@ -673,11 +670,8 @@ class _BackupRestorePanelState extends State<BackupRestorePanel> with ThemeHelpe
       final themeFilename =
           "BlueBubbles-theming-${now.year}${now.month}${now.day}_${now.hour}${now.minute}${now.second}.json";
       if (kIsWeb) {
-        final bytes = utf8.encode(jsonStr);
-        final content = base64.encode(bytes);
-        html.AnchorElement(href: "data:application/octet-stream;charset=utf-16le;base64,$content")
-          ..setAttribute("download", themeFilename)
-          ..click();
+        final bytes = Uint8List.fromList(utf8.encode(jsonStr));
+        downloadBytes(bytes, themeFilename);
         refresh();
         return;
       }

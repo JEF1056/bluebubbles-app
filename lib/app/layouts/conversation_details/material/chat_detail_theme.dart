@@ -2,7 +2,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/ui/theme_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 
 /// Resolves the per-chat theme and scaffold header/tile colors used by the conversation
 /// details + attachments pages.

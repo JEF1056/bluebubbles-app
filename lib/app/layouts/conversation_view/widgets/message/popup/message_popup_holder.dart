@@ -8,8 +8,8 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:get/get.dart';
-import 'package:universal_html/html.dart' as html;
 
 class MessagePopupHolder extends StatefulWidget {
   const MessagePopupHolder({
@@ -189,7 +189,7 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
             : (details) async {
                 if (!kIsWeb && !kIsDesktop) return;
                 if (kIsWeb) {
-                  (await html.document.onContextMenu.first).preventDefault();
+                  await preventNextContextMenu();
                 }
                 openPopup();
               },

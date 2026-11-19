@@ -2,7 +2,6 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:collection/collection.dart';
-import 'package:objectbox/src/native/query/query.dart' as obx;
 
 import 'search_models.dart';
 
@@ -15,7 +14,7 @@ class SearchQueryHelper {
     required bool isNotFromMe,
     required DateTime? sinceDate,
   }) async {
-    obx.Condition<Message> condition = Message_.text
+    Condition<Message> condition = Message_.text
         .contains(term, caseSensitive: false)
         .and(Message.notReactionCondition)
         .and(Message_.dateDeleted.isNull())

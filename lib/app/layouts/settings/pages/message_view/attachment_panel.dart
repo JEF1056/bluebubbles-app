@@ -282,11 +282,9 @@ class _AttachmentPanelState extends State<AttachmentPanel> with ThemeHelpers {
                     ),
                   ],
                 ),
-                if (!kIsWeb)
-                  SettingsHeader(
-                      iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "Attachment Viewer"),
-                if (!kIsWeb)
-                  Obx(() => SettingsSection(
+                SettingsHeader(
+                    iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "Attachment Viewer"),
+                Obx(() => SettingsSection(
                     backgroundColor: tileColor,
                     children: [
                       if (iOS)

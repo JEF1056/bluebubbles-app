@@ -9,10 +9,9 @@ import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:get/get.dart';
 import 'package:flutter_sliding_up_panel/flutter_sliding_up_panel.dart';
 
@@ -250,55 +249,54 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                             ]))
                       ]),
                     ),
-                    if (!kIsWeb)
-                      Obx(() {
-                        NavigationSvc.listener.value;
-                        return Padding(
-                          padding: const EdgeInsets.only(left: 15, right: 15, top: 15, bottom: 10),
-                          child: ToggleButtons(
-                            constraints: BoxConstraints(minWidth: (NavigationSvc.width(context) * 0.9) / 2),
-                            fillColor: context.theme.colorScheme.primary.withValues(alpha: 0.2),
-                            splashColor: context.theme.colorScheme.primary.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(20),
-                            selectedBorderColor: context.theme.colorScheme.primary,
-                            selectedColor: context.theme.colorScheme.primary,
-                            borderColor: context.theme.colorScheme.primary.withValues(alpha: 0.5),
-                            isSelected: [local.value, network.value],
-                            onPressed: (index) {
-                              if (index == 0) {
-                                local.value = true;
-                                network.value = false;
-                              } else {
-                                local.value = false;
-                                network.value = true;
-                              }
-                              isSearching.value = false;
-                              noResults.value = false;
-                              currentSearch.value = null;
-                            },
-                            children: [
-                              const Row(
-                                children: [
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Search Device"),
-                                  ),
-                                  Icon(Icons.storage_outlined, size: 16),
-                                ],
-                              ),
-                              const Row(
-                                children: [
-                                  Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text("Search Mac"),
-                                  ),
-                                  Icon(Icons.cloud_outlined, size: 16),
-                                ],
-                              ),
-                            ],
-                          ),
-                        );
-                      }),
+                    Obx(() {
+                      NavigationSvc.listener.value;
+                      return Padding(
+                        padding: const EdgeInsets.only(left: 15, right: 15, top: 15, bottom: 10),
+                        child: ToggleButtons(
+                          constraints: BoxConstraints(minWidth: (NavigationSvc.width(context) * 0.9) / 2),
+                          fillColor: context.theme.colorScheme.primary.withValues(alpha: 0.2),
+                          splashColor: context.theme.colorScheme.primary.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(20),
+                          selectedBorderColor: context.theme.colorScheme.primary,
+                          selectedColor: context.theme.colorScheme.primary,
+                          borderColor: context.theme.colorScheme.primary.withValues(alpha: 0.5),
+                          isSelected: [local.value, network.value],
+                          onPressed: (index) {
+                            if (index == 0) {
+                              local.value = true;
+                              network.value = false;
+                            } else {
+                              local.value = false;
+                              network.value = true;
+                            }
+                            isSearching.value = false;
+                            noResults.value = false;
+                            currentSearch.value = null;
+                          },
+                          children: [
+                            const Row(
+                              children: [
+                                Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Text("Search Device"),
+                                ),
+                                Icon(Icons.storage_outlined, size: 16),
+                              ],
+                            ),
+                            const Row(
+                              children: [
+                                Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Text("Search Mac"),
+                                ),
+                                Icon(Icons.cloud_outlined, size: 16),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
                     Divider(color: context.theme.colorScheme.outline.withValues(alpha: 0.75)),
                     if (!isSearching.value && noResults.value)
                       Padding(

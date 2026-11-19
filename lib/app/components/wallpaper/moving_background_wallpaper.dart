@@ -1,6 +1,9 @@
+import 'dart:math';
+
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_config_field.dart';
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_definition.dart';
 import 'package:bluebubbles/app/components/wallpaper/theme_wallpaper_palette.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_moving_background/flutter_moving_background.dart';
 import 'package:get/get.dart';
@@ -27,6 +30,8 @@ class MovingBackgroundWallpaperDefinition extends DynamicWallpaperDefinition {
   static double _speed(Map<String, dynamic> c) => (c['speed'] as num?)?.toDouble() ?? 0.5;
   static int _circleCount(Map<String, dynamic> c) => ((c['circleCount'] as num?)?.toInt() ?? 4).clamp(2, 6).toInt();
   static double _circleSize(Map<String, dynamic> c) => (c['circleSize'] as num?)?.toDouble() ?? 1.0;
+  static double effectiveBlurSigma(double blur, {required bool isWeb}) => isWeb ? min(blur, 8.0) : blur;
+
   static double _blur(Map<String, dynamic> c) => (c['blur'] as num?)?.toDouble() ?? 2.0;
 
   static List<Color> _colors(Map<String, dynamic> c, List<Color> fallbackPalette) {
@@ -164,7 +169,10 @@ class _MovingBackgroundWallpaperViewState extends State<_MovingBackgroundWallpap
     final circleCount = MovingBackgroundWallpaperDefinition._circleCount(widget.config);
     final sizeMultiplier = MovingBackgroundWallpaperDefinition._circleSize(widget.config);
     final speed = MovingBackgroundWallpaperDefinition._speed(widget.config);
-    final blur = MovingBackgroundWallpaperDefinition._blur(widget.config);
+    final blur = MovingBackgroundWallpaperDefinition.effectiveBlurSigma(
+      MovingBackgroundWallpaperDefinition._blur(widget.config),
+      isWeb: kIsWeb,
+    );
     final durationMs = (14000 / speed).round();
 
     return ColoredBox(

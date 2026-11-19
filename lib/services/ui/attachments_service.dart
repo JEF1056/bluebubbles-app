@@ -1,14 +1,13 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/interfaces/image_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart' show FFmpegKit, ReturnCode, SaverGallery;
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:ffmpeg_kit_flutter_new_min/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new_min/return_code.dart';
 import 'package:file_picker/file_picker.dart' hide PlatformFile;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -20,8 +19,6 @@ import 'package:path/path.dart';
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress;
 import 'package:bluebubbles/utils/file_utils.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:saver_gallery/saver_gallery.dart';
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vcf_dart/vcf_dart.dart';
@@ -155,6 +152,22 @@ class AttachmentsService extends GetxService {
         // No GUID and no bytes — return a PlatformFile with whatever path is available.
         return PlatformFile(name: attachment.transferName!, path: path, size: attachment.totalBytes ?? 0);
       } else {
+        if (kIsWeb && attachment.bytes == null && attachment.guid != null && attachment.isDownloaded == true) {
+          final guid = attachment.guid!;
+          unawaited(WebMediaCache.instance.get(WebMediaCache.attachmentsStore, guid).then((cached) {
+            if (cached != null && cached.isNotEmpty) {
+              attachment.bytes = cached;
+              onComplete?.call(PlatformFile(
+                name: attachment.transferName!,
+                path: path,
+                size: cached.length,
+                bytes: cached,
+              ));
+            }
+          }).catchError((Object e, StackTrace s) {
+            Logger.warn("WebMediaCache lookup failed for $guid", error: e, trace: s);
+          }));
+        }
         return PlatformFile(
           name: attachment.transferName!,
           path: path,
@@ -447,11 +460,10 @@ class AttachmentsService extends GetxService {
 
   Future<void> saveToDisk(PlatformFile file, {bool isAutoDownload = false, bool isDocument = false}) async {
     if (kIsWeb) {
-      final content = base64.encode(file.bytes!);
-      // create a fake download element and "click" it
-      html.AnchorElement(href: "data:application/octet-stream;charset=utf-16le;base64,$content")
-        ..setAttribute("download", file.name)
-        ..click();
+      if (file.bytes == null || file.bytes!.isEmpty) {
+        return showSnackbar('Error', 'That attachment has no data to save!', type: SnackbarType.error);
+      }
+      downloadBytes(file.bytes!, file.name);
     } else if (kIsDesktop) {
       if (file.path == null && file.bytes == null) {
         return showSnackbar('Error', 'That attachment has no data to save!', type: SnackbarType.error);

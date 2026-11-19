@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/url_preview_controller.dart';
@@ -63,6 +64,7 @@ class CupertinoUrlPreview extends StatelessWidget {
   Widget _buildHero(BuildContext context, {required Message? message, required bool inReply}) {
     final webImageUrl = controller.webImageUrl;
     final previewImagePath = controller.previewImagePath.value;
+    final previewImageBytes = controller.previewImageBytes.value;
     final resolvedContent = controller.resolvedContent;
     final contentFile = controller.contentFile;
     final hasAppleImage = controller.showsAppleImage;
@@ -71,11 +73,12 @@ class CupertinoUrlPreview extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (previewImagePath != null || webImageUrl != null)
+        if (previewImagePath != null || previewImageBytes != null || webImageUrl != null)
           _buildPreviewImage(
             context,
-            animate: previewImagePath != null && !controller.previewImageFromDisk.value,
+            animate: (previewImagePath != null || previewImageBytes != null) && !controller.previewImageFromDisk.value,
             previewImagePath: previewImagePath,
+            previewImageBytes: previewImageBytes,
             webImageUrl: webImageUrl,
           ),
         if (hasAppleImage && resolvedContent?.bytes != null)
@@ -297,25 +300,33 @@ class CupertinoUrlPreview extends StatelessWidget {
   /// icon rather than surfacing as an uncaught rendering error.
   Widget _buildIcon(BuildContext context, {double size = 45}) {
     final iconImagePath = controller.iconImagePath.value;
+    final iconImageBytes = controller.iconImageBytes.value;
     final webIconUrl = controller.webIconUrl;
 
     final icon = ConstrainedBox(
       constraints: BoxConstraints(maxWidth: size),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: iconImagePath != null
-            ? Image.file(
-                File(iconImagePath),
+        child: iconImageBytes != null
+            ? Image.memory(
+                iconImageBytes,
                 gaplessPlayback: true,
                 filterQuality: FilterQuality.none,
                 errorBuilder: (_, _, _) => const SizedBox.shrink(),
               )
-            : Image.network(
-                webIconUrl!,
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.none,
-                errorBuilder: (_, _, _) => const SizedBox.shrink(),
-              ),
+            : iconImagePath != null
+                ? Image.file(
+                    File(iconImagePath),
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.none,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  )
+                : Image.network(
+                    webIconUrl!,
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.none,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
       ),
     );
 
@@ -388,27 +399,38 @@ class CupertinoUrlPreview extends StatelessWidget {
     BuildContext context, {
     required bool animate,
     required String? previewImagePath,
+    required Uint8List? previewImageBytes,
     required String? webImageUrl,
   }) {
-    final ImageProvider imageProvider =
-        previewImagePath != null ? FileImage(File(previewImagePath)) : NetworkImage(webImageUrl!) as ImageProvider;
+    final ImageProvider imageProvider = previewImageBytes != null
+        ? MemoryImage(previewImageBytes)
+        : previewImagePath != null
+            ? FileImage(File(previewImagePath))
+            : NetworkImage(webImageUrl!) as ImageProvider;
 
     final container = _buildBlurredImage(
       context,
       imageProvider,
-      previewImagePath != null
-          ? Image.file(
-              File(previewImagePath),
+      previewImageBytes != null
+          ? Image.memory(
+              previewImageBytes,
               gaplessPlayback: true,
               filterQuality: FilterQuality.none,
               errorBuilder: (_, _, _) => _imageErrorText(context),
             )
-          : Image.network(
-              webImageUrl ?? '',
-              gaplessPlayback: true,
-              filterQuality: FilterQuality.none,
-              errorBuilder: (_, _, _) => _imageErrorText(context),
-            ),
+          : previewImagePath != null
+              ? Image.file(
+                  File(previewImagePath),
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.none,
+                  errorBuilder: (_, _, _) => _imageErrorText(context),
+                )
+              : Image.network(
+                  webImageUrl ?? '',
+                  gaplessPlayback: true,
+                  filterQuality: FilterQuality.none,
+                  errorBuilder: (_, _, _) => _imageErrorText(context),
+                ),
     );
 
     if (!animate) return container;

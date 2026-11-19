@@ -9,7 +9,7 @@ import 'package:bluebubbles/utils/share.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:open_filex/open_filex.dart';
+import 'package:bluebubbles/platform/shims/native_misc.dart' show OpenFilex, ResultType;
 import 'package:pasteboard/pasteboard.dart';
 import 'package:path/path.dart' hide context;
 import 'package:url_launcher/url_launcher_string.dart';

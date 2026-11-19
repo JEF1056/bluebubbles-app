@@ -1,5 +1,6 @@
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:universal_io/io.dart';
 
 class AttachmentApi {
@@ -19,6 +20,33 @@ class AttachmentApi {
     });
   }
 
+  static bool isWebUnsupportedImageMime(String? mimeType) {
+    if (mimeType == null) return false;
+    final lower = mimeType.toLowerCase();
+    return lower == 'image/heic' ||
+        lower == 'image/heif' ||
+        lower == 'image/tiff' ||
+        lower == 'image/heic-sequence' ||
+        lower == 'image/heif-sequence';
+  }
+
+  static Map<String, dynamic> buildDownloadQueryParams({
+    bool original = false,
+    String? mimeType,
+    int? width,
+    String? quality,
+    bool isWeb = kIsWeb,
+  }) {
+    final params = <String, dynamic>{};
+    // Omit original=true on web for HEIC/HEIF/TIFF so bluebubbles-server auto-converts via sips.
+    if (!(isWeb && isWebUnsupportedImageMime(mimeType))) {
+      params["original"] = original;
+    }
+    if (width != null) params["width"] = width;
+    if (quality != null) params["quality"] = quality;
+    return params;
+  }
+
   /// Download the attachment data for the specified [guid].
   /// If [savePath] is provided, downloads directly to that file path (more efficient, avoids loading into memory).
   /// Otherwise returns bytes in response data (legacy behavior for web).
@@ -26,13 +54,21 @@ class AttachmentApi {
     String guid, {
     void Function(int, int)? onReceiveProgress,
     bool original = false,
+    String? mimeType,
+    int? width,
+    String? quality,
     CancelToken? cancelToken,
     String? savePath,
   }) async {
     return _svc.runApiGuarded(() async {
       final response = await _svc.dio.get(
         "${_svc.apiRoot}/attachment/$guid/download",
-        queryParameters: _svc.buildQueryParams({"original": original}),
+        queryParameters: _svc.buildQueryParams(buildDownloadQueryParams(
+          original: original,
+          mimeType: mimeType,
+          width: width,
+          quality: quality,
+        )),
         options: Options(
           responseType: savePath != null ? ResponseType.stream : ResponseType.bytes,
           receiveTimeout: _svc.dio.options.receiveTimeout! * 12,

@@ -148,10 +148,15 @@ class FindMyFriendListTile extends StatelessWidget {
                         if (isLocating) ...[
                           const SizedBox(width: 8),
                           SizedBox(
-                            key: ValueKey('findmy-friend-locating-${item.stableId ?? displayName}'),
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                            height: 34,
+                            child: Center(
+                              child: SizedBox(
+                                key: ValueKey('findmy-friend-locating-${item.stableId ?? displayName}'),
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                              ),
+                            ),
                           ),
                         ],
                         const SizedBox(width: 8),
@@ -252,9 +257,15 @@ class FindMyFriendListTile extends StatelessWidget {
         ),
         trailing: isLocating
             ? SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: cs.onSurfaceVariant),
+                width: 24,
+                height: 24,
+                child: Center(
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: cs.onSurfaceVariant),
+                  ),
+                ),
               )
             : (proximity.isNotEmpty
                 ? Row(

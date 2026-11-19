@@ -141,12 +141,11 @@ class _MaterialIMessageStatsPageState
                 selectedForegroundColor: context.theme.colorScheme.onPrimary,
                 selectedBackgroundColor: context.theme.colorScheme.primary,
               ),
-              segments: [
-                const ButtonSegment(value: IMessageStatsSource.server, label: Text("Server")),
-                const ButtonSegment(
+              segments: const [
+                ButtonSegment(value: IMessageStatsSource.server, label: Text("Server")),
+                ButtonSegment(
                   value: IMessageStatsSource.local,
                   label: Text("Local DB"),
-                  enabled: !kIsWeb,
                 ),
               ],
               selected: {controller.selectedStatsSource.value},
@@ -154,14 +153,6 @@ class _MaterialIMessageStatsPageState
             ),
           ),
         ),
-        if (kIsWeb)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(15, 4, 15, 4),
-            child: Text(
-              "Local DB stats are unavailable on web builds.",
-              style: context.theme.textTheme.bodySmall,
-            ),
-          ),
         if (error != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(15, 4, 15, 4),

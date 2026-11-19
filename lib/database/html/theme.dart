@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:core';
 
+import 'package:bluebubbles/database/html/objectbox.dart';
 import 'package:bluebubbles/helpers/ui/theme_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flex_color_scheme/flex_color_scheme.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class ThemeStruct {
   int? id;
@@ -38,11 +40,27 @@ class ThemeStruct {
       ThemesService.isAdaptiveBackgroundThemeName(name);
 
   ThemeStruct save({bool updateIfNotAbsent = true}) {
+    HtmlDatabase.runInTransaction(TxMode.write, () {
+      final ThemeStruct? existing = ThemeStruct.findOne(name);
+      if (existing != null) {
+        id = existing.id;
+      }
+      try {
+        if (id != null && existing != null && updateIfNotAbsent) {
+          id = HtmlDatabase.themes.put(this);
+        } else if (id == null || existing == null) {
+          id = HtmlDatabase.themes.put(this);
+        }
+      } on UniqueViolationException catch (_) {}
+    });
     return this;
   }
 
   void delete() {
-    return;
+    if (isPreset || id == null) return;
+    HtmlDatabase.runInTransaction(TxMode.write, () {
+      HtmlDatabase.themes.remove(id!);
+    });
   }
 
   static ThemeStruct _clonePreset(dynamic preset) {
@@ -55,26 +73,46 @@ class ThemeStruct {
   }
 
   static ThemeStruct getLightTheme() {
-    for (final preset in ThemesService.defaultThemes) {
-      if (preset.name == "Bright White") return _clonePreset(preset);
+    final name = PrefsSvc.theme.getSelectedLightTheme();
+    final query = HtmlDatabase.themes.query(ThemeStruct_.name.equals(name ?? ThemesService.materialYouLightName)).build();
+    query.limit = 1;
+    final result = query.findFirst();
+    query.close();
+    if (result == null) {
+      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouLightName);
+      return _clonePreset(preset);
     }
-    return ThemeStruct(name: "Bright White", themeData: ThemesService.whiteLightTheme);
+    return result;
   }
 
   static ThemeStruct getDarkTheme() {
-    for (final preset in ThemesService.defaultThemes) {
-      if (preset.name == "OLED Dark") return _clonePreset(preset);
+    final name = PrefsSvc.theme.getSelectedDarkTheme();
+    final query = HtmlDatabase.themes.query(ThemeStruct_.name.equals(name ?? ThemesService.materialYouDarkName)).build();
+    query.limit = 1;
+    final result = query.findFirst();
+    query.close();
+    if (result == null) {
+      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouDarkName);
+      return _clonePreset(preset);
     }
-    return ThemeStruct(name: "OLED Dark", themeData: ThemesService.oledDarkTheme);
+    return result;
   }
 
   static ThemeStruct? findOne(String name) {
-    return null;
+    return HtmlDatabase.runInTransaction(TxMode.read, () {
+      final query = HtmlDatabase.themes.query(ThemeStruct_.name.equals(name)).build();
+      query.limit = 1;
+      final result = query.findFirst();
+      query.close();
+      return result;
+    });
   }
 
   static ThemeStruct resolveByName(String? name, Brightness brightness) {
     final fallback = brightness == Brightness.dark ? getDarkTheme() : getLightTheme();
     if (name == null || name.isEmpty) return fallback;
+    final found = findOne(name);
+    if (found != null) return found;
     for (final preset in ThemesService.defaultThemes) {
       if (preset.name == name) return _clonePreset(preset);
     }
@@ -82,7 +120,12 @@ class ThemeStruct {
   }
 
   static List<ThemeStruct> getThemes() {
-    return ThemesService.defaultThemes.map(_clonePreset).toList();
+    List<ThemeStruct> allThemes = HtmlDatabase.themes.getAll();
+    if (allThemes.isEmpty) {
+      HtmlDatabase.themes.putMany(ThemesService.defaultThemes.map(_clonePreset).toList());
+      allThemes = HtmlDatabase.themes.getAll();
+    }
+    return allThemes;
   }
 
   Map<String, dynamic> toMap() => {
@@ -91,6 +134,7 @@ class ThemeStruct {
         "gradientBg": gradientBg ? 1 : 0,
         "data": {
           "textTheme": {
+            "font": googleFont,
             "titleLarge": {
               "color": data.textTheme.titleLarge!.color!.toARGB32(),
               "fontWeight": data.textTheme.titleLarge!.fontWeight!.index,
@@ -150,10 +194,22 @@ class ThemeStruct {
             "surfaceVariant": data.colorScheme.surfaceVariant.toARGB32(),
             "onSurfaceVariant": data.colorScheme.onSurfaceVariant.toARGB32(),
             "outline": data.colorScheme.outline.toARGB32(),
+            "outlineVariant": data.colorScheme.outlineVariant.toARGB32(),
             "shadow": data.colorScheme.shadow.toARGB32(),
             "inverseSurface": data.colorScheme.inverseSurface.toARGB32(),
             "onInverseSurface": data.colorScheme.onInverseSurface.toARGB32(),
             "inversePrimary": data.colorScheme.inversePrimary.toARGB32(),
+            "surfaceContainerLowest": data.colorScheme.surfaceContainerLowest.toARGB32(),
+            "surfaceContainerLow": data.colorScheme.surfaceContainerLow.toARGB32(),
+            "surfaceContainer": data.colorScheme.surfaceContainer.toARGB32(),
+            "surfaceContainerHigh": data.colorScheme.surfaceContainerHigh.toARGB32(),
+            "surfaceContainerHighest": data.colorScheme.surfaceContainerHighest.toARGB32(),
+            "iMessageBubble": (data.extensions[BubbleColors] as BubbleColors?)?.iMessageBubbleColor?.toARGB32(),
+            "oniMessageBubble": (data.extensions[BubbleColors] as BubbleColors?)?.oniMessageBubbleColor?.toARGB32(),
+            "smsBubble": (data.extensions[BubbleColors] as BubbleColors?)?.smsBubbleColor?.toARGB32(),
+            "onSmsBubble": (data.extensions[BubbleColors] as BubbleColors?)?.onSmsBubbleColor?.toARGB32(),
+            "receivedBubble": (data.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor?.toARGB32(),
+            "onReceivedBubble": (data.extensions[BubbleColors] as BubbleColors?)?.onReceivedBubbleColor?.toARGB32(),
             "brightness": data.colorScheme.brightness.index,
           },
         },
@@ -162,99 +218,163 @@ class ThemeStruct {
   factory ThemeStruct.fromMap(Map<String, dynamic> json) {
     final map = json["data"];
     final brightness = Brightness.values[map["colorScheme"]["brightness"]];
+    final font = GoogleFonts.asMap()[map["textTheme"]["font"]] ??
+        ({
+          TextStyle? textStyle,
+          Color? color,
+          Color? backgroundColor,
+          double? fontSize,
+          FontWeight? fontWeight,
+          FontStyle? fontStyle,
+          double? letterSpacing,
+          double? wordSpacing,
+          TextBaseline? textBaseline,
+          double? height,
+          Locale? locale,
+          Paint? foreground,
+          Paint? background,
+          List<Shadow>? shadows,
+          List<FontFeature>? fontFeatures,
+          TextDecoration? decoration,
+          Color? decorationColor,
+          TextDecorationStyle? decorationStyle,
+          double? decorationThickness,
+        }) {
+          return textStyle!;
+        };
     final typography = brightness == Brightness.light
         ? Typography.englishLike2021.merge(Typography.blackMountainView)
         : Typography.englishLike2021.merge(Typography.whiteMountainView);
+    final baseFlexTheme = FlexColorScheme(
+      textTheme: typography.copyWith(
+        titleLarge: font(
+            textStyle: typography.titleLarge!
+                .copyWith(
+                  color: Color(map["textTheme"]["titleLarge"]["color"]),
+                  fontWeight: FontWeight.values[map["textTheme"]["titleLarge"]["fontWeight"]],
+                  fontSize: map["textTheme"]["titleLarge"]["fontSize"]?.toDouble(),
+                )
+                .apply(letterSpacingFactor: 0)),
+        bodyLarge: font(
+            textStyle: typography.bodyLarge!
+                .copyWith(
+                  color: Color(map["textTheme"]["bodyLarge"]["color"]),
+                  fontWeight: FontWeight.values[map["textTheme"]["bodyLarge"]["fontWeight"]],
+                  fontSize: map["textTheme"]["bodyLarge"]["fontSize"]?.toDouble(),
+                )
+                .apply(letterSpacingFactor: 0)),
+        bodyMedium: font(
+            textStyle: typography.bodyMedium!
+                .copyWith(
+                  color: Color(map["textTheme"]["bodyMedium"]["color"]),
+                  fontWeight: FontWeight.values[map["textTheme"]["bodyMedium"]["fontWeight"]],
+                  fontSize: map["textTheme"]["bodyMedium"]["fontSize"]?.toDouble(),
+                )
+                .apply(letterSpacingFactor: 0)),
+        bodySmall: font(
+            textStyle: typography.bodySmall!
+                .copyWith(
+                  color: Color(map["textTheme"]["bodySmall"]["color"]),
+                  fontWeight: FontWeight.values[map["textTheme"]["bodySmall"]["fontWeight"]],
+                  fontSize: map["textTheme"]["bodySmall"]["fontSize"]?.toDouble(),
+                )
+                .apply(letterSpacingFactor: 0)),
+        labelLarge: font(
+            textStyle: typography.labelLarge!
+                .copyWith(
+                  color: Color(map["textTheme"]["labelLarge"]["color"]),
+                  fontWeight: FontWeight.values[map["textTheme"]["labelLarge"]["fontWeight"]],
+                  fontSize: map["textTheme"]["labelLarge"]["fontSize"]?.toDouble(),
+                )
+                .apply(letterSpacingFactor: 0)),
+        labelSmall: font(
+            textStyle: typography.labelSmall!
+                .copyWith(
+                  color: Color(map["textTheme"]["labelSmall"]["color"]),
+                  fontWeight: FontWeight.values[map["textTheme"]["labelSmall"]["fontWeight"]],
+                  fontSize: map["textTheme"]["labelSmall"]["fontSize"]?.toDouble(),
+                )
+                .apply(letterSpacingFactor: 0)),
+        // these are not themeable and only used to override the font family
+        displayLarge: font(textStyle: typography.displayLarge),
+        displayMedium: font(textStyle: typography.displayMedium),
+        displaySmall: font(textStyle: typography.displaySmall),
+        headlineLarge: font(textStyle: typography.headlineLarge),
+        headlineMedium: font(textStyle: typography.headlineMedium),
+        headlineSmall: font(textStyle: typography.headlineSmall),
+        titleMedium: font(textStyle: typography.titleMedium),
+        titleSmall: font(textStyle: typography.titleSmall),
+        labelMedium: font(textStyle: typography.labelMedium),
+      ),
+      colorScheme: ColorScheme(
+        primary: Color(map["colorScheme"]["primary"]),
+        onPrimary: Color(map["colorScheme"]["onPrimary"]),
+        primaryContainer: Color(map["colorScheme"]["primaryContainer"]),
+        onPrimaryContainer: Color(map["colorScheme"]["onPrimaryContainer"]),
+        secondary: Color(map["colorScheme"]["secondary"]),
+        onSecondary: Color(map["colorScheme"]["onSecondary"]),
+        secondaryContainer: Color(map["colorScheme"]["secondaryContainer"]),
+        onSecondaryContainer: Color(map["colorScheme"]["onSecondaryContainer"]),
+        tertiary: Color(map["colorScheme"]["tertiary"]),
+        onTertiary: Color(map["colorScheme"]["onTertiary"]),
+        tertiaryContainer: Color(map["colorScheme"]["tertiaryContainer"]),
+        onTertiaryContainer: Color(map["colorScheme"]["onTertiaryContainer"]),
+        error: Color(map["colorScheme"]["error"]),
+        onError: Color(map["colorScheme"]["onError"]),
+        errorContainer: Color(map["colorScheme"]["errorContainer"]),
+        onErrorContainer: Color(map["colorScheme"]["onErrorContainer"]),
+        surface: Color(map["colorScheme"]["surface"] ?? map["colorScheme"]["background"]),
+        onSurface: Color(map["colorScheme"]["onSurface"] ?? map["colorScheme"]["onBackground"]),
+        surfaceVariant: Color(map["colorScheme"]["surfaceVariant"]),
+        onSurfaceVariant: Color(map["colorScheme"]["onSurfaceVariant"]),
+        outline: Color(map["colorScheme"]["outline"]),
+        shadow: Color(map["colorScheme"]["shadow"]),
+        inverseSurface: Color(map["colorScheme"]["inverseSurface"]),
+        onInverseSurface: Color(map["colorScheme"]["onInverseSurface"]),
+        inversePrimary: Color(map["colorScheme"]["inversePrimary"]),
+        brightness: brightness,
+      ),
+      useMaterial3: true,
+    ).toTheme;
+    final csMap = map["colorScheme"];
+    final baseTheme = baseFlexTheme.copyWith(
+      colorScheme: baseFlexTheme.colorScheme.copyWith(
+        outlineVariant: csMap["outlineVariant"] != null ? Color(csMap["outlineVariant"]) : null,
+        surfaceContainerLowest: csMap["surfaceContainerLowest"] != null ? Color(csMap["surfaceContainerLowest"]) : null,
+        surfaceContainerLow: csMap["surfaceContainerLow"] != null ? Color(csMap["surfaceContainerLow"]) : null,
+        surfaceContainer: csMap["surfaceContainer"] != null ? Color(csMap["surfaceContainer"]) : null,
+        surfaceContainerHigh: csMap["surfaceContainerHigh"] != null ? Color(csMap["surfaceContainerHigh"]) : null,
+        surfaceContainerHighest: csMap["surfaceContainerHighest"] != null ? Color(csMap["surfaceContainerHighest"]) : null,
+      ),
+    );
     return ThemeStruct(
         id: json["ROWID"],
         name: json["name"],
         gradientBg: json["gradientBg"] == 1,
-        themeData: FlexColorScheme(
-          textTheme: typography.copyWith(
-            titleLarge: typography.titleLarge!.copyWith(
-              color: Color(map["textTheme"]["titleLarge"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["titleLarge"]["fontWeight"]],
-              fontSize: map["textTheme"]["titleLarge"]["fontSize"],
-              letterSpacing: typography.titleLarge!.letterSpacing! * 0,
-            ),
-            bodyLarge: typography.bodyLarge!.copyWith(
-              color: Color(map["textTheme"]["bodyLarge"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["bodyLarge"]["fontWeight"]],
-              fontSize: map["textTheme"]["bodyLarge"]["fontSize"],
-              letterSpacing: typography.bodyLarge!.letterSpacing! * 0,
-            ),
-            bodyMedium: typography.bodyMedium!.copyWith(
-              color: Color(map["textTheme"]["bodyMedium"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["bodyMedium"]["fontWeight"]],
-              fontSize: map["textTheme"]["bodyMedium"]["fontSize"],
-              letterSpacing: typography.bodyMedium!.letterSpacing! * 0,
-            ),
-            bodySmall: typography.bodySmall!.copyWith(
-              color: Color(map["textTheme"]["bodySmall"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["bodySmall"]["fontWeight"]],
-              fontSize: map["textTheme"]["bodySmall"]["fontSize"],
-              letterSpacing: typography.bodySmall!.letterSpacing! * 0,
-            ),
-            labelLarge: typography.labelLarge!.copyWith(
-              color: Color(map["textTheme"]["labelLarge"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["labelLarge"]["fontWeight"]],
-              fontSize: map["textTheme"]["labelLarge"]["fontSize"],
-              letterSpacing: typography.labelLarge!.letterSpacing! * 0,
-            ),
-            labelSmall: typography.labelSmall!.copyWith(
-              color: Color(map["textTheme"]["labelSmall"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["labelSmall"]["fontWeight"]],
-              fontSize: map["textTheme"]["labelSmall"]["fontSize"],
-              letterSpacing: typography.labelSmall!.letterSpacing! * 0,
-            ),
+        themeData: baseTheme.copyWith(splashFactory: InkSparkle.splashFactory, extensions: [
+          BubbleColors(
+            iMessageBubbleColor:
+                map["colorScheme"]["iMessageBubble"] == null ? null : Color(map["colorScheme"]["iMessageBubble"]),
+            oniMessageBubbleColor:
+                map["colorScheme"]["oniMessageBubble"] == null ? null : Color(map["colorScheme"]["oniMessageBubble"]),
+            smsBubbleColor: map["colorScheme"]["smsBubble"] == null ? null : Color(map["colorScheme"]["smsBubble"]),
+            onSmsBubbleColor:
+                map["colorScheme"]["onSmsBubble"] == null ? null : Color(map["colorScheme"]["onSmsBubble"]),
+            receivedBubbleColor:
+                map["colorScheme"]["receivedBubble"] == null ? null : Color(map["colorScheme"]["receivedBubble"]),
+            onReceivedBubbleColor:
+                map["colorScheme"]["onReceivedBubble"] == null ? null : Color(map["colorScheme"]["onReceivedBubble"]),
           ),
-          colorScheme: ColorScheme(
-            primary: Color(map["colorScheme"]["primary"]),
-            onPrimary: Color(map["colorScheme"]["onPrimary"]),
-            primaryContainer: Color(map["colorScheme"]["primaryContainer"]),
-            onPrimaryContainer: Color(map["colorScheme"]["onPrimaryContainer"]),
-            secondary: Color(map["colorScheme"]["secondary"]),
-            onSecondary: Color(map["colorScheme"]["onSecondary"]),
-            secondaryContainer: Color(map["colorScheme"]["secondaryContainer"]),
-            onSecondaryContainer: Color(map["colorScheme"]["onSecondaryContainer"]),
-            tertiary: Color(map["colorScheme"]["tertiary"]),
-            onTertiary: Color(map["colorScheme"]["onTertiary"]),
-            tertiaryContainer: Color(map["colorScheme"]["tertiaryContainer"]),
-            onTertiaryContainer: Color(map["colorScheme"]["onTertiaryContainer"]),
-            error: Color(map["colorScheme"]["error"]),
-            onError: Color(map["colorScheme"]["onError"]),
-            errorContainer: Color(map["colorScheme"]["errorContainer"]),
-            onErrorContainer: Color(map["colorScheme"]["onErrorContainer"]),
-            surface: Color(map["colorScheme"]["surface"] ?? map["colorScheme"]["background"]),
-            onSurface: Color(map["colorScheme"]["onSurface"] ?? map["colorScheme"]["onBackground"]),
-            surfaceVariant: Color(map["colorScheme"]["surfaceVariant"]),
-            onSurfaceVariant: Color(map["colorScheme"]["onSurfaceVariant"]),
-            outline: Color(map["colorScheme"]["outline"]),
-            shadow: Color(map["colorScheme"]["shadow"]),
-            inverseSurface: Color(map["colorScheme"]["inverseSurface"]),
-            onInverseSurface: Color(map["colorScheme"]["onInverseSurface"]),
-            inversePrimary: Color(map["colorScheme"]["inversePrimary"]),
-            brightness: brightness,
-          ),
-          useMaterial3: true,
-        ).toTheme.copyWith(splashFactory: InkSparkle.splashFactory, extensions: [
-          if (json["name"] == "OLED Dark" || json["name"] == "Bright White")
-            BubbleColors(
-              iMessageBubbleColor: HexColor("1982FC"),
-              oniMessageBubbleColor: Colors.white,
-              smsBubbleColor: HexColor("43CC47"),
-              onSmsBubbleColor: Colors.white,
-              receivedBubbleColor: HexColor(json["name"] == "OLED Dark" ? "323332" : "e9e9e8"),
-              onReceivedBubbleColor: json["name"] == "OLED Dark" ? Colors.white : Colors.black,
-            ),
           BubbleText(
-            bubbleText: typography.bodyMedium!.copyWith(
-              color: Color(map["textTheme"]["bodyMedium"]["color"]),
-              fontWeight: FontWeight.values[map["textTheme"]["bodyMedium"]["fontWeight"]],
-              fontSize: map["textTheme"]["bubbleText"]?["fontSize"] ?? 15,
-              letterSpacing: typography.bodyMedium!.letterSpacing! * 0,
-              height: typography.bodyMedium!.height! * 0.85,
-            ),
+            bubbleText: font(
+                textStyle: typography.bodyMedium!
+                    .copyWith(
+                      color: Color(map["textTheme"]["bodyMedium"]["color"]),
+                      fontWeight: FontWeight.values[map["textTheme"]["bodyMedium"]["fontWeight"]],
+                      fontSize: map["textTheme"]["bubbleText"]?["fontSize"]?.toDouble() ?? 15,
+                      height: typography.bodyMedium!.height! * 0.85,
+                    )
+                    .apply(letterSpacingFactor: 0)),
           ),
         ]));
   }
@@ -290,6 +410,8 @@ class ThemeStruct {
       "onSurfaceVariant": finalData.colorScheme.onSurfaceVariant,
       "inverseSurface": finalData.colorScheme.inverseSurface,
       "onInverseSurface": finalData.colorScheme.onInverseSurface,
+      "smsBubble": (finalData.extensions[BubbleColors] as BubbleColors?)?.smsBubbleColor ?? HexColor("43CC47"),
+      "onSmsBubble": (finalData.extensions[BubbleColors] as BubbleColors?)?.onSmsBubbleColor ?? Colors.white,
       // the following get their own customization card, rather than
       // being paired like the above
       "outline": finalData.colorScheme.outline,
@@ -326,6 +448,8 @@ class ThemeStruct {
             "inverseSurface is an attention-grabbing background color. We use this on snackbars / toast messages.",
         "onInverseSurface":
             "onInverseSurface is used for any text or icon that is on top of an inverseSurface colored element.",
+        "smsBubble": "smsBubble is used for the background color of sent SMS / Text Forwarding messages.",
+        "onSmsBubble": "onSmsBubble is used for any text or icon that is on top of a smsBubble colored element.",
         // the following get their own customization card, rather than
         // being paired like the above
         "outline": "outline is used for most outlined elements, as well as most small label-style text.",

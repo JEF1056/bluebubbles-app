@@ -1,6 +1,6 @@
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:get/get.dart';
 
 /// A small anchored popup menu with a scale/fade entrance animation, used for

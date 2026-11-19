@@ -6,7 +6,7 @@ import 'package:bluebubbles/utils/window_effects.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/theming/avatar/custom_avatar_color_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/theming/avatar/custom_avatar_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
-import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart';
+import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart' deferred as theme_studio;
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -15,7 +15,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:idb_shim/idb.dart';
@@ -79,18 +79,19 @@ class _ThemingPanelState extends CustomState<ThemingPanel, void, ThemingPanelCon
                       secondaryColor: headerColor,
                       useModernMenu: true,
                     ),
-                    if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                    if (!kIsWeb)
-                      SettingsTile(
-                        title: "Theme Studio",
+                    const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                    SettingsTile(
+                      title: "Theme Studio",
                         subtitle:
                             "Customize app colors and font sizes with custom themes\n${ThemeStruct.getLightTheme().name}   |   ${ThemeStruct.getDarkTheme().name}",
                         trailing: const NextButton(),
                         isThreeLine: true,
                         onTap: () async {
+                          await theme_studio.loadLibrary();
+                          if (!context.mounted) return;
                           Navigator.of(context).push(
                             CupertinoPageRoute(
-                              builder: (context) => ThemeStudioPanel(),
+                              builder: (context) => theme_studio.ThemeStudioPanel(),
                             ),
                           );
                         },
@@ -454,23 +455,21 @@ class _ThemingPanelState extends CustomState<ThemingPanel, void, ThemingPanelCon
                           backgroundColor: tileColor,
                           subtitle: "Gives received message bubbles a splash of color",
                         )),
-                    if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                    if (!kIsWeb)
-                      SettingsTile(
-                        title: "Custom Avatar Colors",
-                        trailing: const NextButton(),
-                        onTap: () async {
-                          NavigationSvc.pushSettings(
-                            context,
-                            CustomAvatarColorPanel(),
-                          );
-                        },
-                        subtitle: "Customize the color for different avatars",
-                      ),
-                    if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                    if (!kIsWeb)
-                      SettingsTile(
-                        title: "Custom Avatars",
+                    const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                    SettingsTile(
+                      title: "Custom Avatar Colors",
+                      trailing: const NextButton(),
+                      onTap: () async {
+                        NavigationSvc.pushSettings(
+                          context,
+                          CustomAvatarColorPanel(),
+                        );
+                      },
+                      subtitle: "Customize the color for different avatars",
+                    ),
+                    const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                    SettingsTile(
+                      title: "Custom Avatars",
                         trailing: const NextButton(),
                         onTap: () async {
                           NavigationSvc.pushSettings(

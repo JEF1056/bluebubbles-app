@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/models/models.dart' show StickerPlacement;
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:universal_io/io.dart';
 
@@ -127,8 +128,11 @@ class _StickerHolderState extends State<StickerHolder> {
   /// This holder's sticker attachments, in the order their messages were sent, so later stickers draw on top
   List<Attachment> _stickers = const [];
 
-  /// Guids of the stickers whose image is on disk, ready to draw
+  /// Guids of the stickers whose image is on disk (or in memory on web), ready to draw
   final Set<String> _ready = {};
+
+  /// Cached sticker bytes for web / in-memory rendering
+  final Map<String, Uint8List> _bytes = {};
 
   /// Guids being downloaded, so an update doesn't add another callback to the same download
   final Set<String> _downloading = {};
@@ -175,10 +179,41 @@ class _StickerHolderState extends State<StickerHolder> {
     ];
     final guids = _stickers.map((a) => a.guid!).toSet();
     _ready.retainAll(guids);
+    _bytes.removeWhere((k, _) => !guids.contains(k));
 
     for (final attachment in List.of(_stickers)) {
       final guid = attachment.guid!;
       if (_ready.contains(guid) || _downloading.contains(guid)) continue;
+      if (kIsWeb) {
+        Uint8List? bytes = _bytes[guid] ?? attachment.bytes;
+        if (bytes == null) {
+          try {
+            bytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, guid);
+          } catch (_) {}
+        }
+        if (!mounted || _ready.contains(guid) || _downloading.contains(guid)) continue;
+        if (bytes != null && bytes.isNotEmpty) {
+          _bytes[guid] = bytes;
+          attachment.bytes ??= bytes;
+          _markReady(guid, attachment);
+        } else {
+          _downloading.add(guid);
+          AttachmentDownloader.startDownload(
+            attachment,
+            onComplete: (file) {
+              _downloading.remove(guid);
+              final downloaded = file.bytes ?? attachment.bytes;
+              if (downloaded != null && downloaded.isNotEmpty) {
+                _bytes[guid] = downloaded;
+                attachment.bytes ??= downloaded;
+                _markReady(guid, attachment);
+              }
+            },
+            onError: () => _downloading.remove(guid),
+          );
+        }
+        continue;
+      }
       final exists = await FileSystemEntity.type(attachment.path) != FileSystemEntityType.notFound;
       if (!mounted || _ready.contains(guid) || _downloading.contains(guid)) continue;
       if (exists) {
@@ -234,7 +269,9 @@ class _StickerHolderState extends State<StickerHolder> {
 
   @override
   Widget build(BuildContext context) {
-    final ready = _stickers.where((a) => _ready.contains(a.guid)).toList();
+    final ready = _stickers
+        .where((a) => _ready.contains(a.guid) && (!kIsWeb || (_bytes[a.guid] ?? a.bytes) != null))
+        .toList();
     if (ready.isEmpty) return const SizedBox.shrink();
     if (widget.placed) return _buildPlaced(ready);
 
@@ -293,7 +330,13 @@ class _StickerHolderState extends State<StickerHolder> {
     );
   }
 
-  ImageProvider _provider(Attachment attachment, double scale) => FileImage(File(attachment.path), scale: scale);
+  ImageProvider _provider(Attachment attachment, double scale) {
+    final bytes = _bytes[attachment.guid] ?? attachment.bytes;
+    if (kIsWeb || bytes != null) {
+      return MemoryImage(bytes ?? Uint8List(0), scale: scale);
+    }
+    return FileImage(File(attachment.path), scale: scale);
+  }
 
   Widget _image(Attachment attachment, [FilterQuality quality = FilterQuality.none, double scale = 1]) => Image(
         image: _provider(attachment, scale),

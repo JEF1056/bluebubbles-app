@@ -2,7 +2,7 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
-import 'package:bitsdojo_window/bitsdojo_window.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_devices_tab_view.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friends_tab_view.dart';
@@ -195,7 +195,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
           onRefresh: () => controller.hardRefresh(),
           child: CustomScrollView(
             controller: controller.friendsController,
-            physics: kIsWeb ? const NeverScrollableScrollPhysics() : ThemeSwitcher.getScrollPhysics(),
+            physics: ThemeSwitcher.getScrollPhysics(),
             slivers: [
               if (context.samsung) _buildSamsungAppBar(context, "FindMy Friends"),
               if (!context.samsung) FindMyFriendsTabView(controller: controller),
@@ -227,7 +227,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
           onRefresh: () => controller.hardRefresh(),
           child: CustomScrollView(
             controller: controller.devicesController,
-            physics: kIsWeb ? const NeverScrollableScrollPhysics() : ThemeSwitcher.getScrollPhysics(),
+            physics: ThemeSwitcher.getScrollPhysics(),
             slivers: [
               if (context.samsung) _buildSamsungAppBar(context, "FindMy Devices"),
               if (!context.samsung) FindMyDevicesTabView(controller: controller),
@@ -259,7 +259,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
           onRefresh: () => controller.hardRefresh(),
           child: CustomScrollView(
             controller: controller.itemsController,
-            physics: kIsWeb ? const NeverScrollableScrollPhysics() : ThemeSwitcher.getScrollPhysics(),
+            physics: ThemeSwitcher.getScrollPhysics(),
             slivers: [
               if (context.samsung) _buildSamsungAppBar(context, "FindMy Items"),
               if (!context.samsung) FindMyItemsTabView(controller: controller),
@@ -485,10 +485,12 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                 tooltip: 'Refresh Locations',
                 onPressed: controller.canRefresh.value && !isRefreshing ? () => controller.hardRefresh() : null,
                 icon: isRefreshing
-                    ? SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                    ? Center(
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
+                        ),
                       )
                     : const Icon(Icons.refresh_rounded, size: 20),
               ),
@@ -639,7 +641,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                               width: 48,
                               margin: const EdgeInsets.only(right: 8),
                               child: controller.refreshing.value || controller.refreshing2.value
-                                  ? buildProgressIndicator(context)
+                                  ? Center(child: buildProgressIndicator(context))
                                   : IconButton(
                                       iconSize: 22,
                                       icon: Icon(context.iOS ? CupertinoIcons.arrow_counterclockwise : Icons.refresh,

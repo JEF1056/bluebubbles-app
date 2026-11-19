@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -21,32 +19,17 @@ class MessageSender extends StatelessWidget {
       // Obx makes the sender name reactive: updates when contact data syncs.
       child: Obx(() {
         final hasCustomBackground = chatState?.hasCustomWallpaper ?? false;
-        final text = Text(
+        return Text(
           state.senderDisplayName,
           style: context.theme.textTheme.labelMedium!.copyWith(
-            color: hasCustomBackground ? context.theme.colorScheme.onSurface : context.theme.colorScheme.outline,
+            color: hasCustomBackground
+                ? Colors.white.withValues(alpha: 0.88)
+                : context.theme.colorScheme.outline,
             fontWeight: FontWeight.normal,
+            shadows: hasCustomBackground ? const [Shadow(color: Colors.black54, blurRadius: 3)] : null,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-        );
-        if (!hasCustomBackground) return text;
-        return Align(
-          alignment: Alignment.centerLeft,
-          widthFactor: 1.0,
-          child: IntrinsicWidth(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  color: context.theme.colorScheme.surface.withValues(alpha: 0.5),
-                  child: text,
-                ),
-              ),
-            ),
-          ),
         );
       }),
     );

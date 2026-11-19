@@ -1,6 +1,7 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:ui' hide window;
+
+import 'lifecycle_port_io.dart' if (dart.library.js_interop) 'lifecycle_port_web.dart';
 
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
@@ -11,8 +12,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 
-import 'package:universal_html/html.dart' hide Platform;
-import 'dart:io' show Platform;
+import 'package:bluebubbles/helpers/web/web_interop.dart';
+import 'package:bluebubbles/services/backend/lifecycle/web_lifecycle_interop.dart';
+import 'package:universal_io/io.dart' show Platform;
+import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 
 // ignore: non_constant_identifier_names
@@ -23,9 +26,13 @@ class LifecycleService with WidgetsBindingObserver {
   bool headless = false;
   bool windowFocused = true;
   bool? wasActiveAliveBefore;
+  final RxBool isOnline = true.obs;
+  final RxBool isReconnecting = false.obs;
+  VoidCallback? _webLifecycleDispose;
+  bool _webWakeInFlight = false;
 
   bool get isAlive {
-    if (kIsWeb) return !(window.document.hidden ?? false);
+    if (kIsWeb) return !isWebDocumentHidden;
     if (kIsDesktop) return windowFocused;
     // Headless isolates may not have a widgets binding (e.g. the GlobalIsolate),
     // where touching WidgetsBinding.instance throws — rely on the port marker only.
@@ -44,7 +51,7 @@ class LifecycleService with WidgetsBindingObserver {
   /// direction, e.g. dropping a push notification because the UI is expected to
   /// receive the message over the socket instead.
   bool get isForeground {
-    if (kIsWeb) return !(window.document.hidden ?? false);
+    if (kIsWeb) return !isWebDocumentHidden;
     if (kIsDesktop) return windowFocused;
     if (headless) return false;
     return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
@@ -81,8 +88,64 @@ class LifecycleService with WidgetsBindingObserver {
     this.headless = headless;
     this.isBubble = isBubble;
 
+    if (kIsWeb && !headless) {
+      isOnline.value = isWebNavigatorOnline;
+      _webLifecycleDispose?.call();
+      _webLifecycleDispose = listenWebLifecycle(
+        onVisibilityChange: (hidden) {
+          if (hidden) {
+            if (GetIt.I.isRegistered<ChatsService>()) {
+              ChatsSvc.setActiveToDead();
+            }
+          } else {
+            if (GetIt.I.isRegistered<ChatsService>()) {
+              ChatsSvc.setActiveToAlive();
+            }
+            unawaited(_onWebWake());
+          }
+        },
+        onOnlineChange: (online) {
+          isOnline.value = online;
+          if (online) {
+            unawaited(_onWebWake());
+          }
+        },
+      );
+    }
+
     unawaited(handleForegroundService(AppLifecycleState.resumed));
     Logger.debug("LifecycleService initialized");
+  }
+
+  Future<void> _onWebWake() async {
+    if (_webWakeInFlight || !isOnline.value || !SettingsSvc.settings.finishedSetup.value) return;
+    _webWakeInFlight = true;
+    isReconnecting.value = true;
+    try {
+      await Database.waitForInit();
+      if (GetIt.I.isRegistered<SocketService>()) {
+        SocketSvc.resumeConnection();
+        if (SocketSvc.state.value != SocketState.connected) {
+          SocketSvc.restartSocket();
+        } else {
+          SocketSvc.checkConnection();
+        }
+      }
+      if (GetIt.I.isRegistered<SyncService>()) {
+        await SyncSvc.startIncrementalSync(catchUp: true)
+            .timeout(const Duration(seconds: 30), onTimeout: () {});
+      }
+    } catch (e, s) {
+      Logger.warn("Web wake recovery failed", error: e, trace: s, tag: "LifecycleService");
+    } finally {
+      _webWakeInFlight = false;
+      isReconnecting.value = false;
+    }
+  }
+
+  void dispose() {
+    _webLifecycleDispose?.call();
+    _webLifecycleDispose = null;
   }
 
   @override
@@ -186,11 +249,7 @@ class LifecycleService with WidgetsBindingObserver {
   }
 
   // clever trick so we can see if the app is active in an isolate or not
-  void createFakePort() {
-    final port = ReceivePort();
-    IsolateNameServer.removePortNameMapping('bg_isolate');
-    IsolateNameServer.registerPortWithName(port.sendPort, 'bg_isolate');
-  }
+  void createFakePort() => createFakeBgIsolatePort();
 
   /// [triggerState] is the lifecycle state that caused this close. Cleanup
   /// decisions must use it rather than the live [currentState]: by the time the

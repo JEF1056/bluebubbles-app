@@ -29,9 +29,8 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
   Widget build(BuildContext context) {
     final chatState = ChatsSvc.getChatState(chat.guid);
 
-    bool canCall = !kIsWeb &&
-        !kIsDesktop &&
-        !chat.chatIdentifier!.startsWith("urn:biz") &&
+    bool canCall = !kIsDesktop &&
+        !(chat.chatIdentifier?.startsWith("urn:biz") ?? false) &&
         (chat.handles.isNotEmpty &&
             ((chat.handles.first.contactsV2.firstOrNull?.phoneNumbers.isNotEmpty ?? false) ||
                 !chat.handles.first.address.contains("@")));

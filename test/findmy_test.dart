@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_detail_sheet.dart';
+import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_device_list_tile.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_devices_tab_view.dart';
+import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friend_list_tile.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friends_tab_view.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_items_tab_view.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart';
@@ -1369,6 +1371,116 @@ void main() {
       expect(startedHandles.length, greaterThanOrEqualTo(2));
       expect(startedHandles.every((h) => h == 'alice@example.com'), isTrue);
       expect(controller.locatingFriendId.value, isNull);
+    });
+  });
+
+  group('FindMy UI spinner centering & focus scroll-to-top', () {
+    testWidgets('inline friend and device locating spinners vertically center with the more button', (tester) async {
+      final now = DateTime(2026, 11, 18, 12, 0, 0);
+      final controller = FindMyController(now: () => now, autoFetch: false);
+      addTearDown(controller.onClose);
+
+      final alice = _friend(
+        lastUpdated: now.subtract(const Duration(minutes: 2)),
+        status: LocationStatus.shallow,
+        title: 'Alice',
+        handleAddress: 'alice@example.com',
+      );
+      controller.friends.add(alice);
+      controller.selectedFriendId.value = alice.stableId;
+      controller.locatingFriendId.value = alice.stableId;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FindMyFriendListTile(
+              item: alice,
+              controller: controller,
+            ),
+          ),
+        ),
+      );
+
+      final friendSpinnerCenter =
+          tester.getCenter(find.byKey(ValueKey('findmy-friend-locating-${alice.stableId}')));
+      final friendMoreCenter = tester.getCenter(find.byKey(const ValueKey('findmy-inline-more')));
+      expect(friendSpinnerCenter.dy, closeTo(friendMoreCenter.dy, 0.5));
+
+      final macbook = FindMyDevice.fromJson({
+        'id': 'dev-1',
+        'name': 'MacBook Pro',
+        'location': {'latitude': 37.7749, 'longitude': -122.4194, 'timeStamp': now.millisecondsSinceEpoch},
+      });
+      controller.devices.add(macbook);
+      controller.selectedDeviceId.value = 'dev-1';
+      controller.refreshing.value = true;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: FindMyDeviceListTile(
+              item: macbook,
+              controller: controller,
+            ),
+          ),
+        ),
+      );
+
+      final deviceSpinnerCenter = tester.getCenter(find.byType(CircularProgressIndicator).first);
+      final deviceMoreCenter = tester.getCenter(find.byKey(const ValueKey('findmy-inline-more')));
+      expect(deviceSpinnerCenter.dy, closeTo(deviceMoreCenter.dy, 0.5));
+    });
+
+    testWidgets('focusFriend and focusDevice jump scrolled list to top and switch tab when needed', (tester) async {
+      final now = DateTime(2026, 11, 18, 12, 0, 0);
+      final controller = FindMyController(now: () => now, autoFetch: false);
+      addTearDown(controller.onClose);
+
+      final friends = List.generate(
+        12,
+        (i) => _friend(
+          lastUpdated: now.subtract(Duration(minutes: i + 1)),
+          status: LocationStatus.shallow,
+          title: 'Friend $i',
+          handleAddress: 'friend$i@example.com',
+        ),
+      );
+      controller.fetching2.value = false;
+      controller.friends.addAll(friends);
+      controller.friendsWithLocation.addAll(friends);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 240,
+              child: CustomScrollView(
+                controller: controller.friendsController,
+                slivers: [
+                  FindMyFriendsTabView(controller: controller),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      controller.friendsController.jumpTo(200);
+      await tester.pump();
+      expect(controller.friendsController.offset, 200);
+
+      controller.tabIndex.value = 1;
+      controller.focusFriend(friends[8]);
+      await tester.pump();
+
+      expect(controller.tabIndex.value, 0);
+      expect(controller.friendsController.offset, 0);
+      expect(find.byKey(ValueKey('findmy-inline-friend-${friends[8].stableId}')), findsOneWidget);
+
+      controller.clearSelection();
+      await tester.pump();
+      expect(controller.selectedFriendId.value, isNull);
+      expect(controller.friendsController.offset, 0);
     });
   });
 }

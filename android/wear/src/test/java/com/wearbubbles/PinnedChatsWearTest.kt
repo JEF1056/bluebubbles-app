@@ -1,5 +1,6 @@
 package com.wearbubbles
 
+import com.wearbubbles.db.ChatDao
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.relay.PhoneRelayClient
@@ -89,5 +90,61 @@ class PinnedChatsWearTest {
 
         val favorites = selectFavoriteContacts(contacts, chats)
         assertEquals(listOf("Alice", "Bob"), favorites.map { it.displayName })
+    }
+
+    @Test
+    fun `parseRelayChatsPayload reads pinsAuthoritative and mergePreservingPins preserves existing pins on transient failure`() {
+        val json = """
+            {
+              "pinsAuthoritative": false,
+              "chats": [
+                {
+                  "guid": "any;-;+15550001111",
+                  "chatIdentifier": "+15550001111",
+                  "participantAddresses": ["+15550001111"],
+                  "lastMessageText": "Updated msg",
+                  "lastMessageDate": 5000,
+                  "lastMessageIsFromMe": false,
+                  "hasUnreadMessage": true,
+                  "isPinned": false
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val (incoming, pinsAuthoritative) = PhoneRelayClient.parseRelayChatsPayload(json)!!
+        assertFalse(pinsAuthoritative)
+
+        val existingPinned = listOf(
+            ChatEntity("any;-;+15550001111", "+15550001111", "Alice", "+15550001111", "Old", 1000L, false, false, isPinned = true, pinIndex = 0),
+            ChatEntity("any;-;+15550009999", "+15550009999", "Older Pin", "+15550009999", "Hey", 100L, false, false, isPinned = true, pinIndex = 1)
+        )
+
+        val merged = ChatDao.mergePreservingPins(incoming, existingPinned)
+        assertEquals(2, merged.size)
+        assertTrue(merged[0].isPinned)
+        assertEquals(0, merged[0].pinIndex)
+        assertEquals("Updated msg", merged[0].lastMessageText)
+        assertEquals("any;-;+15550009999", merged[1].guid)
+        assertTrue(merged[1].isPinned)
+        assertEquals(1, merged[1].pinIndex)
+    }
+
+    @Test
+    fun `mergePreservingPins keeps older pinned chat B when A is pinned incoming and pinsAuthoritative is false`() {
+        val incoming = listOf(
+            ChatEntity("any;-;+15550001111", "+15550001111", "A", "+15550001111", "New", 5000L, false, false, isPinned = true, pinIndex = null)
+        )
+        val existingPinned = listOf(
+            ChatEntity("any;-;+15550001111", "+15550001111", "A", "+15550001111", "Old", 1000L, false, false, isPinned = true, pinIndex = 0),
+            ChatEntity("any;-;+15550002222", "+15550002222", "B", "+15550002222", "Older", 100L, false, false, isPinned = true, pinIndex = 1)
+        )
+
+        val merged = ChatDao.mergePreservingPins(incoming, existingPinned)
+        assertEquals(listOf("any;-;+15550001111", "any;-;+15550002222"), merged.map { it.guid })
+        assertTrue(merged[0].isPinned)
+        assertEquals(0, merged[0].pinIndex)
+        assertTrue(merged[1].isPinned)
+        assertEquals(1, merged[1].pinIndex)
     }
 }

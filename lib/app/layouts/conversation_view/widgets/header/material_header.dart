@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:bluebubbles/app/layouts/conversation_details/conversation_details.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_widgets.dart';
@@ -8,9 +10,10 @@ import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide BackButton;
 import 'package:flutter/services.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -22,20 +25,25 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Rx<Color> _backgroundColor = context.theme.colorScheme.surfaceContainer
-        .withValues(alpha: (kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled) ? 0.4 : 1)
-        .obs;
     final Color _foregroundColor = context.theme.colorScheme.onSurface;
+    final hasWindowEffect = kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled;
 
     return Stack(children: [
-      Obx(() => AppBar(
-            backgroundColor: _backgroundColor.value,
-            surfaceTintColor: Colors.transparent,
-            scrolledUnderElevation: 0,
-            systemOverlayStyle: context.systemUiOverlayStyle(
-              statusBarColor: _backgroundColor.value,
-              backgroundBrightness: ThemeData.estimateBrightnessForColor(_backgroundColor.value),
-            ),
+      Obx(() {
+        final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ??
+            ChatsSvc.getChatState(controller.chat.guid)?.hasCustomWallpaper ??
+            false;
+        final backgroundColor = context.theme.colorScheme.surfaceContainer.withValues(
+          alpha: hasWindowEffect ? 0.4 : 1.0,
+        );
+        final appBar = AppBar(
+          backgroundColor: backgroundColor,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+          systemOverlayStyle: context.systemUiOverlayStyle(
+            statusBarColor: hasWallpaper ? Colors.transparent : backgroundColor,
+            backgroundBrightness: ThemeData.estimateBrightnessForColor(backgroundColor),
+          ),
             automaticallyImplyLeading: false,
             toolbarHeight: (kIsDesktop ? 25 : 0) + kToolbarHeight,
             leadingWidth: 56,
@@ -91,7 +99,10 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                     onPressed: () => startFaceTimeCall(context, controller.chat, video: true),
                   ),
                 ),
-              if (Platform.isAndroid && !controller.chat.isGroup && controller.chat.handles.first.address.isPhoneNumber)
+              if ((Platform.isAndroid || kIsWeb) &&
+                  !controller.chat.isGroup &&
+                  controller.chat.handles.isNotEmpty &&
+                  controller.chat.handles.first.address.isPhoneNumber)
                 Padding(
                   padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                   child: IconButton(
@@ -101,7 +112,10 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                     },
                   ),
                 ),
-              if (Platform.isAndroid && !controller.chat.isGroup && controller.chat.handles.first.address.isEmail)
+              if ((Platform.isAndroid || kIsWeb) &&
+                  !controller.chat.isGroup &&
+                  controller.chat.handles.isNotEmpty &&
+                  controller.chat.handles.first.address.isEmail)
                 Padding(
                   padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                   child: IconButton(
@@ -114,7 +128,9 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
               Padding(
                 padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                 child: PopupMenuButton<int>(
-                  color: context.theme.colorScheme.surfaceContainerHigh,
+                  color: hasWallpaper
+                      ? context.theme.colorScheme.surfaceContainerHigh.withValues(alpha: 0.90)
+                      : context.theme.colorScheme.surfaceContainerHigh,
                   shape: SettingsSvc.settings.skin.value != Skins.Material
                       ? const RoundedRectangleBorder(
                           borderRadius: BorderRadius.all(
@@ -214,7 +230,17 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                 ),
               )
             ],
-          )),
+          );
+        if (hasWallpaper && !SettingsSvc.settings.highPerfMode.value) {
+          return ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: appBar,
+            ),
+          );
+        }
+        return appBar;
+      }),
       const Positioned(
         bottom: 0,
         left: 0,

@@ -124,6 +124,7 @@ class AttachmentDownloadService extends GetxService {
           attachment: a,
           onComplete: onComplete,
           onError: onError,
+          bypassCache: forceFresh,
         ),
         tag: a.guid!);
   }
@@ -176,6 +177,7 @@ class AttachmentDownloadController extends GetxController {
   final RxnNum progress = RxnNum();
   final Rxn<PlatformFile> file = Rxn<PlatformFile>();
   final Rx<AttachmentDownloadState> state = Rx<AttachmentDownloadState>(AttachmentDownloadState.queued);
+  final bool bypassCache;
   Stopwatch stopwatch = Stopwatch();
   CancelToken? _cancelToken;
 
@@ -198,6 +200,7 @@ class AttachmentDownloadController extends GetxController {
     required this.attachment,
     Function(PlatformFile)? onComplete,
     Function? onError,
+    this.bypassCache = false,
   }) {
     if (onComplete != null) completeFuncs.add(onComplete);
     if (onError != null) errorFuncs.add(onError);
@@ -292,6 +295,39 @@ class AttachmentDownloadController extends GetxController {
 
     // Mark as not downloaded while downloading (handles re-downloads)
     attachment.isDownloaded = false;
+
+    final guid = attachment.guid;
+    if (kIsWeb && !bypassCache && guid != null) {
+      try {
+        final cached = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, guid);
+        if (_failed || (_cancelToken?.isCancelled ?? false)) return;
+        if (cached != null && cached.isNotEmpty) {
+          stopwatch.stop();
+          progress.value = 1.0;
+          attachment.bytes = cached;
+          attachment.isDownloaded = true;
+          file.value = PlatformFile(
+            name: attachment.transferName!,
+            path: null,
+            size: cached.length,
+            bytes: cached,
+          );
+          await attachment.saveAsync(attachment.message.target);
+          state.value = AttachmentDownloadState.complete;
+          for (Function f in completeFuncs) {
+            try {
+              f.call(file.value);
+            } catch (e, s) {
+              Logger.error("Attachment download completion callback threw", error: e, trace: s);
+            }
+          }
+          AttachmentDownloader._removeFromQueue(this);
+          return;
+        }
+      } catch (e, s) {
+        Logger.warn("WebMediaCache lookup failed for $guid", error: e, trace: s);
+      }
+    }
 
     // For web, download to memory. For native platforms, write to disk.
     //
@@ -394,6 +430,13 @@ class AttachmentDownloadController extends GetxController {
         bytes = response.data;
       }
       attachment.bytes = bytes;
+      if (bytes != null && bytes.isNotEmpty && attachment.guid != null) {
+        try {
+          await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, attachment.guid!, bytes);
+        } catch (e, s) {
+          Logger.warn("WebMediaCache store failed for ${attachment.guid}", error: e, trace: s);
+        }
+      }
     } else {
       // For native platforms, the temp file is fully written to disk.
       // Handle GIF optimization on the temp file so the rewrite is covered by the

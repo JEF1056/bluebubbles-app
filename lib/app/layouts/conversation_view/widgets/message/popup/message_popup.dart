@@ -30,7 +30,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide BackButton;
 import 'package:bluebubbles/database/models.dart' hide PayloadType;
 import 'package:flutter/services.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/tapback_icon.dart';
 import 'package:get/get.dart';
 import 'package:sprung/sprung.dart';
@@ -137,6 +137,13 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
   bool get minBigSur => widget.serverDetails.minBigSur;
 
   bool get supportsOriginalDownload => widget.serverDetails.supportsOriginalDownload;
+
+  bool get _supportsTapbackAndReply =>
+      chat.isIMessage ||
+      chat.isRCS ||
+      (ChatServiceType.fromServiceName(message.service)?.supportsTapbackAndReply ?? false);
+
+  bool get _hasCustomWallpaper => ChatsSvc.getChatState(chat.guid)?.hasCustomWallpaper ?? false;
 
   BuildContext get widthContext => widget.widthContext.call() ?? context;
 
@@ -288,8 +295,9 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
     );
   }
 
-  Color _tapbackPanelColor(BuildContext context) =>
-      context.theme.colorScheme.surfaceContainerHighest.withAlpha(iOS ? 150 : 255).lightenOrDarken(iOS ? 0 : 10);
+  Color _tapbackPanelColor(BuildContext context) => context.theme.colorScheme.surfaceContainerHighest
+      .withValues(alpha: iOS ? 150 / 255 : (_hasCustomWallpaper ? 0.86 : 1.0))
+      .lightenOrDarken(iOS ? 0 : 10);
 
   // On iOS this "shadow" is the panel's own colour laid under it, which gives it its density
   Shadow _tapbackPanelShadow(BuildContext context) => iOS
@@ -438,7 +446,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                       backgroundColor: context.theme.colorScheme.surface.oppositeLightenOrDarken(5),
                       automaticallyImplyLeading: false,
                       leadingWidth: 40,
-                      toolbarHeight: kIsDesktop ? 80 : 50,
+                      toolbarHeight: kIsDesktop ? 80 : kToolbarHeight,
                       leading: Padding(
                         padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0, left: 10.0),
                         child: BackButton(
@@ -536,7 +544,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                             : const SizedBox.shrink(),
                       ),
                     ),
-                  if (SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && (chat.isIMessage || chat.isRCS))
+                  if (SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && _supportsTapbackAndReply)
                     Positioned(
                       bottom: _pickerBottom(context, narrowScreen),
                       right: isFromMe ? 15 : null,
@@ -681,7 +689,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
                   if (!iOS &&
                       SettingsSvc.settings.enablePrivateAPI.value &&
                       minBigSur &&
-                      (chat.isIMessage || chat.isRCS) &&
+                      _supportsTapbackAndReply &&
                       isSent)
                     Positioned(
                       left: (!message.isFromMe!
@@ -734,7 +742,7 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
     final canEdit = (message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 15) ?? false);
     final canUnsend = (message.dateCreated?.toUtc().isWithin(DateTime.now().toUtc(), minutes: 2) ?? false);
     return [
-      if (SettingsSvc.settings.enablePrivateAPI.value && minBigSur && (chat.isIMessage || chat.isRCS) && isSent)
+      if (SettingsSvc.settings.enablePrivateAPI.value && minBigSur && _supportsTapbackAndReply && isSent)
         DetailsMenuActionWidget(
           onTap: () => popup_navigation_actions.reply(_buildActionContext(DetailsMenuAction.Reply)),
           action: DetailsMenuAction.Reply,
@@ -957,7 +965,9 @@ class _MessagePopupState extends State<MessagePopup> with SingleTickerProviderSt
       Padding(
           padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
           child: PopupMenuButton<int>(
-              color: context.theme.colorScheme.surfaceContainerHighest,
+              color: _hasCustomWallpaper
+                  ? context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.90)
+                  : context.theme.colorScheme.surfaceContainerHighest,
               shape: SettingsSvc.settings.skin.value != Skins.Material
                   ? const RoundedRectangleBorder(
                       borderRadius: BorderRadius.all(Radius.circular(20.0)),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
+
+import 'log_merge_io.dart' if (dart.library.js_interop) 'log_merge_web.dart';
 
 import 'package:archive/archive_io.dart';
 import 'package:bluebubbles/env.dart';
@@ -131,7 +132,7 @@ class BaseLogger {
 
   Future<void> init() async {
     // Before createLogger(): the file output is named after the isolate.
-    final name = isolateNameOverride ?? Isolate.current.debugName ?? "main";
+    final name = getIsolateDebugName() ?? "main";
     _isolateName = logNamePrefix == null ? name : (name == "main" ? logNamePrefix! : "$logNamePrefix$name");
     _logger = createLogger();
 
@@ -270,7 +271,7 @@ class BaseLogger {
   Future<void> _addMergedLog(ZipFileEncoder encoder, String logDir) async {
     final File mergedFile = File(join(FilesystemSvc.appDocDir.path, "bluebubbles-merged.log"));
     try {
-      await _writeMergedLogInIsolate(logDir, mergedFile.path);
+      await writeMergedLogInIsolate(logDir, mergedFile.path, _writeMergedLog, _mergeTimeout);
       await encoder.addFile(mergedFile);
     } catch (e, stackTrace) {
       warn("Leaving the merged log out of the export", error: e, trace: stackTrace);
@@ -283,49 +284,6 @@ class BaseLogger {
 
   /// How long the merge gets before it's killed and left out of the export.
   static const Duration _mergeTimeout = Duration(minutes: 2);
-
-  /// Runs [_writeMergedLog] in a short-lived isolate of its own, which exits once it's done. The merge reads every
-  /// log file and needs nothing but their paths, so it doesn't tie up the UI or depend on the GlobalIsolate.
-  /// Throws a [TimeoutException] after [_mergeTimeout], once the isolate is killed.
-  ///
-  /// Static, with only value parameters, so the entry point can't capture `this` and its unsendable stream (see
-  /// ChatStatsController's isolate entry points).
-  static Future<void> _writeMergedLogInIsolate(String logDir, String outPath) async {
-    final port = ReceivePort();
-    final Isolate isolate;
-    try {
-      isolate = await Isolate.spawn(_mergeLogEntry, (port.sendPort, logDir, outPath),
-          onExit: port.sendPort, debugName: 'LogExport');
-    } catch (_) {
-      port.close();
-      rethrow;
-    }
-    // The entry point's result, or the onExit null if the isolate died first.
-    final result = port.first;
-    final Object? message;
-    try {
-      message = await result.timeout(_mergeTimeout);
-    } on TimeoutException {
-      isolate.kill(priority: Isolate.immediate);
-      // Wait for it to exit, so the caller can delete the half-written file.
-      await result.timeout(const Duration(seconds: 5), onTimeout: () => null);
-      rethrow;
-    }
-    if (message is (String, String)) throw RemoteError(message.$1, message.$2);
-    if (message != true) throw StateError("The log merge isolate exited without finishing");
-  }
-
-  /// The merge isolate's entry point: reports `true` on success, or the error and stack trace as strings.
-  static Future<void> _mergeLogEntry((SendPort, String, String) args) async {
-    final (resultPort, logDir, outPath) = args;
-    Object result = true;
-    try {
-      await _writeMergedLog(logDir, outPath);
-    } catch (e, stackTrace) {
-      result = ('$e', '$stackTrace');
-    }
-    Isolate.exit(resultPort, result);
-  }
 
   /// Writes every log file in [logDir], rotated ones included, to [outPath] as one timeline. Each isolate rotates on
   /// its own schedule, so merging only the latest files would leave uneven coverage.

@@ -1,7 +1,8 @@
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/send_effect_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/audio_player.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/handlers/web_input_interop.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/send_button.dart';
 import 'package:bluebubbles/app/wrappers/cupertino_icon_wrapper.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -26,6 +27,7 @@ class TextFieldSuffix extends StatefulWidget {
     required this.controller,
     required this.recorderController,
     required this.sendMessage,
+    this.audioRecorder,
     this.isChatCreator = false,
     this.alwaysShowSend = false,
     this.hasInitialAttachments = false,
@@ -35,6 +37,7 @@ class TextFieldSuffix extends StatefulWidget {
   final TextEditingController textController;
   final ConversationViewController? controller;
   final RecorderController? recorderController;
+  final AudioRecorder? audioRecorder;
   final Future<void> Function({String? effect}) sendMessage;
   final bool isChatCreator;
 
@@ -53,7 +56,7 @@ class TextFieldSuffix extends StatefulWidget {
 }
 
 class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
-  final AudioRecorder audioRecorder = AudioRecorder();
+  late final AudioRecorder audioRecorder = widget.audioRecorder ?? AudioRecorder();
 
   // Cache these values at init to avoid repeated platform checks
   late final bool _isWeb = kIsWeb;
@@ -63,6 +66,10 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
   bool get alwaysShowSend => widget.alwaysShowSend;
 
   void deleteAudioRecording(String path) {
+    if (kIsWeb) {
+      revokeWebObjectUrl(path);
+      return;
+    }
     File(path).delete();
   }
 
@@ -111,7 +118,8 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
           // Only reactive values in Obx scope - controller is guaranteed non-null here
           final hasAttachments =
               widget.controller!.pickedAttachments.isNotEmpty || widget.controller!.pendingGame.value != null;
-          final showRecording = widget.controller!.showRecording.value && widget.recorderController != null;
+          final showRecording =
+              widget.controller!.showRecording.value && (_isWeb || widget.recorderController != null);
           final canSend = alwaysShowSend || hasText || hasSubject || hasAttachments;
 
           final isMaterial = SettingsSvc.settings.skin.value == Skins.Material && !isChatCreator;
@@ -160,7 +168,9 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
 
   @override
   void dispose() {
-    audioRecorder.dispose();
+    if (widget.audioRecorder == null) {
+      audioRecorder.dispose();
+    }
 
     super.dispose();
   }
@@ -193,10 +203,6 @@ class _RecordingButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (isWeb) {
-      return const SizedBox(height: 32, width: 32);
-    }
-
     return Obx(() {
       final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
       final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
@@ -214,8 +220,8 @@ class _RecordingButton extends StatelessWidget {
                       : context.theme.colorScheme.primary.withValues(alpha: 0.4),
           shape: const CircleBorder(),
           padding: const EdgeInsets.all(0),
-          maximumSize: isIOS ? (isDesktop ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
-          minimumSize: isIOS ? (isDesktop ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
+          maximumSize: isIOS ? ((isDesktop || isWeb) ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
+          minimumSize: isIOS ? ((isDesktop || isWeb) ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
           tapTargetSize: isIOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
         ),
         child: !isChatCreator && !showRecording
@@ -251,6 +257,36 @@ class _RecordingButton extends StatelessWidget {
 
           if (controller!.showRecording.value) {
             // Start recording
+            if (isWeb) {
+              try {
+                final hasPerm = await audioRecorder.hasPermission();
+                if (!hasPerm) {
+                  controller!.showRecording.value = false;
+                  showSnackbar(
+                    "Error",
+                    "Microphone access was denied. Please allow microphone permissions in your browser.",
+                    type: SnackbarType.error,
+                  );
+                  return;
+                }
+                final encoder = await pickWebAudioEncoder(audioRecorder);
+                await audioRecorder.start(
+                  RecordConfig(encoder: encoder, bitRate: 128000),
+                  path: '',
+                );
+                if (!await audioRecorder.isRecording()) {
+                  controller!.showRecording.value = false;
+                  showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
+                      type: SnackbarType.error);
+                }
+              } catch (e, stack) {
+                controller!.showRecording.value = false;
+                showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
+                    type: SnackbarType.error);
+                Logger.error("Error starting web recording", error: e, trace: stack);
+              }
+              return;
+            }
             if (isDesktop) {
               try {
                 File temp = File(join(
@@ -293,16 +329,46 @@ class _RecordingButton extends StatelessWidget {
             }
           } else {
             // Stop recording and show dialog
-            late final String? path;
+            final String? stoppedPath;
             late final PlatformFile file;
 
-            if (isDesktop) {
-              path = await audioRecorder.stop();
-              if (path == null) {
+            if (isWeb) {
+              try {
+                stoppedPath = await audioRecorder.stop();
+              } catch (e, stack) {
+                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                Logger.error("Error stopping web recording", error: e, trace: stack);
+                return;
+              }
+              if (stoppedPath == null) {
                 showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
                 return;
               }
-              final _file = File(path);
+              ({Uint8List bytes, String mimeType})? blobData;
+              try {
+                blobData = await readWebBlobUrlBytes(stoppedPath);
+              } catch (e, stack) {
+                Logger.error("Error reading web recording blob", error: e, trace: stack);
+              } finally {
+                revokeWebObjectUrl(stoppedPath);
+              }
+              if (blobData == null || blobData.bytes.isEmpty) {
+                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                return;
+              }
+              final ext = audioExtensionForMime(blobData.mimeType);
+              file = PlatformFile(
+                name: "voice_memo_${DateTime.now().millisecondsSinceEpoch}.$ext",
+                bytes: blobData.bytes,
+                size: blobData.bytes.length,
+              );
+            } else if (isDesktop) {
+              stoppedPath = await audioRecorder.stop();
+              if (stoppedPath == null) {
+                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                return;
+              }
+              final _file = File(stoppedPath);
               file = PlatformFile(
                 name: basename(_file.path),
                 path: _file.path,
@@ -310,12 +376,12 @@ class _RecordingButton extends StatelessWidget {
                 size: await _file.length(),
               );
             } else {
-              path = await recorderController!.stop();
-              if (path == null) {
+              stoppedPath = await recorderController!.stop();
+              if (stoppedPath == null) {
                 showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
                 return;
               }
-              final _file = File(path);
+              final _file = File(stoppedPath);
               file = PlatformFile(
                 name: basename(_file.path),
                 path: _file.path,
@@ -323,6 +389,9 @@ class _RecordingButton extends StatelessWidget {
                 size: await _file.length(),
               );
             }
+
+            final String path = stoppedPath;
+            if (!context.mounted) return;
 
             await showBBDialog(
               context: context,
@@ -351,7 +420,7 @@ class _RecordingButton extends StatelessWidget {
                   text: "Discard",
                   isDestructive: true,
                   onPressed: () {
-                    onDeleteRecording(file.path!);
+                    onDeleteRecording(path);
                     Navigator.of(context, rootNavigator: true).pop();
                   },
                 ),
@@ -365,7 +434,7 @@ class _RecordingButton extends StatelessWidget {
                       subject: "",
                       isAudioMessage: true,
                     ));
-                    onDeleteRecording(file.path!);
+                    onDeleteRecording(path);
                     Navigator.of(context, rootNavigator: true).pop();
                   },
                 ),
@@ -376,4 +445,25 @@ class _RecordingButton extends StatelessWidget {
       );
     });
   }
+}
+
+@visibleForTesting
+Future<AudioEncoder> pickWebAudioEncoder(AudioRecorder recorder) async {
+  if (await recorder.isEncoderSupported(AudioEncoder.aacLc)) {
+    return AudioEncoder.aacLc;
+  }
+  if (await recorder.isEncoderSupported(AudioEncoder.opus)) {
+    return AudioEncoder.opus;
+  }
+  return AudioEncoder.wav;
+}
+
+@visibleForTesting
+String audioExtensionForMime(String mimeType) {
+  final clean = mimeType.split(';').first.trim().toLowerCase();
+  if (clean.contains('mp4') || clean.contains('aac')) return 'm4a';
+  if (clean.contains('webm')) return 'webm';
+  if (clean.contains('ogg')) return 'ogg';
+  if (clean.contains('wav')) return 'wav';
+  return 'm4a';
 }

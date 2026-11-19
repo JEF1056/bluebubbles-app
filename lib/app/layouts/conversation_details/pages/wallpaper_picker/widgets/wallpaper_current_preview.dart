@@ -3,7 +3,6 @@ import 'package:bluebubbles/app/state/chat_state.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:universal_io/io.dart';
 
 /// Shows the chat's currently active wallpaper (static image or live dynamic
 /// preview) with a "Remove" action, or an empty placeholder when none is
@@ -29,8 +28,8 @@ class WallpaperCurrentPreview extends StatelessWidget {
           config: chatState?.dynamicWallpaperConfig.value,
         );
       } else if (type == ChatWallpaperType.image && imagePath != null) {
-        preview = Image.file(
-          File(imagePath),
+        preview = Image(
+          image: chatBackgroundImageProvider(imagePath, context),
           fit: BoxFit.cover,
           filterQuality: FilterQuality.high,
           errorBuilder: (_, _, _) => const SizedBox.shrink(),

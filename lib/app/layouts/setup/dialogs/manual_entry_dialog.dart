@@ -2,10 +2,10 @@ import 'package:bluebubbles/helpers/backend/settings_helpers.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/layouts/setup/dialogs/connecting_dialog.dart';
 import 'package:bluebubbles/app/layouts/setup/dialogs/failed_to_scan_dialog.dart';
+import 'package:bluebubbles/app/layouts/setup/pages/sync/server_credentials.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart' hide Response;
@@ -29,8 +29,9 @@ class _ManualEntryDialogState extends State<ManualEntryDialog> {
     if (url.endsWith("/")) {
       url = url.substring(0, url.length - 1);
     }
-    if (kIsWeb && url.startsWith("http://")) {
-      error.value = "HTTP URLs are not supported on Web! You must use an HTTPS URL.";
+    if (isWebMixedContentBlocked(url)) {
+      error.value = "Mixed Content blocked: this page is served over HTTPS, so your browser cannot connect to an http:// server URL. "
+          "Use an https:// URL with CORS enabled.";
       return;
     }
     if (!isValidServerAddress(url) || password.isEmpty) {
@@ -118,6 +119,7 @@ class _ManualEntryDialogState extends State<ManualEntryDialog> {
                     ),
                   ),
                 ),
+                WebHttpHelpBanner(controller: urlController),
                 const SizedBox(height: 10),
                 Focus(
                   onKeyEvent: (node, event) {

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:isolate';
 
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -12,7 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:network_tools/network_tools.dart'
-    if (dart.library.html) 'package:bluebubbles/models/html/network_tools.dart';
+    if (dart.library.js_interop) 'package:bluebubbles/database/html/network_tools.dart';
 import 'package:universal_io/io.dart';
 
 class NetworkTasks {
@@ -174,14 +173,14 @@ class NetworkTasks {
   /// thread and freezes typing, so it runs in a short-lived isolate there.
   static Future<String?> _lanIPv4() async {
     if (kIsWeb || !Platform.isWindows) return NetworkInfo().getWifiIP();
-    return Isolate.run(() async {
+    return compute((_) async {
       final plugin = NetworkInfoPlusWindowsPlugin();
       try {
         return await plugin.getWifiIP();
       } finally {
         plugin.closeHandle();
       }
-    });
+    }, null);
   }
 
   /// Sets [HttpSvc.originOverride] and syncs the new value to registered isolates.

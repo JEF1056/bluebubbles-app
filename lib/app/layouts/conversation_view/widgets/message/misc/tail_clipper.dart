@@ -27,7 +27,7 @@ abstract final class BubbleConnect {
     if (CurrentSkin.iOS) return false;
     if (!state.isLeadingMessagePart(part)) return true;
     final older = state.oldMessage;
-    return older != null && !older.isGroupEvent && !older.showTail(state.message) && !state.message.isReply;
+    return older != null && !older.isGroupEvent && !older.showTail(state.message);
   }
 }
 

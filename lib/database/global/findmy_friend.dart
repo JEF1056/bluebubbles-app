@@ -13,7 +13,7 @@ import 'package:intl/intl.dart';
 enum LocationStatus { legacy, shallow, live }
 
 Handle? findHandleForAddress(String? address) {
-  if (address == null || address.isEmpty || kIsWeb) return null;
+  if (address == null || address.isEmpty) return null;
   try {
     // 1. iMessage
     var h = Handle.findOne(addressAndService: HandleLookupKey(address, "iMessage"));
@@ -52,7 +52,7 @@ String resolveFriendDisplayName({
           GetIt.I.isRegistered<HandleService>())
       ? (HandleSvc.getHandleState(rawHandle!.id!)?.handle ?? rawHandle)
       : rawHandle;
-  if (resolvedHandle != null && !kIsWeb && resolvedHandle.contactsV2.isNotEmpty) {
+  if (resolvedHandle != null && resolvedHandle.contactsV2.isNotEmpty) {
     final name = resolvedHandle.displayName;
     if (name.isNotEmpty && name != resolvedHandle.address) {
       return name;
@@ -60,7 +60,7 @@ String resolveFriendDisplayName({
   }
 
   // 2. Device / server contacts (symmetric phone-variant & email matching, prefers contacts with avatars)
-  if (!kIsWeb && rawAddress != null && rawAddress.isNotEmpty) {
+  if (rawAddress != null && rawAddress.isNotEmpty) {
     try {
       final ContactV2? matched = contactsOverride != null
           ? ContactV2Actions.matchContactForAddress(contactsOverride, rawAddress)

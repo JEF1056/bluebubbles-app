@@ -1,20 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' as io;
+import 'package:universal_io/io.dart' as io;
 import 'dart:math';
 
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
-import 'package:desktop_webview_auth/desktop_webview_auth.dart';
-import 'package:desktop_webview_auth/google.dart';
+import 'package:bluebubbles/platform/shims/native_misc.dart' show DesktopWebviewAuth, GoogleSignInArgs;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:window_manager/window_manager.dart';
+import 'package:bluebubbles/platform/shims/desktop_window.dart';
 
 typedef GoogleOAuthStageCallback = void Function(String status);
 
@@ -158,11 +157,18 @@ Future<String?> googleOAuth(
     }
 
     // initialize gsi
+    final webClientId = kIsWeb ? fdb.getClientId() : null;
+    if (kIsWeb && (webClientId == null || webClientId.isEmpty)) {
+      throw const GoogleOAuthException(
+        userMessage: "Google Sign-In is not configured for this web origin. Use Manual entry with your server URL and password.",
+        technicalMessage: "Missing GOOGLE_WEB_CLIENT_ID for custom web origin.",
+      );
+    }
     final gsi = GoogleSignIn.instance;
     try {
       reportStage("Initializing Google Sign-In");
       await gsi.initialize(
-        clientId: kIsWeb ? fdb.getClientId() : null,
+        clientId: webClientId,
         serverClientId: !kIsWeb && Platform.isAndroid ? fdb.getServerClientId() : null,
       );
       GoogleSignInAccount? account;
@@ -241,10 +247,12 @@ Future<String?> googleOAuth(
 
 Future<void> forgetGoogleOAuthSession() async {
   if (Platform.isAndroid || kIsWeb) {
+    final webClientId = kIsWeb ? fdb.getClientId() : null;
+    if (kIsWeb && (webClientId == null || webClientId.isEmpty)) return;
     try {
       final gsi = GoogleSignIn.instance;
       await gsi.initialize(
-        clientId: kIsWeb ? fdb.getClientId() : null,
+        clientId: webClientId,
         serverClientId: !kIsWeb && Platform.isAndroid ? fdb.getServerClientId() : null,
       );
       await gsi.signOut();

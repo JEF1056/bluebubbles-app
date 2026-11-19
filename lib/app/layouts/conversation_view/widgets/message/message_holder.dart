@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/chat_event/chat_event.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
@@ -395,7 +396,8 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                       !widget.isReplyThread &&
                                       message.threadOriginatorGuid != null &&
                                       replyTo != null &&
-                                      replyTo!.guid != null)
+                                      replyTo!.guid != null &&
+                                      (olderMessage == null || message.showUpperMessage(olderMessage!)))
                                     ReplyBubbleSection(
                                       replyTo: replyTo!,
                                       cvController: widget.cvController,
@@ -428,32 +430,52 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                             (showAvatar || alwaysShowAvatars) && !(message.isGroupEvent || e.isUnsent)
                                                 ? EdgeInsets.only(left: 35.0 * avatarScale)
                                                 : EdgeInsets.zero,
-                                        child: DecoratedBox(
-                                          decoration: iOS &&
+                                        child: SelectModeWrapper(
+                                          cvController: widget.cvController,
+                                          tapped: tapped,
+                                          child: LayoutBuilder(
+                                            builder: (context, constraints) {
+                                              final hasBackground =
+                                                  ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+                                              final lineColor = hasBackground
+                                                  ? Colors.white.withValues(alpha: 0.42)
+                                                  : (iOS
+                                                      ? context.theme.colorScheme.surfaceContainerHighest
+                                                      : context.theme.colorScheme.outlineVariant);
+                                              final iosEnabled = iOS &&
                                                   !widget.isReplyThread &&
                                                   ((index == 0 &&
                                                           message.threadOriginatorGuid != null &&
                                                           olderMessage != null) ||
                                                       (index == messageParts.length - 1 &&
                                                           threadReplies.isNotEmpty &&
-                                                          newerMessage != null))
-                                              ? ReplyLineDecoration(
-                                                  isFromMe: message.isFromMe!,
-                                                  color: context.theme.colorScheme.surfaceContainerHighest,
-                                                  connectUpper: message.connectToUpper(),
-                                                  connectLower:
-                                                      newerMessage != null && message.connectToLower(newerMessage!),
-                                                  context: context,
-                                                )
-                                              : const BoxDecoration(),
-                                          child: SelectModeWrapper(
-                                            cvController: widget.cvController,
-                                            tapped: tapped,
-                                            child: LayoutBuilder(
-                                              builder: (context, constraints) => Align(
-                                                alignment:
-                                                    message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
-                                                child: Row(
+                                                          newerMessage != null));
+                                              // Material: draw a single subtle L-hook only when replying directly
+                                              // across opposite senders (never full-width loops between stacked same-sender replies).
+                                              final materialConnectUpper = !iOS &&
+                                                  !widget.isReplyThread &&
+                                                  index == 0 &&
+                                                  message.threadOriginatorGuid != null &&
+                                                  olderMessage != null &&
+                                                  olderMessage!.isFromMe != message.isFromMe &&
+                                                  !message.showUpperMessage(olderMessage!);
+                                              final connectUpper = iosEnabled
+                                                  ? message.connectToUpper()
+                                                  : materialConnectUpper;
+                                              final connectLower = iosEnabled
+                                                  ? (newerMessage != null && message.connectToLower(newerMessage!))
+                                                  : false;
+                                              return ReplyLineBox(
+                                                enabled: iosEnabled || materialConnectUpper,
+                                                isFromMe: message.isFromMe!,
+                                                color: lineColor,
+                                                connectUpper: connectUpper,
+                                                connectLower: connectLower,
+                                                compactHook: !iOS,
+                                                child: Align(
+                                                  alignment:
+                                                      message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
+                                                  child: Row(
                                                   mainAxisSize: MainAxisSize.min,
                                                   children: [
                                                     // show group event
@@ -638,11 +660,12 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                   ].conditionalReverse(message.isFromMe!),
                                                 ),
                                               ),
-                                            ),
-                                          ),
+                                            );
+                                          },
                                         ),
                                       ),
-                                    ],
+                                    ),
+                                  ],
                                   ),
                                   // message properties (edits, effect) & tappable multi-response reply count pill
                                   ..._buildThreadAndPropertiesSection(
@@ -749,47 +772,77 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                 ),
               ),
             )
-          : Material(
-              color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.8),
-              borderRadius: BorderRadius.circular(16),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(16),
-                onTap: () => showReplyThread(context, message, e, service, widget.cvController),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.reply_rounded,
-                        size: 13,
-                        color: theme.colorScheme.onSecondaryContainer,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        label,
-                        textHeightBehavior: const TextHeightBehavior(
-                          applyHeightToFirstAscent: true,
-                          applyHeightToLastDescent: true,
-                          leadingDistribution: TextLeadingDistribution.even,
+          : (ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false)
+              ? InkWell(
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () => showReplyThread(context, message, e, service, widget.cvController),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Text(
+                          label,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.88),
+                            fontWeight: FontWeight.w600,
+                            shadows: const [Shadow(color: Colors.black54, blurRadius: 3)],
+                          ),
                         ),
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: theme.colorScheme.onSecondaryContainer,
-                          fontWeight: FontWeight.w600,
-                          height: 1.2,
+                        const SizedBox(width: 2),
+                        Icon(
+                          Icons.chevron_right_rounded,
+                          size: 15,
+                          color: Colors.white.withValues(alpha: 0.88),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ),
-            );
+                )
+              : Material(
+                  color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(16),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => showReplyThread(context, message, e, service, widget.cvController),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.reply_rounded,
+                            size: 13,
+                            color: theme.colorScheme.onSecondaryContainer,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            label,
+                            textHeightBehavior: const TextHeightBehavior(
+                              applyHeightToFirstAscent: true,
+                              applyHeightToLastDescent: true,
+                              leadingDistribution: TextLeadingDistribution.even,
+                            ),
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.onSecondaryContainer,
+                              fontWeight: FontWeight.w600,
+                              height: 1.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
 
       widgets.add(
         Padding(
-          padding: avatarPad.add(const EdgeInsets.symmetric(horizontal: 15).add(const EdgeInsets.only(top: 4))),
+          padding: iOS
+              ? avatarPad.add(const EdgeInsets.symmetric(horizontal: 15).add(const EdgeInsets.only(top: 4)))
+              : avatarPad.add(const EdgeInsets.only(top: 4)),
           child: pill,
         ),
       );

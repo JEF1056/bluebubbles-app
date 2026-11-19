@@ -1,5 +1,7 @@
 import 'dart:async';
 
+Future<void> configureNetworkTools(String dbDirectory, {bool enableDebugging = false}) async {}
+
 /// Shim for NetworkInfo to allow for web compile
 class HostScanner {
   /// Obtains the IPv4 address of the connected wifi network
@@ -15,6 +17,26 @@ class HostScanner {
     final StreamController<ActiveHost> activeHostsController = StreamController<ActiveHost>();
     return activeHostsController.stream;
   }
+}
+
+class HostScannerService {
+  static final instance = HostScannerService();
+
+  Stream<ActiveHost> scanDevicesForSinglePort(
+    String subnet,
+    int port, {
+    int firstHostId = 1,
+    int lastHostId = 254,
+    Duration timeout = const Duration(milliseconds: 2000),
+    dynamic progressCallback,
+    bool resultsInAddressAscendingOrder = true,
+  }) =>
+      const Stream<ActiveHost>.empty();
+}
+
+class NetworkInfoPlusWindowsPlugin {
+  Future<String?> getWifiIP() async => null;
+  void closeHandle() {}
 }
 
 class ActiveHost {

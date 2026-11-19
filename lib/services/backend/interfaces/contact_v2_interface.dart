@@ -6,7 +6,7 @@ import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/services/backend/actions/contact_v2_actions.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/services.dart';
-import 'package:flutter_contacts/flutter_contacts.dart' as fc;
+import 'package:bluebubbles/platform/shims/native_misc.dart' as fc;
 import 'package:get_it/get_it.dart';
 
 /// ContactV2Interface provides the bridge between the main isolate and the GlobalIsolate

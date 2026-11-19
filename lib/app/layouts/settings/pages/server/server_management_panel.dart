@@ -6,7 +6,6 @@ import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/models/models.dart' show ServerDetails;
 import 'package:bluebubbles/services/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -150,12 +149,6 @@ class ServerManagementPanelController extends StatefulController {
   Future<bool> refreshLocalStats() async {
     isLoadingLocalStats.value = true;
     localStatsErrorMessage.value = null;
-
-    if (kIsWeb) {
-      localStatsErrorMessage.value = "Local stats are unavailable on web builds";
-      isLoadingLocalStats.value = false;
-      return false;
-    }
 
     try {
       await Database.waitForInit();

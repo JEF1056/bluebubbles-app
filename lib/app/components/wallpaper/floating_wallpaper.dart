@@ -1,7 +1,11 @@
+import 'dart:math';
+
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_config_field.dart';
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_definition.dart';
 import 'package:bluebubbles/app/components/wallpaper/theme_wallpaper_palette.dart';
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_web_hints.dart';
 import 'package:floating_animation/floating_animation.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -158,6 +162,9 @@ class _FloatingWallpaperView extends StatelessWidget {
     final size = FloatingWallpaperDefinition._size(config);
     final rotation = FloatingWallpaperDefinition._rotation(config);
     final pulse = FloatingWallpaperDefinition._pulse(config);
+    final rawMaxShapes = FloatingWallpaperDefinition._maxShapes(config);
+    final cores = kIsWeb ? webHardwareConcurrency : null;
+    final maxShapes = (kIsWeb && cores != null && cores <= 4) ? min(rawMaxShapes, 20) : rawMaxShapes;
 
     return ColoredBox(
       color: context.theme.colorScheme.surface,
@@ -168,7 +175,7 @@ class _FloatingWallpaperView extends StatelessWidget {
         // frame. Keying on them forces a fresh instance (and a fresh
         // `initState()`) whenever one changes.
         key: ValueKey('$speed-$size-$rotation-$pulse'),
-        maxShapes: FloatingWallpaperDefinition._maxShapes(config),
+        maxShapes: maxShapes,
         speedMultiplier: speed,
         sizeMultiplier: size,
         selectedShape: shape,

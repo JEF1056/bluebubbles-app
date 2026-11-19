@@ -105,26 +105,25 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
             behavior: HitTestBehavior.opaque,
             onTap: () => _openReplyThread(context, chatGuid, resolvedPart),
             child: Container(
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-              decoration: hasBackground
-                  ? BoxDecoration(
-                      color: context.theme.colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                    )
-                  : null,
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
               // Obx: redacted-mode toggles and sender-name changes update the preview in place.
               child: Obx(() => Text.rich(
                     TextSpan(children: [
-                      TextSpan(
-                        text: controller.senderDisplayName,
-                        style: context.textTheme.bodyMedium!
-                            .copyWith(fontWeight: FontWeight.w400, color: context.theme.colorScheme.outline),
-                      ),
-                      const TextSpan(text: "\n"),
+                      if (!iOS && !message.isFromMe!) ...[
+                        TextSpan(
+                          text: controller.senderDisplayName,
+                          style: context.textTheme.labelSmall!
+                              .copyWith(fontWeight: FontWeight.w500, color: context.theme.colorScheme.onSurfaceVariant),
+                        ),
+                        const TextSpan(text: "\n"),
+                      ],
                       TextSpan(
                         text: _previewText(resolvedPart),
-                        style: context.textTheme.bodyMedium!.apply(fontSizeFactor: 1.15),
+                        style: context.textTheme.bodyMedium!.copyWith(
+                          color: (!iOS && message.isFromMe!)
+                              ? context.theme.colorScheme.onPrimaryContainer
+                              : context.theme.colorScheme.onSurface,
+                        ),
                       ),
                     ]),
                     textHeightBehavior: const TextHeightBehavior(

@@ -1,3 +1,5 @@
+import 'dart:io' as dart_io show HttpClient;
+
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/network/user_certificates.dart';
 import 'package:universal_io/io.dart';
@@ -45,7 +47,7 @@ class CustomHttpContext extends HttpOverrides {
   }
 
   @override
-  HttpClient createHttpClient(SecurityContext? context) {
+  dart_io.HttpClient createHttpClient(SecurityContext? context) {
     // Use the cached context with system + user certs
     final client = super.createHttpClient(_cachedContext ?? context);
 

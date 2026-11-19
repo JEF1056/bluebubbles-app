@@ -1,8 +1,15 @@
+import 'dart:async';
+
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/models/models.dart';
+import 'package:bluebubbles/services/backend/filesystem/web_media_cache.dart';
+import 'package:bluebubbles/services/backend/filesystem/web_media_cache_quota_stub.dart'
+    if (dart.library.js_interop) 'package:bluebubbles/services/backend/filesystem/web_media_cache_quota_web.dart';
 import 'package:bluebubbles/services/backend/interfaces/storage_interface.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/isolates/isolate_event.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:uuid/uuid.dart';
@@ -25,12 +32,22 @@ class StorageAnalyzerController extends GetxController {
   /// correspond to what's on screen.
   final RxSet<StorageSegmentType> selectedSegments = <StorageSegmentType>{}.obs;
 
+  final RxnInt webMediaUsageBytes = RxnInt();
+  final RxnInt webOriginUsageBytes = RxnInt();
+  final RxnInt webOriginQuotaBytes = RxnInt();
+  final RxBool webLoading = false.obs;
+  final RxBool webClearingCache = false.obs;
+
   String? _currentRunId;
   late final void Function(dynamic) _onProgress = _handleProgressEvent;
 
   @override
   void onInit() {
     super.onInit();
+    if (kIsWeb) {
+      unawaited(loadWebStorageInfo());
+      return;
+    }
     GetIt.I<GlobalIsolate>().addEventListener(IsolateEvent.storageAnalysisProgress, _onProgress);
     // Re-run automatically once the user has already analyzed at least once —
     // before that, the empty state's explicit "Analyze" button is the only
@@ -49,7 +66,9 @@ class StorageAnalyzerController extends GetxController {
 
   @override
   void onClose() {
-    GetIt.I<GlobalIsolate>().removeEventListener(IsolateEvent.storageAnalysisProgress, _onProgress);
+    if (!kIsWeb && GetIt.I.isRegistered<GlobalIsolate>()) {
+      GetIt.I<GlobalIsolate>().removeEventListener(IsolateEvent.storageAnalysisProgress, _onProgress);
+    }
     super.onClose();
   }
 
@@ -114,4 +133,35 @@ class StorageAnalyzerController extends GetxController {
           .where((s) => selectedSegments.contains(s.type))
           .fold<int>(0, (a, s) => a + s.bytes) ??
       0;
+
+  Future<void> loadWebStorageInfo() async {
+    webLoading.value = true;
+    try {
+      final results = await Future.wait([
+        WebMediaCache.instance.usageBytes(),
+        estimateWebOriginStorage(),
+      ]);
+      webMediaUsageBytes.value = results[0] as int;
+      final est = results[1] as ({int? usage, int? quota});
+      webOriginUsageBytes.value = est.usage;
+      webOriginQuotaBytes.value = est.quota;
+    } catch (_) {
+      // Best-effort browser quota / IDB query.
+    } finally {
+      webLoading.value = false;
+    }
+  }
+
+  Future<void> clearWebMediaCache() async {
+    if (webClearingCache.value) return;
+    webClearingCache.value = true;
+    try {
+      await WebMediaCache.instance.clearAll();
+      imageCache.clear();
+      imageCache.clearLiveImages();
+      await loadWebStorageInfo();
+    } finally {
+      webClearingCache.value = false;
+    }
+  }
 }

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/network/metadata/models/url_metadata.dart';
-import 'package:flutter/foundation.dart';
 
 /// Identifies which preview a set of keys inside `Message.metadata` belongs to.
 ///
@@ -190,7 +189,7 @@ abstract final class MessageMetadataStore {
 
   static void _save(Message message, Map<String, dynamic> map) {
     message.metadata = map;
-    if (kIsWeb || message.id == null) return;
+    if (message.id == null) return;
     // Off the main isolate: a synchronous write waits out any write transaction a sync holds, which on Windows
     // also blocks keyboard input since the main isolate shares the platform thread.
     unawaited(message.saveAsync());

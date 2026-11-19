@@ -90,28 +90,43 @@ class _AvatarCropState extends State<AvatarCrop> with ThemeHelpers {
     }
 
     if (widget.index == null && widget.chat == null) {
-      File file = File(p.join(FilesystemSvc.avatarsPath, "you", "avatar-${croppedData.length}.jpg"));
-      if (!(await file.exists())) {
-        await file.create(recursive: true);
+      if (kIsWeb) {
+        SettingsSvc.settings.userAvatarPath.value = await FilesystemSvc.saveWebAvatar('you', croppedData);
+        await SettingsSvc.settings.saveOneAsync("userAvatarPath");
+      } else {
+        File file = File(p.join(FilesystemSvc.avatarsPath, "you", "avatar-${croppedData.length}.jpg"));
+        if (!(await file.exists())) {
+          await file.create(recursive: true);
+        }
+        if (SettingsSvc.settings.userAvatarPath.value != null) {
+          await File(SettingsSvc.settings.userAvatarPath.value!).delete();
+        }
+        await file.writeAsBytes(croppedData);
+        SettingsSvc.settings.userAvatarPath.value = file.path;
+        await SettingsSvc.settings.saveOneAsync("userAvatarPath");
       }
-      if (SettingsSvc.settings.userAvatarPath.value != null) {
-        await File(SettingsSvc.settings.userAvatarPath.value!).delete();
-      }
-      await file.writeAsBytes(croppedData);
-      SettingsSvc.settings.userAvatarPath.value = file.path;
-      await SettingsSvc.settings.saveOneAsync("userAvatarPath");
+      if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
       Navigator.of(context).pop();
     } else if (widget.chat != null) {
-      File file = File(p.join(FilesystemSvc.avatarsPath, FilesystemService.sanitizeGuid(widget.chat!.guid),
-          "avatar-${croppedData.length}.jpg"));
-      if (!(await file.exists())) {
-        await file.create(recursive: true);
-      }
-      await file.writeAsBytes(croppedData);
+      if (kIsWeb) {
+        final sanitized = FilesystemService.sanitizeGuid(widget.chat!.guid);
+        final savedPath = await FilesystemSvc.saveWebAvatar(sanitized, croppedData);
+        if (!mounted) return;
+        Navigator.of(context, rootNavigator: true).pop();
+        Navigator.of(context).pop(savedPath);
+      } else {
+        File file = File(p.join(FilesystemSvc.avatarsPath, FilesystemService.sanitizeGuid(widget.chat!.guid),
+            "avatar-${croppedData.length}.jpg"));
+        if (!(await file.exists())) {
+          await file.create(recursive: true);
+        }
+        await file.writeAsBytes(croppedData);
 
-      Navigator.of(context, rootNavigator: true).pop();
-      Navigator.of(context).pop(file.path);
+        if (!mounted) return;
+        Navigator.of(context, rootNavigator: true).pop();
+        Navigator.of(context).pop(file.path);
+      }
     } else {
       Navigator.of(context, rootNavigator: true).pop();
       Navigator.of(context).pop();

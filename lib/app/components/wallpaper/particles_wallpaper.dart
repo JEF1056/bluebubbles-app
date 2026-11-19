@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_config_field.dart';
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_definition.dart';
 import 'package:bluebubbles/app/components/wallpaper/theme_wallpaper_palette.dart';
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_web_hints.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:particles_flutter/engine.dart';
@@ -57,6 +59,13 @@ class ParticlesWallpaperDefinition extends DynamicWallpaperDefinition {
 
   static String _preset(Map<String, dynamic> c) => (c['preset'] as String?) ?? 'starfield';
   static _PresetTuning _tuningFor(String preset) => _presetTuning[preset] ?? _presetTuning['starfield']!;
+
+  static int effectiveCount(int count, {required bool isWeb, int? hardwareConcurrency}) {
+    if (isWeb && hardwareConcurrency != null && hardwareConcurrency <= 4) {
+      return min(count, 45);
+    }
+    return count;
+  }
 
   static int _count(Map<String, dynamic> c) {
     final tuning = _tuningFor(_preset(c));
@@ -267,7 +276,11 @@ class _ParticlesWallpaperView extends StatelessWidget {
     final palette = ThemeWallpaperPalette.fromContext(context, isIMessage: true);
     final colors = ParticlesWallpaperDefinition._colors(config, palette);
     final preset = ParticlesWallpaperDefinition._preset(config);
-    final count = ParticlesWallpaperDefinition._count(config);
+    final count = ParticlesWallpaperDefinition.effectiveCount(
+      ParticlesWallpaperDefinition._count(config),
+      isWeb: kIsWeb,
+      hardwareConcurrency: kIsWeb ? webHardwareConcurrency : null,
+    );
     final speed = ParticlesWallpaperDefinition._speed(config);
 
     return ColoredBox(

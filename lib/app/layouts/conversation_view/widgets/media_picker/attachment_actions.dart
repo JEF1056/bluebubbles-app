@@ -4,8 +4,7 @@ import 'package:bluebubbles/app/layouts/conversation_details/dialogs/timeframe_p
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_library_popover.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button.dart';
-import 'package:bluebubbles/database/io/klipy.dart';
-import 'package:bluebubbles/database/global/platform_file.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/genmoji.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -53,7 +52,7 @@ class AttachmentActions {
           path: file.path,
           name: file.name,
           size: size,
-          bytes: kIsDesktop ? await file.readAsBytes() : null,
+          bytes: (kIsDesktop || kIsWeb) ? await file.readAsBytes() : null,
         ),
       );
     }

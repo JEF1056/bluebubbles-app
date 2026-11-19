@@ -22,8 +22,6 @@ class SyncActions {
   ///
   /// Returns a map with `messageIds` (List<int>) and `chatIds` (List<int>) of updated chats.
   static Future<Map<String, dynamic>> bulkSyncData(dynamic data) async {
-    if (kIsWeb) return {'messageIds': <int>[], 'chatIds': <int>[]};
-
     final chatData = data['chatData'] as Map<String, dynamic>?;
     final messagesData = (data['messagesData'] as List).cast<Map<String, dynamic>>();
 
@@ -109,7 +107,9 @@ class SyncActions {
         'chatIds': updatedChatIds,
       };
     });
-    AttachmentActions.moveRekeyedFiles(moves);
+    if (!kIsWeb) {
+      AttachmentActions.moveRekeyedFiles(moves);
+    }
     return result;
   }
 

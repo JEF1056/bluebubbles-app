@@ -1,5 +1,5 @@
 import 'dart:ffi';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/generated/libmpv/bindings.dart';

@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';

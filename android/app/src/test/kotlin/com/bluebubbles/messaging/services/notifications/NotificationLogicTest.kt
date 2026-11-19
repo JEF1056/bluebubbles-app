@@ -199,4 +199,50 @@ class NotificationLogicTest {
         )
         assertEquals(null, DeleteNotificationHandler.resolveDismissedChatGuid(null, ""))
     }
+
+    @Test
+    fun `shortcut fingerprint deduplicates unchanged pushes and invalidates on metadata change`() {
+        val fp1 = com.bluebubbles.messaging.services.system.PushShareTargetsHandler.computeShortcutFingerprint(
+            name = "Audrey",
+            resolvedUri = "content://com.android.contacts/contacts/lookup/abc/1",
+            iconHash = 12345,
+            participantCount = 0
+        )
+        val fpSame = com.bluebubbles.messaging.services.system.PushShareTargetsHandler.computeShortcutFingerprint(
+            name = "Audrey",
+            resolvedUri = "content://com.android.contacts/contacts/lookup/abc/1",
+            iconHash = 12345,
+            participantCount = 0
+        )
+        val fpRenamed = com.bluebubbles.messaging.services.system.PushShareTargetsHandler.computeShortcutFingerprint(
+            name = "Audrey Sioeng",
+            resolvedUri = "content://com.android.contacts/contacts/lookup/abc/1",
+            iconHash = 12345,
+            participantCount = 0
+        )
+        assertEquals(fp1, fpSame)
+        assertNotEquals(fp1, fpRenamed)
+        val map = mapOf("any;-;+16266165776" to fp1)
+        assertTrue(
+            com.bluebubbles.messaging.services.system.PushShareTargetsHandler.shouldSkipShortcutPush(
+                "any;-;+16266165776",
+                fpSame,
+                map
+            )
+        )
+        assertFalse(
+            com.bluebubbles.messaging.services.system.PushShareTargetsHandler.shouldSkipShortcutPush(
+                "any;-;+16266165776",
+                fpRenamed,
+                map
+            )
+        )
+        assertFalse(
+            com.bluebubbles.messaging.services.system.PushShareTargetsHandler.shouldSkipShortcutPush(
+                "any;-;+19999999999",
+                fp1,
+                map
+            )
+        )
+    }
 }

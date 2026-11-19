@@ -14,8 +14,8 @@ import 'package:animated_size_and_fade/animated_size_and_fade.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:get/get.dart';
-import 'package:universal_html/html.dart' as uh;
 
 class NotificationPanel extends StatefulWidget {
   const NotificationPanel({super.key});
@@ -32,7 +32,7 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
   @override
   void initState() {
     super.initState();
-    tabController = TabController(vsync: this, length: kIsWeb ? 1 : 2);
+    tabController = TabController(vsync: this, length: 2);
   }
 
   @override
@@ -68,13 +68,13 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
               if (kIsWeb)
                 SettingsTile(
                   onTap: () async {
-                    String res = await uh.Notification.requestPermission();
+                    String res = await requestWebNotificationPermission();
                     setState(() {});
                     showSnackbar("Notice", "Notification permission $res");
                   },
-                  title: uh.Notification.permission == "granted"
+                  title: webNotificationPermission == "granted"
                       ? "Notifications enabled"
-                      : uh.Notification.permission == "denied"
+                      : webNotificationPermission == "denied"
                           ? "Notifications denied, please update your browser settings to re-enable notifications"
                           : "Click to enable notifications",
                   backgroundColor: tileColor,
@@ -333,12 +333,10 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
                   ),
                 ),
               ),
-              if (!kIsWeb) const ChatList(),
+              const ChatList(),
             ],
           ),
-          bottomNavigationBar: kIsWeb
-              ? null
-              : NavigationBar(
+          bottomNavigationBar: NavigationBar(
                   selectedIndex: index.value,
                   backgroundColor: headerColor,
                   destinations: [

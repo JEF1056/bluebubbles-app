@@ -102,7 +102,6 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         val chatTitle: String = call.argument("chat_title")!!
         val chatIsGroup: Boolean = call.argument("chat_is_group")!!
         val chatIcon: ByteArray? = call.argument("chat_icon")
-        val chatBitmap = if ((chatIcon?.size ?: 0) == 0) null else Utils.getAdaptiveIconFromByteArray(chatIcon!!)
         // message details
         val messageText: String = call.argument("message_text")!!
         val messageGuid: String = call.argument("message_guid")!!
@@ -112,6 +111,14 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         val contactName: String = call.argument("contact_name")!!
         val contactIcon: ByteArray? = call.argument("contact_avatar")
         val contactBitmap = if ((contactIcon?.size ?: 0) == 0) null else Utils.getAdaptiveIconFromByteArray(contactIcon!!)
+        // Reuse contactBitmap on 1:1 chats to avoid decoding the same avatar bytes twice.
+        val chatBitmap = if (!chatIsGroup && (chatIcon == null || chatIcon.isEmpty() || (contactIcon != null && chatIcon.contentEquals(contactIcon)))) {
+            contactBitmap
+        } else if ((chatIcon?.size ?: 0) == 0) {
+            null
+        } else {
+            Utils.getAdaptiveIconFromByteArray(chatIcon!!)
+        }
         val contactKey: String? = call.argument("contact_key")
         val contactUri: String? = call.argument("contact_uri")
         val nativeContactId: String? = call.argument("native_contact_id")
@@ -141,16 +148,16 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             return result.success(null)
         }
         
-        // Synchronize to prevent duplicate notifications from concurrent calls
-        synchronized(notificationLock) {
-            // check if the message has already been posted as a notification
-            val notificationPostedAlready = notificationManager.activeNotifications.firstOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("messageGuid") == messageGuid } != null
-            // don't double post a notification
+        // Synchronize to prevent duplicate notifications from concurrent calls; snapshot activeNotifications once.
+        val activeNotifications = synchronized(notificationLock) {
+            val active = notificationManager.activeNotifications
+            val notificationPostedAlready = active.firstOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("messageGuid") == messageGuid } != null
             if (notificationPostedAlready) return result.success(null)
+            active
         }
         
         // this is used to copy the style, since the notification already exists
-        val chatNotification = notificationManager.activeNotifications.lastOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("channelId") == channelId }
+        val chatNotification = activeNotifications.lastOrNull { it.notification.extras.getString("chatGuid") == chatGuid && it.notification.extras.getString("channelId") == channelId }
 
         // Route to conversation-specific channel on Android 11+ when present
         val targetChannelId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -160,31 +167,21 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             channelId
         }
 
-        // build the sender, "You", and participant Person objects for DND contact breakthrough & shortcuts
+        // build the sender and "You" Person objects for DND contact breakthrough; shortcut refresh is cached/async.
         val resolvedSenderUri = PushShareTargetsHandler.resolveContactLookupUri(context, nativeContactId, contactUri)
         val sender = buildPerson(contactName, contactBitmap, resolvedSenderUri, contactKey, true)
         val youPerson = buildPerson(youName, null, null, youKey, false)
-        val participantPersons = rawParticipants?.mapNotNull { p ->
-            val pName = p["name"] as? String ?: return@mapNotNull null
-            val pKey = p["key"] as? String
-            val pUri = PushShareTargetsHandler.resolveContactLookupUri(
-                context,
-                p["native_contact_id"] as? String,
-                p["uri"] as? String
-            )
-            val pIcon = if (pKey != null && pKey == contactKey) contactBitmap else null
-            buildPerson(pName, pIcon, pUri, pKey, true)
-        } ?: emptyList()
 
-        PushShareTargetsHandler().pushShareTarget(
+        PushShareTargetsHandler().ensureShareTargetForNotification(
             context = context,
             name = chatTitle,
             guid = chatGuid,
-            icon = chatIcon,
-            contactUri = resolvedSenderUri,
+            icon = chatIcon ?: contactIcon,
+            predecodedIcon = chatBitmap,
+            resolvedSenderUri = resolvedSenderUri,
             contactKey = contactKey,
-            nativeContactId = nativeContactId,
-            participants = participantPersons.ifEmpty { null }
+            contactBitmap = contactBitmap,
+            rawParticipants = rawParticipants
         )
 
         // get or create a messaging style
@@ -387,11 +384,16 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             .addAction(replyAction)
             .addExtras(extras)
 
-        if (participantPersons.isNotEmpty()) {
-            notificationBuilder.addPerson(sender)
-            participantPersons.filter { it.key != sender.key }.forEach { notificationBuilder.addPerson(it) }
-        } else {
-            notificationBuilder.addPerson(sender)
+        notificationBuilder.addPerson(sender)
+        rawParticipants?.forEach { p ->
+            val pName = p["name"] as? String ?: return@forEach
+            val pKey = p["key"] as? String
+            if (pKey != null && pKey == sender.key) return@forEach
+            val pUri = PushShareTargetsHandler.resolveContactLookupUriIfCached(
+                p["native_contact_id"] as? String,
+                p["uri"] as? String
+            ) ?: (p["uri"] as? String)
+            notificationBuilder.addPerson(buildPerson(pName, null, pUri, pKey, true))
         }
 
         val existingHistory = chatNotification?.notification?.extras?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
@@ -444,7 +446,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             PendingIntent.FLAG_IMMUTABLE
         )
 
-        val activeChildren = notificationManager.activeNotifications.filter {
+        val activeChildren = activeNotifications.filter {
             it.tag == Constants.newMessageNotificationTag && it.id != 0 && it.id != notificationId
         }
         val existingLines = activeChildren.mapNotNull { sbn ->
@@ -490,8 +492,9 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             .setNumber(totalConversations)
             .setColor(4888294)
 
-        notificationManager.notify(Constants.newMessageNotificationTag, 0, summaryNotificationBuilder.build())
+        // Post child notification first so heads-up and Wear OS native bridge trigger immediately.
         notificationManager.notify(Constants.newMessageNotificationTag, notificationId, notificationBuilder.build())
+        notificationManager.notify(Constants.newMessageNotificationTag, 0, summaryNotificationBuilder.build())
         result.success(null)
     }
 }

@@ -5,8 +5,10 @@ import 'package:bluebubbles/app/layouts/settings/pages/storage/widgets/storage_e
 import 'package:bluebubbles/app/layouts/settings/pages/storage/widgets/storage_expressive_results_section.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/storage/widgets/storage_filter_bar.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/storage/widgets/storage_free_up_fab.dart';
+import 'package:bluebubbles/app/layouts/settings/pages/storage/widgets/web_storage_section.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -29,7 +31,7 @@ class MaterialStorageAnalyzerPanel extends StatelessWidget with StorageAnalyzerH
       materialSubtitle: context.materialSubtitle,
       tileColor: context.tileColor,
       headerColor: context.headerColor,
-      fab: StorageFreeUpFab(controller: controller),
+      fab: kIsWeb ? null : StorageFreeUpFab(controller: controller),
       bodySlivers: [
         SliverToBoxAdapter(
           child: Padding(
@@ -38,13 +40,15 @@ class MaterialStorageAnalyzerPanel extends StatelessWidget with StorageAnalyzerH
             // `M3ESection`'s own default margin is already 16, and a page-level
             // wrapper here would double it up.
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              children: [
-                StorageFilterBar(controller: controller),
-                const SizedBox(height: 8),
-                Obx(() => _buildBody(context)),
-              ],
-            ),
+            child: kIsWeb
+                ? WebStorageSection(controller: controller)
+                : Column(
+                    children: [
+                      StorageFilterBar(controller: controller),
+                      const SizedBox(height: 8),
+                      Obx(() => _buildBody(context)),
+                    ],
+                  ),
           ),
         ),
       ],

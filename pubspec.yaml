@@ -111,6 +111,7 @@ dependencies:
   hand_signature: ^3.1.0+2
   idb_shim: ^2.6.1+7
   image: ^4.5.4
+  camera: ^0.11.1
   image_picker: ^1.2.0
   image_size_getter: ^2.4.1
   in_app_review: ^2.0.11
@@ -179,8 +180,8 @@ dependencies:
   supercharged: ^2.1.1
   tray_manager: ^0.9.0
   unicode_emojis: ^0.5.1
-  universal_html: ^2.2.4 # cross-platform dart:html implementation
   universal_io: ^2.2.2 # cross-platform dart:io implementation
+  web: ^1.1.2 # Wasm-safe DOM/JS interop for Flutter Web
   url_launcher: ^6.3.2
   vcf_dart: ^1.0.2
   version: ^3.0.2
@@ -242,6 +243,8 @@ dependency_overrides:
       path: permission_handler_windows
   pointycastle: ^4.0.0 # firebase_dart
   rxdart: ^0.28.0 # firebase_dart
+  secure_application:
+    path: packages/secure_application
   uuid: ^4.5.1 # firebase_dart
 
 dev_dependencies:

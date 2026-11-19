@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -7,7 +7,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:mime_type/mime_type.dart';
-import 'package:photo_manager/photo_manager.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 
 /// Optimized attachment picker file that uses File-based rendering instead of loading bytes
 /// This significantly reduces memory usage and improves scrolling performance

@@ -1,11 +1,13 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_audio_player.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 // it does actually export (Web only)
 // ignore: undefined_hidden_name
 import 'package:bluebubbles/database/models.dart' hide PlayerState;
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
@@ -28,6 +30,7 @@ class AudioPlayer extends StatefulWidget {
   State<StatefulWidget> createState() => _createState();
 
   State<StatefulWidget> _createState() {
+    if (kIsWeb) return _WebAudioPlayerState();
     if (kIsDesktop) return _DesktopAudioPlayerState();
     return _AudioPlayerState();
   }
@@ -251,6 +254,90 @@ class _DesktopAudioPlayerState extends State<AudioPlayer>
               ),
               if (widget.transcript != null) _NoIntrinsicWidth(child: _Transcript(widget.transcript!)),
             ])));
+  }
+
+  @override
+  bool get wantKeepAlive => true;
+}
+
+class _WebAudioPlayerState extends State<AudioPlayer>
+    with AutomaticKeepAliveClientMixin, SingleTickerProviderStateMixin {
+  late final WebAudioController _controller;
+  late final animController = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 400), animationBehavior: AnimationBehavior.preserve);
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebAudioController(file: widget.file, attachment: widget.attachment)
+      ..addListener(_onControllerUpdate);
+  }
+
+  void _onControllerUpdate() {
+    if (!mounted) return;
+    if (!_controller.isPlaying && animController.value > 0) {
+      animController.reverse();
+    } else if (_controller.isPlaying && animController.value == 0) {
+      animController.forward();
+    }
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerUpdate);
+    _controller.dispose();
+    animController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final maxSec = _controller.duration.inSeconds.toDouble();
+    final posSec = _controller.position.inSeconds.toDouble().clamp(0.0, maxSec > 0 ? maxSec : 0.0);
+
+    return Padding(
+      padding: const EdgeInsets.all(5),
+      child: IntrinsicWidth(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  onPressed: _controller.togglePlayPause,
+                  icon: AnimatedIcon(
+                    icon: AnimatedIcons.play_pause,
+                    progress: animController,
+                  ),
+                  color: context.theme.colorScheme.onSurfaceVariant,
+                  visualDensity: VisualDensity.compact,
+                ),
+                SizedBox(
+                  height: 30,
+                  child: Slider(
+                    value: posSec,
+                    onChanged: maxSec > 0
+                        ? (double value) => _controller.seek(Duration(seconds: value.toInt()))
+                        : null,
+                    min: 0,
+                    max: maxSec > 0 ? maxSec : 1.0,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 10, right: 16),
+                  child: Text("${prettyDuration(_controller.position)} / ${prettyDuration(_controller.duration)}"),
+                ),
+              ],
+            ),
+            if (widget.transcript != null) _NoIntrinsicWidth(child: _Transcript(widget.transcript!)),
+          ],
+        ),
+      ),
+    );
   }
 
   @override

@@ -3,6 +3,137 @@ import 'dart:math';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+
+/// Paints [ReplyLinePainter] behind an [Align] child using the child's actual
+/// rendered bubble width so the horizontal connector reaches the bubble edge.
+class ReplyLineBox extends SingleChildRenderObjectWidget {
+  final bool enabled;
+  final bool isFromMe;
+  final bool connectUpper;
+  final bool connectLower;
+  final Color color;
+  final bool compactHook;
+
+  const ReplyLineBox({
+    super.key,
+    required this.enabled,
+    required this.isFromMe,
+    required this.connectUpper,
+    required this.connectLower,
+    required this.color,
+    this.compactHook = false,
+    required super.child,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => RenderReplyLineBox(
+        enabled: enabled,
+        isFromMe: isFromMe,
+        connectUpper: connectUpper,
+        connectLower: connectLower,
+        color: color,
+        compactHook: compactHook,
+      );
+
+  @override
+  void updateRenderObject(BuildContext context, RenderReplyLineBox renderObject) {
+    renderObject
+      ..enabled = enabled
+      ..isFromMe = isFromMe
+      ..connectUpper = connectUpper
+      ..connectLower = connectLower
+      ..color = color
+      ..compactHook = compactHook;
+  }
+}
+
+class RenderReplyLineBox extends RenderProxyBox {
+  bool _enabled;
+  bool _isFromMe;
+  bool _connectUpper;
+  bool _connectLower;
+  Color _color;
+  bool _compactHook;
+
+  RenderReplyLineBox({
+    required bool enabled,
+    required bool isFromMe,
+    required bool connectUpper,
+    required bool connectLower,
+    required Color color,
+    required bool compactHook,
+  })  : _enabled = enabled,
+        _isFromMe = isFromMe,
+        _connectUpper = connectUpper,
+        _connectLower = connectLower,
+        _color = color,
+        _compactHook = compactHook;
+
+  set enabled(bool v) {
+    if (_enabled != v) {
+      _enabled = v;
+      markNeedsPaint();
+    }
+  }
+
+  set isFromMe(bool v) {
+    if (_isFromMe != v) {
+      _isFromMe = v;
+      markNeedsPaint();
+    }
+  }
+
+  set connectUpper(bool v) {
+    if (_connectUpper != v) {
+      _connectUpper = v;
+      markNeedsPaint();
+    }
+  }
+
+  set connectLower(bool v) {
+    if (_connectLower != v) {
+      _connectLower = v;
+      markNeedsPaint();
+    }
+  }
+
+  set color(Color v) {
+    if (_color != v) {
+      _color = v;
+      markNeedsPaint();
+    }
+  }
+
+  set compactHook(bool v) {
+    if (_compactHook != v) {
+      _compactHook = v;
+      markNeedsPaint();
+    }
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (_enabled && (_connectUpper || _connectLower) && size.width > 0 && size.height > 0) {
+      double? bubbleWidth;
+      if (child is RenderPositionedBox) {
+        bubbleWidth = (child as RenderPositionedBox).child?.size.width;
+      }
+      ReplyLinePainter.paintConnector(
+        canvas: context.canvas,
+        offset: offset,
+        size: size,
+        isFromMe: _isFromMe,
+        connectUpper: _connectUpper,
+        connectLower: _connectLower,
+        color: _color,
+        bubbleWidth: bubbleWidth,
+        compactHook: _compactHook,
+      );
+    }
+    super.paint(context, offset);
+  }
+}
 
 class ReplyLineDecoration extends Decoration {
   final bool isFromMe;
@@ -57,126 +188,135 @@ class ReplyLinePainter extends BoxPainter {
 
   @override
   void paint(Canvas canvas, Offset offset, ImageConfiguration configuration) {
-    final size = configuration.size!;
-    // Outgoing and incoming message cells use slightly different local anchors.
+    paintConnector(
+      canvas: canvas,
+      offset: offset,
+      size: configuration.size!,
+      isFromMe: isFromMe,
+      connectUpper: connectUpper,
+      connectLower: connectLower,
+      color: color,
+      fallbackMaxWidth: NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor,
+    );
+  }
+
+  static void paintConnector({
+    required Canvas canvas,
+    required Offset offset,
+    required Size size,
+    required bool isFromMe,
+    required bool connectUpper,
+    required bool connectLower,
+    required Color color,
+    double? bubbleWidth,
+    double? fallbackMaxWidth,
+    bool compactHook = false,
+  }) {
+    if (compactHook) {
+      // Short iOS-style L-hook on the opposite-sender margin (never stretches across the wallpaper).
+      final paint = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      final path = Path();
+      const double edgeInset = 18.0;
+      const double hookLen = 28.0;
+      final double r = min(14.0, size.height / 2);
+      final double midY = offset.dy + size.height / 2;
+      final double verticalX = isFromMe ? offset.dx + edgeInset : offset.dx + size.width - edgeInset;
+      if (connectUpper) {
+        path.moveTo(verticalX, offset.dy - 4.0);
+        path.lineTo(verticalX, midY - r);
+        if (isFromMe) {
+          path.arcToPoint(Offset(verticalX + r, midY), clockwise: false, radius: Radius.circular(r));
+          path.lineTo(verticalX + hookLen, midY);
+        } else {
+          path.arcToPoint(Offset(verticalX - r, midY), clockwise: true, radius: Radius.circular(r));
+          path.lineTo(verticalX - hookLen, midY);
+        }
+      }
+      canvas.drawPath(path, paint);
+      return;
+    }
+
     final localOffset = offset + Offset(isFromMe ? 35 : 0, 0);
     final midY = localOffset.dy + size.height / 2;
-
-    // Corner radius where the vertical thread line bends into the horizontal segment.
-    final radius = min(size.height / 2, 30.0);
-
-    // Left/right edge that the vertical thread segment is pinned to.
+    final radius = min(size.height / 2, 22.0);
     final verticalX = isFromMe ? localOffset.dx : localOffset.dx + size.width - 35;
 
-    // Horizontal endpoint limit near the bubble edge.
-    final horizontalLimit = isFromMe
-        ? localOffset.dx + size.width - NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 30
-        : localOffset.dx + NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor;
+    // Aim horizontal tip cleanly 8dp from the actual bubble edge when known.
+    final double horizontalTarget;
+    if (bubbleWidth != null) {
+      horizontalTarget = isFromMe
+          ? offset.dx + size.width - bubbleWidth - 8
+          : offset.dx + bubbleWidth + 8;
+    } else {
+      final maxW = fallbackMaxWidth ?? (size.width * MessageState.maxBubbleSizeFactor);
+      horizontalTarget = isFromMe
+          ? localOffset.dx + size.width - maxW - 30
+          : localOffset.dx + maxW - 35;
+    }
 
     final paint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
 
     final path = Path();
 
+    // Bridge the small vertical gap between stacked reply rows.
+    const double verticalOverlap = 6.0;
+
     if (connectUpper) {
-      _addBottomConnector(
-        path: path,
-        localOffset: localOffset,
-        size: size,
-        midY: midY,
-        radius: radius,
-        verticalX: verticalX,
-        horizontalLimit: horizontalLimit,
-      );
+      final effectiveRadius =
+          isFromMe ? radius * _outgoingVisualBottomRadiusFactor : radius * _incomingVisualBottomRadiusFactor;
+      final clampedRadius = min(effectiveRadius, size.height / 2);
+      final verticalEndY = midY - clampedRadius;
+
+      path.moveTo(verticalX, localOffset.dy - verticalOverlap);
+      path.lineTo(verticalX, verticalEndY);
+      if (isFromMe) {
+        final turnEndX = verticalX + clampedRadius;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(clampedRadius));
+        if (horizontalTarget > turnEndX) {
+          path.lineTo(horizontalTarget, midY);
+        }
+      } else {
+        final turnEndX = verticalX - clampedRadius;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(clampedRadius));
+        if (horizontalTarget < turnEndX) {
+          path.lineTo(horizontalTarget, midY);
+        }
+      }
     }
 
     if (connectLower) {
-      _addTopConnector(
-        path: path,
-        localOffset: localOffset,
-        size: size,
-        midY: midY,
-        radius: radius,
-        verticalX: verticalX,
-        horizontalLimit: horizontalLimit,
-      );
+      final effectiveRadius =
+          isFromMe ? radius * _outgoingVisualTopRadiusFactor : radius * _incomingVisualTopRadiusFactor;
+      final clampedRadius = min(effectiveRadius, size.height / 2);
+      final verticalEndY = midY + clampedRadius;
+
+      path.moveTo(verticalX, localOffset.dy + size.height + verticalOverlap);
+      path.lineTo(verticalX, verticalEndY);
+      if (isFromMe) {
+        final turnEndX = verticalX + clampedRadius;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(clampedRadius));
+        if (horizontalTarget > turnEndX) {
+          path.lineTo(horizontalTarget, midY);
+        }
+      } else {
+        final turnEndX = verticalX - clampedRadius;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(clampedRadius));
+        if (horizontalTarget < turnEndX) {
+          path.lineTo(horizontalTarget, midY);
+        }
+      }
     }
 
     canvas.drawPath(path, paint);
-  }
-
-  void _addBottomConnector({
-    required Path path,
-    required Offset localOffset,
-    required Size size,
-    required double midY,
-    required double radius,
-    required double verticalX,
-    required double horizontalLimit,
-  }) {
-    final effectiveRadius =
-        isFromMe ? radius * _outgoingVisualBottomRadiusFactor : radius * _incomingVisualBottomRadiusFactor;
-    final verticalEndY = localOffset.dy + (size.height / 2 - effectiveRadius).clamp(0, double.infinity);
-
-    if (isFromMe) {
-      final turnEndX = verticalX + effectiveRadius;
-      final arcRect = Rect.fromLTWH(
-        verticalX,
-        midY - (2 * effectiveRadius),
-        2 * effectiveRadius,
-        2 * effectiveRadius,
-      );
-      // Start at left-middle (pi) and sweep upward->right by 90 degrees.
-      path.arcTo(arcRect, pi, -pi / 2, false);
-      path.lineTo(max(turnEndX, horizontalLimit), midY);
-      return;
-    }
-
-    // Incoming: top -> down vertical -> curve left into midline -> continue left.
-    path.moveTo(verticalX, localOffset.dy);
-    path.lineTo(verticalX, verticalEndY);
-
-    final turnEndX = verticalX - effectiveRadius;
-    path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(effectiveRadius));
-    path.lineTo(min(turnEndX, horizontalLimit - 35), midY);
-  }
-
-  void _addTopConnector({
-    required Path path,
-    required Offset localOffset,
-    required Size size,
-    required double midY,
-    required double radius,
-    required double verticalX,
-    required double horizontalLimit,
-  }) {
-    final effectiveRadius =
-        isFromMe ? radius * _outgoingVisualTopRadiusFactor : radius * _incomingVisualTopRadiusFactor;
-    final verticalEndY = localOffset.dy + size.height - (size.height / 2 - effectiveRadius).clamp(0, double.infinity);
-
-    if (isFromMe) {
-      // Outgoing: bottom -> up vertical -> curve right into midline -> continue right.
-      path.moveTo(verticalX, localOffset.dy + size.height);
-      // Small overlap avoids tiny seam with the upper connector on stacked replies.
-      path.lineTo(verticalX, verticalEndY);
-
-      final turnEndX = verticalX + effectiveRadius;
-      final arcRect = Rect.fromLTWH(verticalX, midY, 2 * effectiveRadius, 2 * effectiveRadius);
-      // Start at left-middle (pi) and sweep downward->right by 90 degrees.
-      path.arcTo(arcRect, pi, pi / 2, false);
-      path.lineTo(max(turnEndX, horizontalLimit), midY);
-      return;
-    }
-
-    // Incoming: bottom -> up vertical -> curve left into midline -> continue left.
-    path.moveTo(verticalX, localOffset.dy + size.height);
-    path.lineTo(verticalX, verticalEndY);
-
-    final turnEndX = verticalX - effectiveRadius;
-    path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(effectiveRadius));
-    path.lineTo(min(turnEndX, horizontalLimit - 35), midY);
   }
 }

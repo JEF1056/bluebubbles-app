@@ -1,9 +1,10 @@
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/voice_message_recorder.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:record/record.dart';
 
 /// Animated overlay shown on top of the text field while audio is recording.
 ///
@@ -14,10 +15,12 @@ class TextFieldRecordingOverlay extends StatelessWidget {
     super.key,
     required this.controller,
     this.recorderController,
+    this.audioRecorder,
   });
 
   final ConversationViewController controller;
   final RecorderController? recorderController;
+  final AudioRecorder? audioRecorder;
 
   @override
   Widget build(BuildContext context) {
@@ -61,6 +64,7 @@ class TextFieldRecordingOverlay extends StatelessWidget {
                           })
                       : VoiceMessageRecorder(
                           recorderController: recorderController,
+                          audioRecorder: audioRecorder,
                           textFieldSize: textFieldSize,
                           iOS: iOS,
                           samsung: samsung,

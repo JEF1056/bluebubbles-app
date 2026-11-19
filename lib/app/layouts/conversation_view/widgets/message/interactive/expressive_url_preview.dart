@@ -88,6 +88,7 @@ class ExpressiveUrlPreview extends StatelessWidget {
     final header = _buildHeader(
       context,
       previewImagePath: controller.previewImagePath.value,
+      previewImageBytes: controller.previewImageBytes.value,
       webImageUrl: controller.webImageUrl,
       appleBytes: controller.showsAppleImage ? resolvedContent?.bytes : null,
       appleFile: controller.showsAppleImage && resolvedContent?.bytes == null ? controller.contentFile : null,
@@ -301,6 +302,7 @@ class ExpressiveUrlPreview extends StatelessWidget {
   Widget? _buildHeader(
     BuildContext context, {
     required String? previewImagePath,
+    required Uint8List? previewImageBytes,
     required String? webImageUrl,
     required Uint8List? appleBytes,
     required File? appleFile,
@@ -312,7 +314,15 @@ class ExpressiveUrlPreview extends StatelessWidget {
     final bool animate;
 
     final Widget image;
-    if (previewImagePath != null) {
+    if (previewImageBytes != null) {
+      animate = !controller.previewImageFromDisk.value;
+      image = Image.memory(
+        previewImageBytes,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (_, _, _) => _imageFallback(context),
+      );
+    } else if (previewImagePath != null) {
       animate = !controller.previewImageFromDisk.value;
       image = Image.file(
         File(previewImagePath),
@@ -387,6 +397,7 @@ class ExpressiveUrlPreview extends StatelessWidget {
   /// icon rather than surfacing as an uncaught rendering error.
   Widget _buildIcon(BuildContext context, {double size = _sourceIconSize}) {
     final iconImagePath = controller.iconImagePath.value;
+    final iconImageBytes = controller.iconImageBytes.value;
     final webIconUrl = controller.webIconUrl;
 
     // A definite box rather than a max constraint: the source row's height must
@@ -400,21 +411,29 @@ class ExpressiveUrlPreview extends StatelessWidget {
         // Proportional to the mark. A radius chosen for a 40px badge rounds a
         // 16px favicon into a circle and eats its corners.
         borderRadius: BorderRadius.all(Radius.circular(size / 4)),
-        child: iconImagePath != null
-            ? Image.file(
-                File(iconImagePath),
+        child: iconImageBytes != null
+            ? Image.memory(
+                iconImageBytes,
                 fit: BoxFit.contain,
                 gaplessPlayback: true,
                 filterQuality: FilterQuality.medium,
                 errorBuilder: (_, _, _) => const SizedBox.shrink(),
               )
-            : Image.network(
-                webIconUrl!,
-                fit: BoxFit.contain,
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.medium,
-                errorBuilder: (_, _, _) => const SizedBox.shrink(),
-              ),
+            : iconImagePath != null
+                ? Image.file(
+                    File(iconImagePath),
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  )
+                : Image.network(
+                    webIconUrl!,
+                    fit: BoxFit.contain,
+                    gaplessPlayback: true,
+                    filterQuality: FilterQuality.medium,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
       ),
     );
 

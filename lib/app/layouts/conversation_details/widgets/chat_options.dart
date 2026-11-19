@@ -1,10 +1,10 @@
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/chat_sync_dialog.dart';
-import 'package:bluebubbles/app/layouts/conversation_details/pages/chat_stats/chat_stats_page.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/pages/chat_stats/chat_stats_page.dart' deferred as chat_stats;
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/sync_time_range_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/timeframe_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/storage/storage_analyzer_panel.dart';
-import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart';
+import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart' deferred as theme_studio;
 import 'package:bluebubbles/app/layouts/settings/widgets/content/next_button.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
@@ -86,7 +86,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
   Widget _buildAppearanceGroup(BuildContext context) {
     final rows = <_OptionRow>[
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsTile(
           title: "Change Chat Avatar",
           subtitle: "Set or reset a custom avatar for this chat",
@@ -136,7 +136,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsTile(
           title: "Wallpaper",
           subtitle: "Set an image or animated wallpaper for this chat",
@@ -150,7 +150,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsTile(
           title: "Set Custom Theme",
           subtitle: "Choose light and dark chat themes in Theme Studio",
@@ -161,14 +161,16 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
             containerColor: Colors.purple,
           ),
           trailing: const NextButton(),
-          onTap: () {
+          onTap: () async {
             final lightThemeName = chat.customThemeLight ?? ThemeStruct.getLightTheme().name;
             final darkThemeName = chat.customThemeDark ?? ThemeStruct.getDarkTheme().name;
+            await theme_studio.loadLibrary();
+            if (!context.mounted) return;
 
             NavigationSvc.push(
               context,
-              ThemeStudioPanel(
-                config: ThemeStudioPanelConfig(
+              theme_studio.ThemeStudioPanel(
+                config: theme_studio.ThemeStudioPanelConfig(
                   initialLightThemeName: lightThemeName,
                   initialDarkThemeName: darkThemeName,
                   adaptiveImagePath: FilesystemSvc.getExistingChatBackgroundPath(chat.guid),
@@ -260,7 +262,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsSwitch(
           title: "Pin Conversation",
           subtitle: "Keep this chat pinned to the top of your conversation list",
@@ -277,7 +279,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsSwitch(
           title: "Mute Conversation",
           subtitle: "Silence notifications for this chat",
@@ -298,7 +300,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsSwitch(
           title: "Archive Conversation",
           subtitle: "Hide this chat from your main conversation list",
@@ -315,7 +317,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
         build: (context) => SettingsSwitch(
           title: "Send Typing Indicators",
           subtitle: "Overrides the global typing indicator setting",
@@ -337,7 +339,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
         build: (context) => SettingsSwitch(
           title: "Follow Global Setting",
           subtitle:
@@ -361,7 +363,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
         build: (context) => SettingsSwitch(
           title: "${SettingsSvc.settings.privateManualMarkAsRead.value ? "Automatically " : ""}Send Read Receipts",
           subtitle: "Overrides the global read receipt setting",
@@ -382,7 +384,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
         build: (context) => SettingsSwitch(
           title: "Follow Global Setting",
           subtitle:
@@ -413,7 +415,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
   Widget _buildContentGroup(BuildContext context) {
     final rows = <_OptionRow>[
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsTile(
           title: "Chat Stats",
           subtitle: "View texting patterns, response times, and activity",
@@ -424,7 +426,11 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
           ),
           trailing: const NextButton(),
           isThreeLine: true,
-          onTap: () => NavigationSvc.push(context, ChatStatsPage(chat: chat)),
+          onTap: () async {
+            await chat_stats.loadLibrary();
+            if (!context.mounted) return;
+            NavigationSvc.push(context, chat_stats.ChatStatsPage(chat: chat));
+          },
         ),
       ),
       _OptionRow(
@@ -695,7 +701,7 @@ class _ChatOptionsState extends State<ChatOptions> with ThemeHelpers {
   Widget _buildDangerZoneGroup(BuildContext context) {
     final rows = <_OptionRow>[
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => SettingsTile(
           title: "Clear Transcript",
           subtitle: "Delete all messages for this chat on this device",

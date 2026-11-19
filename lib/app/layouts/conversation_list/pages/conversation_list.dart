@@ -30,6 +30,7 @@ import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 
 class ConversationListController extends StatefulController {
   final bool showArchivedChats;
@@ -250,6 +251,16 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
             child: Align(alignment: Alignment.topRight, child: ServerV2MigrationBanner()),
           ),
         ),
+        if (kIsWeb)
+          const Positioned(
+            bottom: 16,
+            left: 16,
+            right: 16,
+            child: SafeArea(
+              top: false,
+              child: Align(alignment: Alignment.bottomCenter, child: WebConnectivityBanner()),
+            ),
+          ),
       ],
     );
 
@@ -334,5 +345,59 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
         ),
       ),
     );
+  }
+}
+
+class WebConnectivityBanner extends StatelessWidget {
+  final bool? onlineOverride;
+  final bool? reconnectingOverride;
+
+  const WebConnectivityBanner({super.key, this.onlineOverride, this.reconnectingOverride});
+
+  @override
+  Widget build(BuildContext context) {
+    Widget buildBanner(bool online, bool reconnecting) {
+      if (online && !reconnecting) return const SizedBox.shrink();
+      final theme = Theme.of(context);
+      final isOffline = !online;
+      final bg = isOffline ? theme.colorScheme.errorContainer : theme.colorScheme.surfaceContainerHigh;
+      final fg = isOffline ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSurface;
+      return IgnorePointer(
+        child: Material(
+          color: bg.withValues(alpha: 0.94),
+          elevation: 2,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isOffline)
+                  Icon(Icons.cloud_off, size: 15, color: fg)
+                else
+                  SizedBox(
+                    width: 13,
+                    height: 13,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: fg),
+                  ),
+                const SizedBox(width: 8),
+                Text(
+                  isOffline ? 'Offline — waiting for network' : 'Reconnecting…',
+                  style: theme.textTheme.labelMedium?.copyWith(color: fg),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (onlineOverride != null || reconnectingOverride != null) {
+      return buildBanner(onlineOverride ?? true, reconnectingOverride ?? false);
+    }
+    if (!GetIt.I.isRegistered<LifecycleService>()) {
+      return const SizedBox.shrink();
+    }
+    return Obx(() => buildBanner(LifecycleSvc.isOnline.value, LifecycleSvc.isReconnecting.value));
   }
 }

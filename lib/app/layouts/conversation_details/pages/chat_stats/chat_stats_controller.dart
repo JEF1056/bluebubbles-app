@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:isolate';
+import 'package:flutter/foundation.dart';
 
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -446,29 +446,45 @@ class ChatStatsController extends GetxController {
     required int attachments,
     required int unattributedCount,
     int? firstTrackedMessageMillis,
-  }) {
-    return Isolate.run(() => computeOverview(
+  }) async {
+    if (kIsWeb) {
+      return computeOverview(
+        byParticipant: byParticipant,
+        attachments: attachments,
+        unattributedCount: unattributedCount,
+        firstTrackedMessageMillis: firstTrackedMessageMillis,
+      );
+    }
+    return compute((_) => computeOverview(
           byParticipant: byParticipant,
           attachments: attachments,
           unattributedCount: unattributedCount,
           firstTrackedMessageMillis: firstTrackedMessageMillis,
-        ));
+        ), null);
   }
 
-  static Future<ActivityStats> _isolateActivity({required Map<int, List<int>> byParticipant}) {
-    return Isolate.run(() => computeActivity(byParticipant: byParticipant));
+  static Future<ActivityStats> _isolateActivity({required Map<int, List<int>> byParticipant}) async {
+    if (kIsWeb) return computeActivity(byParticipant: byParticipant);
+    return compute((_) => computeActivity(byParticipant: byParticipant), null);
   }
 
   static Future<EngagementStats> _isolateEngagement({
     required Map<int, List<int>> byParticipant,
     required List<int> readMillis,
     required bool isGroup,
-  }) {
-    return Isolate.run(() => computeEngagement(
+  }) async {
+    if (kIsWeb) {
+      return computeEngagement(
+        byParticipant: byParticipant,
+        readMillis: readMillis,
+        isGroup: isGroup,
+      );
+    }
+    return compute((_) => computeEngagement(
           byParticipant: byParticipant,
           readMillis: readMillis,
           isGroup: isGroup,
-        ));
+        ), null);
   }
 
   static Future<ContentStats> _isolateContent({
@@ -492,8 +508,32 @@ class ChatStatsController extends GetxController {
     required double textCoverage,
     required bool windowed,
     int? comparisonParticipantId,
-  }) {
-    return Isolate.run(() => computeContent(
+  }) async {
+    if (kIsWeb) {
+      return computeContent(
+        myTexts: myTexts,
+        theirTexts: theirTexts,
+        lengthsByParticipant: lengthsByParticipant,
+        reactions: reactions,
+        attachmentMimeTypes: attachmentMimeTypes,
+        expressiveSendStyleIds: expressiveSendStyleIds,
+        editedCount: editedCount,
+        unsentCount: unsentCount,
+        editedCountMine: editedCountMine,
+        editedCountTheirs: editedCountTheirs,
+        unsentCountMine: unsentCountMine,
+        unsentCountTheirs: unsentCountTheirs,
+        sentCountMine: sentCountMine,
+        receivedCountTheirs: receivedCountTheirs,
+        audioSent: audioSent,
+        audioReceived: audioReceived,
+        audioPlayedRatio: audioPlayedRatio,
+        textCoverage: textCoverage,
+        windowed: windowed,
+        comparisonParticipantId: comparisonParticipantId,
+      );
+    }
+    return compute((_) => computeContent(
           myTexts: myTexts,
           theirTexts: theirTexts,
           lengthsByParticipant: lengthsByParticipant,
@@ -514,7 +554,7 @@ class ChatStatsController extends GetxController {
           textCoverage: textCoverage,
           windowed: windowed,
           comparisonParticipantId: comparisonParticipantId,
-        ));
+        ), null);
   }
 
   static Future<ReactionMatrixStats> _isolateReactionMatrix({
@@ -522,12 +562,20 @@ class ChatStatsController extends GetxController {
     required Map<String, int> guidToSender,
     required List<int> participantIds,
     required int windowMonths,
-  }) {
-    return Isolate.run(() => computeReactionMatrix(
+  }) async {
+    if (kIsWeb) {
+      return computeReactionMatrix(
+        reactionRows: reactionRows,
+        guidToSender: guidToSender,
+        participantIds: participantIds,
+        windowMonths: windowMonths,
+      );
+    }
+    return compute((_) => computeReactionMatrix(
           reactionRows: reactionRows,
           guidToSender: guidToSender,
           participantIds: participantIds,
           windowMonths: windowMonths,
-        ));
+        ), null);
   }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_video_player.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/dialogs/metadata_dialog.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -14,8 +15,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:media_kit_video/media_kit_video_controls/media_kit_video_controls.dart' as media_kit_video_controls;
-import 'package:universal_html/html.dart' as html;
 
 class FullscreenVideo extends StatefulWidget {
   const FullscreenVideo({
@@ -45,7 +46,9 @@ class FullscreenVideo extends StatefulWidget {
 class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAliveClientMixin, ThemeHelpers {
   Timer? hideOverlayTimer;
 
-  late VideoController videoController;
+  VideoController? videoController;
+  WebVideoController? webVideoController;
+  late PlatformFile _file = widget.file;
 
   bool hasListener = false;
   bool hasDisposed = false;
@@ -75,11 +78,16 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
   }
 
   void initControllers() async {
+    if (kIsWeb) {
+      webVideoController = WebVideoController();
+      showPlayPauseOverlay.value = true;
+      return;
+    }
     if (widget.videoController != null) {
       // Reuse existing controller from in-chat player
       videoController = widget.videoController!;
       // Sync mute state
-      await videoController.player.setVolume(muted.value ? 0 : 100);
+      await videoController!.player.setVolume(muted.value ? 0 : 100);
     } else {
       // Create new controller
       final player = Player();
@@ -87,20 +95,19 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
 
       late final Media media;
       if (widget.file.path == null) {
-        final blob = html.Blob([widget.file.bytes]);
-        final url = html.Url.createObjectUrlFromBlob(blob);
+        final url = createObjectUrlFromBytes(widget.file.bytes!);
         media = Media(url);
       } else {
         media = Media(widget.file.path!);
       }
 
-      await videoController.player.setPlaylistMode(PlaylistMode.none);
-      await videoController.player.open(media, play: false);
-      await _configureAndroidVideoColorPipeline(videoController.player);
-      await videoController.player.setVolume(muted.value ? 0 : 100);
+      await videoController!.player.setPlaylistMode(PlaylistMode.none);
+      await videoController!.player.open(media, play: false);
+      await _configureAndroidVideoColorPipeline(videoController!.player);
+      await videoController!.player.setVolume(muted.value ? 0 : 100);
     }
 
-    createListener(videoController);
+    createListener(videoController!);
 
     if (!kIsDesktop && !kIsWeb) {
       // Start with all overlays hidden
@@ -108,7 +115,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
       widget.onOverlayToggle?.call(false);
       // Auto-play after a short delay so the viewer is fully visible first
       Future.delayed(const Duration(milliseconds: 500), () {
-        if (!hasDisposed) videoController.player.play();
+        if (!hasDisposed) videoController!.player.play();
       });
     } else {
       showPlayPauseOverlay.value = true;
@@ -197,7 +204,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
     final newVal = !showPlayPauseOverlay.value;
     showPlayPauseOverlay.value = newVal;
     widget.onOverlayToggle?.call(newVal);
-    if (newVal && videoController.player.state.playing) {
+    if (newVal && (videoController?.player.state.playing ?? false)) {
       _startHideTimer();
     } else {
       _cancelHideTimer();
@@ -213,16 +220,17 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
     // Sync mute state back to parent — deferred to avoid mutating an Rx value
     // while the widget tree is locked (causes markNeedsBuild error in Obx).
     if (widget.mute != null) {
-      final muteValue = muted.value;
+      final muteValue = kIsWeb && webVideoController != null ? webVideoController!.isMuted : muted.value;
       SchedulerBinding.instance.addPostFrameCallback((_) {
         widget.mute!.value = muteValue;
       });
     }
 
     // Only dispose the player if one was not passed in (via a controller)
-    if (widget.videoController == null) {
-      videoController.player.dispose();
+    if (!kIsWeb && widget.videoController == null) {
+      videoController?.player.dispose();
     }
+    webVideoController?.dispose();
 
     super.dispose();
   }
@@ -230,19 +238,25 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
   void refreshAttachment() {
     AttachmentsSvc.redownloadAttachment(widget.attachment, onComplete: (file) async {
       if (hasDisposed) return;
+      if (kIsWeb) {
+        _file = file;
+        if (mounted) setState(() {});
+        return;
+      }
       hasListener = false;
       late final Media media;
-      if (widget.file.path == null) {
-        final blob = html.Blob([widget.file.bytes]);
-        final url = html.Url.createObjectUrlFromBlob(blob);
+      if (file.path == null) {
+        final url = createObjectUrlFromBytes(file.bytes!);
         media = Media(url);
       } else {
-        media = Media(widget.file.path!);
+        media = Media(file.path!);
       }
-      await videoController.player.open(media, play: false);
-      await videoController.player.setVolume(muted.value ? 0 : 100);
-      createListener(videoController);
-      showPlayPauseOverlay.value = !videoController.player.state.playing;
+      final vc = videoController;
+      if (vc == null) return;
+      await vc.player.open(media, play: false);
+      await vc.player.setVolume(muted.value ? 0 : 100);
+      createListener(vc);
+      showPlayPauseOverlay.value = !vc.player.state.playing;
     });
   }
 
@@ -258,7 +272,9 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
       child: Obx(
         () => MouseRegion(
           onEnter: (event) => showPlayPauseOverlay.value = true,
-          onExit: (event) => showPlayPauseOverlay.value = !videoController.player.state.playing,
+          onExit: (event) => showPlayPauseOverlay.value = kIsWeb
+              ? !(webVideoController?.isPlaying ?? false)
+              : !(videoController?.player.state.playing ?? false),
           child: Theme(
             data: context.theme.copyWith(
                 platform: iOS ? TargetPlatform.iOS : TargetPlatform.android,
@@ -267,40 +283,57 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
             child: Stack(
               alignment: Alignment.center,
               children: <Widget>[
-                Listener(
-                  behavior: HitTestBehavior.translucent,
-                  onPointerDown: (event) {
-                    _pointerDownPosition = event.position;
-                  },
-                  onPointerUp: (event) {
-                    if (_pointerDownPosition != null) {
-                      final distance = (_pointerDownPosition! - event.position).distance;
-                      if (distance < 20) _handleTap();
-                      _pointerDownPosition = null;
-                    }
-                  },
-                  // Disable horizontal-drag-to-seek — its recognizer is always attached
-                  // regardless of this flag (only the callback itself is gated), so it still
-                  // wins the gesture arena over the fullscreen gallery's own swipe handling.
-                  // Setting seekGesture false at least stops it from also seeking the video
-                  // as a side effect of a swipe-to-next-attachment gesture.
-                  child: media_kit_video_controls.MaterialVideoControlsTheme(
-                    normal: media_kit_video_controls.kDefaultMaterialVideoControlsThemeData.copyWith(seekGesture: false),
-                    fullscreen:
-                        media_kit_video_controls.kDefaultMaterialVideoControlsThemeData.copyWith(seekGesture: false),
-                    child: Video(
-                        controller: videoController,
-                        controls: (state) => Padding(
-                              padding: EdgeInsets.all(!kIsWeb && !kIsDesktop ? 0 : 20).copyWith(
-                                  bottom: !kIsWeb && !kIsDesktop ? (iOS && widget.showInteractions ? 100 : 10) : 0),
-                              child: kIsDesktop
-                                  ? media_kit_video_controls.MaterialDesktopVideoControls(state)
-                                  : media_kit_video_controls.MaterialVideoControls(state),
-                            ),
-                        filterQuality: FilterQuality.medium),
+                if (kIsWeb)
+                  Positioned.fill(
+                    child: WebVideoPlayer(
+                      file: _file,
+                      attachment: widget.attachment,
+                      controller: webVideoController,
+                      autoplay: true,
+                      muted: muted.value,
+                      controls: true,
+                      fit: BoxFit.contain,
+                      enableKeyboardShortcuts: true,
+                      onPlayingChanged: (playing) {
+                        showPlayPauseOverlay.value = !playing;
+                      },
+                    ),
+                  )
+                else
+                  Listener(
+                    behavior: HitTestBehavior.translucent,
+                    onPointerDown: (event) {
+                      _pointerDownPosition = event.position;
+                    },
+                    onPointerUp: (event) {
+                      if (_pointerDownPosition != null) {
+                        final distance = (_pointerDownPosition! - event.position).distance;
+                        if (distance < 20) _handleTap();
+                        _pointerDownPosition = null;
+                      }
+                    },
+                    // Disable horizontal-drag-to-seek — its recognizer is always attached
+                    // regardless of this flag (only the callback itself is gated), so it still
+                    // wins the gesture arena over the fullscreen gallery's own swipe handling.
+                    // Setting seekGesture false at least stops it from also seeking the video
+                    // as a side effect of a swipe-to-next-attachment gesture.
+                    child: media_kit_video_controls.MaterialVideoControlsTheme(
+                      normal: media_kit_video_controls.kDefaultMaterialVideoControlsThemeData.copyWith(seekGesture: false),
+                      fullscreen:
+                          media_kit_video_controls.kDefaultMaterialVideoControlsThemeData.copyWith(seekGesture: false),
+                      child: Video(
+                          controller: videoController!,
+                          controls: (state) => Padding(
+                                padding: EdgeInsets.all(!kIsWeb && !kIsDesktop ? 0 : 20).copyWith(
+                                    bottom: !kIsWeb && !kIsDesktop ? (iOS && widget.showInteractions ? 100 : 10) : 0),
+                                child: kIsDesktop
+                                    ? media_kit_video_controls.MaterialDesktopVideoControls(state)
+                                    : media_kit_video_controls.MaterialVideoControls(state),
+                              ),
+                          filterQuality: FilterQuality.medium),
+                    ),
                   ),
-                ),
-                if (kIsWeb || kIsDesktop)
+                if (kIsDesktop)
                   Obx(() {
                     return MouseRegion(
                       onEnter: (event) => _hover.value = true,
@@ -319,11 +352,13 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                             child: InkWell(
                               borderRadius: BorderRadius.circular(40),
                               onTap: () async {
-                                if (videoController.player.state.playing) {
-                                  await videoController.player.pause();
+                                final vc = videoController;
+                                if (vc == null) return;
+                                if (vc.player.state.playing) {
+                                  await vc.player.pause();
                                   showPlayPauseOverlay.value = true;
                                 } else {
-                                  await videoController.player.play();
+                                  await vc.player.play();
                                   showPlayPauseOverlay.value = false;
                                 }
                               },
@@ -338,7 +373,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                                 child: Padding(
                                   padding: EdgeInsets.only(
                                     left: SettingsSvc.settings.skin.value == Skins.iOS &&
-                                            !videoController.player.state.playing
+                                            !(videoController?.player.state.playing ?? false)
                                         ? 17
                                         : 10,
                                     top: SettingsSvc.settings.skin.value == Skins.iOS ? 13 : 10,
@@ -346,7 +381,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                                     bottom: 10,
                                   ),
                                   child: Obx(
-                                    () => videoController.player.state.playing
+                                    () => (videoController?.player.state.playing ?? false)
                                         ? Icon(
                                             SettingsSvc.settings.skin.value == Skins.iOS
                                                 ? CupertinoIcons.pause
@@ -499,7 +534,11 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                                 ),
                                 onPressed: () async {
                                   muted.toggle();
-                                  await videoController.player.setVolume(muted.value ? 0.0 : 100.0);
+                                  if (kIsWeb) {
+                                    await webVideoController?.setMuted(muted.value);
+                                  } else {
+                                    await videoController?.player.setVolume(muted.value ? 0.0 : 100.0);
+                                  }
                                 },
                               ),
                             ],

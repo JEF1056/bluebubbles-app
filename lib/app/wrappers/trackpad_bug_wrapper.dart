@@ -1,5 +1,5 @@
 import 'dart:collection';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:flutter/gestures.dart';

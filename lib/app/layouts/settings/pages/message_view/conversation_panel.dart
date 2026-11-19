@@ -1,4 +1,4 @@
-import 'package:audio_waveforms/audio_waveforms.dart' as aw;
+import 'package:bluebubbles/platform/shims/native_media.dart' as aw;
 import 'package:bluebubbles/app/layouts/settings/pages/message_view/message_options_order_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/message_view/text_field_buttons_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/content/next_button.dart';
@@ -178,23 +178,22 @@ class _ConversationPanelState extends State<ConversationPanel> with ThemeHelpers
                           )),
                     ],
                   ),
-                  if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                  if (!kIsWeb)
-                    SettingsTile(
-                      title: "Message Options Order",
-                      subtitle:
-                          "Set the order for the options when ${SettingsSvc.settings.doubleTapForDetails.value ? "double-tapping" : "pressing and holding"} a message",
-                      onTap: () {
-                        NavigationSvc.pushSettings(
-                          context,
-                          const MessageOptionsOrderPanel(),
-                        );
-                      },
-                      trailing: const NextButton(),
-                    ),
+                  const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                  SettingsTile(
+                    title: "Message Options Order",
+                    subtitle:
+                        "Set the order for the options when ${SettingsSvc.settings.doubleTapForDetails.value ? "double-tapping" : "pressing and holding"} a message",
+                    onTap: () {
+                      NavigationSvc.pushSettings(
+                        context,
+                        const MessageOptionsOrderPanel(),
+                      );
+                    },
+                    trailing: const NextButton(),
+                  ),
                   // Android has no configurable buttons: its + opens the attachment sheet
-                  if (kIsDesktop) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                  if (kIsDesktop)
+                  if (kIsDesktop || kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                  if (kIsDesktop || kIsWeb)
                     SettingsTile(
                       title: "Text Field Buttons",
                       subtitle: "Choose which buttons appear next to the message text field and which go in the + menu",
@@ -237,20 +236,19 @@ class _ConversationPanelState extends State<ConversationPanel> with ThemeHelpers
                         ),
                       ],
                     ),
-                  if (!kIsWeb) const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
-                  if (!kIsWeb)
-                    Obx(() => SettingsSwitch(
-                          onChanged: (bool val) async {
-                            SettingsSvc.settings.scrollToLastUnread.value = val;
-                            await SettingsSvc.settings.saveOneAsync('scrollToLastUnread');
-                          },
-                          initialVal: SettingsSvc.settings.scrollToLastUnread.value,
-                          title: "Store Last Read Message",
-                          subtitle:
-                              "Remembers the last opened message and allows automatically scrolling back to it if out of view",
-                          backgroundColor: tileColor,
-                          isThreeLine: true,
-                        )),
+                  const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                  Obx(() => SettingsSwitch(
+                        onChanged: (bool val) async {
+                          SettingsSvc.settings.scrollToLastUnread.value = val;
+                          await SettingsSvc.settings.saveOneAsync('scrollToLastUnread');
+                        },
+                        initialVal: SettingsSvc.settings.scrollToLastUnread.value,
+                        title: "Store Last Read Message",
+                        subtitle:
+                            "Remembers the last opened message and allows automatically scrolling back to it if out of view",
+                        backgroundColor: tileColor,
+                        isThreeLine: true,
+                      )),
                   Obx(() => SettingsSwitch(
                         onChanged: (bool val) {
                           SettingsSvc.settings.hideNamesForReactions.value = val;

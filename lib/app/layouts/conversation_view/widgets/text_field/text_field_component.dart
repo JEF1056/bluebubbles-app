@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:collection/collection.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
@@ -9,6 +9,7 @@ import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart'
 import 'package:bluebubbles/app/layouts/conversation_view/dialogs/custom_mention_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/desktop_attachment_menu.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/gmsg_camera_gallery_sheet.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/text_field_attachment_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/formatting_bar.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/picked_attachments_holder.dart';
@@ -24,11 +25,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:record/record.dart';
 import 'package:universal_io/io.dart';
 import 'handlers/emoji_autocomplete_handler.dart';
 import 'handlers/mention_autocomplete_handler.dart';
 import 'handlers/keyboard_shortcut_handler.dart';
 import 'handlers/clipboard_paste_handler.dart';
+import 'handlers/web_input_interop.dart';
 
 class TextFieldComponent extends StatefulWidget {
   const TextFieldComponent({
@@ -38,6 +41,7 @@ class TextFieldComponent extends StatefulWidget {
     required this.controller,
     required this.recorderController,
     required this.sendMessage,
+    this.audioRecorder,
     this.focusNode,
     this.initialAttachments = const [],
     this.alwaysShowSend = false,
@@ -49,6 +53,7 @@ class TextFieldComponent extends StatefulWidget {
   final MentionTextEditingController textController;
   final ConversationViewController? controller;
   final RecorderController? recorderController;
+  final AudioRecorder? audioRecorder;
   final Future<void> Function({String? effect}) sendMessage;
   final FocusNode? focusNode;
 
@@ -83,6 +88,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   MentionAutocompleteHandler? mentionHandler;
   KeyboardShortcutHandler? keyboardHandler;
   ClipboardPasteHandler? clipboardHandler;
+  StreamSubscription<void>? _webPasteSub;
+  Worker? _recordingWorker;
 
   TextFieldComponentState() : isRecordingNotifier = ValueNotifier<bool>(false);
 
@@ -105,6 +112,17 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     _configureHandlers();
     _fieldFocusNode = controller?.focusNode ?? focusNode;
     _fieldFocusNode?.addListener(_onFieldFocusChange);
+    if (kIsWeb) {
+      _webPasteSub = listenWebPaste(
+        shouldHandle: () =>
+            mounted &&
+            ((_fieldFocusNode?.hasFocus ?? false) || (controller?.subjectFocusNode.hasFocus ?? false)),
+        onFiles: (files) {
+          if (!mounted) return;
+          clipboardHandler?.handleWebPastedFiles(files);
+        },
+      );
+    }
 
     assert(!(subjectTextController == null &&
         !isChatCreator &&
@@ -124,6 +142,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
 
   @override
   void dispose() {
+    _webPasteSub?.cancel();
+    _recordingWorker?.dispose();
     _fieldFocusNode?.removeListener(_onFieldFocusChange);
     // dispose of the ValueNotifier when the state is disposed
     isRecordingNotifier.dispose();
@@ -140,6 +160,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   }
 
   void _configureHandlers() {
+    _recordingWorker?.dispose();
+    _recordingWorker = null;
     final ctrl = controller;
     clipboardHandler = ClipboardPasteHandler(controller: ctrl, textController: ctrl?.textController ?? textController);
     if (ctrl == null) {
@@ -147,6 +169,13 @@ class TextFieldComponentState extends State<TextFieldComponent> {
       mentionHandler = null;
       keyboardHandler = null;
       return;
+    }
+
+    if (recorderController == null) {
+      isRecordingNotifier.value = ctrl.showRecording.value;
+      _recordingWorker = ever(ctrl.showRecording, (bool val) {
+        isRecordingNotifier.value = val;
+      });
     }
 
     emojiHandler = EmojiAutocompleteHandler(controller: ctrl, textField: textController);
@@ -170,6 +199,19 @@ class TextFieldComponentState extends State<TextFieldComponent> {
 
   bool get isChatCreator => focusNode != null;
 
+  static String hintTextForService({
+    required bool material,
+    required bool isRCS,
+    required bool isIMessage,
+  }) {
+    if (material) {
+      if (isRCS) return "RCS message";
+      return isIMessage ? "iMessage" : "Text message";
+    }
+    if (isRCS) return "Text Message • RCS";
+    return isIMessage ? "iMessage" : "Text Forwarding";
+  }
+
   String _hintText(bool isRecording) {
     if (widget.hintText != null) return widget.hintText!;
     if (isChatCreator) return material ? "Text message" : "New Message";
@@ -177,9 +219,11 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     if (SettingsSvc.settings.recipientAsPlaceholder.value) {
       return ChatsSvc.getChatState(chat!.guid)?.title.value ?? chat!.getTitle();
     }
-    if (material) return chat!.isRCS ? "RCS message" : "Text message";
-    if (chat!.isRCS) return "Text Message • RCS";
-    return chat!.isIMessage ? "iMessage" : "Text Forwarding";
+    return hintTextForService(
+      material: material,
+      isRCS: chat!.isRCS,
+      isIMessage: chat!.isIMessage,
+    );
   }
 
   bool _showAttachmentPickerLocal = false;
@@ -199,10 +243,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
       child: ValueListenableBuilder<bool>(
           valueListenable: isRecordingNotifier,
           builder: (context, isRecording, child) {
-            final hasBackground = chat != null
-                ? (ChatsSvc.getChatState(chat!.guid)?.hasCustomWallpaper ?? false)
-                : false;
-            return Container(
+            final chatState = chat != null ? ChatsSvc.getChatState(chat!.guid) : null;
+            Widget buildPill(bool hasBackground) => Container(
               // Border is placed in the foregroundDecoration so it paints on top of
               // child content (ReplyHolder, attachments, etc.) and remains visible
               // at all corners instead of being covered by opaque children.
@@ -219,7 +261,10 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                   : null,
               decoration: BoxDecoration(
                 color: (!iOS || hasBackground)
-                    ? (iOS ? context.theme.colorScheme.surfaceContainerHighest : context.theme.colorScheme.surfaceContainerHigh)
+                    ? (iOS
+                            ? context.theme.colorScheme.surfaceContainerHighest
+                            : context.theme.colorScheme.surfaceContainerHigh)
+                        .withValues(alpha: hasBackground ? 0.86 : 1.0)
                     : null,
                 borderRadius: BorderRadius.circular(iOS ? 20 : 28),
               ),
@@ -367,7 +412,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           prefixIcon: material && !isChatCreator && controller != null
                               ? Padding(
                                   padding: const EdgeInsets.only(left: 4.0),
-                                  child: kIsDesktop
+                                  child: (kIsDesktop || kIsWeb)
                                       ? DesktopAttachmentMenu(
                                           controller: controller!,
                                           inRow: SettingsSvc.settings.textFieldButtons,
@@ -383,24 +428,42 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                             onPressed: toggle,
                                           ),
                                         )
-                                      : IconButton(
-                                          tooltip: 'Add attachment',
-                                          constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                                          padding: EdgeInsets.zero,
-                                          icon: Icon(
-                                            Icons.add_circle_outline,
-                                            color: context.theme.colorScheme.onSurfaceVariant,
-                                            size: 24,
-                                          ),
-                                          onPressed: () {
-                                            if (!controller!.showAttachmentPicker.value) {
-                                              controller!.focusNode.unfocus();
-                                              controller!.subjectFocusNode.unfocus();
-                                            }
-                                            controller!.showAttachmentPicker.value =
-                                                !controller!.showAttachmentPicker.value;
-                                          },
-                                        ),
+                                      : Builder(builder: (context) {
+                                          final isOpen = controller!.showAttachmentPicker.value;
+                                          return IconButton(
+                                            tooltip: isOpen ? 'Close attachments' : 'Add attachment',
+                                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                            padding: EdgeInsets.zero,
+                                            icon: isOpen
+                                                ? Container(
+                                                    width: 28,
+                                                    height: 28,
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      color: context.theme.colorScheme.surfaceContainerHighest,
+                                                    ),
+                                                    child: Icon(
+                                                      Icons.close_rounded,
+                                                      color: context.theme.colorScheme.onSurfaceVariant,
+                                                      size: 18,
+                                                    ),
+                                                  )
+                                                : Icon(
+                                                    Icons.add_circle_outline,
+                                                    color: context.theme.colorScheme.onSurfaceVariant,
+                                                    size: 24,
+                                                  ),
+                                            onPressed: () {
+                                              if (!isOpen) {
+                                                controller!.focusNode.unfocus();
+                                                controller!.subjectFocusNode.unfocus();
+                                              } else {
+                                                controller!.showGenmojiLibrary.value = false;
+                                              }
+                                              controller!.showAttachmentPicker.value = !isOpen;
+                                            },
+                                          );
+                                        }),
                                 )
                               : null,
                           suffixIconConstraints: BoxConstraints(minHeight: iOS ? 0 : 48),
@@ -413,17 +476,6 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           IconButton(
-                                            tooltip: 'Emoji',
-                                            constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
-                                            padding: EdgeInsets.zero,
-                                            icon: Icon(
-                                              Icons.sentiment_satisfied_alt_outlined,
-                                              color: context.theme.colorScheme.onSurfaceVariant,
-                                              size: 22,
-                                            ),
-                                            onPressed: () => AttachmentActions.toggleEmojiPicker(controller!),
-                                          ),
-                                          IconButton(
                                             tooltip: 'Gallery',
                                             constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
                                             padding: EdgeInsets.zero,
@@ -433,15 +485,13 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                               size: 22,
                                             ),
                                             onPressed: () {
-                                              if (kIsDesktop) {
+                                              if (kIsDesktop || kIsWeb) {
                                                 AttachmentActions.pickFiles(controller!);
                                               } else {
-                                                if (!controller!.showAttachmentPicker.value) {
-                                                  controller!.focusNode.unfocus();
-                                                  controller!.subjectFocusNode.unfocus();
-                                                }
-                                                controller!.showAttachmentPicker.value =
-                                                    !controller!.showAttachmentPicker.value;
+                                                controller!.focusNode.unfocus();
+                                                controller!.subjectFocusNode.unfocus();
+                                                controller!.showAttachmentPicker.value = false;
+                                                showGmsgCameraGallerySheet(context, controller!);
                                               }
                                             },
                                           ),
@@ -455,6 +505,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                         textController: txtController,
                                         controller: controller,
                                         recorderController: recorderController,
+                                        audioRecorder: widget.audioRecorder,
                                         sendMessage: sendMessage,
                                         isChatCreator: isChatCreator,
                                         alwaysShowSend: widget.alwaysShowSend,
@@ -609,6 +660,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                 ),
               ),
             );
+            return chatState != null ? Obx(() => buildPill(chatState.hasCustomWallpaper)) : buildPill(false);
           }),
     );
     // On Windows, wrap with Shortcuts/Actions to intercept Ctrl+V on KeyDown.
@@ -659,8 +711,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                     visualDensity: Platform.isAndroid ? VisualDensity.compact : null,
                     onPressed: onPressed,
                   );
-              // Desktop has no attachment sheet: `+` opens a menu of the same actions instead.
-              if (kIsDesktop) {
+              // Desktop and web have no attachment sheet: `+` opens a menu of the same actions instead.
+              if (kIsDesktop || kIsWeb) {
                 return DesktopAttachmentMenu(
                   controller: controller!,
                   // The chat creator has no button row; this keeps GIF and emoji out of its menu

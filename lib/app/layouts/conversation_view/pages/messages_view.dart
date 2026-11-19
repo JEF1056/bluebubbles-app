@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/mixins/messages_service_mixin.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/messages_view_components.dart';
@@ -31,12 +31,14 @@ class MessagesView extends StatefulWidget {
   final MessagesService? customService;
   final ConversationViewController controller;
   final String? initialScrollToGuid;
+  final double bottomPadding;
 
   const MessagesView({
     super.key,
     this.customService,
     this.initialScrollToGuid,
     required this.controller,
+    this.bottomPadding = 0.0,
   });
 
   @override
@@ -501,7 +503,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
       }
     }
 
-    if (insertIndex == 0 && !message.isFromMe! && SettingsSvc.settings.receiveSoundPath.value != null) {
+    if (insertIndex == 0 && !message.isFromMe! && !kIsWeb && SettingsSvc.settings.receiveSoundPath.value != null) {
       if (kIsDesktop && (ChatsSvc.getChatState(chat.guid)?.isActive.value ?? false)) {
         Player player = Player();
         player.stream.completed
@@ -579,7 +581,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
             margin: const EdgeInsets.all(5),
             decoration: hasBackground
                 ? BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
+                    color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.86),
                     borderRadius: BorderRadius.circular(19),
                   )
                 : BoxDecoration(
@@ -679,6 +681,10 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                         // for minor smoothing of local scroll gestures.
                         scrollCacheExtent: const ScrollCacheExtent.pixels(500),
                         slivers: <Widget>[
+                          if (widget.bottomPadding > 0)
+                            SliverToBoxAdapter(
+                              child: SizedBox(height: widget.bottomPadding),
+                            ),
                           SliverToBoxAdapter(
                             child: ConversationPillsRow(
                               controller: controller,
@@ -791,7 +797,16 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                             },
                           ),
                           SliverPadding(
-                            padding: EdgeInsets.all(iOS || samsung ? 70 : 12),
+                            padding: (iOS || samsung)
+                                ? const EdgeInsets.all(70)
+                                : (ChatsSvc.getChatState(controller.chat.guid)?.hasCustomWallpaper ?? false)
+                                    ? EdgeInsets.only(
+                                        top: MediaQuery.paddingOf(context).top + 12,
+                                        left: 12,
+                                        right: 12,
+                                        bottom: 12,
+                                      )
+                                    : const EdgeInsets.all(12),
                           ),
                         ],
                       ),

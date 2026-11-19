@@ -5,22 +5,24 @@ import 'package:bluebubbles/services/backend/interfaces/image_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/file_utils.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_size_getter/image_size_getter.dart' as isg;
 import 'package:universal_io/io.dart';
 
-/// A validated, disk-cached preview image.
+/// A validated, disk-cached (or web-IDB-cached) preview image.
 @immutable
 class CachedPreviewImage {
   const CachedPreviewImage({
     required this.path,
     required this.hash,
     required this.fromDisk,
+    this.bytes,
     this.width,
     this.height,
   });
 
-  /// Absolute path to the cached file.
+  /// Absolute path to the cached file (empty on web).
   final String path;
 
   /// SHA-256 of the image bytes, which is also the filename. Persisted on the
@@ -30,6 +32,9 @@ class CachedPreviewImage {
   /// True when the file was already on disk, so the UI can skip the grow-in
   /// animation.
   final bool fromDisk;
+
+  /// Raw image bytes when cached in memory / WebMediaCache on web.
+  final Uint8List? bytes;
 
   final int? width;
   final int? height;
@@ -151,8 +156,6 @@ class PreviewImageDownloader {
   /// frames) and anything already within [optimizedMaxDimension], which a
   /// favicon always is.
   Future<CachedPreviewImage?> download(String imageUrl, {bool optimize = false}) {
-    if (kIsWeb) return Future.value();
-
     if (_isKnownBad(imageUrl)) {
       Logger.debug('Skipping $imageUrl; a previous attempt failed permanently', tag: 'PreviewImage');
       return Future.value();
@@ -217,6 +220,22 @@ class PreviewImageDownloader {
       final size = _dimensions(bytes);
       if (size != null && (size.$1 < minDimension || size.$2 < minDimension)) {
         return _reject(imageUrl, '${size.$1}x${size.$2} is likely a tracking pixel');
+      }
+
+      if (kIsWeb) {
+        final rawBytes = Uint8List.fromList(bytes);
+        final hash = sha256.convert(rawBytes).toString();
+        try {
+          await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, 'url_preview_$hash', rawBytes);
+        } catch (_) {}
+        return CachedPreviewImage(
+          path: '',
+          hash: hash,
+          fromDisk: false,
+          bytes: rawBytes,
+          width: size?.$1,
+          height: size?.$2,
+        );
       }
 
       final hash = await FilesystemSvc.saveUrlPreviewImage(Uint8List.fromList(bytes));

@@ -76,18 +76,22 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
 
   List<InlineSpan> buildTwoPiece(String action, String? date) {
     final material = !iOS && !samsung;
-    final color = material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+    final color = hasBackground
+        ? Colors.white.withValues(alpha: 0.86)
+        : (material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline);
+    final shadows = hasBackground ? const [Shadow(color: Colors.black54, blurRadius: 3)] : null;
     final baseStyle = material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!;
     final hasDate = date != null && date.isNotEmpty;
     return [
       TextSpan(
         text: action,
-        style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600, color: color),
+        style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600, color: color, shadows: shadows),
       ),
       if (hasDate)
         TextSpan(
           text: material ? " · $date" : " $date",
-          style: baseStyle.copyWith(color: color, fontWeight: FontWeight.normal),
+          style: baseStyle.copyWith(color: color, fontWeight: FontWeight.normal, shadows: shadows),
         ),
     ];
   }

@@ -134,4 +134,20 @@ class ClipboardPasteHandler {
       ));
     }
   }
+
+  /// Handle files/images pasted from a web DOM `paste` event.
+  void handleWebPastedFiles(List<({String name, Uint8List bytes})> files) {
+    if (files.isEmpty) return;
+    if (controller == null) {
+      _rejectAttachment();
+      return;
+    }
+    for (final file in files) {
+      controller!.pickedAttachments.add(PlatformFile(
+        name: file.name,
+        bytes: file.bytes,
+        size: file.bytes.length,
+      ));
+    }
+  }
 }

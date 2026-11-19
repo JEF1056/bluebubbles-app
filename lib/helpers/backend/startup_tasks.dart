@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -183,8 +183,16 @@ class StartupTasks {
     }
   }
 
+  static void configureWebImageCache() {
+    if (!kIsWeb) return;
+    PaintingBinding.instance.imageCache
+      ..maximumSize = 100
+      ..maximumSizeBytes = 80 << 20; // 80 MB
+  }
+
   static Future<void> initStartupServices({bool isBubble = false}) async {
     debugPrint("Initializing startup services...");
+    configureWebImageCache();
     await _initCoreServices(headless: false);
 
     final startupInteropReady = _preRegisterInteropServices(
@@ -280,6 +288,9 @@ class StartupTasks {
     GetIt.I.registerSingleton<SocketService>(SocketService());
     Logger.info("Waiting on NotificationsService...");
     await _waitForInterop(notifications: true);
+    if (kIsWeb) {
+      NotificationsSvc.bindWebUnreadBadge();
+    }
 
     GetIt.I.registerSingleton<EventDispatcher>(EventDispatcher());
     if (!kIsWeb && !kIsDesktop && !isBubble) unawaited(OpenPigeon.init());

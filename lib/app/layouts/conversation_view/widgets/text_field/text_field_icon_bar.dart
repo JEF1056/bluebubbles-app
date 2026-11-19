@@ -55,7 +55,7 @@ class TextFieldIconBar extends StatelessWidget {
     Widget button(VoidCallback onPressed) => IconButton(
           style: IconButton.styleFrom(
             backgroundColor: hasBackground
-                ? context.theme.colorScheme.surfaceContainerHighest
+                ? context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.86)
                 : (iOS
                     ? context.theme.colorScheme.outline.withValues(alpha: 0.2)
                     : context.theme.colorScheme.surfaceContainerHigh),
@@ -92,6 +92,7 @@ class TextFieldIconBar extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       ListTile(
+                        leading: const Icon(Icons.folder_rounded),
                         title: Text("Upload file", style: Theme.of(context).textTheme.bodyLarge),
                         onTap: () async {
                           final res = await FilePicker.pickFiles();
@@ -113,6 +114,40 @@ class TextFieldIconBar extends StatelessWidget {
                         },
                       ),
                       ListTile(
+                        leading: const Icon(Icons.gif_box_rounded),
+                        title: Text("GIF", style: Theme.of(context).textTheme.bodyLarge),
+                        onTap: () {
+                          Get.back();
+                          AttachmentActions.pickGif(context, controller);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.schedule_rounded),
+                        title: Text("Schedule", style: Theme.of(context).textTheme.bodyLarge),
+                        onTap: () {
+                          Get.back();
+                          AttachmentActions.schedule(context, controller);
+                        },
+                      ),
+                      if (!kIsWeb && SettingsSvc.getServerDetails().supportsGenmoji)
+                        ListTile(
+                          leading: const Icon(Icons.add_reaction_rounded),
+                          title: Text("Genmoji", style: Theme.of(context).textTheme.bodyLarge),
+                          onTap: () {
+                            Get.back();
+                            AttachmentActions.run(TextFieldButton.Genmoji, context, controller);
+                          },
+                        ),
+                      ListTile(
+                        leading: const Icon(Icons.draw_rounded),
+                        title: Text("Handwritten", style: Theme.of(context).textTheme.bodyLarge),
+                        onTap: () {
+                          Get.back();
+                          AttachmentActions.handwritten(context, controller);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.location_on_rounded),
                         title: Text("Send location", style: Theme.of(context).textTheme.bodyLarge),
                         onTap: () async {
                           Share.location(_chat);

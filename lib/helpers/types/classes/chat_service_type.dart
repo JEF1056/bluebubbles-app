@@ -31,6 +31,9 @@ enum ChatServiceType {
   /// Whether chats of this type are RCS chats.
   bool get isRcsService => this == ChatServiceType.rcs;
 
+  /// Whether messages on this service support tapbacks and inline replies.
+  bool get supportsTapbackAndReply => isIMessageService || isRcsService;
+
   /// Parses the service type from a server `service` or `serviceName` string.
   static ChatServiceType? fromServiceName(String? serviceName) {
     final normalized = serviceName?.trim().toLowerCase();

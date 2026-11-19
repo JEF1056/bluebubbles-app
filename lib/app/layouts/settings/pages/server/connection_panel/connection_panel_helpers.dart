@@ -14,10 +14,11 @@ import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/backend/settings_helpers.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
+import 'package:bluebubbles/platform/shims/firebase_rtdb.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/share.dart';
-import 'package:firebase_dart/firebase_dart.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -26,7 +27,6 @@ import 'package:get/get.dart';
 import 'package:path/path.dart';
 
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
 
 class StatusItemConfig {
@@ -647,11 +647,8 @@ mixin ConnectionPanelHelpersMixin {
                         return showSnackbar('Success', 'Saved logs to $downloadsPath!', type: SnackbarType.success);
                       }
                       if (kIsWeb) {
-                        final bytes = utf8.encode(response.data['data']);
-                        final content = base64.encode(bytes);
-                        html.AnchorElement(href: "data:application/octet-stream;charset=utf-16le;base64,$content")
-                          ..setAttribute("download", "main.log")
-                          ..click();
+                        final bytes = Uint8List.fromList(utf8.encode(response.data['data']));
+                        downloadBytes(bytes, "main.log");
                         controller.fetchStatus.value = null;
                         return;
                       }
@@ -794,9 +791,10 @@ mixin ConnectionPanelHelpersMixin {
                         }
                       } else {
                         if (!isNullOrEmpty(SettingsSvc.fcmData.firebaseURL)) {
-                          var db = FirebaseDatabase(databaseURL: SettingsSvc.fcmData.firebaseURL);
-                          var ref = db.reference().child('config').child('nextRestart');
-                          await ref.set(DateTime.now().toUtc().millisecondsSinceEpoch);
+                          await setFirebaseNextRestart(
+                            databaseUrl: SettingsSvc.fcmData.firebaseURL!,
+                            timestampMs: DateTime.now().toUtc().millisecondsSinceEpoch,
+                          );
                         } else {
                           await HttpSvc.firebase.setRestartDateCF(SettingsSvc.fcmData.projectID!);
                         }

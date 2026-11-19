@@ -895,9 +895,11 @@ class Chat {
   }
 
   /// The messaging service this chat belongs to.
+  /// Prefer the latest message's service over chat.service_name: macOS keeps a stale
+  /// service_name (e.g. "SMS") on unified `any;-;` chats even after switching to iMessage/RCS.
   ChatServiceType get service =>
-      ChatServiceType.fromServiceName(serviceName) ??
       ChatServiceType.fromServiceName(dbLatestMessage.target?.service) ??
+      ChatServiceType.fromServiceName(serviceName) ??
       ChatServiceType.fromServiceName(handles.firstOrNull?.service) ??
       ChatServiceType.fromServiceName(participants.firstOrNull?.service) ??
       ChatServiceType.fromGuid(guid);
@@ -939,6 +941,10 @@ class Chat {
     isPinned ??= other.isPinned;
     if (dbLatestMessage.target == null && other.dbLatestMessage.target != null) {
       setLatestMessage(other.dbLatestMessage.target!);
+    } else if (dbLatestMessage.target != null &&
+        other.dbLatestMessage.target?.service != null &&
+        dbLatestMessage.target!.guid == other.dbLatestMessage.target!.guid) {
+      dbLatestMessage.target!.service = other.dbLatestMessage.target!.service;
     }
     muteArgs ??= other.muteArgs;
     dateDeleted ??= other.dateDeleted;
@@ -947,7 +953,7 @@ class Chat {
     dynamicWallpaperId ??= other.dynamicWallpaperId;
     dynamicWallpaperConfig ??= other.dynamicWallpaperConfig;
     knownGroupPhotoGuid ??= other.knownGroupPhotoGuid;
-    serviceName ??= other.serviceName;
+    if (other.serviceName != null) serviceName = other.serviceName;
     return this;
   }
 

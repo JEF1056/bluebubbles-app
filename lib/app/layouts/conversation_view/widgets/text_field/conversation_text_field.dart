@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:bluebubbles/helpers/ui/recent_emojis.dart';
-import 'dart:math';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/text_field_attachment_picker.dart';
@@ -12,7 +11,6 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/con
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/helpers/text_field_match_helper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_component.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_effect_picker.dart';
-import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_emoji_picker_section.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_icon_bar.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_recording_overlay.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_suffix.dart';
@@ -22,13 +20,13 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
-import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' hide context;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:record/record.dart';
 import 'package:universal_io/io.dart';
 
 export 'text_field_component.dart' show TextFieldComponent, TextFieldComponentState;
@@ -50,21 +48,14 @@ class ConversationTextField extends CustomStateful<ConversationViewController> {
 class ConversationTextFieldState extends CustomState<ConversationTextField, void, ConversationViewController>
     with TickerProviderStateMixin {
   final recorderController = kIsWeb ? null : RecorderController();
+  final AudioRecorder? audioRecorder = kIsWeb ? AudioRecorder() : null;
   final localController = ConversationTextFieldLocalController();
-  final _emojiScrollController = ScrollController();
 
   Chat get chat => controller.chat;
 
   String get chatGuid => chat.guid;
 
   bool get showAttachmentPicker => controller.showAttachmentPicker.value;
-
-  late final double emojiPickerHeight = max(256, context.height * 0.4);
-  late final emojiColumns =
-      NavigationSvc.width(context) ~/ 56; // Intentionally not responsive to prevent rebuilds when resizing
-  RxBool get showEmojiPicker => controller.showEmojiPicker;
-
-  final proxyController = TextEditingController();
 
   @override
   void initState() {
@@ -90,23 +81,6 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
     controller.textController.addListener(_onTextChange);
     controller.subjectTextController.addListener(_onSubjectTextChange);
-
-    if (kIsDesktop || kIsWeb) {
-      proxyController.addListener(() {
-        if (proxyController.text.isEmpty) return;
-        String emoji = proxyController.text;
-        proxyController.clear();
-        TextEditingController realController =
-            controller.editing.lastOrNull?.controller ?? controller.lastFocusedTextController;
-        String text = realController.text;
-        TextSelection selection = realController.selection;
-
-        realController.text = text.substring(0, selection.start) + emoji + text.substring(selection.end);
-        realController.selection = TextSelection.collapsed(offset: selection.start + emoji.length);
-
-        (controller.editing.lastOrNull?.controller.focusNode ?? controller.lastFocusedNode).requestFocus();
-      });
-    }
   }
 
   void getDrafts() async {
@@ -274,9 +248,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.subjectFocusNode.removeListener(_onSubjectFocusChange);
     controller.textController.removeListener(_onTextChange);
     controller.subjectTextController.removeListener(_onSubjectTextChange);
-    proxyController.dispose();
     recorderController?.dispose();
-    _emojiScrollController.dispose();
+    audioRecorder?.dispose();
     controller.showAttachmentPicker.value = false;
     localController.cancelAllTimers();
     Get.delete<ConversationTextFieldLocalController>();
@@ -458,17 +431,18 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                         textController: controller.textController,
                         controller: controller,
                         recorderController: recorderController,
+                        audioRecorder: audioRecorder,
                         sendMessage: sendMessage,
                       ),
-                      if (!kIsWeb)
-                        Positioned(
-                          top: 0,
-                          bottom: 0,
-                          child: TextFieldRecordingOverlay(
-                            controller: controller,
-                            recorderController: recorderController,
-                          ),
+                      Positioned(
+                        top: 0,
+                        bottom: 0,
+                        child: TextFieldRecordingOverlay(
+                          controller: controller,
+                          recorderController: recorderController,
+                          audioRecorder: audioRecorder,
                         ),
+                      ),
                       SendAnimation(parentController: controller),
                     ],
                   ),
@@ -483,6 +457,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                       textController: controller.textController,
                       controller: controller,
                       recorderController: recorderController,
+                      audioRecorder: audioRecorder,
                       sendMessage: sendMessage,
                     ),
                   ),
@@ -516,13 +491,6 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                                 ),
                     ));
               }),
-              TextFieldEmojiPickerSection(
-                controller: controller,
-                proxyController: proxyController,
-                emojiScrollController: _emojiScrollController,
-                emojiPickerHeight: emojiPickerHeight,
-                emojiColumns: emojiColumns,
-              ),
             ],
           ),
         ));

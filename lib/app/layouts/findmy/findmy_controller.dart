@@ -72,6 +72,31 @@ typedef FindMyLiveStopFn = Future<Response> Function({
   CancelToken? cancelToken,
 });
 
+typedef FindMyReverseGeocodeFn = Future<String?> Function(double latitude, double longitude);
+
+@visibleForTesting
+String formatNominatimAddress(Map<String, dynamic> data) {
+  final addr = data['address'];
+  if (addr is Map) {
+    final house = addr['house_number']?.toString().trim() ?? '';
+    final road = (addr['road'] ?? addr['pedestrian'] ?? addr['footway'] ?? addr['path'])?.toString().trim() ?? '';
+    final street = [house, road].where((p) => p.isNotEmpty).join(' ');
+    final city = (addr['city'] ??
+            addr['town'] ??
+            addr['village'] ??
+            addr['hamlet'] ??
+            addr['suburb'] ??
+            addr['municipality'])
+        ?.toString()
+        .trim() ??
+        '';
+    final state = addr['state']?.toString().trim() ?? '';
+    final formatted = [street, city, state].where((p) => p.isNotEmpty).join(', ');
+    if (formatted.isNotEmpty) return formatted;
+  }
+  return data['display_name']?.toString().trim() ?? '';
+}
+
 class FindMyController extends GetxController {
   FindMyController({
     DateTime Function()? now,
@@ -79,25 +104,31 @@ class FindMyController extends GetxController {
     FindMyFriendsRefreshFn? refreshFriendsRequest,
     FindMyLiveStartFn? startLiveFriendRequest,
     FindMyLiveStopFn? stopLiveFriendRequest,
+    FindMyReverseGeocodeFn? reverseGeocodeRequest,
     Duration? livePollInterval,
     Duration? liveFallbackInterval,
     Duration? liveKeepaliveInterval,
+    Duration? geocodeMinInterval,
   })  : _now = now ?? DateTime.now,
         _refreshFriendsFn = refreshFriendsRequest,
         _startLiveFriendFn = startLiveFriendRequest,
         _stopLiveFriendFn = stopLiveFriendRequest,
+        _reverseGeocodeFn = reverseGeocodeRequest,
         _livePollInterval = livePollInterval ?? const Duration(seconds: 5),
         _liveFallbackInterval = liveFallbackInterval ?? const Duration(seconds: 25),
-        _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(minutes: 3);
+        _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(minutes: 3),
+        _geocodeMinInterval = geocodeMinInterval ?? const Duration(seconds: 1);
 
   final DateTime Function() _now;
   final bool autoFetch;
   final FindMyFriendsRefreshFn? _refreshFriendsFn;
   final FindMyLiveStartFn? _startLiveFriendFn;
   final FindMyLiveStopFn? _stopLiveFriendFn;
+  final FindMyReverseGeocodeFn? _reverseGeocodeFn;
   final Duration _livePollInterval;
   final Duration _liveFallbackInterval;
   final Duration _liveKeepaliveInterval;
+  final Duration _geocodeMinInterval;
 
   DateTime get currentTime => _now();
   // Scroll Controllers
@@ -146,6 +177,13 @@ class FindMyController extends GetxController {
   /// ~100m location cells already attempted this controller lifetime, so the 30s
   /// poll doesn't re-hit the platform geocoder for the same spot.
   final Set<String> _geocodeAttempts = {};
+  final Map<String, String> _webGeocodeCache = {};
+  Future<void> _webGeocodeTail = Future.value();
+  DateTime? _lastWebGeocodeAt;
+  static final Dio _nominatimDio = Dio(BaseOptions(
+    connectTimeout: const Duration(seconds: 5),
+    receiveTimeout: const Duration(seconds: 5),
+  ));
 
   bool _refreshFriendsInFlight = false;
   bool _refreshDevicesInFlight = false;
@@ -471,8 +509,22 @@ class FindMyController extends GetxController {
     }
   }
 
+  void _scrollToTop(ScrollController scrollController) {
+    if (!scrollController.hasClients) return;
+    for (final position in scrollController.positions) {
+      if (position.pixels > 0) {
+        position.jumpTo(0);
+      }
+    }
+  }
+
   void focusFriend(FindMyFriend friend, {double? sheetOffsetPx, double minZoom = 14.5}) {
     selectFriend(friend);
+    if (tabIndex.value != 0) {
+      tabIndex.value = 0;
+      tabController?.animateTo(0);
+    }
+    _scrollToTop(friendsController);
     onRequestDetailSheetOpen?.call();
     if ((friend.latitude ?? 0) != 0 && (friend.longitude ?? 0) != 0) {
       final key = friend.stableId ?? friend.title ?? 'friend';
@@ -485,6 +537,12 @@ class FindMyController extends GetxController {
 
   void focusDevice(FindMyDevice device, {double? sheetOffsetPx, double minZoom = 14.5}) {
     selectDevice(device);
+    final targetTab = device.isConsideredAccessory ? 2 : 1;
+    if (tabIndex.value != targetTab) {
+      tabIndex.value = targetTab;
+      tabController?.animateTo(targetTab);
+    }
+    _scrollToTop(device.isConsideredAccessory ? itemsController : devicesController);
     onRequestDetailSheetOpen?.call();
     if (device.location?.latitude != null && device.location?.longitude != null) {
       final key = device.id ?? device.name ?? 'device';
@@ -1011,11 +1069,17 @@ class FindMyController extends GetxController {
     final lat = friend.latitude;
     final lng = friend.longitude;
     if (lat == null || lng == null || (lat == 0 && lng == 0)) return;
-    // The geocoding plugin implements Android/iOS/macOS only.
-    if (kIsWeb || !(Platform.isAndroid || Platform.isIOS || Platform.isMacOS)) return;
 
     final key = _addressKeyForFriend(friend);
     if (friendAddresses.containsKey(key)) return;
+
+    if (kIsWeb || _reverseGeocodeFn != null) {
+      await _resolveFriendAddressWeb(friend, key, lat, lng);
+      return;
+    }
+
+    // The geocoding plugin implements Android/iOS/macOS only.
+    if (!(Platform.isAndroid || Platform.isIOS || Platform.isMacOS)) return;
     if (!_geocodeAttempts.add('${lat.toStringAsFixed(3)},${lng.toStringAsFixed(3)}')) return;
 
     try {
@@ -1028,6 +1092,67 @@ class FindMyController extends GetxController {
     } catch (e, s) {
       _logWarn("Failed to reverse-geocode Find My friend location", error: e, trace: s);
     }
+  }
+
+  Future<void> _resolveFriendAddressWeb(FindMyFriend friend, String key, double lat, double lng) async {
+    final cell = '${lat.toStringAsFixed(4)},${lng.toStringAsFixed(4)}';
+    final cached = _webGeocodeCache[cell];
+    if (cached != null) {
+      friendAddresses[key] = cached;
+      return;
+    }
+    if (!_geocodeAttempts.add(cell)) {
+      await _webGeocodeTail;
+      final hit = _webGeocodeCache[cell];
+      if (_isAlive && hit != null) friendAddresses[key] = hit;
+      return;
+    }
+
+    // shortcut: OSM Nominatim reverse-geocode (~1 req/s, 4-decimal RAM cache); upgrade to server geocoder if rate-limited.
+    final next = _webGeocodeTail.then((_) async {
+      if (!_isAlive) return;
+      final hit = _webGeocodeCache[cell];
+      if (hit != null) {
+        friendAddresses[key] = hit;
+        return;
+      }
+      if (_lastWebGeocodeAt != null && _geocodeMinInterval > Duration.zero) {
+        final elapsed = _now().difference(_lastWebGeocodeAt!);
+        if (elapsed < _geocodeMinInterval) {
+          await Future.delayed(_geocodeMinInterval - elapsed);
+        }
+      }
+      if (!_isAlive) return;
+      _lastWebGeocodeAt = _now();
+      try {
+        final String? address;
+        if (_reverseGeocodeFn != null) {
+          address = await _reverseGeocodeFn(lat, lng);
+        } else {
+          final response = await _nominatimDio.get<Map<String, dynamic>>(
+            'https://nominatim.openstreetmap.org/reverse',
+            queryParameters: {
+              'format': 'jsonv2',
+              'lat': lat.toStringAsFixed(6),
+              'lon': lng.toStringAsFixed(6),
+              'zoom': '18',
+              'addressdetails': '1',
+            },
+          );
+          final data = response.data;
+          address = data != null ? formatNominatimAddress(data) : null;
+        }
+        if (_isAlive && address != null && address.trim().isNotEmpty) {
+          final clean = address.trim();
+          _webGeocodeCache[cell] = clean;
+          friendAddresses[key] = clean;
+        }
+      } catch (e, s) {
+        _logWarn("Failed to reverse-geocode Find My friend location", error: e, trace: s);
+      }
+    });
+    _webGeocodeTail = next.catchError((_) {});
+    await next;
   }
 
   LatLng markerPointForDevice(FindMyDevice device) => resolveFindMyMarkerPoint(

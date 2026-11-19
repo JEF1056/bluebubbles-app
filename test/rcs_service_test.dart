@@ -67,6 +67,22 @@ void main() {
       expect(existing.isRCS, isTrue);
     });
 
+    test('unified any;-; chat prefers latestMessage service over stale chat.serviceName', () {
+      final chat = Chat.fromMap({
+        'guid': 'any;-;+16266165776',
+        'serviceName': 'SMS',
+      });
+      chat.dbLatestMessage.target = Message.fromMap({
+        'guid': 'msg-imsg-1',
+        'service': 'iMessage',
+        'text': 'Sigh',
+      });
+
+      expect(chat.service, ChatServiceType.iMessage);
+      expect(chat.isIMessage, isTrue);
+      expect(chat.isSMS, isFalse);
+    });
+
     test('Message.fromMap and toMap preserve service', () {
       final msg = Message.fromMap({
         'guid': 'msg-1',
@@ -76,6 +92,29 @@ void main() {
 
       expect(msg.service, 'RCS');
       expect(msg.toMap()['service'], 'RCS');
+    });
+
+    test('supportsTapbackAndReply allows iMessage/RCS from message.service even if chat is SMS', () {
+      expect(ChatServiceType.iMessage.supportsTapbackAndReply, isTrue);
+      expect(ChatServiceType.rcs.supportsTapbackAndReply, isTrue);
+      expect(ChatServiceType.sms.supportsTapbackAndReply, isFalse);
+
+      final chat = Chat.fromMap({
+        'guid': 'any;-;+15551234567',
+        'serviceName': 'SMS',
+      });
+      final rcsMsg = Message.fromMap({'guid': 'msg-rcs-1', 'service': 'RCS'});
+      final imsgMsg = Message.fromMap({'guid': 'msg-imsg-1', 'service': 'iMessage'});
+      final smsMsg = Message.fromMap({'guid': 'msg-sms-1', 'service': 'SMS'});
+
+      bool supports(Message m) =>
+          chat.isIMessage ||
+          chat.isRCS ||
+          (ChatServiceType.fromServiceName(m.service)?.supportsTapbackAndReply ?? false);
+
+      expect(supports(rcsMsg), isTrue);
+      expect(supports(imsgMsg), isTrue);
+      expect(supports(smsMsg), isFalse);
     });
   });
 }

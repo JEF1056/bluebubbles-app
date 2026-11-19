@@ -4,9 +4,10 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/helpers/ui/system_ui_overlay_style_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/window_effects.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_acrylic/flutter_acrylic.dart';
+import 'package:bluebubbles/platform/shims/window_effect.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 
@@ -112,16 +113,22 @@ class BubbleText extends ThemeExtension<BubbleText> {
 }
 
 extension EmojiFontFallback on ThemeData {
-  /// Windows' own font fallback misses newer emoji (e.g. U+1FAEA), so name the emoji font explicitly. Apply to every
-  /// theme handed to a [Theme] widget, including per-chat themes resolved from [ThemeStruct]. No-op elsewhere.
-  ThemeData get withEmojiFallback => !Platform.isWindows
-      ? this
-      : copyWith(
-          textTheme: textTheme.apply(fontFamilyFallback: const ["Segoe UI Emoji"]),
-          extensions: extensions.values.map((e) => e is BubbleText
-              ? e.copyWith(bubbleText: e.bubbleText.apply(fontFamilyFallback: const ["Segoe UI Emoji"]))
-              : e),
-        );
+  /// Windows' own font fallback misses newer emoji (e.g. U+1FAEA), and Web
+  /// needs explicit emoji font fallback (cached Apple Color Emoji / system emoji)
+  /// to avoid tofu glyphs. Apply to every theme handed to a [Theme] widget,
+  /// including per-chat themes resolved from [ThemeStruct]. No-op elsewhere.
+  ThemeData get withEmojiFallback {
+    final List<String>? fallback = kIsWeb
+        ? const ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"]
+        : (Platform.isWindows ? const ["Segoe UI Emoji"] : null);
+    if (fallback == null) return this;
+    return copyWith(
+      textTheme: textTheme.apply(fontFamilyFallback: fallback),
+      extensions: extensions.values.map((e) => e is BubbleText
+          ? e.copyWith(bubbleText: e.bubbleText.apply(fontFamilyFallback: fallback))
+          : e),
+    );
+  }
 }
 
 /// Mixin to provide settings widgets with easy access to the commonly used

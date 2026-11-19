@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/network/metadata/metadata.dart';
 import 'package:bluebubbles/helpers/types/constants.dart';
+import 'package:bluebubbles/services/backend/filesystem/web_media_cache.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
@@ -188,14 +189,20 @@ abstract final class MetadataHelper {
     bool isIcon = false,
     bool bypassGate = false,
   }) async {
-    if (kIsWeb) return null;
-
     final storedHash =
         isIcon ? MessageMetadataStore.iconHash(message, slot) : MessageMetadataStore.imageHash(message, slot);
     if (storedHash != null) {
-      final cachedPath = FilesystemSvc.urlPreviewImagePath(storedHash);
-      if (await File(cachedPath).exists()) {
-        return CachedPreviewImage(path: cachedPath, hash: storedHash, fromDisk: true);
+      if (kIsWeb) {
+        final cachedBytes =
+            await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, 'url_preview_$storedHash');
+        if (cachedBytes != null) {
+          return CachedPreviewImage(path: '', hash: storedHash, fromDisk: true, bytes: cachedBytes);
+        }
+      } else {
+        final cachedPath = FilesystemSvc.urlPreviewImagePath(storedHash);
+        if (await File(cachedPath).exists()) {
+          return CachedPreviewImage(path: cachedPath, hash: storedHash, fromDisk: true);
+        }
       }
     }
 
@@ -223,7 +230,7 @@ abstract final class MetadataHelper {
       map[slot.imageHashKey] = downloaded.hash;
     }
     message.metadata = map;
-    if (!kIsWeb && message.id != null) unawaited(message.saveAsync());
+    if (message.id != null) unawaited(message.saveAsync());
 
     return downloaded;
   }

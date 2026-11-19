@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
-import 'package:audio_waveforms/audio_waveforms.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_audio_player.dart';
+import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -413,7 +414,7 @@ class IncomingMessageHandler {
     //    The original ActionHandler gates sound on its shouldNotifyForNewMessageGuid dedup flag.
     //    Here, dedup already short-circuited at step 1, so we just gate on isFromMe:
     //    outgoing echoes never need a receive sound; real incoming messages do.
-    if (!(saved.isFromMe ?? false)) await _playReceiveSound();
+    if (!(saved.isFromMe ?? false)) unawaited(_playReceiveSound());
 
     // 8. Drive UI reactivity, if not in a background isolate.
     if (!isIsolate) {
@@ -1035,8 +1036,16 @@ class IncomingMessageHandler {
   /// * Android: only while the app process is alive, so headless wake-ups do not play audio.
   /// * Desktop: may play regardless of window focus.
   Future<void> _playReceiveSound() async {
-    if (SettingsSvc.settings.receiveSoundPath.value == null) return;
     if (SettingsSvc.settings.soundVolume.value == 0) return;
+    if (kIsWeb) {
+      await playWebChime(
+        isSend: false,
+        volume: SettingsSvc.settings.soundVolume.value / 100.0,
+        customUrl: SettingsSvc.settings.receiveSoundPath.value,
+      );
+      return;
+    }
+    if (SettingsSvc.settings.receiveSoundPath.value == null) return;
     if (Platform.isAndroid && !LifecycleSvc.isAlive) return;
 
     if (kIsDesktop) {

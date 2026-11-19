@@ -8,6 +8,7 @@ import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:skeletonizer/skeletonizer.dart';
@@ -105,8 +106,15 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
   }
 
   Future<void> removePhoto() async {
-    File file = File(SettingsSvc.settings.userAvatarPath.value!);
-    file.delete();
+    final current = SettingsSvc.settings.userAvatarPath.value;
+    if (current != null) {
+      if (kIsWeb) {
+        await FilesystemSvc.deleteWebAvatar(current);
+      } else {
+        final file = File(current);
+        if (await file.exists()) await file.delete();
+      }
+    }
     SettingsSvc.settings.userAvatarPath.value = null;
     await SettingsSvc.settings.saveOneAsync("userAvatarPath");
   }

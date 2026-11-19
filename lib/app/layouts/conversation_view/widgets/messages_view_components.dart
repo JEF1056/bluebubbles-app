@@ -183,7 +183,7 @@ class ConversationPillsRow extends StatelessWidget {
       margin: const EdgeInsets.all(5),
       decoration: hasBackground
           ? BoxDecoration(
-              color: context.theme.colorScheme.surfaceContainerHighest,
+              color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.86),
               borderRadius: BorderRadius.circular(19),
             )
           : BoxDecoration(

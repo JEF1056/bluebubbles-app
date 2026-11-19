@@ -1,4 +1,3 @@
-import "dart:ffi";
 import "dart:math";
 
 import "package:bluebubbles/app/layouts/conversation_view/widgets/message/text/run_text_effects.dart";
@@ -7,14 +6,12 @@ import "package:bluebubbles/database/models.dart";
 import "package:bluebubbles/services/services.dart";
 import 'package:bluebubbles/utils/emoji.dart';
 import "package:bluebubbles/utils/emoticons.dart";
+import 'package:bluebubbles/utils/win32_clipboard.dart';
 import "package:collection/collection.dart";
-import "package:ffi/ffi.dart";
 import "package:flutter/foundation.dart";
 import "package:flutter/material.dart";
 import "package:get/get.dart";
 import 'package:languagetool_textfield/languagetool_textfield.dart';
-import 'package:universal_io/io.dart';
-import 'package:win32/win32.dart' show GetClipboardOwner, GetCurrentProcessId, GetWindowThreadProcessId;
 import "package:languagetool_textfield/src/utils/closed_range.dart";
 import "package:languagetool_textfield/src/utils/keep_latest_response_service.dart";
 
@@ -663,16 +660,7 @@ class MentionTextEditingController extends SpellCheckTextEditingController {
 
   /// Whether another app put what's on the clipboard there, so the same text copied elsewhere doesn't get our
   /// formatting. Only Windows says who copied last; elsewhere, and when it can't tell, the text alone decides.
-  static bool _clipboardFromElsewhere() {
-    if (!Platform.isWindows) return false;
-    final owner = GetClipboardOwner().value;
-    if (owner.address == 0) return false;
-    return using((arena) {
-      final pid = arena<Uint32>();
-      GetWindowThreadProcessId(owner, pid);
-      return pid.value != GetCurrentProcessId();
-    });
-  }
+  static bool _clipboardFromElsewhere() => clipboardFromElsewhere();
 
   @override
   set value(TextEditingValue newValue) {

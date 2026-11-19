@@ -9,6 +9,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/backend/interfaces/sync_interface.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:dio/dio.dart' as dio;
+import 'package:flutter/foundation.dart';
 
 class IncrementalSyncManager extends SyncManager {
   final tag = 'IncrementalSyncManager';
@@ -514,14 +515,17 @@ class IncrementalSyncManager extends SyncManager {
       messagesSynced += syncResult.messages.length;
       setProgress(messagesSynced, total);
 
-      // Backfills may run directly on the main isolate without SyncService's
-      // per-page listener. Refresh already visible messages there as well.
-      if (_syncingV2 && !isIsolate) {
+      // Backfills and web syncs run directly on the main isolate without SyncService's
+      // per-page listener. Refresh already visible messages (and append new ones on web).
+      if ((_syncingV2 || kIsWeb) && !isIsolate) {
         final service = maybeFindMessagesSvc(item.key);
         if (service != null) {
           for (final message in syncResult.messages) {
-            if (message.guid != null && service.struct.getMessage(message.guid!) != null) {
+            if (message.guid == null) continue;
+            if (service.struct.getMessage(message.guid!) != null) {
               service.updateMessage(message);
+            } else if (kIsWeb) {
+              await service.addNewMessage(message);
             }
           }
         }
@@ -547,6 +551,7 @@ class IncrementalSyncManager extends SyncManager {
       if (latestMessageIdPerChat[item.key] != null) {
         pageLatestMessageIdPerChat[item.key] = latestMessageIdPerChat[item.key]!;
       }
+      if (kIsWeb) await Future.delayed(Duration.zero);
     }
 
     // Emit a per-page event so the main thread can update the UI incrementally

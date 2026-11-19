@@ -1,5 +1,6 @@
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/media_collection.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -63,8 +64,8 @@ class _CollectionTitleState extends State<CollectionTitle> {
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      onEnter: kIsDesktop ? (_) => setState(() => _labelHovered = true) : null,
-      onExit: kIsDesktop ? (_) => setState(() => _labelHovered = false) : null,
+      onEnter: (kIsDesktop || kIsWeb) ? (_) => setState(() => _labelHovered = true) : null,
+      onExit: (kIsDesktop || kIsWeb) ? (_) => setState(() => _labelHovered = false) : null,
       child: GestureDetector(
         onTap: widget.onTap,
         child: Stack(

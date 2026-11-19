@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'package:universal_io/io.dart' show Platform;
 import 'dart:math' as math;
 
 import 'package:bluebubbles/helpers/helpers.dart';

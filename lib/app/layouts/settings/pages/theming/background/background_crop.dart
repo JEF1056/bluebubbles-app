@@ -1,4 +1,3 @@
-import 'dart:isolate';
 import 'dart:ui' as ui;
 
 import 'package:bluebubbles/app/components/bb_slider.dart';
@@ -10,13 +9,12 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:crop_your_image/crop_your_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:bluebubbles/utils/logger/logger.dart';
-import 'package:path/path.dart' as p;
-import 'package:universal_io/io.dart';
 
 enum _EditStep { selectImage, crop, blur }
 
@@ -117,36 +115,16 @@ class _BackgroundCropState extends State<BackgroundCrop> with ThemeHelpers {
   Future<void> _saveImage() async {
     _showSavingDialog();
     final Uint8List cropped = _croppedData!;
-    final Uint8List capped = await Isolate.run(() => _capResolution(cropped));
+    final Uint8List capped = await compute(_capResolution, cropped);
     final Uint8List blurred = await _applyBlurToImage(capped, _blurSigma);
-    final Uint8List finalData = await Isolate.run(() => _encodeFinal(blurred));
-    final String sanitizedGuid = FilesystemService.sanitizeGuid(chat.guid);
-    final File file =
-        File(p.join(FilesystemSvc.customBackgroundsPath, sanitizedGuid, "background-${finalData.length}.jpg"));
-
-    if (!(await file.exists())) {
-      await file.create(recursive: true);
-    }
-
-    // Delete the old background file if one exists. `Chat.customBackgroundPath`
-    // is never populated for a locally-set background (only by server-synced
-    // data) -- the filesystem scan is the actual source of truth everywhere
-    // else in the app, so it's what's used here too, or every save just
-    // leaves the previous file orphaned on disk.
-    final existingPath = FilesystemSvc.getExistingChatBackgroundPath(chat.guid);
-    if (existingPath != null) {
-      final File oldFile = File(existingPath);
-      if (await oldFile.exists()) {
-        await oldFile.delete();
-      }
-    }
-
-    await file.writeAsBytes(finalData);
-    await ChatsSvc.setChatCustomBackgroundPath(chat, file.path);
+    final Uint8List finalData = await compute(_encodeFinal, blurred);
+    await FilesystemSvc.deleteChatBackground(chat.guid);
+    final savedPath = await FilesystemSvc.saveChatBackground(chat.guid, finalData);
+    await ChatsSvc.setChatCustomBackgroundPath(chat, savedPath);
 
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pop();
-    Navigator.of(context).pop(file.path);
+    Navigator.of(context).pop(savedPath);
   }
 
   @override

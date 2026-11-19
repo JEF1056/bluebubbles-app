@@ -1,0 +1,86 @@
+name: Web Deploy
+
+# Builds the Flutter Web (Wasm/Skwasm) bundle and deploys it to Cloudflare Pages
+# on pushes to master or manual workflow_dispatch runs. Pull requests run a
+# build-only dry run and upload the compiled bundle as an artifact.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+concurrency:
+  group: web-deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  # Needed by setup-flutter to prune superseded caches on master.
+  actions: write
+
+env:
+  FLUTTER_VERSION: "3.50.0"
+  FVM_VERSION: "4.3.2"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Setup Flutter
+        uses: ./.github/actions/setup-flutter
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          fvm-version: ${{ env.FVM_VERSION }}
+
+      # pubspec.yaml bundles .env as an asset (served publicly in build/web/assets/.env),
+      # so write an empty placeholder matching pr-check.yml rather than exposing secrets.
+      - name: Write .env
+        run: echo "KLIPY_API_KEY=" > .env
+
+      - name: Build web (Wasm)
+        env:
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+        run: |
+          args=(
+            --no-pub
+            --wasm
+            --release
+            --base-href /
+          )
+          if [ -n "${GOOGLE_WEB_CLIENT_ID:-}" ]; then
+            args+=("--dart-define=GOOGLE_WEB_CLIENT_ID=${GOOGLE_WEB_CLIENT_ID}")
+          fi
+          fvm flutter build web "${args[@]}"
+
+      - name: Verify Cloudflare Pages config in build/web
+        run: |
+          for file in _headers _redirects; do
+            if [ ! -f "build/web/$file" ]; then
+              echo "::error::Missing build/web/$file (expected copy from web/$file)"
+              exit 1
+            fi
+          done
+
+      - name: Upload preview build artifact
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: bluebubbles-web-preview
+          path: build/web
+          retention-days: 7
+
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy build/web --project-name=bluebubbles-web

@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -10,7 +10,7 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_contacts/flutter_contacts.dart' as fc;
+import 'package:bluebubbles/platform/shims/native_misc.dart' as fc;
 import 'package:get_it/get_it.dart';
 import 'package:path/path.dart' as p;
 
@@ -107,7 +107,7 @@ class ContactV2Actions {
   /// Link [handles] to matching existing [ContactV2] records inside an active
   /// write transaction. Returns the IDs of handles that were newly linked.
   static List<int> linkHandlesToContactsInTx(List<Handle> handles) {
-    if (kIsWeb || handles.isEmpty) return const [];
+    if (handles.isEmpty) return const [];
 
     final allContacts = Database.contactsV2.getAll();
     if (allContacts.isEmpty) return const [];
@@ -214,7 +214,7 @@ class ContactV2Actions {
       final avatarPaths = <String, String?>{};
       final failedDeviceAvatarIds = <String>{};
 
-      if (!kIsDesktop && includeDeviceContacts) {
+      if (!kIsDesktop && !kIsWeb && includeDeviceContacts) {
         // Step 1: Fetch contacts using flutter_contacts (include thumbnails in the bulk query
         // so unmatched contacts don't need N+1 per-contact fetches, and matched contacts have
         // an immediate fallback if full-res fetch fails).
@@ -345,7 +345,7 @@ class ContactV2Actions {
       var serverFetchAttempted = false;
       var serverFetchSucceeded = false;
       final dedupedServerIds = <String>{};
-      if (kIsDesktop || hasServerUrl) {
+      if (kIsDesktop || kIsWeb || hasServerUrl) {
         serverFetchAttempted = true;
         try {
           Logger.info('[ContactV2] Starting contact fetch from server...');
@@ -364,7 +364,7 @@ class ContactV2Actions {
                 avatarPaths: avatarPaths,
                 failedDeviceAvatarIds: failedDeviceAvatarIds,
                 dedupedServerIdsOut: dedupedServerIds,
-                prefixServerIds: !kIsDesktop,
+                prefixServerIds: !kIsDesktop && !kIsWeb,
               );
               Logger.info(
                   '[ContactV2] Merged ${serverMaps.length} server contacts (${networkContacts.length} server-only)');
@@ -863,6 +863,7 @@ class ContactV2Actions {
   /// Check for contact database changes by comparing native contact IDs
   /// This is used by the periodic background task (Section II.B of FR-1.md)
   static Future<bool> checkContactChanges(dynamic data) async {
+    if (kIsWeb || kIsDesktop) return false;
     try {
       Logger.info('[ContactV2] Checking for contact changes...');
 
@@ -946,12 +947,24 @@ class ContactV2Actions {
   static Future<String?> saveContactAvatarForTest(String contactId, Uint8List avatarData) =>
       _saveContactAvatar(contactId, avatarData);
 
+  static String _webAvatarCacheKey(String contactId) => 'contact_avatar:${sanitizeFileName(contactId)}';
+
   /// Save a contact avatar to disk under a content-hashed filename and return the path.
   /// Content-hashing ensures changed photos get a new path (busting Flutter's
   /// ImageCache and HandleState equality checks), while unchanged photos hit
   /// an O(1) exists+length check without rewriting.
   static Future<String?> _saveContactAvatar(String contactId, Uint8List avatarData) async {
     try {
+      if (kIsWeb) {
+        await WebMediaCache.instance.put(
+          WebMediaCache.attachmentsStore,
+          _webAvatarCacheKey(contactId),
+          avatarData,
+        );
+        // Leave ContactV2.avatarPath null on web while ContactAvatarWidget uses FileImage.
+        return null;
+      }
+
       final avatarsDir = Directory(FilesystemSvc.contactAvatarsPath);
 
       if (!await avatarsDir.exists()) {
@@ -1020,6 +1033,13 @@ class ContactV2Actions {
     final nativeContactId = dataMap['nativeContactId'] as String;
 
     try {
+      if (kIsWeb) {
+        return await WebMediaCache.instance.get(
+          WebMediaCache.attachmentsStore,
+          _webAvatarCacheKey(nativeContactId),
+        );
+      }
+
       // Check stored ContactV2.avatarPath first (already content-hashed on disk).
       final storedPath = Database.runInTransaction(TxMode.read, () {
         final q = Database.contactsV2.query(ContactV2_.nativeContactId.equals(nativeContactId)).build();

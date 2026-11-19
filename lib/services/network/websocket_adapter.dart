@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 import 'package:bluebubbles/services/network/http_overrides.dart';
 import 'package:bluebubbles/services/network/user_certificates.dart';
 import 'package:socket_io_client/socket_io_client.dart';

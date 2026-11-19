@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/text/run_text_effects.dart';
@@ -194,6 +195,20 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
       final material = !iOS && !samsung;
       final tailGutter = iOS && !message.isBigEmoji ? 10.0 : 0.0;
       final useGradient = !isFromMe && !message.isBigEmoji && SettingsSvc.settings.colorfulBubbles.value;
+      final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+      final bubbleAlpha = hasWallpaper ? 0.86 : 1.0;
+
+      Color? resolvedColor;
+      if (isFromMe && !message.isBigEmoji) {
+        final base = selected
+            ? context.theme.colorScheme.tertiaryContainer
+            : context.theme.colorScheme
+                .bubble(context, message.chat.target?.isIMessage ?? true)
+                .darkenAmount(isTempMessage ? 0.2 : 0);
+        resolvedColor = base.withValues(alpha: bubbleAlpha);
+      } else if (!isFromMe && !message.isBigEmoji && !useGradient) {
+        resolvedColor = getBubbleColors(selected).first.withValues(alpha: bubbleAlpha);
+      }
 
       return Container(
         constraints: BoxConstraints(
@@ -204,19 +219,13 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
         ),
         padding: EdgeInsets.symmetric(vertical: material ? 9 : 8, horizontal: material ? 16 : 15)
             .add(EdgeInsets.only(left: isFromMe ? 0 : tailGutter, right: isFromMe ? tailGutter : 0)),
-        color: isFromMe && !message.isBigEmoji
-            ? (selected
-                ? context.theme.colorScheme.tertiaryContainer
-                : context.theme.colorScheme
-                    .bubble(context, message.chat.target?.isIMessage ?? true)
-                    .darkenAmount(isTempMessage ? 0.2 : 0))
-            : (!isFromMe && !message.isBigEmoji && !useGradient ? getBubbleColors(selected).first : null),
+        color: resolvedColor,
         decoration: useGradient
             ? BoxDecoration(
                 gradient: LinearGradient(
                   begin: AlignmentDirectional.bottomCenter,
                   end: AlignmentDirectional.topCenter,
-                  colors: getBubbleColors(selected),
+                  colors: getBubbleColors(selected).map((c) => c.withValues(alpha: bubbleAlpha)).toList(),
                 ),
               )
             : null,

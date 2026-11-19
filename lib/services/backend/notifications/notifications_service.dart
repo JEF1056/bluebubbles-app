@@ -17,10 +17,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart' hide Message;
 import 'package:get/get.dart';
 import 'package:bluebubbles/services/backend/notifications/desktop_notification.dart';
+import 'package:bluebubbles/services/backend/notifications/web_notifications_interop.dart';
 import 'package:path/path.dart';
 import 'package:synchronized/synchronized.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:timezone/timezone.dart';
-import 'package:universal_html/html.dart' hide File, Platform, Navigator;
 import 'package:universal_io/io.dart';
 import 'package:get_it/get_it.dart';
 
@@ -52,6 +53,7 @@ class NotificationsService {
 
   final FlutterLocalNotificationsPlugin flnp = FlutterLocalNotificationsPlugin();
   StreamSubscription? countSub;
+  Worker? _webUnreadWorker;
   int currentCount = 0;
 
   bool headless = false;
@@ -148,11 +150,21 @@ class NotificationsService {
           Logger.warn('IntentsService not registered, cannot process notification launch payload');
         }
       }
+    } else if (kIsWeb && !headless) {
+      bindWebUnreadBadge();
     }
+  }
+
+  void bindWebUnreadBadge() {
+    if (!kIsWeb || headless || !GetIt.I.isRegistered<ChatsService>()) return;
+    updateWebTitleAndBadge(ChatsSvc.unreadCount.value);
+    _webUnreadWorker?.dispose();
+    _webUnreadWorker = ever<int>(ChatsSvc.unreadCount, updateWebTitleAndBadge);
   }
 
   void close() {
     countSub?.cancel();
+    _webUnreadWorker?.dispose();
   }
 
   static const int _reminderIdBase = 50000;
@@ -223,13 +235,17 @@ class NotificationsService {
     final text = hideContent ? "iMessage" : message.getNotificationText();
     final isReaction = message.isReaction;
 
-    if (kIsWeb && Notification.permission == "granted") {
+    if (kIsWeb && webNotificationPermission == "granted") {
       final chatIcon = await avatarAsBytes(chat: chat, quality: 256);
-      final notif =
-          Notification(title, body: text, icon: "data:image/png;base64,${base64Encode(chatIcon)}", tag: message.guid);
-      notif.onClick.listen((event) async {
-        await IntentsSvc.openChat(guid, isInitialIntent: false);
-      });
+      await showWebNotificationEx(
+        title: title,
+        body: text,
+        icon: "data:image/png;base64,${base64Encode(chatIcon)}",
+        tag: message.guid,
+        onClick: () async {
+          await IntentsSvc.openChat(guid, isInitialIntent: false);
+        },
+      );
     } else if (kIsDesktop) {
       // Avatar loading is deferred to _buildAndShowToast — don't load it here.
       _lock.synchronized(
@@ -244,14 +260,16 @@ class NotificationsService {
         final personIcon = (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
         Uint8List chatIcon = await avatarAsBytes(chat: chat, quality: 256);
         final isFromMe = message.isFromMe ?? false;
+        // Reuse chatIcon on 1:1 chats instead of decoding and encoding the same avatar twice.
         Uint8List contactIcon = isFromMe
             ? personIcon
-            : await avatarAsBytes(
-                participantsOverride: !chat.isGroup
-                    ? null
-                    : chat.people.where((e) => e.address == message.handleRelation.target?.address).toList(),
-                chat: chat,
-                quality: 256);
+            : !chat.isGroup
+                ? chatIcon
+                : await avatarAsBytes(
+                    participantsOverride:
+                        chat.people.where((e) => e.address == message.handleRelation.target?.address).toList(),
+                    chat: chat,
+                    quality: 256);
         if (chatIcon.isEmpty) chatIcon = personIcon;
         if (contactIcon.isEmpty) contactIcon = personIcon;
 
@@ -272,15 +290,17 @@ class NotificationsService {
             ? senderContact.nativeContactId
             : null;
 
-        final List<Map<String, dynamic>> participants = chat.people.map((h) {
-          final ContactV2? c = h.contactsV2.where((e) => e.isNative).firstOrNull ?? h.contactsV2.firstOrNull;
-          return <String, dynamic>{
-            'name': h.displayName,
-            'key': h.address,
-            'uri': ContactV2.personUriForAddress(h.address),
-            'native_contact_id': (c != null && c.isNative && c.nativeContactId.isNotEmpty) ? c.nativeContactId : null,
-          };
-        }).toList();
+        final List<Map<String, dynamic>> participants = isGroup
+            ? chat.people.map((h) {
+                final ContactV2? c = h.contactsV2.where((e) => e.isNative).firstOrNull ?? h.contactsV2.firstOrNull;
+                return <String, dynamic>{
+                  'name': h.displayName,
+                  'key': h.address,
+                  'uri': ContactV2.personUriForAddress(h.address),
+                  'native_contact_id': (c != null && c.isNative && c.nativeContactId.isNotEmpty) ? c.nativeContactId : null,
+                };
+              }).toList()
+            : const <Map<String, dynamic>>[];
 
         String? attachmentPath;
         String? attachmentMime;
@@ -305,7 +325,7 @@ class NotificationsService {
           'chat_guid': guid,
           'chat_is_group': isGroup,
           'chat_title': title,
-          'chat_icon': isGroup ? chatIcon : contactIcon,
+          'chat_icon': isGroup ? chatIcon : null,
           'contact_name': contactName,
           'contact_avatar': contactIcon,
           'contact_key': contactKey,
@@ -363,14 +383,18 @@ class NotificationsService {
     String text = "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
     chatIcon ??= (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
 
-    if (kIsWeb && Notification.permission == "granted") {
-      final notif =
-          Notification(title, body: text, icon: "data:image/png;base64,${base64Encode(chatIcon)}", tag: callUuid);
-      if (callUuid != null) {
-        notif.onClick.listen((event) async {
-          await IntentsSvc.answerFaceTime(callUuid);
-        });
-      }
+    if (kIsWeb && webNotificationPermission == "granted") {
+      await showWebNotificationEx(
+        title: title,
+        body: text,
+        icon: "data:image/png;base64,${base64Encode(chatIcon)}",
+        tag: callUuid,
+        onClick: callUuid != null
+            ? () async {
+                await IntentsSvc.answerFaceTime(callUuid);
+              }
+            : null,
+      );
       return false;
     } else if (kIsDesktop) {
       _lock.synchronized(() async => await showPersistentDesktopFaceTimeNotif(callUuid, caller, chatIcon, isAudio));

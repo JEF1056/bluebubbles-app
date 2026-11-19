@@ -15,7 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:intl/intl.dart' as intl;
 import 'package:photo_view/photo_view.dart';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 class FullscreenImage extends StatefulWidget {
   const FullscreenImage({

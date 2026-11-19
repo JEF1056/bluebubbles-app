@@ -25,6 +25,40 @@ class NavigatorService {
   /// settings list tiles highlight themselves when it matches their destination.
   final Rxn<Type> activeSettingsPage = Rxn<Type>();
 
+  /// Preserves the open settings subpage across 600px split/narrow resizes.
+  Widget? activeSettingsWidget;
+  Bindings? activeSettingsBinding;
+  Route<dynamic>? narrowSettingsRoute;
+  Route<dynamic>? narrowChatRoute;
+
+  /// Tracks whether SettingsPage is open (for web hash URL `#/settings` sync).
+  final RxBool isSettingsOpen = false.obs;
+
+  /// Optional right-side chat inspector drawer on wide (>1024px) desktop/web layouts.
+  final RxBool showInspectorDrawer = true.obs;
+
+  void toggleInspectorDrawer() => showInspectorDrawer.value = !showInspectorDrawer.value;
+
+  bool get hasNarrowChatRoute => narrowChatRoute != null && narrowChatRoute!.isActive;
+
+  bool get hasNarrowSettingsRoute => narrowSettingsRoute != null && narrowSettingsRoute!.isActive;
+
+  void removeNarrowChatRoute(BuildContext context) {
+    final route = narrowChatRoute;
+    narrowChatRoute = null;
+    if (route == null || !route.isActive) return;
+    final nav = route.navigator ?? key.currentState ?? Navigator.maybeOf(context);
+    nav?.removeRoute(route);
+  }
+
+  void removeNarrowSettingsRoute(BuildContext context) {
+    final route = narrowSettingsRoute;
+    narrowSettingsRoute = null;
+    if (route == null || !route.isActive) return;
+    final nav = route.navigator ?? key.currentState ?? Navigator.maybeOf(context);
+    nav?.removeRoute(route);
+  }
+
   /// width of left side of split screen view
   double? _widthChatListLeft;
 
@@ -116,20 +150,27 @@ class NavigatorService {
           predicate,
           id: 2);
     } else {
-      await Navigator.of(context).pushAndRemoveUntil(
-          customRoute ??
-              ThemeSwitcher.buildPageRoute(
-                builder: (BuildContext context) => TitleBarWrapper(child: widget),
-              ),
-          predicate);
+      final route = customRoute ??
+          ThemeSwitcher.buildPageRoute(
+            builder: (BuildContext context) => TitleBarWrapper(child: widget),
+          );
+      if (widget.runtimeType.toString() == 'ConversationView') {
+        narrowChatRoute = route;
+        route.popped.then((_) {
+          if (identical(narrowChatRoute, route)) narrowChatRoute = null;
+        });
+      }
+      await Navigator.of(context).pushAndRemoveUntil(route, predicate);
     }
   }
 
   /// Push a new route, popping all previous routes, on the settings navigator
   void pushAndRemoveSettingsUntil(BuildContext context, Widget widget, bool Function(Route) predicate,
       {Bindings? binding}) {
+    activeSettingsPage.value = widget.runtimeType;
+    activeSettingsWidget = widget;
+    activeSettingsBinding = binding;
     if (Get.keys.containsKey(3) && isTabletMode(context)) {
-      activeSettingsPage.value = widget.runtimeType;
       // we only want to offUntil when in landscape, otherwise when the user presses back, the previous page will be the chat list
       Get.offUntil(
           GetPageRoute(
@@ -143,9 +184,19 @@ class NavigatorService {
     } else {
       binding?.dependencies();
       // only push here because we don't want to remove underlying routes when in portrait
-      Navigator.of(context).push(ThemeSwitcher.buildPageRoute(
+      final route = ThemeSwitcher.buildPageRoute(
         builder: (BuildContext context) => TitleBarWrapper(child: widget),
-      ));
+      );
+      narrowSettingsRoute = route;
+      route.popped.then((_) {
+        if (identical(narrowSettingsRoute, route)) {
+          narrowSettingsRoute = null;
+          activeSettingsPage.value = null;
+          activeSettingsWidget = null;
+          activeSettingsBinding = null;
+        }
+      });
+      Navigator.of(context).push(route);
     }
   }
 
@@ -190,9 +241,16 @@ class NavigatorService {
   }
 
   void closeSettings(BuildContext context) {
+    activeSettingsPage.value = null;
+    activeSettingsWidget = null;
+    activeSettingsBinding = null;
+    narrowSettingsRoute = null;
     if (Get.keys.containsKey(3) && Get.keys[3]?.currentContext != null && isTabletMode(context)) {
       Get.until((route) => route.isFirst, id: 3);
-      Get.back(closeOverlays: true);
+    }
+    final rootNav = key.currentState;
+    if (rootNav != null) {
+      rootNav.popUntil((route) => route.isFirst);
     } else {
       Navigator.of(context).popUntil((route) => route.isFirst);
     }
@@ -214,4 +272,53 @@ class NavigatorService {
       Get.back(result: result, closeOverlays: closeOverlays);
     }
   }
+}
+
+enum WebHashRouteKind { home, chat, settings }
+
+class WebHashRouteTarget {
+  final WebHashRouteKind kind;
+  final String? chatGuid;
+
+  const WebHashRouteTarget._(this.kind, [this.chatGuid]);
+
+  const WebHashRouteTarget.home() : this._(WebHashRouteKind.home);
+  const WebHashRouteTarget.settings() : this._(WebHashRouteKind.settings);
+  const WebHashRouteTarget.chat(String guid) : this._(WebHashRouteKind.chat, guid);
+}
+
+WebHashRouteTarget parseWebHashRoute(String rawRoute) {
+  var normalized = rawRoute.trim();
+  if (normalized.startsWith('#')) {
+    normalized = normalized.substring(1);
+  }
+  if (!normalized.startsWith('/')) {
+    normalized = '/$normalized';
+  }
+  final uri = Uri.tryParse(normalized);
+  final path = uri?.path ?? normalized;
+  if (path == '/settings' || path.startsWith('/settings/')) {
+    return const WebHashRouteTarget.settings();
+  }
+  if (path.startsWith('/chat/')) {
+    final encoded = path.substring('/chat/'.length);
+    if (encoded.isNotEmpty) {
+      try {
+        return WebHashRouteTarget.chat(Uri.decodeComponent(encoded));
+      } catch (_) {
+        return WebHashRouteTarget.chat(encoded);
+      }
+    }
+  }
+  return const WebHashRouteTarget.home();
+}
+
+Uri buildWebHashRouteUri({required bool settingsOpen, String? activeChatGuid}) {
+  if (settingsOpen) {
+    return Uri(path: '/settings');
+  }
+  if (activeChatGuid != null && activeChatGuid.isNotEmpty) {
+    return Uri(path: '/chat/${Uri.encodeComponent(activeChatGuid)}');
+  }
+  return Uri(path: '/');
 }

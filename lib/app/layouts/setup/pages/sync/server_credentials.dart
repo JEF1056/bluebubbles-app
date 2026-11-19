@@ -19,6 +19,79 @@ import 'package:get/get.dart' hide Response;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
 
+@visibleForTesting
+bool shouldShowWebMixedContentHelp(
+  String url, {
+  bool isWeb = kIsWeb,
+  String? pageScheme,
+}) {
+  if (!isWeb) return false;
+  final scheme = (pageScheme ?? Uri.base.scheme).toLowerCase();
+  if (scheme != 'https') return false;
+  return url.trim().toLowerCase().startsWith('http://');
+}
+
+bool isWebMixedContentBlocked(
+  String url, {
+  bool isWeb = kIsWeb,
+  String? pageScheme,
+}) {
+  if (!shouldShowWebMixedContentHelp(url, isWeb: isWeb, pageScheme: pageScheme)) return false;
+  final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
+  return host != 'localhost' && host != '127.0.0.1' && host != '::1' && host != '[::1]';
+}
+
+class WebHttpHelpBanner extends StatelessWidget {
+  const WebHttpHelpBanner({super.key, required this.controller, this.width});
+
+  final TextEditingController controller;
+  final double? width;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        if (!shouldShowWebMixedContentHelp(value.text)) {
+          return const SizedBox.shrink();
+        }
+        final blocked = isWebMixedContentBlocked(value.text);
+        final message = blocked
+            ? "Browsers block http:// requests from an https:// page (Mixed Content). "
+                "Use an https:// URL (e.g. Cloudflare Tunnel, Tailscale Funnel, or a reverse proxy) with CORS enabled for this origin."
+            : "Local http:// connections from an https:// page still require CORS headers on your BlueBubbles server for this origin.";
+        return Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Container(
+            width: width,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: context.theme.colorScheme.errorContainer.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: context.theme.colorScheme.error.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.warning_amber_rounded, size: 18, color: context.theme.colorScheme.onErrorContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: context.theme.textTheme.bodySmall?.copyWith(
+                      color: context.theme.colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class ServerCredentials extends StatefulWidget {
   const ServerCredentials({super.key});
 
@@ -33,7 +106,8 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
   final FocusScopeNode focusScopeNode = FocusScopeNode(traversalEdgeBehavior: TraversalEdgeBehavior.stop);
   final googleFlow = GoogleOAuthFlowController();
 
-  final RxBool showLoginButtons = true.obs;
+  bool get _canUseGoogleSignIn => !kIsWeb || fdb.getClientId() != null;
+  late final RxBool showLoginButtons = _canUseGoogleSignIn.obs;
   final RxBool obscureText = true.obs;
 
   Rxn<String> get token => googleFlow.token;
@@ -255,7 +329,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                     ),
                   ),
                 ),
-              if (googleName.value == null && showLoginButtons.value)
+              if (googleName.value == null && showLoginButtons.value && _canUseGoogleSignIn)
                 Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(20),
@@ -305,7 +379,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                     ),
                   ),
                 ),
-              if (googleName.value == null && showLoginButtons.value) const SizedBox(height: 10),
+              if (googleName.value == null && showLoginButtons.value && _canUseGoogleSignIn) const SizedBox(height: 10),
               if (googleName.value == null && !kIsWeb && !kIsDesktop && showLoginButtons.value)
                 Container(
                   decoration: BoxDecoration(
@@ -346,7 +420,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                 ),
               if (googleName.value == null && !kIsWeb && !kIsDesktop && showLoginButtons.value)
                 const SizedBox(height: 10),
-              if (googleName.value == null)
+              if (googleName.value == null && _canUseGoogleSignIn)
                 Container(
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(20),
@@ -421,6 +495,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                               labelText: "URL",
                                             ),
                                           ),
+                                        ),
+                                        WebHttpHelpBanner(
+                                          controller: urlController,
+                                          width: context.width * 2 / 3,
                                         ),
                                         const SizedBox(height: 20),
                                         SizedBox(
@@ -617,8 +695,11 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
     if (url.endsWith("/")) {
       url = url.substring(0, url.length - 1);
     }
-    if (kIsWeb && url.startsWith("http://")) {
-      controller.updateConnectError("HTTP URLs are not supported on Web! You must use an HTTPS URL.");
+    if (isWebMixedContentBlocked(url)) {
+      controller.updateConnectError(
+        "Mixed Content blocked: this page is served over HTTPS, so your browser cannot connect to an http:// server URL. "
+        "Use an https:// URL (e.g. Cloudflare Tunnel, Tailscale Funnel, or a reverse proxy) with CORS enabled.",
+      );
       return;
     }
     if (!isValidServerAddress(url) || password.isEmpty) {
@@ -686,7 +767,8 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
     if (serverResponse?.statusCode != 200) {
       SocketSvc.forgetConnection();
       return controller.updateConnectError(
-          "Failed to connect to $addr! Please ensure your Server's URL is accessible from your device.");
+          "Failed to connect to $addr! Please ensure your Server's URL is accessible from your device"
+          "${kIsWeb ? " and allows CORS requests from this origin." : "."}");
     }
     // Ignore any other server errors unless user is using ngrok or cloudflare
     final data = fcmResponse?.data;

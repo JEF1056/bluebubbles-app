@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/state/chat_state.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_animations/simple_animations.dart';
@@ -53,12 +54,12 @@ class _GradientBackgroundState extends CustomState<GradientBackground, void, Con
   /// The (logical size, device pixel ratio) to decode the static background for.
   ///
   /// Mobile returns the live value: its size only changes on rotation or fold, which is a single
-  /// step. Desktop returns the last settled value while a resize is in flight, so the already
-  /// decoded image keeps drawing (`BoxFit.cover` stretches it) and the decode happens once, after
-  /// the window has held still for [_resizeSettleDelay].
+  /// step. Desktop and web return the last settled value while a resize is in flight, so the
+  /// already decoded image keeps drawing (`BoxFit.cover` stretches it) and the decode happens once,
+  /// after the window has held still for [_resizeSettleDelay].
   (Size, double) _geometryToDecodeFor(BuildContext context) {
     final (Size, double) live = (MediaQuery.sizeOf(context), MediaQuery.devicePixelRatioOf(context));
-    if (!kIsDesktop) return live;
+    if (!kIsDesktop && !kIsWeb) return live;
 
     // The first real size is decoded for immediately; the debounce only applies to changes after
     // that. An empty size (window not laid out yet) is passed through without being remembered,

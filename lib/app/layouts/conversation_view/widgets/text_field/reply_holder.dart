@@ -118,9 +118,10 @@ class _ReplyContent extends StatelessWidget {
   Widget build(BuildContext context) {
     return Obx(() {
       final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
+      final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
 
       return Container(
-        color: context.theme.colorScheme.surfaceContainerHighest,
+        color: hasBackground ? Colors.transparent : context.theme.colorScheme.surfaceContainerHighest,
         padding: EdgeInsets.only(left: !isIOS ? 20.0 : 0, right: isIOS ? 8.0 : 0, top: 4, bottom: 4),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,

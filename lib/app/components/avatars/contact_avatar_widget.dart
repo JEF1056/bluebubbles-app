@@ -5,6 +5,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flex_color_picker/flex_color_picker.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
@@ -32,12 +33,23 @@ class ContactAvatarWidget extends StatefulWidget {
   /// The one image provider every avatar file is drawn and precached with. `fit` keeps the
   /// photo's aspect ratio (fits it inside avatarDecodeSize²); callers crop with BoxFit.cover.
   /// Decoding to an exact square squashed portrait/landscape contact photos.
-  static ImageProvider avatarImage(String path) => ResizeImage(
-        FileImage(File(path)),
-        width: avatarDecodeSize,
-        height: avatarDecodeSize,
-        policy: ResizeImagePolicy.fit,
-      );
+  static ImageProvider avatarImage(String path) {
+    final ImageProvider base;
+    if (kIsWeb && path.startsWith('web-avatar://')) {
+      final bytes = GetIt.I.isRegistered<FilesystemService>()
+          ? FilesystemSvc.getCachedWebAvatarByPath(path)
+          : null;
+      base = MemoryImage(bytes ?? FilesystemService.transparent1x1Png);
+    } else {
+      base = FileImage(File(path));
+    }
+    return ResizeImage(
+      base,
+      width: avatarDecodeSize,
+      height: avatarDecodeSize,
+      policy: ResizeImagePolicy.fit,
+    );
+  }
 
   final Handle? handle;
   final ContactV2? contact;
@@ -287,6 +299,7 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
                   key: ValueKey(userAvatarPath),
                   radius: size / 2,
                   backgroundImage: ContactAvatarWidget.avatarImage(userAvatarPath),
+                  onBackgroundImageError: (_, _) {},
                   backgroundColor: Colors.transparent,
                 );
               } else if (!hideContactInfo && !genAvatars && !isNullOrEmpty(contactV2Avatar)) {

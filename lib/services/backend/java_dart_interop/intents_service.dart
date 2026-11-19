@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/scheduling/scheduled_messages_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/server_management_panel.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
@@ -20,7 +21,6 @@ import 'package:bluebubbles/models/models.dart' show HandleLookupKey;
 import 'package:path/path.dart';
 import 'package:receive_intent/receive_intent.dart';
 import 'package:universal_io/io.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:get_it/get_it.dart';
 
 // ignore: non_constant_identifier_names
@@ -170,11 +170,7 @@ class IntentsService {
       return showSnackbar("Failed to answer FaceTime", "Unable to generate FaceTime link!", type: SnackbarType.error);
     }
 
-    if (!kIsWeb) {
-      await launchUrl(Uri.parse(link), mode: LaunchMode.externalApplication);
-    } else if (kIsWeb) {
-      // TODO: Implement web FaceTime
-    }
+    await openFaceTimeJoinLink(link, context: Get.context);
   }
 
   Future<void> openChat(String? guid,

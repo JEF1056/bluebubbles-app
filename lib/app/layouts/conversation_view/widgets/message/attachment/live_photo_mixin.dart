@@ -1,10 +1,13 @@
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_video_player.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/services/backend/filesystem/web_media_cache.dart';
 import 'package:bluebubbles/services/network/http_service.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as p;
@@ -18,6 +21,7 @@ mixin LivePhotoMixin<T extends StatefulWidget> on State<T> {
   PlatformFile? livePhotoFile;
   Player? livePhotoPlayer;
   VideoController? livePhotoController;
+  WebVideoController? _webVideoController;
   final RxBool isPlayingLivePhoto = false.obs;
   final RxDouble livePhotoOpacity = 0.0.obs;
 
@@ -27,6 +31,7 @@ mixin LivePhotoMixin<T extends StatefulWidget> on State<T> {
   @override
   void dispose() {
     livePhotoPlayer?.dispose();
+    _webVideoController?.dispose();
     super.dispose();
   }
 
@@ -38,7 +43,94 @@ mixin LivePhotoMixin<T extends StatefulWidget> on State<T> {
     return "${livePhotoAttachment.directory}/$fileName";
   }
 
+  String _webLivePhotoName(String guid) {
+    final tn = livePhotoAttachment.transferName;
+    if (tn == null || tn.isEmpty) return '$guid.mov';
+    final dot = tn.lastIndexOf('.');
+    return '${dot > 0 ? tn.substring(0, dot) : tn}.mov';
+  }
+
+  Future<void> _handleWebLivePhotoTap() async {
+    if (isDownloadingLivePhoto.value) return;
+    final guid = livePhotoAttachment.guid;
+    if (guid == null) return;
+
+    if (isPlayingLivePhoto.value) {
+      livePhotoOpacity.value = 0.0;
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (mounted) {
+        isPlayingLivePhoto.value = false;
+        await _webVideoController?.pause();
+      }
+      return;
+    }
+
+    if (livePhotoFile?.bytes != null) {
+      isPlayingLivePhoto.value = true;
+      await Future.delayed(const Duration(milliseconds: 50));
+      if (mounted) livePhotoOpacity.value = 1.0;
+      await _webVideoController?.seek(Duration.zero);
+      await _webVideoController?.play();
+      return;
+    }
+
+    final cacheKey = '${guid}_live';
+    try {
+      final cached = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, cacheKey);
+      if (cached != null && cached.isNotEmpty) {
+        livePhotoFile = PlatformFile(
+          name: _webLivePhotoName(guid),
+          size: cached.length,
+          bytes: cached,
+        );
+        if (mounted) {
+          isPlayingLivePhoto.value = true;
+          await Future.delayed(const Duration(milliseconds: 50));
+          if (mounted) livePhotoOpacity.value = 1.0;
+        }
+        return;
+      }
+    } catch (_) {}
+
+    isDownloadingLivePhoto.value = true;
+    livePhotoProgress.value = 0.0;
+    try {
+      final response = await HttpSvc.attachment.downloadLivePhoto(
+        guid,
+        onReceiveProgress: (count, total) {
+          if (mounted) {
+            livePhotoProgress.value = total > 0 ? count / total : 0.0;
+          }
+        },
+      );
+      final bytes = response.data is Uint8List
+          ? response.data as Uint8List
+          : Uint8List.fromList(List<int>.from(response.data as List));
+      try {
+        await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, cacheKey, bytes);
+      } catch (_) {}
+      livePhotoFile = PlatformFile(
+        name: _webLivePhotoName(guid),
+        size: bytes.length,
+        bytes: bytes,
+      );
+      isDownloadingLivePhoto.value = false;
+      if (mounted) {
+        isPlayingLivePhoto.value = true;
+        await Future.delayed(const Duration(milliseconds: 50));
+        if (mounted) livePhotoOpacity.value = 1.0;
+      }
+    } catch (ex) {
+      Logger.error("Failed to download/play web live photo", error: ex);
+      if (mounted) isDownloadingLivePhoto.value = false;
+      showSnackbar("Error", "Failed to load live photo", type: SnackbarType.error);
+    }
+  }
+
   Future<void> handleLivePhotoTap() async {
+    if (kIsWeb) {
+      return _handleWebLivePhotoTap();
+    }
     if (isDownloadingLivePhoto.value || isPlayingLivePhoto.value) {
       // If already playing, stop it with fade out
       if (isPlayingLivePhoto.value) {
@@ -255,6 +347,34 @@ mixin LivePhotoMixin<T extends StatefulWidget> on State<T> {
   /// Build the live photo video overlay
   Widget buildLivePhotoOverlay() {
     return Obx(() {
+      if (kIsWeb) {
+        if (!isPlayingLivePhoto.value || livePhotoFile?.bytes == null) {
+          return const SizedBox.shrink();
+        }
+        return Positioned.fill(
+          child: AnimatedOpacity(
+            opacity: livePhotoOpacity.value,
+            duration: const Duration(milliseconds: 200),
+            child: WebVideoPlayer(
+              file: livePhotoFile,
+              controller: _webVideoController ??= WebVideoController(),
+              autoplay: true,
+              muted: true,
+              controls: false,
+              fit: BoxFit.contain,
+              onEnded: () async {
+                if (!mounted || !isPlayingLivePhoto.value) return;
+                livePhotoOpacity.value = 0.0;
+                await Future.delayed(const Duration(milliseconds: 200));
+                if (mounted) {
+                  isPlayingLivePhoto.value = false;
+                }
+              },
+            ),
+          ),
+        );
+      }
+
       if (!isPlayingLivePhoto.value || livePhotoController == null) {
         return const SizedBox.shrink();
       }

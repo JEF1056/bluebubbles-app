@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:local_auth/local_auth.dart';
-import 'package:secure_application/secure_application.dart';
+import 'package:bluebubbles/platform/shims/native_misc.dart' show SecureApplicationProvider;
 import 'package:universal_io/io.dart';
 
 class MiscPanel extends StatefulWidget {

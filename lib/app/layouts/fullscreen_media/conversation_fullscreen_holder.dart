@@ -62,7 +62,7 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
 
   late List<Attachment> attachments = _scopedGallery != null
       ? List<Attachment>.from(_scopedGallery!)
-      : (widget.currentChat == null
+      : (kIsWeb || !widget.showInteractions || widget.currentChat == null
           ? [attachment]
           : (messageService?.struct.attachments.where((e) => e.mimeStart == "image").toList() ?? [attachment]));
 
@@ -97,20 +97,16 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
   @override
   void initState() {
     super.initState();
-    if (kIsWeb || !widget.showInteractions) {
-      controller = PageController(initialPage: 0);
-    } else {
-      if (widget.currentChat != null || _scopedGallery != null) {
-        final targetGuid = widget.initialAttachmentGuid ?? attachment.guid;
-        currentIndex = attachments.indexWhere((e) => e.guid == targetGuid);
-        if (currentIndex == -1 && widget.currentChat != null) {
-          attachments.add(attachment);
-          currentIndex = attachments.indexWhere((e) => e.guid == attachment.guid);
-        }
-        if (currentIndex == -1) currentIndex = 0;
+    if (_scopedGallery != null || (!kIsWeb && widget.showInteractions && widget.currentChat != null)) {
+      final targetGuid = widget.initialAttachmentGuid ?? attachment.guid;
+      currentIndex = attachments.indexWhere((e) => e.guid == targetGuid);
+      if (currentIndex == -1 && widget.currentChat != null) {
+        attachments.add(attachment);
+        currentIndex = attachments.indexWhere((e) => e.guid == attachment.guid);
       }
-      controller = PageController(initialPage: currentIndex);
+      if (currentIndex == -1) currentIndex = 0;
     }
+    controller = PageController(initialPage: currentIndex);
   }
 
   @override
@@ -276,12 +272,18 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                       path: attachment.guid == null ? attachment.transferName : null);
                   final key = attachment.guid ?? attachment.transferName ?? randomString(8);
 
-                  if (content is PlatformFile) {
+                  if (content is PlatformFile || (kIsWeb && attachment.mimeStart == "video")) {
+                    final PlatformFile resolvedFile = content is PlatformFile
+                        ? content
+                        : PlatformFile(
+                            name: attachment.transferName ?? 'video.mp4',
+                            size: attachment.totalBytes ?? 0,
+                          );
                     if (attachment.mimeStart == "image") {
                       return FullscreenImage(
                         key: Key(key),
                         attachment: attachment,
-                        file: content,
+                        file: resolvedFile,
                         showInteractions: widget.showInteractions,
                         onOpenCollectionGallery: _hasCollectionGallery ? _openCollectionGallery : null,
                         updatePhysics: (ScrollPhysics p) {
@@ -302,7 +304,7 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                     } else if (attachment.mimeStart == "video") {
                       return FullscreenVideo(
                         key: Key(key),
-                        file: content,
+                        file: resolvedFile,
                         attachment: attachment,
                         showInteractions: widget.showInteractions,
                         videoController: widget.videoController,

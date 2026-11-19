@@ -175,8 +175,8 @@ class ServerDetails {
   /// 1.x hit (the scan callback's argument order), sending unscanned instead, but 14 to 26 are untested
   bool get supportsLinkScan => isV2Server || !isMinSonoma;
 
-  /// Send emoji tapbacks (`reaction: "emoji"`): a v2 server on macOS Sequoia (15.0) or newer.
-  bool get supportsEmojiTapbacks => isV2Server && isMinSequoia;
+  /// Send emoji tapbacks (`reaction: "emoji"`): supported on macOS Sequoia (15.0) or newer.
+  bool get supportsEmojiTapbacks => isMinSequoia;
 
   /// Bold, italic, underline, strikethrough and text effects (`textFormatting` on `/message/text` and
   /// `/message/multipart`): a v2 server on macOS Sequoia (15.0) or newer, through the Private API. 1.x validated the

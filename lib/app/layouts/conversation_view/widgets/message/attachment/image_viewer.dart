@@ -1,5 +1,5 @@
 import 'dart:math';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/app/components/image_blur_canvas.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/live_photo_mixin.dart';
@@ -7,6 +7,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attach
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -54,6 +55,7 @@ class _ImageViewerState extends State<ImageViewer> with AutomaticKeepAliveClient
 
   // Rotation-corrected, downsampled preview used for fast inline display.
   Future<String?>? _previewPathFuture;
+  Future<Uint8List?>? _webThumbFuture;
 
   @override
   void initState() {
@@ -84,6 +86,45 @@ class _ImageViewerState extends State<ImageViewer> with AutomaticKeepAliveClient
       if (await f.exists()) return f.readAsBytes();
     }
     return null;
+  }
+
+  Future<Uint8List?> _loadWebThumbnail() async {
+    final guid = attachment.guid;
+    if (guid == null || guid.contains("demo") || guid.startsWith("temp")) return null;
+    final cacheKey = _isGif ? guid : '${guid}_thumb_800';
+    try {
+      final cached = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, cacheKey);
+      if (cached != null && cached.isNotEmpty) return cached;
+    } catch (_) {}
+    try {
+      final response = await HttpSvc.attachment.download(
+        guid,
+        mimeType: attachment.mimeType,
+        width: _isGif ? null : 800,
+        quality: _isGif ? null : 'better',
+      );
+      final data = response.data;
+      if (data is Uint8List && data.isNotEmpty) {
+        await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, cacheKey, data);
+        return data;
+      }
+      if (data is List<int> && data.isNotEmpty) {
+        final bytes = Uint8List.fromList(data);
+        await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, cacheKey, bytes);
+        return bytes;
+      }
+    } catch (e, s) {
+      Logger.warn("Failed to load web thumbnail for $guid", error: e, trace: s);
+    }
+    return null;
+  }
+
+  @override
+  void didUpdateWidget(ImageViewer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.attachment.guid != widget.attachment.guid) {
+      _webThumbFuture = null;
+    }
   }
 
   @override
@@ -253,48 +294,62 @@ class _ImageViewerState extends State<ImageViewer> with AutomaticKeepAliveClient
       final size = _displaySize(context);
       final displayWidth = size.width;
       final displayHeight = size.height;
-      if (file.bytes == null) {
+      final qualityFactor = SettingsSvc.settings.previewImageQuality.value;
+      final calculatedWidth = (displayWidth * Get.pixelRatio * qualityFactor).round().abs().nonZero;
+
+      Widget buildMemory(Uint8List bytes) => Image.memory(
+            bytes,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.high,
+            width: widget.fill ? null : displayWidth,
+            // height omitted for non-fill — see comment below. Fill expands via SizedBox.
+            // Display space, width only. The decoder already applies EXIF
+            // orientation (dimensions it reports, and cacheWidth/cacheHeight it
+            // accepts, are post-rotation), so nothing here may re-apply it.
+            // Passing height as well would make ResizeImagePolicy.exact behave
+            // like BoxFit.fill and stretch the bitmap; width alone preserves the
+            // aspect ratio.
+            cacheWidth: calculatedWidth,
+            fit: _fit,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (wasSynchronouslyLoaded) return child;
+              if (frame == null) {
+                return Container(
+                  width: widget.fill ? null : displayWidth,
+                  height: widget.fill ? null : displayHeight,
+                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.outline),
+                    ),
+                  ),
+                );
+              }
+              return child;
+            },
+            errorBuilder: (context, object, stacktrace) =>
+                _buildImageError(context, displayWidth, displayHeight, object, stacktrace),
+          );
+
+      if (file.bytes != null) {
+        imageWidget = buildMemory(file.bytes!);
+      } else if (kIsWeb && attachment.guid != null) {
+        imageWidget = FutureBuilder<Uint8List?>(
+          future: _webThumbFuture ??= _loadWebThumbnail(),
+          builder: (context, snapshot) {
+            if (snapshot.hasData && snapshot.data != null) {
+              return buildMemory(snapshot.data!);
+            }
+            return widget.fill
+                ? const ColoredBox(color: Colors.transparent)
+                : SizedBox(width: displayWidth, height: displayHeight);
+          },
+        );
+      } else {
         imageWidget = widget.fill
             ? const ColoredBox(color: Colors.transparent)
             : SizedBox(width: displayWidth, height: displayHeight);
-      } else {
-        final qualityFactor = SettingsSvc.settings.previewImageQuality.value;
-        final calculatedWidth = (displayWidth * Get.pixelRatio * qualityFactor).round().abs().nonZero;
-        imageWidget = Image.memory(
-          file.bytes!,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.high,
-          width: widget.fill ? null : displayWidth,
-          // height omitted for non-fill — see comment below. Fill expands via SizedBox.
-          // Display space, width only. The decoder already applies EXIF
-          // orientation (dimensions it reports, and cacheWidth/cacheHeight it
-          // accepts, are post-rotation), so nothing here may re-apply it.
-          // Passing height as well would make ResizeImagePolicy.exact behave
-          // like BoxFit.fill and stretch the bitmap; width alone preserves the
-          // aspect ratio.
-          cacheWidth: calculatedWidth,
-          fit: _fit,
-          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-            if (wasSynchronouslyLoaded) return child;
-            if (frame == null) {
-              // Show placeholder while loading
-              return Container(
-                width: widget.fill ? null : displayWidth,
-                height: widget.fill ? null : displayHeight,
-                color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-                child: Center(
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(context.theme.colorScheme.outline),
-                  ),
-                ),
-              );
-            }
-            return child;
-          },
-          errorBuilder: (context, object, stacktrace) =>
-              _buildImageError(context, displayWidth, displayHeight, object, stacktrace),
-        );
       }
     } else {
       // The box this image occupies, reserved up front so nothing moves when

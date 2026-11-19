@@ -11,6 +11,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
 import androidx.activity.ComponentActivity
 import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
+import com.bluebubbles.messaging.services.camera.GmsgCameraHost
 import com.bluebubbles.messaging.services.extensions.OpenPigeonHost
 import com.bluebubbles.messaging.services.foreground.ForegroundServiceBroadcastReceiver
 import com.bluebubbles.messaging.Constants
@@ -118,6 +119,7 @@ class MainActivity : FlutterFragmentActivity() {
             call, result -> MethodCallHandler().methodCallHandler(call, result, this)
         }
         OpenPigeonHost.register(flutterEngine, this)
+        GmsgCameraHost.register(flutterEngine, this)
 
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->

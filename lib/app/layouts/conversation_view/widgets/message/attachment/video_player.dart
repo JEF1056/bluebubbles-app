@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/media_collection.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/media_corner_badge.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_video_player.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/conversation_fullscreen_holder.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -17,8 +18,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:image_size_getter/file_input.dart';
 import 'package:image_size_getter/image_size_getter.dart' as isg;
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:mime_type/mime_type.dart';
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
 
 /// Sizes [child] like [AspectRatio], but never shrinks width to satisfy a
@@ -233,6 +234,7 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
 
   bool hasListener = false;
   VideoController? videoController;
+  WebVideoController? _webVideoController;
 
   final RxBool showPlayPauseOverlay = true.obs;
   final RxBool muted = SettingsSvc.settings.startVideosMuted.value.obs;
@@ -259,6 +261,10 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
 
     // Seed layout from the DB dimensions so the box doesn't resize once the video decodes
     aspectRatio.value = attachment.aspectRatio;
+    if (kIsWeb) {
+      _webVideoController = WebVideoController();
+      return;
+    }
 
     // The cache service may dispose our controller out from under us while the app is
     // backgrounded; drop back to the thumbnail rather than drive a dead player.
@@ -302,6 +308,7 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
   @override
   void dispose() {
     _evictionSubscription?.cancel();
+    _webVideoController?.dispose();
     super.dispose();
   }
 
@@ -309,7 +316,7 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
   /// the lazy thumbnail state; the next tap builds a fresh player from disk. Desktop has
   /// no thumbnail path, so it rebuilds eagerly, as it does on first mount.
   void _onControllerEvicted() {
-    if (videoController == null) return;
+    if (kIsWeb || videoController == null) return;
     videoController = null;
     hasListener = false;
     firstFrameReady.value = false;
@@ -350,8 +357,7 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
 
     late final Media media;
     if (widget.file.path == null) {
-      final blob = html.Blob([widget.file.bytes]);
-      final url = html.Url.createObjectUrlFromBlob(blob);
+      final url = createObjectUrlFromBytes(widget.file.bytes!);
       media = Media(url);
     } else {
       media = Media(widget.file.path!);
@@ -468,6 +474,35 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
     final currentChat = widget.controller?.chat ?? ChatStateScope.maybeChatOf(context);
     // Inside a collection card, fullscreen pages through the collection and offers its gallery.
     final collection = MediaCollectionScope.maybeOf(context);
+    if (kIsWeb) {
+      return Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          _sizeMedia(
+            Obx(
+              () => WebVideoPlayer(
+                file: file,
+                attachment: attachment,
+                controller: _webVideoController,
+                muted: muted.value,
+                controls: true,
+                fit: BoxFit.cover,
+                onAspectRatioChanged: (ratio) {
+                  if (aspectRatio.value != ratio) aspectRatio.value = ratio;
+                },
+              ),
+            ),
+          ),
+          if (ReplyScope.maybeOf(context) == null)
+            FullscreenButton(
+              attachment: attachment,
+              isFromMe: widget.isFromMe,
+              muted: muted,
+              webVideoController: _webVideoController,
+            ),
+        ],
+      );
+    }
     if (videoController != null) {
       return MouseRegion(
         onEnter: (event) => showPlayPauseOverlay.value = true,
@@ -683,12 +718,14 @@ class FullscreenButton extends StatelessWidget {
     required this.attachment,
     required this.isFromMe,
     this.videoController,
+    this.webVideoController,
     this.muted,
   });
 
   final Attachment attachment;
   final bool isFromMe;
   final VideoController? videoController;
+  final WebVideoController? webVideoController;
   final RxBool? muted;
 
   @override
@@ -696,7 +733,8 @@ class FullscreenButton extends StatelessWidget {
     final currentChat = ChatStateScope.maybeChatOf(context);
     final collection = MediaCollectionScope.maybeOf(context);
     return Positioned(
-      bottom: 8,
+      top: kIsWeb ? 8 : null,
+      bottom: kIsWeb ? null : 8,
       left: (!isFromMe) ? 15 : 8,
       child: Obx(
         () => Material(
@@ -704,7 +742,8 @@ class FullscreenButton extends StatelessWidget {
           child: InkWell(
             borderRadius: BorderRadius.circular(40),
             onTap: () async {
-              if (attachment.id == null) return;
+              if (attachment.id == null && !(kIsWeb && (attachment.guid?.isNotEmpty ?? false))) return;
+              await webVideoController?.pause();
               await Navigator.of(Get.context!).push(
                 ThemeSwitcher.buildPageRoute(
                   builder: (context) => ConversationFullscreenHolder(

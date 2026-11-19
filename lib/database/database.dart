@@ -6,6 +6,9 @@ import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/backend/actions/image_actions.dart';
+import 'package:bluebubbles/database/html/idb_persistence.dart';
+import 'package:bluebubbles/database/html/web_pagehide_stub.dart'
+    if (dart.library.js_interop) 'package:bluebubbles/database/html/web_pagehide_web.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/database/migrations/chat_latest_message_migration.dart';
 import 'package:bluebubbles/database/migrations/message_handle_relationship_migration.dart';
@@ -13,6 +16,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:get_it/get_it.dart';
 import 'package:io/io.dart';
 import 'package:path/path.dart';
@@ -41,13 +45,24 @@ class Database {
 
   static String get appDocPath => FilesystemSvc.appDocDir.path;
 
+  static _WebPersistenceLifecycleObserver? _webLifecycleObserver;
+
   static final Completer<void> initComplete = Completer();
 
   static Future<void> init() async {
-    // Web doesn't use a database currently, so do not do anything
-    if (kIsWeb) return;
-
-    if (!kIsDesktop) {
+    if (kIsWeb) {
+      store = await Future<Store>.value(openStore());
+      if (_webLifecycleObserver == null) {
+        registerWebPagehideFlush(Database.flushWebPersistence);
+        try {
+          final observer = _WebPersistenceLifecycleObserver();
+          WidgetsBinding.instance.addObserver(observer);
+          _webLifecycleObserver = observer;
+        } catch (_) {
+          // WidgetsBinding may be uninitialized in headless Dart tests.
+        }
+      }
+    } else if (!kIsDesktop) {
       await _initDatabaseMobile();
     } else {
       await _initDatabaseDesktop();
@@ -104,6 +119,9 @@ class Database {
     }
 
     await seedThemes();
+    if (kIsWeb) {
+      await flushWebPersistence();
+    }
 
     initComplete.complete();
   }
@@ -171,6 +189,7 @@ class Database {
   }
 
   static Future<void> _performDatabaseMigrations({int? versionOverride}) async {
+    if (kIsWeb) return;
     int version = versionOverride ??
         PrefsSvc.database.getDbVersion() ??
         (SettingsSvc.settings.finishedSetup.value ? 1 : Database.version);
@@ -370,5 +389,32 @@ class Database {
       Database.messages.removeAll();
       Database.customGroups.removeAll();
     });
+  }
+
+  /// Flushes any pending web IndexedDB persistence writes. No-op on native IO.
+  static Future<void> flushWebPersistence() async {
+    if (!kIsWeb) return;
+    await IdbPersistence.flushActive();
+  }
+
+  /// Clears all web IndexedDB object stores and in-memory boxes. No-op on native IO.
+  static Future<void> clearWebPersistence() async {
+    if (!kIsWeb) return;
+    IdbPersistence.onClearAllInMemory?.call();
+    await IdbPersistence.clearActive();
+  }
+}
+
+class _WebPersistenceLifecycleObserver with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(Database.flushWebPersistence().catchError((Object e, StackTrace s) {
+        Logger.warn('Lifecycle Web IDB flush failed: $e', tag: 'WebDB');
+      }));
+    }
   }
 }

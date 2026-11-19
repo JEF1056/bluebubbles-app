@@ -1,6 +1,10 @@
+// ignore_for_file: return_of_invalid_type_from_closure
+
 import 'dart:core';
 
-import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/database/html/objectbox.dart';
+import 'package:bluebubbles/database/html/theme_entry.dart';
+import 'package:bluebubbles/database/global/theme_colors.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 
@@ -15,6 +19,7 @@ class ThemeObject {
   bool previousDarkTheme = false;
   ThemeData? data;
   List<ThemeEntry> entries = [];
+  final themeEntries = ToMany<ThemeEntry>();
 
   ThemeObject({
     this.id,
@@ -48,8 +53,13 @@ class ThemeObject {
       ];
 
   static List<ThemeObject> getThemes() {
-    // ignore: argument_type_not_assignable, return_of_invalid_type, invalid_assignment, for_in_of_invalid_element_type
-    return <ThemeObject>[];
+    final results = HtmlDatabase.themeObjects.getAll();
+    final list = <ThemeObject>[];
+    if (results.isNotEmpty) {
+      final existing = list.map((e) => e.name);
+      list.addAll(results.where((element) => !existing.contains(element.name)).map((e) => e..fetchData()));
+    }
+    return list;
   }
 
   List<ThemeEntry> fetchData() {
@@ -63,6 +73,21 @@ class ThemeObject {
       }
 
       entries = toEntries();
+      return entries;
+    }
+    final resolvedEntries = List<ThemeEntry>.from(themeEntries);
+    if (name == "Music Theme (Light)" && resolvedEntries.isEmpty) {
+      data = ThemesService.whiteLightTheme;
+      entries = toEntries();
+    } else if (name == "Music Theme (Dark)" && resolvedEntries.isEmpty) {
+      data = ThemesService.oledDarkTheme;
+      entries = toEntries();
+    } else if (resolvedEntries.isNotEmpty) {
+      entries = resolvedEntries;
+      data = themeData;
+    } else {
+      entries = [];
+      data = themeData;
     }
     return entries;
   }

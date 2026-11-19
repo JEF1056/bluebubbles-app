@@ -1,4 +1,5 @@
-import 'package:bluebubbles/services/backend/settings/shared_preferences_service.dart';
+import 'package:bluebubbles/database/html/objectbox.dart';
+import 'package:bluebubbles/services/services.dart';
 
 class FCMData {
   int? id;
@@ -33,34 +34,49 @@ class FCMData {
     );
   }
 
-  FCMData save() {
+  Future<FCMData> save({bool wait = false}) async {
     if (isNull) return this;
-    Future.delayed(Duration.zero, () async {
-      await PrefsSvc.firebase.saveConfig(
-        projectID: projectID,
-        storageBucket: storageBucket,
-        apiKey: apiKey,
-        firebaseURL: firebaseURL,
-        clientID: clientID,
-        applicationID: applicationID,
-      );
-    });
+    final List<FCMData> data = HtmlDatabase.fcmData.getAll();
+    if (data.length > 1) data.removeRange(1, data.length);
+    id = !HtmlDatabase.fcmData.isEmpty() ? data.first.id : null;
+    HtmlDatabase.fcmData.put(this);
+    final future = PrefsSvc.firebase.saveConfig(
+      projectID: projectID,
+      storageBucket: storageBucket,
+      apiKey: apiKey,
+      firebaseURL: firebaseURL,
+      clientID: clientID,
+      applicationID: applicationID,
+    );
+    if (wait) {
+      await future;
+    } else {
+      Future.delayed(Duration.zero, () async => await future);
+    }
+    // On Dart VM tests, SettingsSvc.fcmData resolves to io/FCMData while on Web it resolves to html/FCMData.
+    (SettingsSvc as dynamic).fcmData = this;
     return this;
   }
 
-  static void deleteFcmData() async {
+  static Future<void> deleteFcmData() async {
+    HtmlDatabase.fcmData.removeAll();
     await PrefsSvc.firebase.clearConfig();
+    (SettingsSvc as dynamic).fcmData = FCMData();
   }
 
   static FCMData getFCM() {
-    return FCMData(
-      projectID: PrefsSvc.firebase.getProjectID(),
-      storageBucket: PrefsSvc.firebase.getStorageBucket(),
-      apiKey: PrefsSvc.firebase.getApiKey(),
-      firebaseURL: PrefsSvc.firebase.getFirebaseURL(),
-      clientID: PrefsSvc.firebase.getClientID(),
-      applicationID: PrefsSvc.firebase.getApplicationID(),
-    );
+    final result = HtmlDatabase.fcmData.getAll();
+    if (result.isEmpty) {
+      return FCMData(
+        projectID: PrefsSvc.firebase.getProjectID(),
+        storageBucket: PrefsSvc.firebase.getStorageBucket(),
+        apiKey: PrefsSvc.firebase.getApiKey(),
+        firebaseURL: PrefsSvc.firebase.getFirebaseURL(),
+        clientID: PrefsSvc.firebase.getClientID(),
+        applicationID: PrefsSvc.firebase.getApplicationID(),
+      );
+    }
+    return result.first;
   }
 
   Map<String, dynamic> toMap() => {

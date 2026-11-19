@@ -62,11 +62,18 @@ class PlayerState {
   });
 }
 
+class NativePlayer {
+  Future<void> setProperty(String key, String value) async {}
+}
+
 class Player {
   PlayerState get state => throw Exception();
   PlayerStreams get stream => throw Exception();
+  Object? get platform => null;
 
   FutureOr<void> dispose({int code = 0}) {}
+
+  FutureOr<void> stop() {}
 
   FutureOr<void> open(
     dynamic playable, {
@@ -142,6 +149,8 @@ class VideoController {
     throw Exception();
   }
 
+  Future<void> get waitUntilFirstFrameRendered => Future<void>.value();
+
   /// Disposes the [VideoController].
   /// Releases the allocated resources back to the system.
   Future<void> dispose() async {}
@@ -150,11 +159,17 @@ class VideoController {
 class Video extends StatefulWidget {
   /// The [VideoController] reference to control this [Video] output & connect with [Player] from `package:media_kit`.
   final VideoController? controller;
+  final BoxFit fit;
+  final Widget Function(dynamic state)? controls;
+  final FilterQuality filterQuality;
 
   /// {@macro video}
   const Video({
     super.key,
     required this.controller,
+    this.fit = BoxFit.contain,
+    this.controls,
+    this.filterQuality = FilterQuality.low,
   });
 
   @override

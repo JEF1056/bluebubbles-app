@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/conversation_fullscreen_holder.dart';
@@ -12,10 +10,10 @@ import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
+import 'package:bluebubbles/platform/shims/native_misc.dart' show OpenFilex, ResultType;
 import 'package:mime_type/mime_type.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart';
-import 'package:universal_html/html.dart' as html;
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -110,10 +108,7 @@ class OtherFile extends StatelessWidget {
           return;
         }
         if (kIsWeb || file.path == null) {
-          final content = base64.encode(file.bytes!);
-          html.AnchorElement(href: "data:application/octet-stream;charset=utf-16le;base64,$content")
-            ..setAttribute("download", file.name)
-            ..click();
+          downloadBytes(file.bytes!, file.name);
         } else if (kIsDesktop) {
           File _file = File(
               join(FilesystemSvc.sysTempPath, "BlueBubbles", "attachments", attachment.guid, basename(file.path!)));

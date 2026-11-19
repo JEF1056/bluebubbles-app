@@ -12,6 +12,7 @@ import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/isolates/incremental_sync_isolate.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:get_it/get_it.dart';
 import 'package:universal_io/universal_io.dart';
@@ -223,7 +224,7 @@ class SyncService {
     }
 
     var contactSyncResult = true;
-    if (!kIsDesktop) {
+    if (!kIsDesktop && !kIsWeb) {
       contactSyncResult = await performContactSyncToHandles();
     } else if (!chatSyncFailed &&
         (_lastServerContactSync == null ||

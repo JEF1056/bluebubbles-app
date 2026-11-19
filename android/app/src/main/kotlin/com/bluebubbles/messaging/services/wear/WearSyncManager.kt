@@ -255,7 +255,11 @@ object WearSyncManager {
                     }
                     chatAvatarTargets.add(guid to avatarKey)
                 }
-                val payload = JsonObject().apply { add("chats", out) }.toString().toByteArray()
+                val pinsAuthoritative = pinnedGuids != null
+                val payload = JsonObject().apply {
+                    add("chats", out)
+                    addProperty("pinsAuthoritative", pinsAuthoritative)
+                }.toString().toByteArray()
                 sendToWatch(context, targetNodeId, PATH_SYNC_CHATS, payload)
                 syncChatIcons(context, settings, client, chatAvatarTargets.take(15))
             } catch (e: Exception) {
@@ -624,7 +628,7 @@ object WearSyncManager {
                 return@launch
             }
             try {
-                val client = buildOkHttpClient(settings)
+                val client = buildOkHttpClient(settings, minReadTimeoutMs = 130_000L)
                 val body = JsonObject().apply {
                     addProperty("chatGuid", chatGuid)
                     addProperty("tempGuid", tempGuid)
@@ -675,7 +679,7 @@ object WearSyncManager {
                 return@launch
             }
             try {
-                val client = buildOkHttpClient(settings)
+                val client = buildOkHttpClient(settings, minReadTimeoutMs = 60_000L)
                 val body = JsonObject().apply {
                     addProperty("chatGuid", chatGuid)
                     addProperty("selectedMessageGuid", selectedMessageGuid)
@@ -706,7 +710,7 @@ object WearSyncManager {
                     sendResult(context, nodeId, tempGuid, tempGuid, false, "Phone server not configured")
                     return@launch
                 }
-                val client = buildOkHttpClient(settings)
+                val client = buildOkHttpClient(settings, minReadTimeoutMs = 130_000L)
                 val method = if (settings.enablePrivateAPI && settings.privateAPIAttachmentSend) {
                     "private-api"
                 } else {
@@ -991,8 +995,9 @@ object WearSyncManager {
         }
     }
 
-    private fun buildOkHttpClient(settings: SettingsHelper): OkHttpClient {
+    private fun buildOkHttpClient(settings: SettingsHelper, minReadTimeoutMs: Long = 15_000L): OkHttpClient {
         val timeout = settings.apiTimeout.toLong().coerceAtLeast(15_000L)
+        val readTimeout = timeout.coerceAtLeast(minReadTimeoutMs)
         val headersInterceptor = Interceptor { chain ->
             val builder = chain.request().newBuilder()
             settings.getAllHeaders().forEach { (k, v) -> builder.addHeader(k, v) }
@@ -1000,7 +1005,7 @@ object WearSyncManager {
         }
         return OkHttpClient.Builder()
             .connectTimeout(timeout, TimeUnit.MILLISECONDS)
-            .readTimeout(timeout, TimeUnit.MILLISECONDS)
+            .readTimeout(readTimeout, TimeUnit.MILLISECONDS)
             .writeTimeout(timeout, TimeUnit.MILLISECONDS)
             .addInterceptor(headersInterceptor)
             .build()

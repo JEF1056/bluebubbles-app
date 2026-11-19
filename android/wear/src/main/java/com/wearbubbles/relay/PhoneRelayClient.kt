@@ -58,6 +58,18 @@ class PhoneRelayClient(private val context: Context) {
     companion object {
         private const val TAG = "PhoneRelayClient"
         const val PHONE_CAPABILITY = "bluebubbles_phone_app"
+        internal const val SEND_TIMEOUT_MS = 130_000L
+
+        internal fun orTimedOutResult(
+            result: SendResultPayload?,
+            requestId: String,
+            tempGuid: String
+        ): SendResultPayload = result ?: SendResultPayload(
+            requestId = requestId,
+            tempGuid = tempGuid,
+            success = false,
+            error = "Phone relay timed out"
+        )
 
         const val PATH_CREDENTIALS = "/bb/credentials"
         const val PATH_REQUEST_CREDENTIALS = "/bb/request-credentials"
@@ -82,11 +94,12 @@ class PhoneRelayClient(private val context: Context) {
 
         private val gsonStatic = Gson()
 
-        internal fun parseRelayChatsToEntities(json: String): List<ChatEntity>? {
+        internal fun parseRelayChatsPayload(json: String): Pair<List<ChatEntity>, Boolean>? {
             val root = JsonParser.parseString(json).asJsonObject
             val type = object : TypeToken<List<ChatRelayDto>>() {}.type
             val list: List<ChatRelayDto> = gsonStatic.fromJson(root.get("chats"), type) ?: return null
-            return list.map { dto ->
+            val pinsAuthoritative = root.get("pinsAuthoritative")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: true
+            val entities = list.map { dto ->
                 ChatEntity(
                     guid = dto.guid,
                     chatIdentifier = dto.chatIdentifier,
@@ -102,7 +115,11 @@ class PhoneRelayClient(private val context: Context) {
                     pinIndex = dto.pinIndex
                 )
             }
+            return entities to pinsAuthoritative
         }
+
+        internal fun parseRelayChatsToEntities(json: String): List<ChatEntity>? =
+            parseRelayChatsPayload(json)?.first
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -231,7 +248,13 @@ class PhoneRelayClient(private val context: Context) {
         }
 
         return try {
-            withTimeoutOrNull(15_000L) { deferred.await() }
+            // Once the phone accepted tempGuid, never return null on timeout: falling back to
+            // direct server with the same tempGuid hits HTTP 400 (already queued).
+            orTimedOutResult(
+                withTimeoutOrNull(SEND_TIMEOUT_MS) { deferred.await() },
+                requestId = requestId,
+                tempGuid = tempGuid
+            )
         } finally {
             pendingResults.remove(requestId)
         }
@@ -261,7 +284,7 @@ class PhoneRelayClient(private val context: Context) {
         }
 
         return try {
-            withTimeoutOrNull(15_000L) { deferred.await() }
+            withTimeoutOrNull(60_000L) { deferred.await() }
         } finally {
             pendingResults.remove(requestId)
         }
@@ -288,7 +311,12 @@ class PhoneRelayClient(private val context: Context) {
                 } catch (_: Exception) {
                 }
             }
-            withTimeoutOrNull(25_000L) { deferred.await() }
+            // Stream flushed to phone with tempGuid; do not fall back to direct server on wait timeout.
+            orTimedOutResult(
+                withTimeoutOrNull(SEND_TIMEOUT_MS) { deferred.await() },
+                requestId = tempGuid,
+                tempGuid = tempGuid
+            )
         } catch (e: Exception) {
             Log.e(TAG, "sendAudioFile failed: ${e.message}")
             null
@@ -377,8 +405,8 @@ class PhoneRelayClient(private val context: Context) {
 
     suspend fun handleChatsSyncJson(json: String) {
         try {
-            val entities = parseRelayChatsToEntities(json) ?: return
-            db.chatDao().replaceAndPrune(entities)
+            val (entities, pinsAuthoritative) = parseRelayChatsPayload(json) ?: return
+            db.chatDao().replaceAndPrune(entities, preservePins = !pinsAuthoritative)
         } catch (e: Exception) {
             Log.e(TAG, "handleChatsSyncJson error: ${e.message}")
         }

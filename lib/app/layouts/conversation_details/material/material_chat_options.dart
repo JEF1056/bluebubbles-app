@@ -1,11 +1,11 @@
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/chat_sync_dialog.dart';
-import 'package:bluebubbles/app/layouts/conversation_details/pages/chat_stats/chat_stats_page.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/pages/chat_stats/chat_stats_page.dart' deferred as chat_stats;
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/sync_time_range_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/timeframe_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/storage/storage_analyzer_panel.dart';
-import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart';
+import 'package:bluebubbles/app/layouts/settings/pages/theming/theme_studio/theme_studio_panel.dart' deferred as theme_studio;
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/theming/avatar/avatar_crop.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/pages/wallpaper_picker/wallpaper_picker_page.dart';
@@ -78,7 +78,7 @@ class ExpressiveChatOptions extends StatelessWidget {
   Widget _buildAppearanceGroup(BuildContext context) {
     final rows = <_OptionRow>[
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: Icons.person_outlined,
           title: "Change chat avatar",
@@ -127,7 +127,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: Icons.wallpaper,
           title: "Wallpaper",
@@ -136,19 +136,21 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: Icons.palette_outlined,
           title: "Set custom theme",
           supportingText: "Pick light and dark themes",
-          onTap: () {
+          onTap: () async {
             final lightThemeName = chat.customThemeLight ?? ThemeStruct.getLightTheme().name;
             final darkThemeName = chat.customThemeDark ?? ThemeStruct.getDarkTheme().name;
+            await theme_studio.loadLibrary();
+            if (!context.mounted) return;
 
             NavigationSvc.push(
               context,
-              ThemeStudioPanel(
-                config: ThemeStudioPanelConfig(
+              theme_studio.ThemeStudioPanel(
+                config: theme_studio.ThemeStudioPanelConfig(
                   initialLightThemeName: lightThemeName,
                   initialDarkThemeName: darkThemeName,
                   adaptiveImagePath: FilesystemSvc.getExistingChatBackgroundPath(chat.guid),
@@ -233,7 +235,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: Icons.push_pin_outlined,
           title: "Pin conversation",
@@ -248,7 +250,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: (chatState?.muteType.value ?? chat.muteType) == "mute"
               ? Icons.notifications_off_outlined
@@ -269,7 +271,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: Icons.archive_outlined,
           title: "Archive conversation",
@@ -284,7 +286,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
         build: (context) => M3EListTile(
           icon: Icons.keyboard_outlined,
           title: "Send typing indicators",
@@ -305,7 +307,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value && typingOverride != null,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value && typingOverride != null,
         build: (context) => M3EListTile(
           nested: true,
           icon: Icons.sync_outlined,
@@ -328,7 +330,7 @@ class ExpressiveChatOptions extends StatelessWidget {
         ),
       ),
       _OptionRow(
-        enabled: !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
+        enabled: !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value,
         build: (context) => M3EListTile(
           icon: Icons.mark_email_read_outlined,
           title: "${SettingsSvc.settings.privateManualMarkAsRead.value ? "Automatically send " : "Send "}read receipts",
@@ -350,7 +352,7 @@ class ExpressiveChatOptions extends StatelessWidget {
       ),
       _OptionRow(
         enabled:
-            !kIsWeb && !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value && readReceiptOverride != null,
+            !chat.isGroup && SettingsSvc.settings.enablePrivateAPI.value && readReceiptOverride != null,
         build: (context) => M3EListTile(
           nested: true,
           icon: Icons.sync_outlined,
@@ -381,12 +383,16 @@ class ExpressiveChatOptions extends StatelessWidget {
   Widget _buildContentGroup(BuildContext context) {
     final rows = <_OptionRow>[
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           icon: Icons.insights,
           title: "Chat stats",
           supportingText: "Texting patterns and activity",
-          onTap: () => NavigationSvc.push(context, ChatStatsPage(chat: chat)),
+          onTap: () async {
+            await chat_stats.loadLibrary();
+            if (!context.mounted) return;
+            NavigationSvc.push(context, chat_stats.ChatStatsPage(chat: chat));
+          },
         ),
       ),
       _OptionRow(
@@ -468,7 +474,7 @@ class ExpressiveChatOptions extends StatelessWidget {
   Widget _buildDangerZoneGroup(BuildContext context) {
     final rows = <_OptionRow>[
       _OptionRow(
-        enabled: !kIsWeb,
+        enabled: true,
         build: (context) => M3EListTile(
           destructive: true,
           icon: Icons.delete_outlined,

@@ -18,8 +18,8 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:get/get.dart';
-import 'package:universal_html/html.dart' as html;
 
 class ConversationTileController extends StatefulController {
   final RxBool shouldHighlight = false.obs;
@@ -64,7 +64,7 @@ class ConversationTileController extends StatefulController {
 
   Future<void> onSecondaryTap(BuildContext context, TapUpDetails details) async {
     if (kIsWeb) {
-      (await html.document.onContextMenu.first).preventDefault();
+      await preventNextContextMenu();
     }
     shouldPartialHighlight.value = true;
     if (!context.mounted) return;

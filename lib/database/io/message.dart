@@ -696,8 +696,13 @@ class Message {
   bool get hasAudioTranscript => attributedBody.any((i) => i.runs.any((e) => e.attributes?.audioTranscript != null));
 
   bool showTail(Message? newer) {
-    // if there is no newer, or if the newer is a different sender
-    if (newer == null || !sameSender(newer) || newer.isGroupEvent || (threadOriginatorGuid == null && newer.isReply)) return true;
+    // if there is no newer, or if the newer is a different sender or reply boundary
+    if (newer == null || !sameSender(newer) || newer.isGroupEvent || isReply != newer.isReply) return true;
+    if (isReply &&
+        (threadOriginatorGuid != newer.threadOriginatorGuid ||
+            normalizedThreadPart != newer.normalizedThreadPart)) {
+      return true;
+    }
     // if newer is over a minute newer
     return newer.dateCreated!.difference(dateCreated!).inMinutes.abs() > 1;
   }
@@ -764,17 +769,12 @@ class Message {
     final olderPartCount = chat.target?.guid != null
         ? maybeFindMessagesSvc(chat.target!.guid)?.getMessageStateIfExists(olderMessage.guid!)?.parts.length ?? 1
         : 1;
-    // make sure the older message is none of the following:
-    // 1) thread originator
-    // 2) part of the thread with the same thread partIndex
-    // OR
-    // 1) It is the thread originator but the part is not the last part of the older message
-    // 2) It is part of the thread but has multiple parts
-    return (olderMessage.guid != threadOriginatorGuid &&
-            (olderMessage.threadOriginatorGuid != threadOriginatorGuid ||
-                olderMessage.normalizedThreadPart != normalizedThreadPart)) ||
-        (olderMessage.guid == threadOriginatorGuid && normalizedThreadPart != olderPartCount - 1) ||
-        (olderMessage.threadOriginatorGuid == threadOriginatorGuid && olderPartCount > 1);
+    if (olderMessage.threadOriginatorGuid == null) {
+      if (olderMessage.guid != threadOriginatorGuid) return true;
+      return normalizedThreadPart != olderPartCount - 1;
+    }
+    return olderMessage.threadOriginatorGuid != threadOriginatorGuid ||
+        olderMessage.normalizedThreadPart != normalizedThreadPart;
   }
 
   bool connectToLower(Message newerMessage) {
@@ -782,10 +782,11 @@ class Message {
         ? maybeFindMessagesSvc(chat.target!.guid)?.getMessageStateIfExists(guid!)?.parts.length ?? 1
         : 1;
     if (newerMessage.isFromMe != isFromMe) return false;
-    if (newerMessage.normalizedThreadPart != thisPartCount - 1) return false;
     if (threadOriginatorGuid != null) {
-      return newerMessage.threadOriginatorGuid == threadOriginatorGuid;
+      return newerMessage.threadOriginatorGuid == threadOriginatorGuid &&
+          newerMessage.normalizedThreadPart == normalizedThreadPart;
     } else {
+      if (newerMessage.normalizedThreadPart != thisPartCount - 1) return false;
       return newerMessage.threadOriginatorGuid == guid;
     }
   }
@@ -991,6 +992,7 @@ class Message {
         (!existing.payloadData.hasAppSession && newMessage.payloadData.hasAppSession)) {
       existing.payloadData = newMessage.payloadData;
     }
+    existing.threadOriginatorGuid ??= newMessage.threadOriginatorGuid;
     existing.threadOriginatorPart ??= newMessage.threadOriginatorPart;
     existing.country ??= newMessage.country;
 
@@ -1081,6 +1083,7 @@ class Message {
     if (incoming.payloadData.hasAppSession || !payloadData.hasAppSession) {
       payloadData = incoming.payloadData ?? payloadData;
     }
+    threadOriginatorGuid = incoming.threadOriginatorGuid ?? threadOriginatorGuid;
     threadOriginatorPart = incoming.threadOriginatorPart ?? threadOriginatorPart;
     datePlayed = incoming.datePlayed ?? datePlayed;
     country = incoming.country ?? country;
@@ -1093,6 +1096,7 @@ class Message {
       (messageSummaryInfo.isNotEmpty && stored.messageSummaryInfo.isEmpty) ||
       (payloadData != null && stored.payloadData == null) ||
       (payloadData.hasAppSession && !stored.payloadData.hasAppSession) ||
+      (threadOriginatorGuid != null && stored.threadOriginatorGuid == null) ||
       (threadOriginatorPart != null && stored.threadOriginatorPart == null) ||
       (datePlayed != null && stored.datePlayed == null) ||
       (country != null && stored.country == null);
