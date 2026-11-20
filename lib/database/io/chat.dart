@@ -668,20 +668,12 @@ class Chat {
     });
   }
 
-  /// Fetch messages asynchronously with progressive loading
-  /// Returns messages with attachments, then loads reactions in background
+  /// Fetches a page of messages with their attachments. Reactions are not loaded; [MessagesService] loads them for
+  /// the messages it shows.
   static Future<List<Message>> getMessagesAsync(Chat chat,
-      {int offset = 0,
-      int limit = 25,
-      bool includeDeleted = false,
-      int? searchAround,
-      Function? onSupplementalDataLoaded}) async {
+      {int offset = 0, int limit = 25, bool includeDeleted = false, int? searchAround}) async {
     if (kIsWeb || chat.id == null) return [];
-
-    final totalStopwatch = Stopwatch()..start();
-
-    // PHASE 1: Query messages with attachments using interface/actions pattern
-    final messages = await ChatInterface.getMessagesAsync(
+    return ChatInterface.getMessagesAsync(
       chatId: chat.id!,
       chatGuid: chat.guid,
       participantsData: chat.handles.map((e) => e.toMap()).toList(),
@@ -690,79 +682,18 @@ class Chat {
       includeDeleted: includeDeleted,
       searchAround: searchAround,
     );
-
-    if (messages.isEmpty) {
-      return messages;
-    }
-
-    // PHASE 2: Load reactions in background (non-blocking)
-    final messageGuids = messages.map((e) => e.guid!).toList();
-
-    // Don't await - let this run in background and call callback when done
-    _loadSupplementalDataAsync(messages, messageGuids, totalStopwatch, onSupplementalDataLoaded);
-
-    totalStopwatch.stop();
-    Logger.debug("[getMessagesAsync] RETURNED (Phase 1 complete): ${totalStopwatch.elapsedMilliseconds}ms");
-
-    // Return messages immediately (reactions/attachments will be added later)
-    return messages;
-  }
-
-  /// Load reactions in background and append to messages
-  static Future<void> _loadSupplementalDataAsync(
-    List<Message> messages,
-    List<String> messageGuids,
-    Stopwatch totalStopwatch,
-    Function? onComplete,
-  ) async {
-    final supplementalStopwatch = Stopwatch()..start();
-
-    try {
-      var associatedMessages = await ChatInterface.loadSupplementalData(
-        messageGuids: messageGuids,
-      );
-
-      Logger.debug("[getMessagesAsync] Phase 2 - Supplemental query: ${supplementalStopwatch.elapsedMilliseconds}ms");
-
-      // Normalize reactions
-      associatedMessages = MessageHelper.normalizedAssociatedMessages(associatedMessages);
-
-      // Append reactions to original messages
-      int messagesWithReactions = 0;
-      for (Message m in messages) {
-        final messageReactions = associatedMessages.where((e) => e.associatedMessageGuid == m.guid).toList();
-        m.associatedMessages = messageReactions;
-        if (messageReactions.isNotEmpty) {
-          messagesWithReactions++;
-          Logger.debug("[getMessagesAsync] Phase 2 - Added ${messageReactions.length} reactions to message ${m.guid}",
-              tag: "MessageReactivity");
-        }
-      }
-
-      supplementalStopwatch.stop();
-      Logger.debug(
-          "[getMessagesAsync] Phase 2 - COMPLETE: ${supplementalStopwatch.elapsedMilliseconds}ms (${associatedMessages.length} reactions on $messagesWithReactions messages)");
-
-      // Notify caller that supplemental data has been loaded
-      if (onComplete != null) {
-        Logger.debug("[getMessagesAsync] Phase 2 - Calling onComplete callback", tag: "MessageReactivity");
-        onComplete();
-      } else {
-        Logger.warn("[getMessagesAsync] Phase 2 - No onComplete callback provided!", tag: "MessageReactivity");
-      }
-    } catch (ex, stacktrace) {
-      Logger.error("Failed to load supplemental data for messages", error: ex, trace: stacktrace);
-    }
   }
 
   void webSyncParticipants() {}
 
   /// Toggle pin status - pure DB operation
   /// Note: For full pin toggle with service updates, use ChatsSvc.toggleChatPin
-  Future<Chat> togglePinAsync(bool isPinned) async {
+  /// A pinned chat always has a [pinIndex]; unpinning clears it.
+  Future<Chat> togglePinAsync(bool isPinned, {int? pinIndex}) async {
     if (id == null) return this;
+    assert(!isPinned || pinIndex != null);
     this.isPinned = isPinned;
-    _pinIndex.value = null;
+    _pinIndex.value = isPinned ? pinIndex : null;
     await saveAsync(updateIsPinned: true, updatePinIndex: true);
     return this;
   }
@@ -780,8 +711,9 @@ class Chat {
   Future<Chat> toggleArchivedAsync(bool isArchived) async {
     if (id == null) return this;
     isPinned = false;
+    _pinIndex.value = null;
     this.isArchived = isArchived;
-    await saveAsync(updateIsPinned: true, updateIsArchived: true);
+    await saveAsync(updateIsPinned: true, updatePinIndex: true, updateIsArchived: true);
     return this;
   }
 
@@ -958,35 +890,6 @@ class Chat {
     knownGroupPhotoGuid ??= other.knownGroupPhotoGuid;
     if (other.serviceName != null) serviceName = other.serviceName;
     return this;
-  }
-
-  static int sort(Chat? a, Chat? b) {
-    // If they both are pinned & ordered, reflect the order
-    if (a!.isPinned! && b!.isPinned! && a.pinIndex != null && b.pinIndex != null) {
-      return a.pinIndex!.compareTo(b.pinIndex!);
-    }
-
-    // If b is pinned & ordered, but a isn't either pinned or ordered, return accordingly
-    if (b!.isPinned! && b.pinIndex != null && (!a.isPinned! || a.pinIndex == null)) {
-      return 1;
-    }
-    // If a is pinned & ordered, but b isn't either pinned or ordered, return accordingly
-    if (a.isPinned! && a.pinIndex != null && (!b.isPinned! || b.pinIndex == null)) {
-      return -1;
-    }
-
-    // Compare when one is pinned and the other isn't
-    if (!a.isPinned! && b.isPinned!) {
-      return 1;
-    }
-    if (a.isPinned! && !b.isPinned!) {
-      return -1;
-    }
-
-    // Compare the last message dates (negate to sort newest first)
-    final aDate = a.dbOnlyLatestMessageDate ?? DateTime.fromMillisecondsSinceEpoch(0);
-    final bDate = b.dbOnlyLatestMessageDate ?? DateTime.fromMillisecondsSinceEpoch(0);
-    return -aDate.compareTo(bDate);
   }
 
   static Future<void> getIcon(Chat c, {bool force = false}) async {

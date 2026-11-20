@@ -1,5 +1,6 @@
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_drop_target.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/chat_event/chat_event.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/hover_action_bar.dart';
@@ -666,6 +667,16 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                       cvController: widget.cvController,
                                                                       placed: true,
                                                                     ),
+                                                                    if (!kIsWeb &&
+                                                                        SettingsSvc.getServerDetails().supportsStickers)
+                                                                      Positioned.fill(
+                                                                        child: StickerDropTarget(
+                                                                          message: message,
+                                                                          part: e.part,
+                                                                          chat: widget.cvController.chat,
+                                                                          tailGutter: !e.isMediaCollection,
+                                                                        ),
+                                                                      ),
                                                                     // Reactions are in the inner Stack so they are always
                                                                     // positioned relative to the bubble, not the sticker.
                                                                     // Collection parts show a reaction per attachment instead

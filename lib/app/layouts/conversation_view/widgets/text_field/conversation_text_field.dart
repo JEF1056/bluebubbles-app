@@ -97,6 +97,14 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
     controller.textController.addListener(_onTextChange);
     controller.subjectTextController.addListener(_onSubjectTextChange);
+    _matchDraft();
+  }
+
+  /// A draft loads before the text listener that suggests for a partial :emoji or @mention
+  void _matchDraft() {
+    final text = controller.textController;
+    if (text.text.contains(":")) TextFieldMatchHelper.processEmojiMatches(controller, text, false);
+    if (SettingsSvc.settings.enablePrivateAPI.value) TextFieldMatchHelper.processMentionMatches(controller, text, false);
   }
 
   void getDrafts() async {
@@ -275,10 +283,15 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     if (kIsWeb) {
       syncWebAttachmentDraft(chatGuid, controller.pickedAttachments.toList());
     }
-    // Update ChatState synchronously and fire DB save in the background.
-    unawaited(ChatsSvc.setChatTextFieldText(chat, hasDraft ? controller.textController.text : '',
-        runs: hasDraft ? controller.textController.runs : const []));
-    unawaited(ChatsSvc.setChatTextFieldAttachments(chat, draftAttachments));
+    final draftText = hasDraft ? controller.textController.text : '';
+    final draftRuns = hasDraft ? controller.textController.runs : const <Run>[];
+    final draftChat = chat;
+    // The tree is locked during dispose, and updating ChatState here would rebuild Obx widgets (the chat tile's
+    // draft line) mid-finalize, so defer the update until after the frame's teardown.
+    Future.microtask(() {
+      unawaited(ChatsSvc.setChatTextFieldText(draftChat, draftText, runs: draftRuns));
+      unawaited(ChatsSvc.setChatTextFieldAttachments(draftChat, draftAttachments));
+    });
 
     controller.focusNode.removeListener(_onFocusChange);
     controller.subjectFocusNode.removeListener(_onSubjectFocusChange);

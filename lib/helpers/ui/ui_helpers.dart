@@ -15,7 +15,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
-import 'package:gesture_x_detector/gesture_x_detector.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:image/image.dart' as img;
@@ -45,40 +44,25 @@ class BackButton extends StatelessWidget {
       color: Colors.transparent,
       child: ConstrainedBox(
         constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-        child: XGestureDetector(
-          supportTouch: true,
-          onTap: !kIsDesktop
-              ? null
-              : (details) {
-                  final result = onPressed?.call() ?? false;
-                  if (!result) {
-                    if (Get.isSnackbarOpen) {
-                      Get.closeAllSnackbars();
-                    }
-                    Navigator.of(context).pop();
-                  }
-                },
-          child: IconButton(
-            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-            icon: Obx(() => Icon(
-                  SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: color ??
-                      (SettingsSvc.settings.skin.value == Skins.Material
-                          ? context.theme.colorScheme.onSurface
-                          : context.theme.colorScheme.primary),
-                )),
-            iconSize: SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24,
-            onPressed: () {
-              if (kIsDesktop) return;
-              final result = onPressed?.call() ?? false;
-              if (!result) {
-                if (Get.isSnackbarOpen) {
-                  Get.closeAllSnackbars();
-                }
-                Navigator.of(context).pop();
+        child: IconButton(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          icon: Obx(() => Icon(
+                SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
+                color: color ??
+                    (SettingsSvc.settings.skin.value == Skins.Material
+                        ? context.theme.colorScheme.onSurface
+                        : context.theme.colorScheme.primary),
+              )),
+          iconSize: SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24,
+          onPressed: () {
+            final result = onPressed?.call() ?? false;
+            if (!result) {
+              if (Get.isSnackbarOpen) {
+                Get.closeAllSnackbars();
               }
-            },
-          ),
+              Navigator.of(context).pop();
+            }
+          },
         ),
       ),
     );
@@ -93,44 +77,29 @@ Widget buildBackButton(BuildContext context,
     child: Container(
       padding: padding,
       constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-      child: XGestureDetector(
-        supportTouch: true,
-        onTap: !kIsDesktop
-            ? null
-            : (details) {
-                final result = callback?.call() ?? true;
-                if (result) {
-                  if (Get.isSnackbarOpen) {
-                    Get.closeAllSnackbars();
-                  }
-                  Navigator.of(context).pop();
-                }
-              },
-        child: IconButton(
-          tooltip: 'Back',
-          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-          iconSize: iconSize ?? (SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24),
-          icon: skin != null
-              ? Icon(skin != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: skin == Skins.Material
-                      ? context.theme.colorScheme.onSurface
-                      : context.theme.colorScheme.primary)
-              : Obx(() => Icon(
-                  SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
-                  color: SettingsSvc.settings.skin.value == Skins.Material
-                      ? context.theme.colorScheme.onSurface
-                      : context.theme.colorScheme.primary)),
-          onPressed: () {
-            if (kIsDesktop) return;
-            final result = callback?.call() ?? true;
-            if (result) {
-              if (Get.isSnackbarOpen) {
-                Get.closeAllSnackbars();
-              }
-              Navigator.of(context).pop();
+      child: IconButton(
+        tooltip: 'Back',
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+        iconSize: iconSize ?? (SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24),
+        icon: skin != null
+            ? Icon(skin != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
+                color: skin == Skins.Material
+                    ? context.theme.colorScheme.onSurface
+                    : context.theme.colorScheme.primary)
+            : Obx(() => Icon(
+                SettingsSvc.settings.skin.value != Skins.Material ? CupertinoIcons.back : Icons.arrow_back,
+                color: SettingsSvc.settings.skin.value == Skins.Material
+                    ? context.theme.colorScheme.onSurface
+                    : context.theme.colorScheme.primary)),
+        onPressed: () {
+          final result = callback?.call() ?? true;
+          if (result) {
+            if (Get.isSnackbarOpen) {
+              Get.closeAllSnackbars();
             }
-          },
-        ),
+            NavigationSvc.pop(context);
+          }
+        },
       ),
     ),
   );

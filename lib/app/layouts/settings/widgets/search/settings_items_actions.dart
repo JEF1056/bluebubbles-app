@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:bluebubbles/app/layouts/settings/widgets/tiles/contact_upload_progress.dart';
 import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/services/backend/interfaces/contact_v2_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
@@ -53,34 +56,31 @@ class SettingsItemsActions {
       },
     );
 
-    final contacts = <Map<String, dynamic>>[];
-    final allContacts = await ContactsSvcV2.getAllContacts();
-    for (final contact in allContacts) {
-      contacts.add(contact.toServerMap());
+    Future<void> upload() async {
+      final allContacts = await ContactsSvcV2.getAllContacts();
+      final deviceId = await getAndroidId();
+      final contacts = [for (final contact in allContacts) contact.toServerMap(deviceId: deviceId)];
+      await ContactV2Interface.uploadContacts(contacts, deviceId: deviceId);
     }
 
-    HttpSvc.contact.create(
-      contacts,
-      onSendProgress: (count, total) {
-        uploadingContacts.value = true;
-        progress.value = count / total;
-        totalSize.value = total;
-        if (progress.value == 1.0) {
-          uploadingContacts.value = false;
-          showSnackbar("Notice", "Successfully exported contacts to server");
-        }
-      },
-    ).catchError((err, stack) {
+    // The upload runs in the GlobalIsolate, which can't report bytes sent, so the dialog shows an indeterminate bar
+    // (null progress) until it finishes.
+    uploadingContacts.value = true;
+    unawaited(upload().then((_) {
+      uploadingContacts.value = false;
+      progress.value = 1.0;
+      showSnackbar("Notice", "Successfully exported contacts to server");
+    }).catchError((err, stack) {
+      uploadingContacts.value = false;
       if (err is Response) {
         Logger.error(err.data["error"]["message"].toString(), error: err, trace: stack);
       } else {
-        Logger.error("Failed to create contact!", error: err, trace: stack);
+        Logger.error("Failed to export contacts!", error: err, trace: stack);
       }
 
       closeDialog();
       showSnackbar("Error", "Failed to export contacts to server", type: SnackbarType.error);
-      return Response(requestOptions: RequestOptions(path: ''));
-    });
+    }));
   }
 
   static Future<void> openStoreReview() async {
@@ -157,6 +157,7 @@ class SettingsItemsActions {
       Logger.error("Failed to delete Firebase FCM token", error: e, trace: s);
     }
 
+    await PrefsSvc.admin.flushToDisk();
     exit(0);
   }
 }

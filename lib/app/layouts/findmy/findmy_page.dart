@@ -9,6 +9,7 @@ import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friends_tab_view.d
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_items_tab_view.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_map_widget.dart';
 import 'package:bluebubbles/app/wrappers/scrollbar_wrapper.dart';
+import 'package:bluebubbles/app/wrappers/tablet_mode_wrapper.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -149,6 +150,29 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
 
   @override
   Widget build(BuildContext context) {
+    if (NavigationSvc.isTabletMode(context)) {
+      return Obx(() {
+        final hasSelection =
+            controller.selectedFriendId.value != null || controller.selectedDeviceId.value != null;
+        return PopScope(
+          canPop: !hasSelection,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && hasSelection) {
+              controller.clearSelection();
+            }
+          },
+          child: TabletModeWrapper(
+            initialRatio: 0.35,
+            minRatio: kIsDesktop || kIsWeb ? 0.2 : 0.3,
+            maxRatio: 0.5,
+            allowResize: true,
+            enableInspector: false,
+            left: _buildScaffold(context, _buildLists(context)),
+            right: _buildScaffold(context, _buildMap(context)),
+          ),
+        );
+      });
+    }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         if (context.isPhone) {
@@ -158,6 +182,76 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
         _hasSnappedInitialPhoneSheet = false;
         return _buildTabletLayout(context);
       },
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, Widget body) {
+    return Obx(
+      () => BBScaffold(
+        backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
+        safeAreaLeft: false,
+        safeAreaRight: false,
+        body: body,
+      ),
+    );
+  }
+
+  Widget _buildMap(BuildContext context) {
+    return Stack(
+      children: [
+        FindMyMapWidget(controller: controller),
+        if (kIsDesktop) _buildDesktopTitleBar(context),
+      ],
+    );
+  }
+
+  Widget _buildLists(BuildContext context) {
+    return Column(
+      children: [
+        if (!context.samsung)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 16, 4),
+            child: SizedBox(
+              height: 48,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: buildBackButton(context),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      "Find My",
+                      style: context.theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (!context.samsung) _buildDesktopTabBar(),
+        Expanded(
+          child: Column(
+            children: [
+              _buildSheetHeader(context),
+              Expanded(
+                child: TabBarView(
+                  key: const ValueKey('tabs-view'),
+                  controller: controller.tabController,
+                  children: [
+                    _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
+                    _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
+                    _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (context.samsung) _buildDesktopTabBar(),
+      ],
     );
   }
 
@@ -188,12 +282,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                     ),
                   ),
                   Expanded(
-                    child: Stack(
-                      children: [
-                        FindMyMapWidget(controller: controller),
-                        if (kIsDesktop) _buildDesktopTitleBar(context),
-                      ],
-                    ),
+                    child: _buildMap(context),
                   ),
                 ],
               ),
@@ -209,56 +298,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                       ),
                     ),
                   ),
-                  child: Column(
-                    children: [
-                      if (!context.samsung)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 8, 16, 4),
-                          child: SizedBox(
-                            height: 48,
-                            child: Row(
-                              children: [
-                                SizedBox(
-                                  width: 44,
-                                  height: 44,
-                                  child: buildBackButton(context),
-                                ),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Text(
-                                    "Find My",
-                                    style: context.theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      if (!context.samsung) _buildDesktopTabBar(),
-                      Expanded(
-                        child: SizedBox(
-                          width: 500,
-                          child: Column(
-                            children: [
-                              _buildSheetHeader(context),
-                              Expanded(
-                                child: TabBarView(
-                                  key: const ValueKey('tabs-view'),
-                                  controller: controller.tabController,
-                                  children: [
-                                    _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
-                                    _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
-                                    _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      if (context.samsung) _buildDesktopTabBar(),
-                    ],
-                  ),
+                  child: _buildLists(context),
                 ),
               ),
             ],

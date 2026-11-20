@@ -213,6 +213,10 @@ class ContactV2Actions {
       List<ContactV2> networkContacts = [];
       final avatarPaths = <String, String?>{};
       final failedDeviceAvatarIds = <String>{};
+      // Set once each source (address book on mobile, server when fetched) is read, so a failed/empty read never prunes.
+      bool deviceSourceRead = false;
+      bool serverSourceRead = false;
+      final staleAvatarPaths = <String>[];
 
       if (!kIsDesktop && !kIsWeb && includeDeviceContacts) {
         // Step 1: Fetch contacts using flutter_contacts (include thumbnails in the bulk query
@@ -237,6 +241,8 @@ class ContactV2Actions {
           Logger.warn('[ContactV2] Device contact fetch skipped/failed: $e');
           deviceContacts = [];
         }
+        // An empty read is likelier a sandboxed provider (see below) than an emptied address book.
+        deviceSourceRead = deviceContacts.isNotEmpty;
         Logger.info('[ContactV2] Fetched ${deviceContacts.length} contacts from device');
         if (deviceContacts.isEmpty) {
           Logger.warn('[ContactV2] 0 device contacts returned (permission denied, empty address book, or contact scoping).');
@@ -349,30 +355,25 @@ class ContactV2Actions {
         serverFetchAttempted = true;
         try {
           Logger.info('[ContactV2] Starting contact fetch from server...');
-          final response = await HttpSvc.contact.fetchAll(withAvatars: true);
-          if (response.statusCode == 200 && response.data is Map && response.data['data'] is List) {
-            serverFetchSucceeded = true;
-            final rawList = response.data['data'] as List<dynamic>;
-            if (rawList.isNotEmpty) {
-              final serverMaps = rawList
-                  .whereType<Map>()
-                  .map((m) => m is Map<String, dynamic> ? m : Map<String, dynamic>.from(m))
-                  .toList();
-              networkContacts = await _mergeServerContactMaps(
-                serverMaps: serverMaps,
-                deviceContacts: deviceContacts,
-                avatarPaths: avatarPaths,
-                failedDeviceAvatarIds: failedDeviceAvatarIds,
-                dedupedServerIdsOut: dedupedServerIds,
-                prefixServerIds: !kIsDesktop && !kIsWeb,
-              );
-              Logger.info(
-                  '[ContactV2] Merged ${serverMaps.length} server contacts (${networkContacts.length} server-only)');
-            } else {
-              Logger.info('[ContactV2] No server contacts found!');
-            }
+          final serverMaps = await HttpSvc.contact.fetchAllPages(
+            isV2Server: dataMap['isV2Server'] as bool? ?? false,
+            withAvatars: true,
+          );
+          serverFetchSucceeded = true;
+          serverSourceRead = serverMaps.isNotEmpty;
+          if (serverMaps.isNotEmpty) {
+            networkContacts = await _mergeServerContactMaps(
+              serverMaps: serverMaps,
+              deviceContacts: deviceContacts,
+              avatarPaths: avatarPaths,
+              failedDeviceAvatarIds: failedDeviceAvatarIds,
+              dedupedServerIdsOut: dedupedServerIds,
+              prefixServerIds: !kIsDesktop && !kIsWeb,
+            );
+            Logger.info(
+                '[ContactV2] Merged ${serverMaps.length} server contacts (${networkContacts.length} server-only)');
           } else {
-            Logger.warn('[ContactV2] Unexpected server contacts response (${response.statusCode})');
+            Logger.info('[ContactV2] No server contacts found!');
           }
         } catch (e) {
           Logger.warn('[ContactV2] Server contact fetch failed (continuing with local contacts): $e');
@@ -430,6 +431,7 @@ class ContactV2Actions {
         Logger.info(
             '[ContactV2] Built lookup maps: ${emailHandleMap.length} email keys, ${phoneHandleMap.length} phone variant keys');
 
+        final keptIds = <String>{};
         for (final rawContact in [...deviceContacts, ...networkContacts]) {
           // Normalize addresses
           final normalizedAddresses = <String>{};
@@ -526,6 +528,8 @@ class ContactV2Actions {
             contactPhones = rawContact.phoneNumbers;
             contactEmails = rawContact.emailAddresses;
           }
+
+          keptIds.add(contactId);
 
           // Get pre-fetched avatar path
           final avatarPath = avatarPaths[contactId];
@@ -662,7 +666,31 @@ class ContactV2Actions {
             }
           }
         }
+
+        // Every stored contact came from its source, so one that source no longer returns was deleted there.
+        if (deviceSourceRead || serverSourceRead) {
+          final stale = contactsBox.getAll().where((c) {
+            if (keptIds.contains(c.nativeContactId)) return false;
+            return c.isNative ? deviceSourceRead : serverSourceRead;
+          }).toList();
+          if (stale.isNotEmpty) {
+            for (final c in stale) {
+              affectedHandleIds.addAll(c.handles.map((h) => h.id).whereType<int>());
+              if (c.avatarPath != null) staleAvatarPaths.add(c.avatarPath!);
+            }
+            contactsBox.removeMany(stale.map((c) => c.id).toList());
+            Logger.info('[ContactV2] Removed ${stale.length} contacts the source no longer has');
+          }
+        }
       });
+
+      for (final path in staleAvatarPaths) {
+        try {
+          File(path).deleteSync();
+        } on FileSystemException catch (e) {
+          Logger.warn('Could not delete avatar of removed contact: ${e.message}', tag: 'ContactV2Actions');
+        }
+      }
 
       final endTime = DateTime.now().millisecondsSinceEpoch;
       // De-duplicate — a handle can be marked affected by both a name/avatar
@@ -1107,19 +1135,92 @@ class ContactV2Actions {
     }
   }
 
-  /// Uploads contacts to the server
+  /// Matches by `externalId`, or by name for uploads that predate it; `api` contacts are the Mac's own, never ours.
+  /// An empty [local] is likelier a failed read than an emptied address book, so it deletes nothing.
+  @visibleForTesting
+  static ({List<Map<String, dynamic>> updates, List<Map<String, dynamic>> creates, List<dynamic> deletes})
+      planContactUpload(
+    List<Map<String, dynamic>> server,
+    List<Map<String, dynamic>> local, {
+    required String deviceId,
+  }) {
+    String nameKey(Map c) => [c['firstName'], c['lastName'], c['displayName']].map((e) => e ?? '').join('\u0000');
+
+    final serverById = {for (final c in server) c['id']: c};
+    final byExternalId = <String, dynamic>{};
+    final byName = <String, List<dynamic>>{};
+    for (final c in server.where((c) => c['sourceType'] == 'db' && c['id'] != null)) {
+      final externalId = c['externalId'] as String?;
+      if (externalId != null && externalId.isNotEmpty) {
+        byExternalId[externalId] = c['id'];
+      } else {
+        byName.putIfAbsent(nameKey(c), () => []).add(c['id']);
+      }
+    }
+
+    final updates = <Map<String, dynamic>>[];
+    final creates = <Map<String, dynamic>>[];
+    for (final c in local) {
+      final legacy = byName[nameKey(c)];
+      final id = byExternalId[c['externalId']] ?? (legacy?.isNotEmpty == true ? legacy!.removeAt(0) : null);
+      if (id != null) {
+        byExternalId.remove(c['externalId']);
+        if (!_sameContact(serverById[id]!, c)) updates.add({...c, 'id': id});
+      } else {
+        creates.add(c);
+      }
+    }
+
+    final deletes = local.isEmpty
+        ? <dynamic>[]
+        : [
+            for (final e in byExternalId.entries)
+              if (e.key.startsWith('$deviceId:')) e.value
+          ];
+    return (updates: updates, creates: creates, deletes: deletes);
+  }
+
+  /// Addresses compare as sets: the server returns them as `{address}` objects in its own order.
+  static bool _sameContact(Map<String, dynamic> server, Map<String, dynamic> local) {
+    Set<String> addresses(dynamic list) =>
+        {for (final e in list as List<dynamic>? ?? []) (e is Map ? e['address'] : e).toString()};
+    return server['externalId'] == local['externalId'] &&
+        (server['firstName'] ?? '') == (local['firstName'] ?? '') &&
+        (server['lastName'] ?? '') == (local['lastName'] ?? '') &&
+        (server['displayName'] ?? '') == (local['displayName'] ?? '') &&
+        setEquals(addresses(server['phoneNumbers']), addresses(local['phoneNumbers'])) &&
+        setEquals(addresses(server['emails']), addresses(local['emails']));
+  }
+
+  /// Uploads contacts (from [ContactV2.toServerMap]) to the server. Released 1.x servers have no update or delete
+  /// route, so they only get the create, which they merge by name. Errors are logged and rethrown for the caller.
   static Future<void> uploadContacts(dynamic data) async {
     final contacts = data['contacts'] as List<Map<String, dynamic>>;
+    final deviceId = data['deviceId'] as String;
+    final isV2Server = data['isV2Server'] as bool? ?? false;
 
     try {
-      await HttpSvc.contact.create(contacts);
-      Logger.info('[ContactV2] Successfully uploaded ${contacts.length} contacts to server');
+      if (!isV2Server) {
+        await HttpSvc.contact.create(contacts);
+        Logger.info('[ContactV2] Uploaded ${contacts.length} contacts');
+        return;
+      }
+
+      final server = await HttpSvc.contact.fetchAllPages(isV2Server: true);
+      final plan = planContactUpload(server, contacts, deviceId: deviceId);
+
+      if (plan.updates.isNotEmpty) await HttpSvc.contact.update(plan.updates);
+      if (plan.creates.isNotEmpty) await HttpSvc.contact.create(plan.creates);
+      if (plan.deletes.isNotEmpty) await HttpSvc.contact.delete(plan.deletes);
+      Logger.info('[ContactV2] Uploaded contacts: ${plan.updates.length} updated, ${plan.creates.length} created, '
+          '${plan.deletes.length} deleted');
     } catch (err, stack) {
       if (err is Response) {
         Logger.error(err.data["error"]["message"].toString(), error: err, trace: stack, tag: 'ContactV2Actions');
       } else {
         Logger.error('Failed to upload contacts!', error: err, trace: stack, tag: 'ContactV2Actions');
       }
+      return Future.error(err, stack);
     }
   }
 

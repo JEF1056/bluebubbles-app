@@ -103,7 +103,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val chatGuid: String? = intent.getStringExtra("chatGuid")
                 val tag: String? = intent.getStringExtra("tag")
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuidFallback = chatGuid)
+                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, chatGuidFallback = chatGuid, keepBubble = true)
                 DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid)) {}
             }
             "MuteChat" -> {

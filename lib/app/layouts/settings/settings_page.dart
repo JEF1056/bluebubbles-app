@@ -25,19 +25,11 @@ class SettingsPage extends StatefulWidget {
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-/// Drops the settings list's highlight once the right pane is back on its
-/// placeholder route — nothing is open, so nothing should look selected.
-/// Page switches remove routes rather than popping them, so they don't hit this.
-class _SettingsPaneObserver extends NavigatorObserver {
-  @override
-  void didPop(Route route, Route? previousRoute) {
-    if (previousRoute?.settings.name == "initial") NavigationSvc.activeSettingsPage.value = null;
-  }
-}
-
 class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
   String searchQuery = "";
-  final _paneObserver = _SettingsPaneObserver();
+
+  /// Per page, so a closed Settings page's routes don't linger in the next one
+  late final PaneObserver _paneObserver = PaneObserver(NavigationSvc.settingsPaneOpen);
 
   List<Widget> _getSettingsItemList(BuildContext context) {
     return buildSettingItemList(
@@ -51,6 +43,13 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
       materialSubtitle: materialSubtitle,
       ns: NavigationSvc,
     );
+  }
+
+  @override
+  void dispose() {
+    // Unless a new Settings page has taken the pane over already
+    if (NavigationSvc.openSection.value != AppSection.settings) NavigationSvc.settingsPaneOpen.value = false;
+    super.dispose();
   }
 
   @override
@@ -77,39 +76,6 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
         );
       });
     }
-  }
-
-  @override
-  void dispose() {
-    NavigationSvc.isSettingsOpen.value = false;
-    NavigationSvc.activeSettingsPage.value = null;
-    NavigationSvc.activeSettingsWidget = null;
-    NavigationSvc.activeSettingsBinding = null;
-    NavigationSvc.narrowSettingsRoute = null;
-    super.dispose();
-  }
-
-  void _handleNarrowTransition() {
-    final page = NavigationSvc.activeSettingsWidget;
-    if (page == null || NavigationSvc.hasNarrowSettingsRoute) return;
-    NavigationSvc.pushAndRemoveSettingsUntil(
-      context,
-      page,
-      (route) => route.isFirst,
-      binding: NavigationSvc.activeSettingsBinding,
-    );
-  }
-
-  void _handleWideTransition() {
-    final page = NavigationSvc.activeSettingsWidget;
-    if (page == null || !NavigationSvc.hasNarrowSettingsRoute) return;
-    NavigationSvc.pushAndRemoveSettingsUntil(
-      context,
-      page,
-      (route) => route.isFirst,
-      binding: NavigationSvc.activeSettingsBinding,
-    );
-    NavigationSvc.removeNarrowSettingsRoute(context);
   }
 
   @override
@@ -140,8 +106,7 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                   maxRatio: 0.5,
                   allowResize: true,
                   enableInspector: false,
-                  onNarrowTransition: _handleNarrowTransition,
-                  onWideTransition: _handleWideTransition,
+                  rightOpen: NavigationSvc.settingsPaneOpen,
                   left: SettingsScaffold(
                     title: "Settings",
                     initialHeader: kIsWeb ? "Server & Message Management" : null,
@@ -287,15 +252,8 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                       explicitChildNodes: true,
                       child: PopScope(
                         canPop: false,
-                        onPopInvokedWithResult: <T>(bool _, T? _) async {
-                          Get.until((route) {
-                            if (route.settings.name == "initial") {
-                              Get.back();
-                            } else {
-                              Get.back(id: 3);
-                            }
-                            return true;
-                          }, id: 3);
+                        onPopInvokedWithResult: (bool didPop, _) {
+                          if (!didPop) NavigationSvc.back();
                         },
                         child: Navigator(
                           key: Get.nestedKey(3),
@@ -304,20 +262,27 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                             route.didPop(false);
                             return false;
                           },
-                          pages: [
-                            MaterialPage(
-                                name: "initial",
-                                child: BBScaffold(
-                                    backgroundColor: headerColor,
-                                    body: Center(
-                                      child: Text("Select a settings page from the list",
-                                          style: context.theme.textTheme.bodyLarge),
-                                    ))),
-                          ],
+                          pages: const [MaterialPage(name: "initial", child: SettingsPlaceholder())],
                         ),
                       ),
                     );
                   }),
                 );
+  }
+}
+
+class SettingsPlaceholder extends StatelessWidget {
+  const SettingsPlaceholder({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // The list shows through while a section slides out
+    if (!NavigationSvc.isTabletMode(context)) return const SizedBox.shrink();
+    return Obx(
+      () => BBScaffold(
+        backgroundColor: context.headerColor,
+        body: Center(child: Text("Select a settings page from the list", style: context.theme.textTheme.bodyLarge)),
+      ),
+    );
   }
 }

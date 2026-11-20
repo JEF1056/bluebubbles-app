@@ -3,6 +3,9 @@ import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_lis
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/conversation_list_fab.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/filters/custom_group_filter_chip_row.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/material_header.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/widgets/pinned_chats_grid.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/pin_drag_source.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/unpin_drop_target.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/list_item.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -91,60 +94,17 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
             final _chats = ChatsSvc.getFilteredChats(
               showArchived: showArchived,
               showUnknown: showUnknown,
+              excludePinned: true,
               filters: ChatsSvc.chatListFilters.value,
             );
-
-            final bool showPinnedHeader = !showArchived && !showUnknown;
-            final List<Chat> pinnedChats = showPinnedHeader
-                ? _chats.where((c) => c.isPinned == true).toList()
-                : const [];
-            final List<Chat> listChats = showPinnedHeader
-                ? _chats.where((c) => c.isPinned != true).toList()
-                : _chats;
-
-            if (!loaded || _chats.isEmpty) {
-              return Padding(
-                padding: EdgeInsets.only(top: MediaQuery.paddingOf(bodyContext).top),
-                child: Material(
-                  color: sheetColor,
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                  clipBehavior: Clip.antiAlias,
-                  child: Column(
-                    children: [
-                      if (!showArchived && !showUnknown)
-                        const CustomGroupFilterChipRow(
-                          padding: EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
-                        ),
-                      Expanded(
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 100),
-                            child: loaded
-                                ? buildEmptyChatListState(context,
-                                    showArchived: showArchived,
-                                    showUnknown: showUnknown,
-                                    filters: ChatsSvc.chatListFilters.value)
-                                : Column(
-                                    children: [
-                                      Padding(
-                                        padding: const EdgeInsets.all(8.0),
-                                        child: Text(
-                                          "Loading chats...",
-                                          style: context.theme.textTheme.labelLarge,
-                                          textAlign: TextAlign.center,
-                                        ),
-                                      ),
-                                      buildProgressIndicator(context, size: 15),
-                                    ],
-                                  ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }
+            // With every chat pinned, the pins are the list.
+            final noChats = _chats.isEmpty &&
+                ChatsSvc.getFilteredChats(
+                  showArchived: showArchived,
+                  showUnknown: showUnknown,
+                  pinnedOnly: true,
+                  filters: ChatsSvc.chatListFilters.value,
+                ).isEmpty;
 
             return NotificationListener(
               onNotification: (notif) {
@@ -153,66 +113,100 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                 }
                 return true;
               },
-              child: ScrollbarWrapper(
-                showScrollbar: true,
-                controller: controller.materialScrollController,
-                child: CustomScrollView(
+              child: UnpinDropTarget(
+                drag: controller.pinDrag,
+                child: ScrollbarWrapper(
+                  showScrollbar: true,
                   controller: controller.materialScrollController,
-                  physics: ThemeSwitcher.getScrollPhysics(),
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: SizedBox(height: MediaQuery.paddingOf(bodyContext).top),
-                    ),
-                    if (pinnedChats.isNotEmpty)
+                  child: CustomScrollView(
+                    controller: controller.materialScrollController,
+                    physics: ThemeSwitcher.getScrollPhysics(),
+                    slivers: [
                       SliverToBoxAdapter(
-                        child: _MaterialPinnedSection(
-                          pinnedChats: pinnedChats,
-                          controller: controller,
-                          onSelectionChanged: () => setState(() {}),
+                        child: SizedBox(height: MediaQuery.paddingOf(bodyContext).top),
+                      ),
+                      PinnedChatsGrid(controller: controller),
+                      DecoratedSliver(
+                        decoration: BoxDecoration(
+                          color: sheetColor,
+                          borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
                         ),
-                      ),
-                    DecoratedSliver(
-                      decoration: BoxDecoration(
-                        color: sheetColor,
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-                      ),
-                      sliver: SliverMainAxisGroup(
-                        slivers: [
-                          if (!showArchived && !showUnknown)
-                            const SliverToBoxAdapter(
-                              child: CustomGroupFilterChipRow(
-                                padding: EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
+                        sliver: SliverMainAxisGroup(
+                          slivers: [
+                            if (!showArchived && !showUnknown)
+                              const SliverToBoxAdapter(
+                                child: CustomGroupFilterChipRow(
+                                  padding: EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
+                                ),
                               ),
-                            ),
-                          SliverPadding(
-                            padding: const EdgeInsets.only(top: 8, bottom: 88),
-                            sliver: SliverList(
-                              delegate: SliverChildBuilderDelegate(
-                                (context, index) {
-                                  final chat = listChats[index];
-                                  return Container(
-                                    key: ValueKey(chat.guid),
-                                    child: ListItem(
-                                      chat: chat,
-                                      controller: controller,
-                                      update: () => setState(() {}),
+                            if (!loaded || noChats)
+                              SliverFillRemaining(
+                                hasScrollBody: false,
+                                child: Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(top: 100),
+                                    child: loaded
+                                        ? buildEmptyChatListState(context,
+                                            showArchived: showArchived,
+                                            showUnknown: showUnknown,
+                                            filters: ChatsSvc.chatListFilters.value)
+                                        : Column(
+                                            children: [
+                                              Padding(
+                                                padding: const EdgeInsets.all(8.0),
+                                                child: Text(
+                                                  "Loading chats...",
+                                                  style: context.theme.textTheme.labelLarge,
+                                                  textAlign: TextAlign.center,
+                                                ),
+                                              ),
+                                              buildProgressIndicator(context, size: 15),
+                                            ],
+                                          ),
+                                  ),
+                                ),
+                              )
+                            else ...[
+                              SliverPadding(
+                                padding: const EdgeInsets.only(top: 8, bottom: 88),
+                                // Only the rows watch the drag, for the room a pin dragged over them makes, so a drag
+                                // doesn't refilter the chats.
+                                sliver: Obx(() {
+                                  final rows = controller.pinDrag.withUnpinPreview(_chats);
+                                  return SliverList(
+                                    delegate: SliverChildBuilderDelegate(
+                                      (context, index) {
+                                        final chat = rows[index];
+                                        return Container(
+                                          key: ValueKey(chat.guid),
+                                          child: PinDragSource(
+                                            drag: controller.pinDrag,
+                                            chat: chat,
+                                            child: ListItem(
+                                              chat: chat,
+                                              controller: controller,
+                                              update: () => setState(() {}),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                      findChildIndexCallback: (key) =>
+                                          findChildIndexByKey(rows, key, (item) => item.guid),
+                                      childCount: rows.length,
                                     ),
                                   );
-                                },
-                                childCount: listChats.length,
-                                findChildIndexCallback: (key) =>
-                                    findChildIndexByKey(listChats, key, (item) => item.guid),
+                                }),
                               ),
-                            ),
-                          ),
-                          const SliverFillRemaining(
-                            hasScrollBody: false,
-                            child: SizedBox.shrink(),
-                          ),
-                        ],
+                              const SliverFillRemaining(
+                                hasScrollBody: false,
+                                child: SizedBox.shrink(),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );

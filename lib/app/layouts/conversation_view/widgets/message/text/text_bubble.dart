@@ -111,6 +111,7 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
         textOffset: isNullOrEmpty(part.subject) ? 0 : part.displaySubject!.length + 1,
         child: RichText(
           text: TextSpan(children: spans),
+          textWidthBasis: TextWidthBasis.longestLine,
           textHeightBehavior: !iOS ? const TextHeightBehavior(leadingDistribution: TextLeadingDistribution.even) : null,
           selectionRegistrar: (kIsWeb || kIsDesktop) ? SelectionContainer.maybeOf(context) : null,
           selectionColor: (kIsWeb || kIsDesktop)

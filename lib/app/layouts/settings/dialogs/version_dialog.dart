@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -60,20 +61,30 @@ void showVersionDialog(BuildContext context) {
         onPressed: () async {
           final info = await packageInfoFuture;
           if (!context.mounted) return;
-          Navigator.of(context, rootNavigator: true).push(MaterialPageRoute<void>(
-            builder: (BuildContext ctx) => Theme(
-              data: Theme.of(ctx),
-              child: LicensePage(
-                applicationName: "BlueBubbles",
-                applicationVersion: info.version,
-                applicationIcon: Image.asset(
-                  "assets/icon/icon.png",
-                  width: 30,
-                  height: 30,
+          Navigator.of(context, rootNavigator: true).pop();
+          NavigationSvc.push(
+            context,
+            Builder(
+              builder: (context) => Theme(
+                data: Theme.of(context).copyWith(
+                  scaffoldBackgroundColor: context.headerColor,
+                  appBarTheme: Theme.of(context)
+                      .appBarTheme
+                      .copyWith(backgroundColor: context.headerColor, toolbarHeight: kIsDesktop ? 80 : null),
+                  cardColor: context.tileColor,
+                ),
+                child: LicensePage(
+                  applicationName: "BlueBubbles",
+                  applicationVersion: info.version,
+                  applicationIcon: Image.asset(
+                    "assets/icon/icon.png",
+                    width: 30,
+                    height: 30,
+                  ),
                 ),
               ),
             ),
-          ));
+          );
         },
       ),
       BBDialogAction(

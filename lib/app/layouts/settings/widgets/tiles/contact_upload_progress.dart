@@ -25,10 +25,12 @@ class ContactUploadProgress extends StatelessWidget {
           body: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Text(
-                '${progress.value != null && totalSize.value != null ? (progress.value! * totalSize.value! / 1000).getFriendlySize(withSuffix: false) : ""} / ${((totalSize.value ?? 0).toDouble() / 1000).getFriendlySize()} (${((progress.value ?? 0) * 100).floor()}%)',
-                style: context.theme.textTheme.bodyMedium,
-              ),
+              // Without a size there is nothing to count: the bar alone shows the upload is running.
+              if (totalSize.value != null)
+                Text(
+                  '${progress.value != null ? (progress.value! * totalSize.value! / 1000).getFriendlySize(withSuffix: false) : ""} / ${(totalSize.value!.toDouble() / 1000).getFriendlySize()} (${((progress.value ?? 0) * 100).floor()}%)',
+                  style: context.theme.textTheme.bodyMedium,
+                ),
               const SizedBox(height: 12.0),
               ClipRRect(
                 borderRadius: BorderRadius.circular(4),

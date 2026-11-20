@@ -37,8 +37,10 @@ class TabletModeWrapper extends StatefulWidget {
   final double? minWidthLeft;
   final double? maxWidthLeft;
   final bool enableInspector;
-  final VoidCallback? onNarrowTransition;
-  final VoidCallback? onWideTransition;
+
+  /// When set, the phone layout keeps [right] mounted over [left] and shows it while true, so pages survive a
+  /// layout switch
+  final RxBool? rightOpen;
 
   const TabletModeWrapper(
       {super.key,
@@ -52,8 +54,7 @@ class TabletModeWrapper extends StatefulWidget {
       this.minWidthLeft,
       this.maxWidthLeft,
       this.enableInspector = true,
-      this.onNarrowTransition,
-      this.onWideTransition})
+      this.rightOpen})
       : assert(initialRatio >= 0),
         assert(initialRatio <= 1);
 
@@ -80,8 +81,6 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
   late final RxDouble _ratio;
 
   double? _maxWidth;
-  bool? altLayoutCache;
-  bool _preserveRightOneFrame = false;
   StreamSubscription? _eventSub;
   Worker? _activeChatWorker;
 
@@ -123,88 +122,27 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
     super.dispose();
   }
 
-  void _scheduleNarrowTransition() {
-    if (widget.onNarrowTransition != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || showAltLayout) return;
-        widget.onNarrowTransition!();
-      });
-      return;
-    }
-    if (ChatsSvc.activeChat == null) return;
-    _preserveRightOneFrame = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || showAltLayout) {
-        if (mounted && _preserveRightOneFrame) setState(() => _preserveRightOneFrame = false);
-        return;
-      }
-      final active = ChatsSvc.activeChat?.chat;
-      if (active != null && !NavigationSvc.hasNarrowChatRoute) {
-        NavigationSvc.pushAndRemoveUntil(
-          context,
-          ConversationView(chat: active),
-          (route) => route.isFirst,
-          closeActiveChat: false,
-        );
-      }
-      // Keep the nested pane mounted for one more frame so the root ConversationView
-      // takes controller.viewOwner before the nested one disposes.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _preserveRightOneFrame) {
-          setState(() => _preserveRightOneFrame = false);
-        }
-      });
-    });
-  }
-
-  void _scheduleWideTransition() {
-    if (widget.onWideTransition != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !showAltLayout) return;
-        widget.onWideTransition!();
-      });
-      return;
-    }
-    if (ChatsSvc.activeChat == null || !NavigationSvc.hasNarrowChatRoute) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted || !showAltLayout) return;
-      final active = ChatsSvc.activeChat?.chat;
-      if (active == null) return;
-      await NavigationSvc.pushAndRemoveUntil(
-        context,
-        ConversationView(chat: active),
-        (route) => route.isFirst,
-        closeActiveChat: false,
-      );
-      if (mounted) {
-        NavigationSvc.removeNarrowChatRoute(context);
-      }
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!showAltLayout) {
-      if (altLayoutCache ?? false) {
-        altLayoutCache = false;
-        _scheduleNarrowTransition();
-      }
-      final leftPane = TitleBarWrapper(child: widget.left);
-      if (_preserveRightOneFrame) {
-        return Stack(
+      final rightOpen = widget.rightOpen;
+      if (rightOpen == null) return TitleBarWrapper(child: widget.left);
+      return TitleBarWrapper(
+        child: Stack(
           children: [
-            Positioned.fill(child: Offstage(offstage: true, child: widget.right)),
-            leftPane,
+            // Offstage alone keeps the hidden pane's animations running and its focusables reachable
+            Obx(() => Offstage(
+                  offstage: rightOpen.value,
+                  child: TickerMode(
+                    enabled: !rightOpen.value,
+                    child: ExcludeFocus(excluding: rightOpen.value, child: widget.left),
+                  ),
+                )),
+            Obx(() => IgnorePointer(ignoring: !rightOpen.value, child: widget.right)),
           ],
-        );
-      }
-      return leftPane;
+        ),
+      );
     }
-    if (altLayoutCache == false) {
-      _scheduleWideTransition();
-    }
-    altLayoutCache = true;
-    _preserveRightOneFrame = false;
     return LayoutBuilder(
       builder: (context, BoxConstraints constraints) {
         final effectiveDividerWidth = kIsWeb ? 1.0 : widget.dividerWidth;

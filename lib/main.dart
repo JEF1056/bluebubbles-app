@@ -19,11 +19,12 @@ import 'package:bluebubbles/services/network/http_overrides.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/media_kit_hot_restart_fix.dart'
     if (dart.library.js_interop) 'package:bluebubbles/utils/media_kit_hot_restart_fix_web.dart';
+import 'package:bluebubbles/utils/linux_launcher_badge.dart'
+    if (dart.library.js_interop) 'package:bluebubbles/utils/linux_launcher_badge_web.dart';
 import 'package:bluebubbles/utils/window_effects.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
-import 'package:bluebubbles/app/layouts/settings/settings_page.dart';
 import 'package:bluebubbles/app/layouts/startup/failure_to_start.dart';
 import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/layouts/startup/splash_screen.dart';
@@ -340,6 +341,9 @@ class Main extends StatelessWidget {
 
   const Main({super.key, required this.lightTheme, required this.darkTheme, this.savedThemeMode});
 
+  Widget _withBackAction(BuildContext context, Widget? navigator) =>
+      Actions(actions: {GoBackIntent: GoBackAction(context)}, child: navigator ?? Container());
+
   @override
   Widget build(BuildContext context) {
     return AdaptiveTheme(
@@ -366,7 +370,7 @@ class Main extends StatelessWidget {
           ),
         ),
         navigatorKey: NavigationSvc.key,
-        navigatorObservers: [routeObserver],
+        navigatorObservers: [NavigationSvc.sectionObserver],
         scrollBehavior: const MaterialScrollBehavior().copyWith(
           // Specifically for GNU/Linux, Android-x86, and Web so mouse/touch/trackpad drag all work consistently.
           dragDevices:
@@ -409,7 +413,8 @@ class Main extends StatelessWidget {
         },
         // A route only reports its own pop state, so a pushed page could tell Android nothing handles back and the
         // gesture left the app. Back always goes through Flutter instead, which still exits when nothing can pop.
-        builder: (context, child) => NotificationListener<NavigationNotification>(
+        // Above the navigator so back reaches pages pushed over Home; GetMaterialApp ignores its actions parameter
+        builder: (context, navigator) => NotificationListener<NavigationNotification>(
           onNotification: (notification) {
             if (notification.canHandlePop) return false;
             const NavigationNotification(canHandlePop: true).dispatch(context);
@@ -427,7 +432,7 @@ class Main extends StatelessWidget {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      child ?? Container(),
+                      _withBackAction(context, navigator),
                       const OngoingCallPillOverlay(),
                     ],
                   ),
@@ -520,7 +525,7 @@ class Main extends StatelessWidget {
                           child: Stack(
                             fit: StackFit.expand,
                             children: [
-                              child ?? Container(),
+                              _withBackAction(context, navigator),
                               const OngoingCallPillOverlay(),
                             ],
                           ),
@@ -586,18 +591,14 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             NavigationSvc.closeAllConversationView(navContext);
             await ChatsSvc.setAllInactive();
             if (!mounted || !navContext.mounted) return;
-            await NavigationSvc.pushAndRemoveUntil(
-              navContext,
-              const SettingsPage(),
-              (route) => route.isFirst,
-            );
+            NavigationSvc.openSettings();
           }
           break;
         case WebHashRouteKind.chat:
           final guid = target.chatGuid!;
           _lastPushedHashPath = '/chat/${Uri.encodeComponent(guid)}';
           if (NavigationSvc.isSettingsOpen.value) {
-            NavigationSvc.closeSettings(navContext);
+            NavigationSvc.closeSections();
           }
           if (ChatsSvc.activeChatGuid.value != guid) {
             final chat = Chat.findOne(guid: guid);
@@ -613,7 +614,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         case WebHashRouteKind.home:
           _lastPushedHashPath = '/';
           if (NavigationSvc.isSettingsOpen.value) {
-            NavigationSvc.closeSettings(navContext);
+            NavigationSvc.closeSections();
           }
           if (ChatsSvc.activeChat != null && mounted) {
             NavigationSvc.closeAllConversationView(navContext);
@@ -704,6 +705,15 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       }
 
       if (kIsDesktop) {
+        if (Platform.isLinux) {
+          /* ----- BADGE ICON LISTENER ----- */
+          Future<void> updateBadge(int count) =>
+              LinuxLauncherBadge.update(SettingsSvc.settings.windowsTaskbarBadge.value ? count : 0);
+
+          unawaited(updateBadge(ChatsSvc.unreadCount.value));
+          ChatsSvc.unreadCount.listen(updateBadge);
+        }
+
         if (Platform.isWindows) {
           /* ----- CONTACT IMAGE CACHE DELETION ----- */
           Directory temp = FilesystemSvc.appTemp;
@@ -883,6 +893,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   /// Render
   @override
   Widget build(BuildContext context) {
+    // Not in the Obx: tracking it swaps in the chat list before setup's last page offers a backup restore
+    final finishedSetup = SettingsSvc.settings.finishedSetup.value;
     return Actions(
       actions: {
         OpenSettingsIntent: OpenSettingsAction(context),
@@ -915,6 +927,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
       },
       child: Obx(() => BBScaffold(
             backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
+            resizeToAvoidBottomInset: !finishedSetup,
+            safeAreaBottom: finishedSetup ? false : null,
             body: Builder(
               builder: (BuildContext context) {
                 if (SettingsSvc.settings.finishedSetup.value) {

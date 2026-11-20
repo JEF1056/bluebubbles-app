@@ -1393,15 +1393,10 @@ class Store {
     _initBoxes();
   }
 
-  factory Store.fromReference(dynamic _, dynamic _) =>
-      throw UnsupportedError('Store.fromReference is not supported on web');
-
   factory Store.attach(dynamic _, String? directoryPath, {bool queriesCaseSensitiveDefault = true}) =>
       throw UnsupportedError('Store.attach is not supported on web');
 
   static bool isOpen(String? directoryPath) => _active != null && !_active!._closed;
-
-  dynamic get reference => throw UnsupportedError('Store.reference is not supported on web');
 
   Stream<List<Type>> get _entityChanges => _entityChangesController.stream;
 

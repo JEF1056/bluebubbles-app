@@ -5,9 +5,7 @@ import 'dart:math';
 import 'package:path/path.dart' show join;
 
 import 'package:bluebubbles/app/layouts/settings/pages/advanced/private_api_panel.dart';
-import 'package:bluebubbles/app/layouts/settings/settings_page.dart';
 import 'package:bluebubbles/app/wrappers/scrollbar_wrapper.dart';
-import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/interfaces/app_interface.dart';
@@ -517,20 +515,7 @@ class SettingsService {
                     await PrefsSvc.server.markPrivateApiEnableTipShown();
                     if (Get.context == null) return;
                     Navigator.of(Get.context!, rootNavigator: true).pop();
-                    NavigationSvc.closeSettings(Get.context!);
-                    NavigationSvc.closeAllConversationView(Get.context!);
-                    await ChatsSvc.setAllInactive();
-                    await Navigator.of(Get.context!).push(
-                      ThemeSwitcher.buildPageRoute(
-                        builder: (BuildContext context) {
-                          return SettingsPage(
-                            initialPage: PrivateAPIPanel(
-                              enablePrivateAPIonInit: true,
-                            ),
-                          );
-                        },
-                      ),
-                    );
+                    NavigationSvc.openSettings(initialPage: PrivateAPIPanel(enablePrivateAPIonInit: true));
                   },
                   child: const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
@@ -563,6 +548,9 @@ class SettingsService {
 
   /// Returns the current cached [ServerDetails].
   ServerDetails get serverDetails => _serverDetails.value;
+
+  /// [serverDetails] to listen to (with `ever`), e.g. to recheck something whenever the server changes
+  Rx<ServerDetails> get serverDetailsChanges => _serverDetails;
 
   /// Several attachments can go as one message: the server takes attachment parts, and they need the Private API.
   bool get canSendAttachmentsTogether =>

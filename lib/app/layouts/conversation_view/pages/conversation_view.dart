@@ -74,6 +74,8 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     controller.fromChatCreator = widget.fromChatCreator;
     controller.fromSearchResult = widget.initialScrollToGuid != null;
     ChatsSvc.setActiveChatSync(chat, clearNotifications: !widget.autoOpened);
+    _sectionWorker = ever(NavigationSvc.openSection, (_) => _updateCovered());
+    _updateCovered();
     ChatsSvc.activeChat?.controller = controller;
     if (kIsWeb && NavigationSvc.showInspectorDrawer.value) {
       NavigationSvc.showInspectorDrawer.value = false;
@@ -117,6 +119,69 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   }
 
   Widget _buildBodyContent() {
+    // Built once so keyboard animation frames only rebuild the padding
+    final composer = GestureDetector(
+      onPanUpdate: _onPanUpdate,
+      child: ConversationTextField(
+        parentController: controller,
+      ),
+    );
+    final Widget bodyChild = (!iOS && !samsung)
+        ? Stack(
+            children: [
+              Positioned.fill(
+                child: MessagesView(
+                  key: Key(chat.guid),
+                  customService: widget.customService,
+                  initialScrollToGuid: widget.initialScrollToGuid,
+                  controller: controller,
+                  bottomPadding: 88.0,
+                  unreadWhileScrolledCount: _unreadWhileScrolledCount,
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 88.0,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: ScrollDownButton(
+                    controller: controller,
+                    unreadWhileScrolledCount: _unreadWhileScrolledCount,
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: composer,
+              ),
+            ],
+          )
+        : Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Stack(
+                  children: [
+                    MessagesView(
+                      key: Key(chat.guid),
+                      customService: widget.customService,
+                      initialScrollToGuid: widget.initialScrollToGuid,
+                      controller: controller,
+                      unreadWhileScrolledCount: _unreadWhileScrolledCount,
+                    ),
+                    ScrollDownButton(
+                      controller: controller,
+                      unreadWhileScrolledCount: _unreadWhileScrolledCount,
+                    ),
+                  ],
+                ),
+              ),
+              composer,
+            ],
+          );
     final content = GradientBackground(
       controller: controller,
       child: Stack(
@@ -144,76 +209,11 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
           ),
           Builder(
             builder: (context) {
-              final bottomInset = MediaQuery.paddingOf(context).bottom;
-              if (!iOS && !samsung) {
-                return Stack(
-                  children: [
-                    Positioned.fill(
-                      child: MessagesView(
-                        key: Key(chat.guid),
-                        customService: widget.customService,
-                        initialScrollToGuid: widget.initialScrollToGuid,
-                        controller: controller,
-                        bottomPadding: 88.0 + bottomInset,
-                        unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                      ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 88.0 + bottomInset,
-                      child: Align(
-                        alignment: Alignment.bottomCenter,
-                        child: ScrollDownButton(
-                          controller: controller,
-                          unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: bottomInset,
-                      child: GestureDetector(
-                        onPanUpdate: _onPanUpdate,
-                        child: ConversationTextField(
-                          parentController: controller,
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              }
+              // padding.bottom reads 0 while the keyboard covers the nav bar
+              final bottomInset = MediaQuery.paddingOf(context).bottom + MediaQuery.viewInsetsOf(context).bottom;
               return Padding(
                 padding: EdgeInsets.only(bottom: bottomInset),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          MessagesView(
-                            key: Key(chat.guid),
-                            customService: widget.customService,
-                            initialScrollToGuid: widget.initialScrollToGuid,
-                            controller: controller,
-                            unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                          ),
-                          ScrollDownButton(
-                            controller: controller,
-                            unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                          ),
-                        ],
-                      ),
-                    ),
-                    GestureDetector(
-                      onPanUpdate: _onPanUpdate,
-                      child: ConversationTextField(
-                        parentController: controller,
-                      ),
-                    ),
-                  ],
-                ),
+                child: bodyChild,
               );
             },
           ),
@@ -250,27 +250,36 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   void didChangeDependencies() {
     super.didChangeDependencies();
     final route = ModalRoute.of(context);
-    if (route != null) {
-      routeObserver.subscribe(this, route);
-    }
+    if (route != null) NavigationSvc.paneRouteObserver.subscribe(this, route);
   }
+
+  bool _pageOver = false;
+  late final Worker _sectionWorker;
+
+  void _updateCovered() => ChatsSvc.getOrCreateChatState(chat)
+      .updateCoveredInternal(_pageOver || NavigationSvc.openSection.value != null);
 
   @override
   void didPushNext() {
     // A route was pushed on top of the conversation view (e.g. ConversationDetails).
     controller.showingSubRoute = true;
+    _pageOver = true;
+    _updateCovered();
   }
 
   @override
   void didPopNext() {
     // The route above was popped — conversation view is visible again.
     controller.showingSubRoute = false;
+    _pageOver = false;
+    _updateCovered();
   }
 
   @override
   void dispose() {
     _unreadWhileScrolledCount.dispose();
-    routeObserver.unsubscribe(this);
+    _sectionWorker.dispose();
+    NavigationSvc.paneRouteObserver.unsubscribe(this);
     controller.saveReplyToMessageState(); // P8bda
     // A replacement view may already have taken this controller over; deleting it would dispose the focus nodes
     // and text controllers its composer is using
@@ -324,9 +333,11 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                 controller.selected.clear();
                 return;
               }
-              // Back from the picker's Genmoji library goes to its photos first.
-              if (controller.showAttachmentPicker.value && controller.showGenmojiLibrary.value) {
+              // Back from the picker's Genmoji or sticker library goes to its photos first.
+              if (controller.showAttachmentPicker.value &&
+                  (controller.showGenmojiLibrary.value || controller.showStickerLibrary.value)) {
                 controller.showGenmojiLibrary.value = false;
+                controller.showStickerLibrary.value = false;
                 return;
               }
               if (controller.showAttachmentPicker.value) {
@@ -356,6 +367,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                   ? Colors.transparent
                   : colorScheme.surface,
               extendBodyBehindAppBar: true,
+              resizeToAvoidBottomInset: false,
               appBar: _appBar,
               body: RepaintBoundary(
                 child: Actions(

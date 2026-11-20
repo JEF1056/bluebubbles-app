@@ -560,16 +560,22 @@ class MessageState extends StatefulController {
 
     if (index >= 0) {
       // Update existing reaction
+      _carryAttachments(associatedMessages[index], reaction);
+      _carryStickerSize(associatedMessages[index], reaction);
       associatedMessages[index] = reaction;
     } else {
-      // Check if this replaces a temp reaction
-      final tempIndex = associatedMessages.indexWhere((e) =>
+      // Check if this replaces a temp reaction. Stickers send their temp GUID, so they match above.
+      final tempIndex = ReactionTypes.sendsSticker(reaction.associatedMessageType)
+          ? -1
+          : associatedMessages.indexWhere((e) =>
           (e.guid?.startsWith('temp') == true || e.guid?.startsWith('error') == true) &&
           e.associatedMessageType == reaction.associatedMessageType &&
           (e.associatedMessagePart ?? 0) == (reaction.associatedMessagePart ?? 0));
 
       if (tempIndex >= 0) {
         // Replace temp reaction
+        _carryAttachments(associatedMessages[tempIndex], reaction);
+        _carryStickerSize(associatedMessages[tempIndex], reaction);
         associatedMessages[tempIndex] = reaction;
       } else {
         // Add new reaction
@@ -580,6 +586,22 @@ class MessageState extends StatefulController {
     // Update underlying message and hasReactions flag
     message.associatedMessages = associatedMessages.toList();
     hasReactions.value = associatedMessages.isNotEmpty;
+  }
+
+  /// A socket event's copy of a message has no linked attachments (they arrive beside it, and are saved to the stored
+  /// row). Replacing the stored copy with it would drop a sticker's image until the stored copy is read back, so it
+  /// keeps the ones already linked, as [Message.merge] does.
+  void _carryAttachments(Message from, Message to) {
+    if (to.dbAttachments.isEmpty && from.dbAttachments.isNotEmpty) to.dbAttachments.addAll(from.dbAttachments);
+  }
+
+  /// The server's copy of a sent sticker has a new attachment guid and no measured size until its file downloads, so
+  /// it takes the sent one's, or [StickerSpace] would resize the bubble in between
+  void _carryStickerSize(Message from, Message to) {
+    if (from.associatedMessageType != "sticker") return;
+    final size = stickerSizes[from.dbAttachments.firstOrNull?.guid];
+    final guid = to.dbAttachments.firstOrNull?.guid;
+    if (size != null && guid != null && !stickerSizes.containsKey(guid)) stickerSizes[guid] = size;
   }
 
   /// Alias for addAssociatedMessageInternal to match controller naming

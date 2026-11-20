@@ -283,8 +283,9 @@ class StartupTasks {
     GetIt.I.registerSingleton<ChatsService>(ChatsService());
     GetIt.I.registerSingleton<TypingIndicatorService>(TypingIndicatorService());
     GetIt.I.registerSingleton<NameAndPhotoSharingService>(NameAndPhotoSharingService());
-    // Lazy: reads nothing from disk until a picker first opens the Genmoji library.
+    // Lazy: read nothing from disk until a picker first opens the Genmoji or sticker library.
     GetIt.I.registerLazySingleton<GenmojiLibraryService>(GenmojiLibraryService.new);
+    GetIt.I.registerLazySingleton<StickerLibraryService>(StickerLibraryService.new);
     GetIt.I.registerSingleton<SocketService>(SocketService());
     Logger.info("Waiting on NotificationsService...");
     await _waitForInterop(notifications: true);
@@ -293,6 +294,7 @@ class StartupTasks {
     }
 
     GetIt.I.registerSingleton<EventDispatcher>(EventDispatcher());
+    GetIt.I.registerSingleton<SubscriptionService>(SubscriptionService()..init());
     if (!kIsWeb && !kIsDesktop && !isBubble) unawaited(OpenPigeon.init());
 
     Logger.info("Registering CustomGroupsService...");
@@ -550,6 +552,7 @@ class StartupTasks {
   static Future<void> onAppResume() async {
     // OpenPigeon may have just been installed, or the server licensed
     unawaited(OpenPigeon.refresh());
+    if (GetIt.I.isRegistered<SubscriptionService>()) unawaited(SubscriptionSvc.refresh());
     final LifecycleService? lifecycle =
         (GetIt.I.isRegistered<LifecycleService>() && GetIt.I.isReadySync<LifecycleService>())
             ? GetIt.I<LifecycleService>()
@@ -571,9 +574,12 @@ class StartupTasks {
             ? GetIt.I<IntentsService>().pendingOpenChatGuid
             : null;
         final redirectingAway = pendingGuid != null && pendingGuid != activeChat.chat.guid;
+        // Settings, Find My or a page over the chat hides it, so it isn't being read and its field mustn't take focus
+        final covered = activeChat.isCovered.value;
         if ((lifecycle?.isForeground ?? true) &&
             !redirectingAway &&
-            !(activeChat.controller?.showingSubRoute ?? false)) {
+            !(activeChat.controller?.showingSubRoute ?? false) &&
+            !covered) {
           ChatsSvc.setChatHasUnread(activeChat.chat, false);
         }
 
@@ -585,7 +591,12 @@ class StartupTasks {
         // On mobile, only refocus if the user has auto-open keyboard enabled AND the
         // conversation view is the active route (not obscured by ConversationDetails etc.).
         ConversationViewController _cvc = cvc(activeChat.chat);
-        if (!_cvc.showingOverlays && !_cvc.showingSubRoute && _cvc.editing.isEmpty) {
+        // The attachment picker closes when the field takes focus, and system pickers it opens resume the app
+        if (!covered &&
+            !_cvc.showingOverlays &&
+            !_cvc.showingSubRoute &&
+            _cvc.editing.isEmpty &&
+            !_cvc.showAttachmentPicker.value) {
           if (kIsDesktop || SettingsSvc.settings.autoOpenKeyboard.value) {
             _cvc.lastFocusedNode.requestFocus();
           } else if (_cvc.lastFocusedNode.hasFocus) {

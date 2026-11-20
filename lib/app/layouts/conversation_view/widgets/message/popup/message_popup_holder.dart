@@ -134,7 +134,11 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
   void sendTapback([String? type, int? part, String? emoji]) {
     HapticFeedback.lightImpact();
     widget.cvController.onUserChatInteraction(immediate: true);
-    final reaction = type ?? SettingsSvc.settings.quickTapbackType.value;
+    final quick = SettingsSvc.settings.quickTapbackType.value;
+    // The quick tapback setting holds the emoji itself for an emoji tapback
+    final quickEmoji = type == null && !ReactionTypes.toList().contains(quick);
+    final reaction = type ?? (quickEmoji ? ReactionTypes.EMOJI : quick);
+    if (quickEmoji) emoji = quick;
     Logger.info("Sending reaction type: $reaction");
 
     final tempMessage = Message(

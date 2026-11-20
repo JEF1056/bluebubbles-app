@@ -456,6 +456,8 @@ class Message {
     return result as dynamic;
   }
 
+  static Message? findRemovedStickerTapback(Message removal) => null;
+
   static List<Message> find({Condition<Message>? cond}) {
     final query = HtmlDatabase.messages.query(cond).build();
     final results = query.find();

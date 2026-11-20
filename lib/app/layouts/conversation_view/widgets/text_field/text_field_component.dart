@@ -407,7 +407,11 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                 borderRadius: BorderRadius.circular(iOS ? 20 : (kIsWeb && material ? 26 : 28)),
               ),
               clipBehavior: Clip.antiAlias,
-              child: AnimatedSize(
+              // Fills its width so only height animates: the Stack above loosens it, and an animated width trailed the
+              // buttons beside it. The TextField inside already needs a bounded width
+              child: SizedBox(
+                width: double.infinity,
+                child: AnimatedSize(
                 duration: const Duration(milliseconds: 400),
                 alignment: Alignment.bottomCenter,
                 // easeOutBack overshoots its target size, which works fine in the full
@@ -824,7 +828,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                     }),
                   ],
                 ),
-              ),
+              )),
             );
             return chatState != null ? Obx(() => buildPill(chatState.hasCustomWallpaper)) : buildPill(false);
           }),
@@ -881,8 +885,9 @@ class TextFieldComponentState extends State<TextFieldComponent> {
               if (kIsDesktop || kIsWeb) {
                 return DesktopAttachmentMenu(
                   controller: controller!,
-                  // The chat creator has no button row; this keeps GIF and emoji out of its menu
-                  inRow: const [TextFieldButton.Gif, TextFieldButton.Emoji],
+                  // The chat creator has no button row, and no messages to drop stickers on; this keeps these out of its
+                  // menu
+                  inRow: const [TextFieldButton.Gif, TextFieldButton.Emoji, TextFieldButton.Stickers],
                   builder: (_, toggle) => button(toggle),
                 );
               }

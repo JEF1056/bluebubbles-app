@@ -44,7 +44,7 @@ class ConversationTileController extends StatefulController {
   });
 
   void onTap(BuildContext context) {
-    if ((inSelectMode || listController.selectedChats.isNotEmpty) && onSelect != null) {
+    if (inSelectMode || listController.selectedChats.isNotEmpty) {
       onLongPress();
     } else if ((!kIsDesktop && !kIsWeb) || ChatsSvc.activeChat?.chat.guid != chat.guid) {
       NavigationSvc.pushAndRemoveUntil(
@@ -54,9 +54,9 @@ class ConversationTileController extends StatefulController {
         ),
         (route) => route.isFirst,
       );
-    } else if (NavigationSvc.isTabletMode(context) && ChatsSvc.activeChat?.isAlive.value == false) {
+    } else if (NavigationSvc.isTabletMode(context) && ChatsSvc.activeChat?.isCovered.value == true) {
       // Pops chat details
-      Get.back(id: 2);
+      NavigationSvc.back();
     } else {
       cvc(chat).lastFocusedNode.requestFocus();
     }
@@ -84,8 +84,24 @@ class ConversationTileController extends StatefulController {
     HapticFeedback.lightImpact();
   }
 
+  void toggleListSelection() {
+    if (isSelected) {
+      listController.selectedChats.removeWhere((c) => c.guid == chat.guid);
+    } else {
+      listController.selectedChats.add(chat);
+    }
+    listController.updateSelectedChats();
+  }
+
   void onSelected() {
-    onSelect?.call(!isSelected);
+    final select = onSelect;
+    if (select != null) {
+      select(!isSelected);
+    } else {
+      // The controller outlives the list that built it (a skin switch keeps the iOS list's, which passes no onSelect),
+      // so selecting falls back to the list's own selection.
+      toggleListSelection();
+    }
     if (SettingsSvc.settings.skin.value == Skins.Material) {
       updateWidgets<MaterialConversationTile>(null);
     }
@@ -232,12 +248,17 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
   String? _cachedInlineKey;
   List<Attachment?> _cachedInline = const [];
 
+  /// Whether the first of [_cachedInline] is a sticker tapback's sticker, which reads as words until it's downloaded
+  bool _cachedLeadingSticker = false;
+
   List<Attachment?> _inlineAttachments(Message? message, String subtitle) {
     // The attachment count too: a Genmoji linked after the first build doesn't change the subtitle
     final key = "${message?.guid}|${message?.dbAttachments.length}|$subtitle";
     if (_cachedInlineKey != key) {
       _cachedInlineKey = key;
       _cachedInline = message?.previewInlineAttachments ?? const [];
+      final sticker = message?.previewSticker;
+      _cachedLeadingSticker = sticker != null && _cachedInline.firstOrNull?.guid == sticker.guid;
     }
     return _cachedInline;
   }
@@ -344,7 +365,14 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
         final inline = _subtitle.contains(objectReplacementChar)
             ? _inlineAttachments(latestMessage, _subtitle)
             : const <Attachment?>[];
-        subtitleSpan = TextSpan(children: inline.isEmpty ? spans : withInlineAttachments(spans, inline, style));
+        final stickerPlaceholder = inline.isNotEmpty && _cachedLeadingSticker
+            ? (latestMessage?.associatedMessageType == ReactionTypes.STICKER ? "with a sticker" : "a sticker")
+            : null;
+        subtitleSpan = TextSpan(
+          children: inline.isEmpty
+              ? spans
+              : withInlineAttachments(spans, inline, style, leadingPlaceholder: stickerPlaceholder),
+        );
       }
 
       final richText = RichText(
