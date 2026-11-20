@@ -157,7 +157,10 @@ class FindMyDevice {
         snd: json["snd"],
         batteryLevel: json["batteryLevel"]?.toDouble(),
         locationEnabled: json["locationEnabled"],
-        isConsideredAccessory: json["isConsideredAccessory"] ?? false,
+        isConsideredAccessory: json["isConsideredAccessory"] is bool
+            ? json["isConsideredAccessory"] as bool
+            : (json["deviceClass"]?.toString().toLowerCase() == 'accessory' ||
+                (json["id"]?.toString().startsWith('utag:') ?? false)),
         address: json["address"] == null ? null : Address.fromJson(json["address"]),
         location: json["location"] == null ? null : Location.fromJson(json["location"]),
         modelDisplayName: json["modelDisplayName"],

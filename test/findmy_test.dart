@@ -2312,6 +2312,256 @@ void main() {
       expect(cameraCalls.single.pitch, closeTo(FindMyController.default3DPitch, 1e-4));
     });
   });
+
+  group('FindMy ring, targeted device refresh, and offline row selection', () {
+    test('FindMyDevice.fromJson classifies utag and Accessory deviceClass as accessories', () {
+      final utag = FindMyDevice.fromJson({'id': 'utag:tag-1', 'name': 'SmartTag2'});
+      final acc = FindMyDevice.fromJson({'id': 'apple-1', 'name': 'Keys', 'deviceClass': 'Accessory'});
+      final phone = FindMyDevice.fromJson({'id': 'gfind:pixel', 'name': 'Pixel 10', 'isConsideredAccessory': false});
+      expect(utag.isConsideredAccessory, isTrue);
+      expect(acc.isConsideredAccessory, isTrue);
+      expect(phone.isConsideredAccessory, isFalse);
+    });
+
+    test('targeted selectDevice refreshes with force:true and merges without dropping other devices', () async {
+      final now = DateTime(2026, 11, 20, 12, 0, 0);
+      final calls = <({String? deviceId, bool force})>[];
+      final controller = FindMyController(
+        now: () => now,
+        autoFetch: false,
+        fetchCurrentPosition: () async => null,
+        positionStream: () => const Stream.empty(),
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+        refreshDevicesRequest: ({deviceId, force = false}) async {
+          calls.add((deviceId: deviceId, force: force));
+          return Response(
+            requestOptions: RequestOptions(path: '/icloud/findmy/devices/refresh'),
+            statusCode: 200,
+            data: {
+              'data': [
+                {
+                  'id': 'gfind:tag-1',
+                  'name': 'Wallet Tag',
+                  'isConsideredAccessory': true,
+                  'location': {
+                    'latitude': 37.3349,
+                    'longitude': -122.009,
+                    'timeStamp': now.millisecondsSinceEpoch,
+                  },
+                },
+              ],
+            },
+          );
+        },
+      )..activatePage();
+      if (!controller.completer.isCompleted) controller.completer.complete();
+      await pumpEventQueue();
+      calls.clear();
+      addTearDown(controller.onClose);
+
+      final other = FindMyDevice.fromJson({'id': 'apple:mac', 'name': 'MacBook'});
+      final tag = FindMyDevice.fromJson({'id': 'gfind:tag-1', 'name': 'Wallet Tag', 'isConsideredAccessory': true});
+      controller.devices.addAll([other, tag]);
+
+      controller.selectDevice(tag);
+      await pumpEventQueue();
+
+      expect(calls, [(deviceId: 'gfind:tag-1', force: true)]);
+      expect(controller.devices.map((d) => d.id), containsAll(['apple:mac', 'gfind:tag-1']));
+      final updated = controller.devices.firstWhere((d) => d.id == 'gfind:tag-1');
+      expect(updated.location?.latitude, closeTo(37.3349, 1e-4));
+    });
+
+    test('toggleRingDevice supports cloud start/stop, gfind BLE fallback, and utag SmartThings handoff', () async {
+      final fakeBle = _FakeFindMyBleService();
+      final ringCalls = <({String deviceId, bool stop, String? component})>[];
+      var cloudShouldFail = false;
+
+      final controller = FindMyController(autoFetch: false)
+        ..bleService = fakeBle
+        ..cloudRingOverride = (deviceId, {stop = false, component}) async {
+          ringCalls.add((deviceId: deviceId, stop: stop, component: component));
+          if (cloudShouldFail) {
+            return Response(
+              requestOptions: RequestOptions(path: '/icloud/findmy/devices/ring'),
+              statusCode: 200,
+              data: {'ok': false, 'error': 'Cloud ring unreachable'},
+            );
+          }
+          return Response(
+            requestOptions: RequestOptions(path: '/icloud/findmy/devices/ring'),
+            statusCode: 200,
+            data: {'ok': true},
+          );
+        };
+      addTearDown(controller.onClose);
+
+      final buds = FindMyDevice.fromJson({
+        'id': 'gfind:buds-1',
+        'name': 'Pixel Buds',
+        'features': {
+          'TRACKER_PROVIDER': 'gfind',
+          'CAN_RING': true,
+          'HAS_BLE_RING': true,
+          'RING_COMPONENTS': ['left', 'right'],
+        },
+      });
+
+      // BLE succeeds first on Android with component
+      expect(await controller.toggleRingDevice(buds, component: 'left'), isTrue);
+      expect(fakeBle.ringGoogleTagCalls, 1);
+      expect(fakeBle.lastComponent, 'left');
+      expect(controller.ringingDeviceId.value, 'gfind:buds-1');
+
+      // Stop calls BLE + cloud
+      expect(await controller.toggleRingDevice(buds, component: 'left'), isTrue);
+      expect(controller.ringingDeviceId.value, isNull);
+      expect(ringCalls.last, (deviceId: 'gfind:buds-1', stop: true, component: 'left'));
+
+      // BLE failure falls back to cloud; cloud failure returns false & clears nothing
+      fakeBle.bleRingSucceeds = false;
+      expect(await controller.toggleRingDevice(buds, component: 'right'), isTrue);
+      expect(ringCalls.last, (deviceId: 'gfind:buds-1', stop: false, component: 'right'));
+      expect(controller.ringingDeviceId.value, 'gfind:buds-1');
+
+      expect(await controller.toggleRingDevice(buds, component: 'right'), isTrue);
+      expect(controller.ringingDeviceId.value, isNull);
+
+      cloudShouldFail = true;
+      expect(await controller.toggleRingDevice(buds, component: 'right'), isFalse);
+      expect(controller.ringingDeviceId.value, isNull);
+
+      // SmartTag2 hands off to SmartThings via launchUwbApp
+      final smartTag = FindMyDevice.fromJson({
+        'id': 'utag:st-1',
+        'name': 'Keys SmartTag2',
+        'features': {
+          'TRACKER_PROVIDER': 'utag',
+          'CAN_RING': true,
+          'SUPPORTS_UWB': true,
+        },
+      });
+      expect(await controller.toggleRingDevice(smartTag), isTrue);
+      expect(fakeBle.launchUwbCalls, 1);
+    });
+
+    testWidgets('offline device and friend rows remain tappable and detail sheet shows L/R ring chips', (tester) async {
+      final controller = FindMyController(autoFetch: false);
+      addTearDown(controller.onClose);
+
+      final offlineTag = FindMyDevice.fromJson({
+        'id': 'gfind:offline-1',
+        'name': 'Offline Tag',
+        'isConsideredAccessory': true,
+        'features': {
+          'TRACKER_PROVIDER': 'gfind',
+          'CAN_RING': true,
+          'CAN_FIND_NEARBY': true,
+          'RING_COMPONENTS': ['left', 'right'],
+        },
+      });
+      final offlineFriend = FindMyFriend.fromJson({
+        'id': 'friend-offline-1',
+        'handle': {'address': '+15559990000'},
+        'title': 'Bob',
+      });
+      controller.devices.add(offlineTag);
+      controller.friends.add(offlineFriend);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                FindMyDeviceListTile(item: offlineTag, controller: controller, isItem: true),
+                FindMyFriendListTile(item: offlineFriend, controller: controller, withLocation: false),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Offline Tag'));
+      await tester.pump();
+      expect(controller.selectedDeviceId.value, 'gfind:offline-1');
+
+      await tester.tap(find.text('Bob'));
+      await tester.pump();
+      expect(controller.selectedFriendId.value, offlineFriend.stableId);
+
+      controller.selectDevice(offlineTag);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: FindMyDetailSheet(
+                controller: controller,
+                onClose: controller.clearSelection,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Find Nearby'), findsOneWidget);
+      expect(find.text('Play Sound'), findsOneWidget);
+      expect(find.text('LEFT'), findsOneWidget);
+      expect(find.text('RIGHT'), findsOneWidget);
+    });
+  });
+}
+
+class _FakeFindMyBleService extends FindMyBleService {
+  int ringGoogleTagCalls = 0;
+  int launchUwbCalls = 0;
+  bool bleRingSucceeds = true;
+  bool permissionsGranted = true;
+  String? lastComponent;
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<bool> checkPermissions() async => permissionsGranted;
+
+  @override
+  Future<bool> requestPermissions() async => permissionsGranted;
+
+  @override
+  Future<FindMyBleSpec?> getBleSpec(String deviceId, {bool forceRefresh = false}) async {
+    return FindMyBleSpec(
+      deviceId: deviceId,
+      rawId: deviceId,
+      provider: deviceId.startsWith('utag:') ? 'utag' : 'gfind',
+      serviceUuid: deviceId.startsWith('utag:') ? 'fd5a' : 'feaa',
+      expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+      ringKeyHex: '0011223344556677',
+      supportsUwb: deviceId.startsWith('utag:'),
+      uwbPackage: deviceId.startsWith('utag:') ? 'com.samsung.android.oneconnect' : null,
+    );
+  }
+
+  @override
+  Future<bool> ringGoogleTag({
+    required FindMyBleSpec spec,
+    String? bleAddress,
+    bool stop = false,
+    String? component,
+  }) async {
+    ringGoogleTagCalls++;
+    lastComponent = component;
+    return bleRingSucceeds;
+  }
+
+  @override
+  Future<bool> launchUwbApp(FindMyBleSpec spec) async {
+    launchUwbCalls++;
+    return true;
+  }
 }
 
 class _NoopFindMyLogger extends BaseLogger {

@@ -23,6 +23,7 @@ import com.bluebubbles.messaging.services.notifications.NotificationListenerPerm
 import com.bluebubbles.messaging.services.notifications.StartNotificationListenerHandler
 import com.bluebubbles.messaging.services.notifications.UnifiedPushHandler
 import com.bluebubbles.messaging.services.system.AndroidIdHandler
+import com.bluebubbles.messaging.services.system.AppSoundPlayer
 import com.bluebubbles.messaging.services.system.BrowserLaunchRequestHandler
 import com.bluebubbles.messaging.services.system.ClipboardHtmlHandler
 import com.bluebubbles.messaging.services.system.CheckChromeOsHandler
@@ -171,6 +172,7 @@ class MethodCallHandler {
             RegisterPhoneAccountHandler.tag -> RegisterPhoneAccountHandler().handleMethodCall(call, result, context)
             MarkFaceTimeCallActiveHandler.tag -> MarkFaceTimeCallActiveHandler().handleMethodCall(call, result, context)
             SetFaceTimeMutedHandler.tag -> SetFaceTimeMutedHandler().handleMethodCall(call, result, context)
+            AppSoundPlayer.tag -> AppSoundPlayer.handleMethodCall(call, result, context)
             "set-locus-context" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && context is Activity) {
                     val chatGuid = call.argument<String>("chat_guid")

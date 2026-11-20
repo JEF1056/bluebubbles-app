@@ -94,11 +94,28 @@ class FindMyDeviceListTile extends StatelessWidget {
               : const Icon(Icons.refresh_rounded, size: 18),
           label: Text(isBusy ? 'Updating' : 'Refresh'),
         ),
+        extraActions: [
+          if (item.canRing || controller.ringingDeviceId.value == item.id)
+            Obx(() {
+              final isRinging = controller.ringingDeviceId.value == item.id;
+              final busy = controller.ringBusy.value;
+              return OutlinedButton.icon(
+                key: ValueKey('findmy-inline-ring-${item.id ?? displayName}'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  shape: const StadiumBorder(),
+                ),
+                onPressed: busy ? null : () => controller.toggleRingDevice(item),
+                icon: Icon(isRinging ? Icons.stop_rounded : Icons.volume_up_rounded, size: 16),
+                label: Text(isRinging ? 'Stop Sound' : 'Play Sound'),
+              );
+            }),
+        ],
         rowSubtitle: modelSubtitle ?? addressText,
         isLocatingRow: item.isLocatingInProgress,
         proximity: proximity,
         showLiveDotInRow: false,
-        onTapRow: markerPoint != null ? () => controller.focusDevice(item) : null,
+        onTapRow: () => controller.focusDevice(item),
         onLongPress: hideContactInfo
             ? null
             : () => FindMyRawDataDialog.show(context, item),

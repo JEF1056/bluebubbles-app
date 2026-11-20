@@ -32,25 +32,7 @@ test.describe('BlueBubbles Web Smoke', () => {
     bbServer,
     errors,
   }) => {
-    await bootAuthenticated(page, pagesServer.url, bbServer, { waitForSync: false });
-    await page.waitForTimeout(3000);
-    console.log('Requests:', bbServer.getRequests().map((r) => `${r.method} ${r.path}`));
-    const labels = await page.evaluate(() => {
-      const out: string[] = [];
-      const walk = (root: ParentNode | ShadowRoot | null) => {
-        if (!root) return;
-        for (const el of root.querySelectorAll('flt-semantics')) {
-          const lbl = el.getAttribute('aria-label') || el.textContent?.trim();
-          if (lbl) out.push(lbl);
-        }
-        for (const h of root.querySelectorAll('flutter-view, flt-glass-pane')) {
-          if (h.shadowRoot) walk(h.shadowRoot);
-        }
-      };
-      walk(document);
-      return out;
-    });
-    console.log('Semantics labels:', labels);
+    await bootAuthenticated(page, pagesServer.url, bbServer);
 
     // Open the first seeded chat (e.g. Alex Mercer or first chat in seed)
     const firstChat = bbServer.seed.chats[0];
@@ -63,7 +45,9 @@ test.describe('BlueBubbles Web Smoke', () => {
     await sendMessage(page, outgoingText);
     const req = await postPromise;
     expect(req.body?.message).toBe(outgoingText);
-    await expect(page.getByText(outgoingText, { exact: false })).toBeVisible();
+    await expect(
+      page.getByLabel(outgoingText, { exact: false }).or(page.getByText(outgoingText, { exact: false })).first(),
+    ).toBeVisible();
 
     // Emit a live incoming message via Socket.IO and verify it renders in real time
     const incomingText = `Live socket reply ${Date.now()}`;
@@ -71,7 +55,9 @@ test.describe('BlueBubbles Web Smoke', () => {
       text: incomingText,
       isFromMe: false,
     });
-    await expect(page.getByText(incomingText, { exact: false })).toBeVisible({ timeout: 15_000 });
+    await expect(
+      page.getByLabel(incomingText, { exact: false }).or(page.getByText(incomingText, { exact: false })).first(),
+    ).toBeVisible({ timeout: 15_000 });
 
     errors.assertNoFatalErrors();
   });

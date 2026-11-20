@@ -1,8 +1,9 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:bluebubbles/database/global/settings.dart';
 import 'package:bluebubbles/helpers/ui/sound_helper.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 bool _isValidWave(Uint8List bytes) {
@@ -12,14 +13,25 @@ bool _isValidWave(Uint8List bytes) {
   return riff == 'RIFF' && wave == 'WAVE';
 }
 
+int? _waveFormatCode(Uint8List bytes) {
+  for (var i = 12; i + 10 <= bytes.length; i++) {
+    if (bytes[i] == 0x66 && bytes[i + 1] == 0x6d && bytes[i + 2] == 0x74 && bytes[i + 3] == 0x20) {
+      return bytes[i + 8] | (bytes[i + 9] << 8);
+    }
+  }
+  return null;
+}
+
 bool _isValidOgg(Uint8List bytes) {
   if (bytes.length < 28) return false;
   return String.fromCharCodes(bytes.sublist(0, 4)) == 'OggS';
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('Google Messages sounds', () {
-    test('all bundled Flutter sound assets exist, are declared in pubspec.yaml, and are valid WAV', () {
+    test('all bundled Flutter sound assets exist, are declared in pubspec.yaml, and are standard PCM WAV', () {
       final pubspec = File('pubspec.yaml').readAsStringSync();
       for (final assetPath in AppSounds.all) {
         final file = File(assetPath);
@@ -27,6 +39,7 @@ void main() {
         final bytes = file.readAsBytesSync();
         expect(bytes.length, greaterThan(1000), reason: 'Sound asset too small: $assetPath');
         expect(_isValidWave(bytes), isTrue, reason: 'Invalid RIFF/WAVE header in $assetPath');
+        expect(_waveFormatCode(bytes), equals(0x0001), reason: 'Expected standard PCM fmt 0x0001 in $assetPath');
         expect(pubspec.contains(assetPath), isTrue, reason: '$assetPath missing from pubspec.yaml');
       }
     });
@@ -60,6 +73,32 @@ void main() {
       expect(AppSounds.messageIncoming, equals('assets/sounds/message_incoming.wav'));
       expect(AppSounds.recordingStart, equals('assets/sounds/recording_start_audio.wav'));
       expect(AppSounds.recordingStop, equals('assets/sounds/recording_stop_audio.wav'));
+    });
+
+    test('Android playAppSound delegates to native SoundPool channel', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      const channel = MethodChannel('com.bluebubbles.messaging');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async {
+          calls.add(call);
+          return true;
+        },
+      );
+      try {
+        await playAppSound(AppSounds.messageSent, volume: 0.75);
+        expect(calls, hasLength(1));
+        expect(calls.single.method, equals('play-app-sound'));
+        expect(calls.single.arguments, equals({
+          'assetPath': AppSounds.messageSent,
+          'customPath': null,
+          'volume': 0.75,
+        }));
+      } finally {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+        debugDefaultTargetPlatformOverride = null;
+      }
     });
   });
 }

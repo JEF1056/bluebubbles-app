@@ -71,14 +71,6 @@ interface RequestWaiter {
   timer: NodeJS.Timeout;
 }
 
-function matchesRoute(method: string, matcher: string | RegExp, reqMethod: string, reqPath: string): boolean {
-  if (method !== '*' && method.toUpperCase() !== reqMethod.toUpperCase()) return false;
-  if (typeof matcher === 'string') {
-    return reqPath === matcher || reqPath.startsWith(matcher + '/');
-  }
-  return matcher.test(reqPath);
-}
-
 function matchesExactOrRegex(method: string, matcher: string | RegExp, reqMethod: string, reqPath: string): boolean {
   if (method !== '*' && method.toUpperCase() !== reqMethod.toUpperCase()) return false;
   if (typeof matcher === 'string') return reqPath === matcher;
@@ -850,7 +842,14 @@ export class MockBBServer {
       return;
     }
     if (method === 'GET' && pathname === '/api/v1/server/info') {
-      this.sendSuccess(res, this.seed.serverInfo);
+      // ServerDetails.fromServerInfo expects server_build_version as String?
+      this.sendSuccess(res, {
+        ...this.seed.serverInfo,
+        server_build_version:
+          this.seed.serverInfo.server_build_version == null
+            ? undefined
+            : String(this.seed.serverInfo.server_build_version),
+      });
       return;
     }
     if (method === 'GET' && pathname === '/api/v2/server/subscription') {

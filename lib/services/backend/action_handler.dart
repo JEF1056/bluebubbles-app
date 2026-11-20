@@ -39,9 +39,9 @@ class ActionHandler extends GetxService {
   Future<Chat> handleNewOrUpdatedChat(Chat partialData) async {
     final chat = await ChatsSvc.fetchChat(partialData.guid) ?? partialData;
 
-    // Push the updated chat into reactive state so the UI refreshes without
-    // requiring an app restart.
-    ChatsSvc.updateChat(chat);
+    // Push the updated chat into reactive state (override: true so Web's shared
+    // in-memory Chat reference still propagates displayName/participant updates).
+    ChatsSvc.updateChat(chat, override: true);
     return chat;
   }
 

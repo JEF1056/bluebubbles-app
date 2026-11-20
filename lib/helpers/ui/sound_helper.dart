@@ -6,10 +6,12 @@ import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show MethodChannel, rootBundle;
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart';
 import 'package:universal_io/io.dart';
+
+const MethodChannel _androidSoundChannel = MethodChannel('com.bluebubbles.messaging');
 
 /// Authentic Google Messages sound assets bundled with the app.
 class AppSounds {
@@ -68,12 +70,21 @@ Future<void> playAppSound(
     return;
   }
 
-  final path = (customPath != null && customPath.isNotEmpty)
-      ? customPath
-      : await ensureBundledSoundFile(assetPath);
-  if (path == null || path.isEmpty) return;
-
   try {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      await _androidSoundChannel.invokeMethod<bool>('play-app-sound', {
+        'assetPath': assetPath,
+        'customPath': customPath,
+        'volume': clampedVol,
+      });
+      return;
+    }
+
+    final path = (customPath != null && customPath.isNotEmpty)
+        ? customPath
+        : await ensureBundledSoundFile(assetPath);
+    if (path == null || path.isEmpty) return;
+
     if (kIsDesktop) {
       final player = Player();
       player.stream.completed
@@ -83,13 +94,13 @@ Future<void> playAppSound(
       await player.open(Media(path));
     } else {
       final controller = PlayerController();
-      await controller.preparePlayer(path: path, volume: clampedVol);
+      await controller.preparePlayer(path: path, volume: clampedVol, shouldExtractWaveform: false);
       await controller.startPlayer();
       unawaited(
         controller.onCompletion.first.whenComplete(controller.dispose).catchError((Object _) {}),
       );
     }
   } catch (e, stack) {
-    Logger.warn('Failed to play app sound $path', error: e, trace: stack);
+    Logger.warn('Failed to play app sound $assetPath', error: e, trace: stack);
   }
 }

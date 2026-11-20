@@ -327,11 +327,21 @@ class FindMyDetailSheet extends StatelessWidget {
         ),
         _RefreshActionTile(controller: controller),
         _LiveToggleTile(controller: controller),
-        if (device.canFindNearby && controller.bleService.isSupported)
+        if (device.canFindNearby)
           _ActionTile(
             icon: Icons.radar_rounded,
             label: 'Find Nearby',
-            onTap: () => showFindMyNearbySheet(context, device, controller),
+            onTap: () {
+              if (!controller.bleService.isSupported) {
+                showSnackbar(
+                  'Find Nearby',
+                  'Nearby BLE finding is only available in the Android app.',
+                  type: SnackbarType.info,
+                );
+                return;
+              }
+              showFindMyNearbySheet(context, device, controller);
+            },
           ),
         if (device.canRing)
           _ActionTile(
@@ -340,7 +350,10 @@ class FindMyDetailSheet extends StatelessWidget {
                 : Icons.volume_up_rounded,
             label: controller.ringingDeviceId.value == device.id ? 'Stop Sound' : 'Play Sound',
             enabled: !controller.ringBusy.value,
-            onTap: () => controller.toggleRingDevice(device),
+            onTap: () => controller.toggleRingDevice(
+              device,
+              component: controller.selectedRingComponent.value,
+            ),
           ),
         if (!redacted)
           _ActionTile(
@@ -349,6 +362,20 @@ class FindMyDetailSheet extends StatelessWidget {
             onTap: () => FindMyRawDataDialog.show(context, device),
           ),
       ],
+      extraContent: device.canRing && device.ringComponents.isNotEmpty
+          ? Wrap(
+              spacing: 8,
+              alignment: WrapAlignment.center,
+              children: device.ringComponents.map((comp) {
+                final selected = (controller.selectedRingComponent.value ?? device.ringComponents.first) == comp;
+                return ChoiceChip(
+                  label: Text(comp.toUpperCase()),
+                  selected: selected,
+                  onSelected: (_) => controller.selectedRingComponent.value = comp,
+                );
+              }).toList(),
+            )
+          : null,
     );
   }
 
@@ -418,6 +445,7 @@ class _DetailSheetFrame extends StatelessWidget {
     required this.isOffline,
     required this.onClose,
     required this.actions,
+    this.extraContent,
   });
 
   final Widget leading;
@@ -429,6 +457,7 @@ class _DetailSheetFrame extends StatelessWidget {
   final bool isOffline;
   final VoidCallback onClose;
   final List<Widget> actions;
+  final Widget? extraContent;
 
   @override
   Widget build(BuildContext context) {
@@ -530,6 +559,10 @@ class _DetailSheetFrame extends StatelessWidget {
               ],
             ),
           ),
+          if (extraContent != null) ...[
+            const SizedBox(height: 12),
+            extraContent!,
+          ],
           const SizedBox(height: 14),
           LayoutBuilder(
             builder: (context, constraints) {

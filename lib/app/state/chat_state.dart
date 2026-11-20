@@ -223,6 +223,7 @@ class ChatState {
   void updateDisplayNameInternal(String? value) {
     if (displayName.value != value) {
       displayName.value = value;
+      updateTitleInternal(_computeTitle());
     }
   }
 

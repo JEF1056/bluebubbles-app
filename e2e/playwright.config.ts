@@ -4,8 +4,10 @@ export default defineConfig({
   testDir: './tests',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  // Recovers from ~1% headless Chrome macOS Skwasm first-frame OffscreenCanvas deadlock.
+  retries: process.env.CI ? 2 : 1,
+  // Cap local concurrency at 4 to avoid Skwasm/WebGL2 context stalls on high-core hosts.
+  workers: process.env.CI ? 2 : 4,
   timeout: 60_000,
   expect: {
     timeout: 15_000,

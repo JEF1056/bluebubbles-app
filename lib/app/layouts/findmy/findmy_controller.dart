@@ -318,6 +318,7 @@ class FindMyController extends GetxController {
   final RxnString selectedDeviceId = RxnString();
   final RxnString ringingDeviceId = RxnString();
   final RxBool ringBusy = false.obs;
+  final RxnString selectedRingComponent = RxnString();
   Timer? _ringAutoClearTimer;
   FindMyBleService bleService = FindMyBleService.instance;
   Future<Response> Function(String deviceId, {bool stop, String? component})? cloudRingOverride;
@@ -928,15 +929,26 @@ class FindMyController extends GetxController {
     }
     if (changed) {
       _forcedLiveForSelection = false;
+      selectedRingComponent.value = device.ringComponents.isNotEmpty ? device.ringComponents.first : null;
       _scrollToTop(device.isConsideredAccessory ? itemsController : devicesController);
     }
     _syncLiveHeartbeat();
     if (_interactive) {
-      refreshOnView(
-        refreshFriends: false,
-        refreshDevices: true,
-        focusedDeviceId: device.id,
-      );
+      if ((changed || device.location == null) && !_refreshDevicesInFlight && device.id != null) {
+        unawaited(getLocations(
+          refreshFriends: false,
+          refreshDevices: true,
+          force: true,
+          skipFetchWhenNotRefreshing: true,
+          focusedDeviceId: device.id,
+        ));
+      } else {
+        refreshOnView(
+          refreshFriends: false,
+          refreshDevices: true,
+          focusedDeviceId: device.id,
+        );
+      }
     }
   }
 
@@ -971,7 +983,7 @@ class FindMyController extends GetxController {
   void focusDevice(FindMyDevice device, {double? sheetOffsetPx, double minZoom = defaultFocusZoom}) {
     selectDevice(device);
     final isAcc = device.isConsideredAccessory;
-    final hasCoords = device.location?.latitude != null && device.location?.longitude != null;
+    final hasCoords = _hasValidFriendCoords(device.location?.latitude, device.location?.longitude);
     final key = device.id ?? device.name ?? 'device';
     _focusTarget(
       targetTab: isAcc ? 2 : 1,
@@ -1324,6 +1336,49 @@ class FindMyController extends GetxController {
     );
   }
 
+  String? _extractRingResponseError(Response res) {
+    final data = res.data;
+    if (data is Map) {
+      if (data['ok'] == false || data['error'] != null) {
+        final err = data['error'];
+        if (err is Map && err['message'] != null) return err['message'].toString();
+        if (err != null) return err.toString();
+        if (data['message'] != null) return data['message'].toString();
+        return 'Ring request was rejected by the server.';
+      }
+      final inner = data['data'];
+      if (inner is Map && (inner['ok'] == false || inner['error'] != null)) {
+        return inner['error']?.toString() ?? inner['message']?.toString() ?? 'Ring request failed.';
+      }
+    }
+    if (res.statusCode != null && res.statusCode != 200) {
+      return 'Server returned HTTP ${res.statusCode}.';
+    }
+    return null;
+  }
+
+  String _extractRingExceptionError(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map) {
+        final err = data['error'];
+        if (err is Map && err['message'] != null) return err['message'].toString();
+        if (err != null) return err.toString();
+        if (data['message'] != null) return data['message'].toString();
+      }
+      if (error.message != null && error.message!.trim().isNotEmpty) {
+        return error.message!.trim();
+      }
+    }
+    return error.toString();
+  }
+
+  void _notifyUser(String title, String message, {SnackbarType type = SnackbarType.info}) {
+    try {
+      showSnackbar(title, message, type: type);
+    } catch (_) {}
+  }
+
   Future<bool> toggleRingDevice(FindMyDevice device, {String? component}) async {
     final deviceId = device.id;
     if (deviceId == null || deviceId.isEmpty || ringBusy.value) return false;
@@ -1331,54 +1386,107 @@ class FindMyController extends GetxController {
     ringBusy.value = true;
     try {
       bool ok = false;
-      final canBleRing =
-          bleService.isSupported && device.hasBleRing && device.trackerProvider == 'gfind';
+      String? lastError;
+      final provider = device.trackerProvider;
+      final canBleRing = bleService.isSupported && device.hasBleRing && provider == 'gfind';
+
+      Future<bool> tryCloudRing({required bool stop}) async {
+        try {
+          final res = await (cloudRingOverride != null
+              ? cloudRingOverride!(deviceId, stop: stop, component: component)
+              : HttpSvc.icloud.ringDevice(deviceId, stop: stop, component: component));
+          final respErr = _extractRingResponseError(res);
+          if (res.statusCode == 200 && respErr == null) {
+            return true;
+          }
+          lastError = respErr ?? 'Ring request failed.';
+        } catch (e) {
+          lastError = _extractRingExceptionError(e);
+        }
+        return false;
+      }
+
+      Future<bool> tryGoogleBleRing({required bool stop}) async {
+        if (!canBleRing) return false;
+        try {
+          if (!await bleService.checkPermissions() && !await bleService.requestPermissions()) {
+            lastError ??= 'Bluetooth permission required for nearby ring.';
+            return false;
+          }
+          final spec = await bleService.getBleSpec(deviceId);
+          if (spec != null && spec.ringKeyHex != null && spec.ringKeyHex!.isNotEmpty) {
+            final bleOk = await bleService.ringGoogleTag(
+              spec: spec,
+              stop: stop,
+              component: component,
+            );
+            if (!bleOk) {
+              final bleErr = bleService.lastRingError?.trim();
+              lastError = (bleErr != null && bleErr.isNotEmpty)
+                  ? bleErr
+                  : (lastError ?? 'Nearby Bluetooth ring failed. Move closer or check Bluetooth.');
+            }
+            return bleOk;
+          }
+          lastError ??= 'Missing BLE ring key for tracker.';
+        } catch (e) {
+          lastError ??= _extractRingExceptionError(e);
+        }
+        return false;
+      }
 
       if (isStopping) {
         if (canBleRing) {
-          try {
-            final spec = await bleService.getBleSpec(deviceId);
-            if (spec != null && spec.ringKeyHex != null && spec.ringKeyHex!.isNotEmpty) {
-              ok = await bleService.ringGoogleTag(
-                spec: spec,
-                stop: true,
-                component: component,
-              );
-            }
-          } catch (_) {}
+          ok = await tryGoogleBleRing(stop: true);
         }
-        try {
-          final res = await (cloudRingOverride != null
-              ? cloudRingOverride!(deviceId, stop: true, component: component)
-              : HttpSvc.icloud.ringDevice(deviceId, stop: true, component: component));
-          if (res.statusCode == 200) ok = true;
-        } catch (_) {}
+        if (provider != 'utag' || cloudRingOverride != null) {
+          final cloudOk = await tryCloudRing(stop: true);
+          ok = ok || cloudOk;
+        }
         _ringAutoClearTimer?.cancel();
         _ringAutoClearTimer = null;
         ringingDeviceId.value = null;
+        if (!ok && lastError != null) {
+          _notifyUser('Stop Sound', lastError!, type: SnackbarType.error);
+        }
         return ok;
       }
 
-      if (canBleRing) {
-        try {
-          final spec = await bleService.getBleSpec(deviceId);
-          if (spec != null && spec.ringKeyHex != null && spec.ringKeyHex!.isNotEmpty) {
-            ok = await bleService.ringGoogleTag(
-              spec: spec,
-              stop: false,
-              component: component,
-            );
+      if (provider == 'utag') {
+        if (bleService.isSupported) {
+          try {
+            final spec = await bleService.getBleSpec(deviceId);
+            if (spec != null && (spec.supportsUwb || (spec.uwbPackage?.isNotEmpty ?? false))) {
+              final launched = await bleService.launchUwbApp(spec);
+              if (launched) return true;
+              lastError = 'Could not open SmartThings to ring this SmartTag.';
+            }
+          } catch (e) {
+            lastError = _extractRingExceptionError(e);
           }
-        } catch (_) {}
+        }
+        if (device.canRing && cloudRingOverride != null) {
+          ok = await tryCloudRing(stop: false);
+        } else if (lastError == null) {
+          lastError = bleService.isSupported
+              ? 'SmartTag ringing requires SmartThings on this device.'
+              : 'SmartTag ringing is only available via SmartThings on Android.';
+        }
+      } else if (provider == 'gfind') {
+        if (canBleRing) {
+          ok = await tryGoogleBleRing(stop: false);
+        }
+        if (!ok && device.canRing) {
+          ok = await tryCloudRing(stop: false);
+        }
+      } else {
+        if (!device.canRing) {
+          lastError = 'Playing sound is not supported for this device.';
+        } else {
+          ok = await tryCloudRing(stop: false);
+        }
       }
-      if (!ok) {
-        try {
-          final res = await (cloudRingOverride != null
-              ? cloudRingOverride!(deviceId, stop: false, component: component)
-              : HttpSvc.icloud.ringDevice(deviceId, stop: false, component: component));
-          ok = res.statusCode == 200;
-        } catch (_) {}
-      }
+
       if (ok) {
         ringingDeviceId.value = deviceId;
         _ringAutoClearTimer?.cancel();
@@ -1387,6 +1495,12 @@ class FindMyController extends GetxController {
             ringingDeviceId.value = null;
           }
         });
+      } else {
+        _notifyUser(
+          'Play Sound',
+          lastError ?? 'Could not play sound on this device.',
+          type: SnackbarType.error,
+        );
       }
       return ok;
     } finally {
@@ -2241,14 +2355,20 @@ class FindMyController extends GetxController {
     }
     _lastFollowedTargetPoint = target;
     final offsetY = detailSheetOffsetProvider?.call() ?? 0.0;
+    final targetZoom = prev == null
+        ? math.max(
+            _targetFocusZoom(defaultFocusZoom),
+            is3DEnabled.value ? minZoomFor3DPitch : defaultFocusZoom,
+          )
+        : cameraZoom.value;
     _runWhenMapReady(() {
       if (!_isAlive) return;
       animateCameraTo(
         target!,
-        cameraZoom.value,
+        targetZoom,
         offset: Offset(0, -offsetY),
         pitch: cameraPitch.value,
-        fly: false,
+        fly: prev == null,
       );
     });
   }
@@ -2380,7 +2500,9 @@ class FindMyController extends GetxController {
                     showSnackbar("Error", "Something went wrong refreshing FindMy Friends data!", type: SnackbarType.error);
                   },
                 )
-              : await safeFetch(HttpSvc.icloud.getFriends(), () => fetching2.value = null);
+              : (!GetIt.I.isRegistered<HttpService>()
+                  ? emptyResponse()
+                  : await safeFetch(HttpSvc.icloud.getFriends(), () => fetching2.value = null));
         } finally {
           if (refreshFriends && friendSeq == _friendRefreshSeq) {
             _refreshFriendsInFlight = false;
@@ -2430,17 +2552,39 @@ class FindMyController extends GetxController {
 
         if (response.statusCode == 200 && response.data['data'] != null) {
           try {
-            devices.value =
+            final incomingDevices =
                 (response.data['data'] as List).map((e) => FindMyDevice.fromJson(e)).toList().cast<FindMyDevice>();
 
             // Apply safe location name as the display label once, here rather than during build.
-            for (final device in devices) {
+            for (final device in incomingDevices) {
               if (device.safeLocations.isNotEmpty && device.safeLocations.first.name != null) {
                 device.address?.label = device.safeLocations.first.name;
               }
             }
 
-            for (FindMyDevice e in devices.where((e) => e.location?.latitude != null && e.location?.longitude != null)) {
+            if (focusedDeviceId != null) {
+              var anyUpdated = false;
+              for (final incoming in incomingDevices) {
+                final existingIndex = incoming.id == null
+                    ? -1
+                    : devices.indexWhere((e) => e.id != null && e.id == incoming.id);
+                final existing = existingIndex == -1 ? null : devices[existingIndex];
+                if (existingIndex == -1) {
+                  devices.add(incoming);
+                  anyUpdated = true;
+                } else if (shouldSupersedeDeviceLocation(existing, incoming)) {
+                  devices[existingIndex] = incoming;
+                  anyUpdated = true;
+                }
+              }
+              if (anyUpdated) {
+                devices.refresh();
+              }
+            } else {
+              devices.value = incomingDevices;
+            }
+
+            for (final e in devices.where((e) => _hasValidFriendCoords(e.location?.latitude, e.location?.longitude))) {
               buildDeviceMarker(e);
             }
             fetching.value = false;

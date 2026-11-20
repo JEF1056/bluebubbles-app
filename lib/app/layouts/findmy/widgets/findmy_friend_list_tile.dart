@@ -138,7 +138,7 @@ class FindMyFriendListTile extends StatelessWidget {
         isLocatingRow: isLocating,
         proximity: proximity,
         showLiveDotInRow: isLive,
-        onTapRow: withLocation && markerPoint != null ? () => controller.focusFriend(item) : null,
+        onTapRow: () => controller.focusFriend(item),
         onLongPress: hideContactInfo
             ? null
             : () => FindMyRawDataDialog.show(context, item),

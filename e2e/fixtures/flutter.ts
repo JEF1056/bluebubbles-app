@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Locator, Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 export const BB_WEB_CACHE_REV = 'bb-20261119-v7';
 
@@ -334,7 +334,11 @@ export async function bootAuthenticated(
     }
 
     // Wait until ConversationList search pill or a chat list renders and initial sync settles
-    await page.getByText('Search BlueBubbles', { exact: false }).waitFor({ state: 'visible', timeout: 20_000 });
+    await page
+      .getByLabel('Search BlueBubbles', { exact: false })
+      .or(page.getByText('Search BlueBubbles', { exact: false }))
+      .first()
+      .waitFor({ state: 'visible', timeout: 20_000 });
     const syncOverlay = page.getByLabel('Syncing…');
     if (await syncOverlay.isVisible().catch(() => false)) {
       await syncOverlay.waitFor({ state: 'hidden', timeout: 20_000 });
@@ -343,7 +347,9 @@ export async function bootAuthenticated(
 }
 
 /**
- * Clicks a Flutter input (by Locator or accessible label/placeholder), clears it, and types text.
+ * Waits for a Flutter input to settle on-screen, focuses its semantic `<input>` (avoiding sibling
+ * `<flt-semantics>` pointer interception), clears it, and dispatches real keystrokes via
+ * `pressSequentially` so Flutter's `TextEditingController` / `AutofillGroup` always syncs.
  */
 export async function fillFlutterInput(
   page: Page,
@@ -354,13 +360,34 @@ export async function fillFlutterInput(
     ? page.getByRole('textbox', { name: target }).or(page.getByLabel(target)).first()
     : target;
 
-  await locator.click({ force: true });
+  await locator.waitFor({ state: 'visible', timeout: 15_000 });
+  const viewport = page.viewportSize();
+  let prevBox: { x: number; y: number; width: number; height: number } | null = null;
+  await expect(async () => {
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    if (viewport) {
+      expect(box!.x + box!.width).toBeGreaterThan(0);
+      expect(box!.x).toBeLessThan(viewport.width);
+    }
+    const settled =
+      prevBox !== null &&
+      Math.abs(box!.x - prevBox.x) < 1 &&
+      Math.abs(box!.y - prevBox.y) < 1;
+    prevBox = box;
+    expect(settled).toBe(true);
+  }).toPass({ timeout: 10_000 });
+
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
-  await page.keyboard.press(`${mod}+a`);
-  await page.keyboard.press('Backspace');
-  if (text.length > 0) {
-    await page.keyboard.insertText(text);
-  }
+  await expect(async () => {
+    await locator.focus();
+    await page.keyboard.press(`${mod}+a`);
+    await page.keyboard.press('Backspace');
+    if (text.length > 0) {
+      await locator.pressSequentially(text);
+    }
+    await expect(locator).toHaveValue(text, { timeout: 1_500 });
+  }).toPass({ timeout: 15_000 });
 }
 
 /**
@@ -374,9 +401,13 @@ export async function pressShortcut(page: Page, shortcut: string): Promise<void>
  * Opens a conversation from the ConversationList by matching its visible title/snippet.
  */
 export async function openChat(page: Page, chatTitleOrPattern: string | RegExp): Promise<void> {
-  const chatItem = page.getByText(chatTitleOrPattern).first();
+  const chatItem = page
+    .getByRole('button', { name: chatTitleOrPattern })
+    .or(page.getByLabel(chatTitleOrPattern))
+    .or(page.getByText(chatTitleOrPattern))
+    .first();
   await chatItem.waitFor({ state: 'visible', timeout: 15_000 });
-  await chatItem.click();
+  await chatItem.click({ force: true });
   // Wait for message composer textbox to appear
   await page.getByRole('textbox').last().waitFor({ state: 'visible', timeout: 15_000 });
 }
@@ -387,10 +418,10 @@ export async function openChat(page: Page, chatTitleOrPattern: string | RegExp):
 export async function sendMessage(page: Page, text: string): Promise<void> {
   const composer = page
     .getByRole('textbox', { name: /Text message|iMessage|New Message|Text Message/i })
-    .or(page.getByRole('textbox').last())
+    .or(page.getByRole('textbox'))
     .first();
 
-  await composer.click({ force: true });
-  await page.keyboard.insertText(text);
+  await composer.focus();
+  await composer.pressSequentially(text);
   await page.keyboard.press('Enter');
 }
