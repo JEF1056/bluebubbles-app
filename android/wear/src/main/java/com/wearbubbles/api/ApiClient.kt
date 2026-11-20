@@ -81,11 +81,22 @@ object ApiClient {
         return api!!
     }
 
-    fun getAttachmentUrl(serverUrl: String, password: String, attachmentGuid: String): String {
+    fun getAttachmentUrl(
+        serverUrl: String,
+        password: String,
+        attachmentGuid: String,
+        mimeType: String? = null
+    ): String {
         val base = serverUrl.trim().trimEnd('/')
         val encodedGuid = URLEncoder.encode(attachmentGuid, "UTF-8")
         val encodedPass = URLEncoder.encode(password, "UTF-8")
-        return "$base/api/v1/attachment/$encodedGuid/download?password=$encodedPass"
+        val normalizedMime = mimeType?.substringBefore(';')?.trim()?.lowercase()
+        val resizeSuffix = if (normalizedMime != null && normalizedMime.startsWith("image/") && normalizedMime != "image/gif") {
+            "&width=512&quality=good"
+        } else {
+            ""
+        }
+        return "$base/api/v1/attachment/$encodedGuid/download?password=$encodedPass$resizeSuffix"
     }
 
     @Synchronized

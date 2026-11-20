@@ -26,7 +26,11 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
@@ -55,6 +60,7 @@ import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.WearPillButton
+import com.wearbubbles.ui.theme.WearSyncPill
 import com.wearbubbles.ui.theme.centeredTextStyle
 
 @OptIn(ExperimentalHorologistApi::class, ExperimentalFoundationApi::class)
@@ -71,6 +77,19 @@ fun ConversationListScreen(
     val updateVersion by viewModel.updateVersion.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     var chatToDelete by remember { mutableStateOf<ChatItemUi?>(null) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> viewModel.onScreenResumed()
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> viewModel.onScreenPaused()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val columnState = rememberResponsiveColumnState(
         contentPadding = ScalingLazyColumnDefaults.padding(
@@ -93,24 +112,33 @@ fun ConversationListScreen(
                 .background(palette.canvas)
         ) {
             item(key = "start_chat") {
-                WearPillButton(
-                    label = "Start chat",
-                    onClick = onNewMessageClick,
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.ChatBubbleOutline,
-                            contentDescription = null,
-                            tint = palette.onPrimary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    },
-                    backgroundColor = palette.primary,
-                    contentColor = palette.onPrimary,
-                    centered = false,
-                    minHeight = 56.dp,
-                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
-                    labelFontWeight = FontWeight.Medium
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    WearPillButton(
+                        label = "Start chat",
+                        onClick = onNewMessageClick,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.ChatBubbleOutline,
+                                contentDescription = null,
+                                tint = palette.onPrimary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        },
+                        backgroundColor = palette.primary,
+                        contentColor = palette.onPrimary,
+                        centered = false,
+                        minHeight = 56.dp,
+                        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 14.dp),
+                        labelFontWeight = FontWeight.Medium
+                    )
+                    WearSyncPill(
+                        visible = isRefreshing && chats.isNotEmpty(),
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
             }
 
             if (updateVersion != null) {
@@ -189,8 +217,7 @@ fun ConversationListScreen(
                     }
                 }
             } else {
-                items(chats.size, key = { chats[it].guid }) { index ->
-                    val chat = chats[index]
+                items(items = chats, key = { it.guid }) { chat ->
                     ChatRow(
                         chat = chat,
                         onClick = { onChatClick(chat.guid) },

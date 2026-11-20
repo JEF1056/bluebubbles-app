@@ -26,7 +26,7 @@ class OptWearUiTest {
     }
 
     @Test
-    fun `selectEagerAttachmentGuids caps to newest 8 uncached non-failed image or audio attachments`() {
+    fun `selectEagerAttachmentGuids caps to newest 4 uncached non-failed image attachments and skips audio`() {
         val entities = (1..12).map { i ->
             MessageEntity(
                 guid = "msg-$i",
@@ -58,8 +58,9 @@ class OptWearUiTest {
             limit = MessageDetailViewModel.MAX_EAGER_ATTACHMENTS
         )
 
+        // Newest eligible image/* (skipping audio att-12/att-9/att-6/att-3, cached att-11, failed att-10, pdf)
         assertEquals(
-            listOf("att-12", "att-9", "att-8", "att-7", "att-6", "att-5", "att-4", "att-3"),
+            listOf("att-8", "att-7", "att-5", "att-4"),
             selected
         )
     }

@@ -10,6 +10,7 @@ import android.net.Uri
 import android.util.Base64
 import androidx.core.app.NotificationCompat
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.R
@@ -106,8 +107,23 @@ object WearSyncManager {
         val isTelephony: Boolean = false
     )
 
+    internal const val WATCH_IMAGE_MAX_DIM = 512
+    internal const val WATCH_IMAGE_MAX_BYTES = 256 * 1024
+    internal const val WATCH_GIF_PASSTHROUGH_MAX_BYTES = 768 * 1024
+    internal const val WATCH_IMAGE_MAX_READ_BYTES = 12 * 1024 * 1024
+    internal const val WATCH_AUDIO_MAX_BYTES = 2 * 1024 * 1024
+
+    internal enum class WatchAttachmentAction {
+        COMPRESS_STATIC_IMAGE,
+        GIF_PASSTHROUGH_OR_PREVIEW,
+        STREAM_BOUNDED_AUDIO,
+        REJECT
+    }
+
     private val incomingCalls = ConcurrentHashMap<String, IncomingCallMeta>()
     private val watchAnsweredCalls = ConcurrentHashMap.newKeySet<String>()
+    private val inFlightAttachments = ConcurrentHashMap.newKeySet<String>()
+    private val attachmentSemaphore = Semaphore(2)
 
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gson = Gson()
@@ -1091,46 +1107,181 @@ object WearSyncManager {
         })
     }
 
+    internal fun buildWatchAttachmentDownloadUrl(apiRoot: String, attachmentGuid: String, authKey: String): String =
+        "$apiRoot/attachment/${encode(attachmentGuid)}/download?password=${encode(authKey)}&width=$WATCH_IMAGE_MAX_DIM&quality=good"
+
+    internal fun classifyWatchAttachment(mimeType: String?, contentLength: Long): WatchAttachmentAction {
+        val mime = mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
+        return when {
+            mime == "image/gif" ->
+                if (contentLength > WATCH_IMAGE_MAX_READ_BYTES) WatchAttachmentAction.REJECT
+                else WatchAttachmentAction.GIF_PASSTHROUGH_OR_PREVIEW
+            mime.startsWith("image/") ->
+                if (contentLength > WATCH_IMAGE_MAX_READ_BYTES) WatchAttachmentAction.REJECT
+                else WatchAttachmentAction.COMPRESS_STATIC_IMAGE
+            mime.startsWith("audio/") ->
+                if (contentLength > WATCH_AUDIO_MAX_BYTES) WatchAttachmentAction.REJECT
+                else WatchAttachmentAction.STREAM_BOUNDED_AUDIO
+            else -> WatchAttachmentAction.REJECT
+        }
+    }
+
+    internal fun computeInSampleSize(width: Int, height: Int, maxDim: Int): Int {
+        if (width <= 0 || height <= 0 || maxDim <= 0) return 1
+        var sampleSize = 1
+        val maxSide = maxOf(width, height)
+        while ((maxSide / (sampleSize * 2)) >= maxDim) {
+            sampleSize *= 2
+        }
+        return sampleSize
+    }
+
+    internal fun readBoundedBytes(input: InputStream, maxBytes: Int): ByteArray? {
+        if (maxBytes <= 0) return null
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val read = input.read(buf)
+            if (read == -1) break
+            total += read
+            if (total > maxBytes) return null
+            out.write(buf, 0, read)
+        }
+        return out.toByteArray()
+    }
+
+    private fun compressWatchImage(
+        rawBytes: ByteArray,
+        maxDim: Int = WATCH_IMAGE_MAX_DIM,
+        maxBytes: Int = WATCH_IMAGE_MAX_BYTES
+    ): ByteArray? {
+        if (rawBytes.isEmpty()) return null
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, bounds)
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxDim)
+            }
+            val decoded = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, decodeOpts)
+                ?: return rawBytes.takeIf { it.size <= maxBytes }
+            var current = if (decoded.width > maxDim || decoded.height > maxDim) {
+                val scale = maxDim.toFloat() / maxOf(decoded.width, decoded.height).toFloat()
+                val w = (decoded.width * scale).toInt().coerceAtLeast(1)
+                val h = (decoded.height * scale).toInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(decoded, w, h, true).also {
+                    if (it !== decoded) decoded.recycle()
+                }
+            } else {
+                decoded
+            }
+            try {
+                val baos = ByteArrayOutputStream()
+                for (quality in intArrayOf(78, 66, 55)) {
+                    baos.reset()
+                    current.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                    val candidate = baos.toByteArray()
+                    if (candidate.isNotEmpty() && candidate.size <= maxBytes) return candidate
+                }
+                val fallbackDim = 360
+                if (current.width > fallbackDim || current.height > fallbackDim) {
+                    val scale = fallbackDim.toFloat() / maxOf(current.width, current.height).toFloat()
+                    val w = (current.width * scale).toInt().coerceAtLeast(1)
+                    val h = (current.height * scale).toInt().coerceAtLeast(1)
+                    val smaller = Bitmap.createScaledBitmap(current, w, h, true)
+                    if (smaller !== current) current.recycle()
+                    current = smaller
+                    baos.reset()
+                    current.compress(Bitmap.CompressFormat.JPEG, 55, baos)
+                    val candidate = baos.toByteArray()
+                    if (candidate.isNotEmpty() && candidate.size <= maxBytes) return candidate
+                }
+                null
+            } finally {
+                current.recycle()
+            }
+        } catch (_: Exception) {
+            rawBytes.takeIf { it.size <= maxBytes }
+        }
+    }
+
     fun streamAttachmentToWatch(context: Context, nodeId: String, attachmentGuid: String) {
         scope.launch {
-            val settings = SettingsHelper(context)
-            if (!settings.hasServerUrl() || !settings.hasAuthKey()) {
-                notifyAttachmentFailed(context, nodeId, attachmentGuid)
-                return@launch
-            }
-            val channelClient = Wearable.getChannelClient(context)
-            var channel: com.google.android.gms.wearable.ChannelClient.Channel? = null
+            val flightKey = "$nodeId|$attachmentGuid"
+            if (!inFlightAttachments.add(flightKey)) return@launch
             try {
-                val client = buildOkHttpClient(settings)
-                val url = "${settings.apiRoot}/attachment/${encode(attachmentGuid)}/download?password=${encode(settings.guidAuthKey)}"
-                client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        PersistentLog.w(context, TAG, "Attachment download HTTP ${resp.code}")
-                        notifyAttachmentFailed(context, nodeId, attachmentGuid)
-                        return@launch
-                    }
-                    val input = resp.body?.byteStream()
-                    if (input == null) {
-                        notifyAttachmentFailed(context, nodeId, attachmentGuid)
-                        return@launch
-                    }
-                    channel = channelClient.openChannel(nodeId, "$PATH_ATTACHMENT_PREFIX${encode(attachmentGuid)}").await()
-                    val out = channelClient.getOutputStream(channel!!).await()
-                    out.use { stream ->
-                        input.copyTo(stream, bufferSize = 16 * 1024)
-                        stream.flush()
-                    }
+                val settings = SettingsHelper(context)
+                if (!settings.hasServerUrl() || !settings.hasAuthKey()) {
+                    notifyAttachmentFailed(context, nodeId, attachmentGuid)
+                    return@launch
                 }
-            } catch (e: Exception) {
-                PersistentLog.e(context, TAG, "streamAttachmentToWatch error: ${e.message}")
-                notifyAttachmentFailed(context, nodeId, attachmentGuid)
-            } finally {
-                channel?.let { ch ->
+                attachmentSemaphore.withPermit {
+                    val channelClient = Wearable.getChannelClient(context)
+                    var channel: com.google.android.gms.wearable.ChannelClient.Channel? = null
                     try {
-                        channelClient.close(ch).await()
-                    } catch (_: Exception) {
+                        val client = buildOkHttpClient(settings)
+                        val url = buildWatchAttachmentDownloadUrl(settings.apiRoot, attachmentGuid, settings.guidAuthKey)
+                        val payloadBytes: ByteArray? = client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+                            if (!resp.isSuccessful) {
+                                PersistentLog.w(context, TAG, "Attachment download HTTP ${resp.code}")
+                                return@use null
+                            }
+                            val body = resp.body ?: return@use null
+                            val mime = resp.header("Content-Type") ?: body.contentType()?.toString()
+                            val action = classifyWatchAttachment(mime, body.contentLength())
+                            if (action == WatchAttachmentAction.REJECT) {
+                                PersistentLog.w(
+                                    context,
+                                    TAG,
+                                    "Rejected watch attachment $attachmentGuid (mime=$mime len=${body.contentLength()})"
+                                )
+                                return@use null
+                            }
+                            val input = body.byteStream()
+                            when (action) {
+                                WatchAttachmentAction.COMPRESS_STATIC_IMAGE -> {
+                                    val raw = readBoundedBytes(input, WATCH_IMAGE_MAX_READ_BYTES) ?: return@use null
+                                    compressWatchImage(raw)
+                                }
+                                WatchAttachmentAction.GIF_PASSTHROUGH_OR_PREVIEW -> {
+                                    val raw = readBoundedBytes(input, WATCH_IMAGE_MAX_READ_BYTES) ?: return@use null
+                                    if (raw.size <= WATCH_GIF_PASSTHROUGH_MAX_BYTES) {
+                                        raw
+                                    } else {
+                                        // shortcut: large GIFs (>768 KB) render as static JPEG preview on watch, upgrade if watch adds WebP/video transcoding
+                                        compressWatchImage(raw)
+                                    }
+                                }
+                                WatchAttachmentAction.STREAM_BOUNDED_AUDIO -> {
+                                    readBoundedBytes(input, WATCH_AUDIO_MAX_BYTES)
+                                }
+                                WatchAttachmentAction.REJECT -> null
+                            }
+                        }
+                        if (payloadBytes == null || payloadBytes.isEmpty()) {
+                            notifyAttachmentFailed(context, nodeId, attachmentGuid)
+                            return@withPermit
+                        }
+                        channel = channelClient.openChannel(nodeId, "$PATH_ATTACHMENT_PREFIX${encode(attachmentGuid)}").await()
+                        val out = channelClient.getOutputStream(channel!!).await()
+                        out.use { stream ->
+                            stream.write(payloadBytes)
+                            stream.flush()
+                        }
+                    } catch (e: Exception) {
+                        PersistentLog.e(context, TAG, "streamAttachmentToWatch error: ${e.message}")
+                        notifyAttachmentFailed(context, nodeId, attachmentGuid)
+                    } finally {
+                        channel?.let { ch ->
+                            try {
+                                channelClient.close(ch).await()
+                            } catch (_: Exception) {
+                            }
+                        }
                     }
                 }
+            } finally {
+                inFlightAttachments.remove(flightKey)
             }
         }
     }

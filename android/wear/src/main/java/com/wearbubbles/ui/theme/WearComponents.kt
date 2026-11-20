@@ -13,6 +13,16 @@ import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,6 +67,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,10 +76,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.wearbubbles.ui.components.rememberReducedMotion
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -400,6 +414,73 @@ fun WearDirectKeyboardInput(
             }
         }
     )
+}
+
+/**
+ * Quiet M3 Expressive syncing pill for round Wear OS displays.
+ * Used inline beneath primary actions in lists or as a compact top overlay in active threads
+ * so cached content remains immediately scrollable while syncing continues in the background.
+ */
+@Composable
+fun WearSyncPill(
+    visible: Boolean,
+    modifier: Modifier = Modifier,
+    label: String = "Syncing…",
+    overlay: Boolean = false
+) {
+    val palette = LocalWearPalette.current
+    val reducedMotion = rememberReducedMotion()
+    val enter = when {
+        reducedMotion -> EnterTransition.None
+        overlay -> fadeIn(tween(180)) + slideInVertically(tween(180)) { -it / 3 }
+        else -> fadeIn(tween(180)) + expandVertically(tween(180))
+    }
+    val exit = when {
+        reducedMotion -> ExitTransition.None
+        overlay -> fadeOut(tween(260)) + slideOutVertically(tween(260)) { -it / 3 }
+        else -> fadeOut(tween(260)) + shrinkVertically(tween(260))
+    }
+
+    AnimatedVisibility(
+        visible = visible,
+        enter = enter,
+        exit = exit,
+        modifier = modifier
+    ) {
+        val bgColor = if (overlay) {
+            palette.surfaceContainerLow.copy(alpha = 0.94f)
+        } else {
+            palette.surfaceContainerLow
+        }
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(bgColor)
+                .border(1.dp, palette.surfaceContainerHigh.copy(alpha = 0.72f), RoundedCornerShape(999.dp))
+                .semantics(mergeDescendants = true) { contentDescription = label }
+                .padding(horizontal = 11.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 1.75.dp,
+                indicatorColor = palette.primary,
+                trackColor = palette.primary.copy(alpha = 0.22f)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                style = centeredTextStyle(
+                    fontSize = 11.sp,
+                    lineHeight = 14.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = palette.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
 }
 
 @Composable

@@ -152,6 +152,31 @@ fun computeBubbleGrouping(
     }
 }
 
+data class MessageRowItem(
+    val message: MessageUi,
+    val meta: GroupedMessageMeta,
+    val prevHadReactions: Boolean
+)
+
+/**
+ * Snapshots messages together with their precomputed grouping and previous-row reaction spacing so
+ * ScalingLazyColumn item lambdas never index live Compose state delegates across list mutations.
+ */
+fun buildMessageRows(messages: List<MessageUi>): List<MessageRowItem> {
+    if (messages.isEmpty()) return emptyList()
+    val grouping = computeBubbleGrouping(
+        items = messages.map { it.toBubbleGroupKey() },
+        hasSenderLabel = { idx -> !messages[idx].senderName.isNullOrBlank() }
+    )
+    return List(messages.size) { index ->
+        MessageRowItem(
+            message = messages[index],
+            meta = grouping[index],
+            prevHadReactions = index > 0 && messages[index - 1].reactions.isNotEmpty()
+        )
+    }
+}
+
 fun shouldShowTimestampBreak(
     prevEpochMs: Long,
     currEpochMs: Long,

@@ -95,6 +95,8 @@ import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.wear.compose.foundation.lazy.items
+import androidx.wear.compose.foundation.lazy.itemsIndexed
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.ListHeader
@@ -132,10 +134,35 @@ import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.WearCircleIconButton
 import com.wearbubbles.ui.theme.WearDirectKeyboardInput
 import com.wearbubbles.ui.theme.WearPillButton
+import com.wearbubbles.ui.theme.WearSyncPill
 import com.wearbubbles.ui.theme.centeredTextStyle
 import com.wearbubbles.ui.theme.rememberSpeechInputLauncher
 import java.io.File
 import java.util.Locale
+
+internal fun shouldAutoScrollOnMessageUpdate(
+    previousLatestGuid: String?,
+    newLatestGuid: String?,
+    previousCount: Int,
+    newCount: Int,
+    newLatestIsFromMe: Boolean,
+    isNearBottom: Boolean
+): Boolean {
+    if (newLatestGuid == null) return false
+    if (previousLatestGuid == null) return true
+    if (previousLatestGuid == newLatestGuid) return false
+    // Reconciling an optimistic temp-* reply to its real server GUID keeps the same message at
+    // the bottom; avoid yanking the user if they scrolled up while sending.
+    if (
+        MessageDao.isTempPlaceholderGuid(previousLatestGuid) &&
+        !MessageDao.isTempPlaceholderGuid(newLatestGuid) &&
+        newCount == previousCount &&
+        newLatestIsFromMe
+    ) {
+        return false
+    }
+    return (newCount > previousCount && newLatestIsFromMe) || isNearBottom
+}
 
 private val QUICK_EMOJIS = listOf(
     "👍", "❤️", "😂",
@@ -198,12 +225,7 @@ fun MessageDetailScreen(
     val sendFailedCount = remember(messages) { messages.count { it.sendFailed } }
     val playingMessageGuid by viewModel.playingMessageGuid.collectAsStateWithLifecycle()
 
-    val grouping = remember(messages) {
-        computeBubbleGrouping(
-            items = messages.map { it.toBubbleGroupKey() },
-            hasSenderLabel = { idx -> !messages[idx].senderName.isNullOrBlank() }
-        )
-    }
+    val messageRows = remember(messages) { buildMessageRows(messages) }
 
     val imageLoader = remember(context) { Coil.imageLoader(context) }
 
@@ -218,6 +240,7 @@ fun MessageDetailScreen(
         messages.firstOrNull { it.guid == target.guid && it.sendFailed }
     }
     var lastScrolledGuid by remember(chatGuid) { mutableStateOf<String?>(null) }
+    var lastScrolledCount by remember(chatGuid) { mutableIntStateOf(0) }
 
     LaunchedEffect(chatGuid) {
         viewModel.init(chatGuid)
@@ -239,6 +262,7 @@ fun MessageDetailScreen(
                 }
                 Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
                     isResumed = false
+                    viewModel.onScreenPaused()
                 }
                 else -> Unit
             }
@@ -263,16 +287,33 @@ fun MessageDetailScreen(
     // Centering the latest message keeps multi-line messages readable while leaving the reply cluster
     // peeking immediately below on round watch faces.
     val latestGuid = messages.lastOrNull()?.guid
-    LaunchedEffect(latestGuid) {
-        if (latestGuid != null && latestGuid != lastScrolledGuid) {
+    val latestIsFromMe = messages.lastOrNull()?.isFromMe == true
+    LaunchedEffect(latestGuid, messages.size) {
+        if (latestGuid != null && (latestGuid != lastScrolledGuid || messages.size != lastScrolledCount)) {
             val headerItems = 1 // chat_header
             val targetIndex = (headerItems + messages.size - 1).coerceAtLeast(0)
             if (lastScrolledGuid == null) {
                 columnState.state.scrollToItem(targetIndex)
             } else {
-                columnState.state.animateScrollToItem(targetIndex)
+                val lastVisible = columnState.state.layoutInfo.visibleItemsInfo.maxOfOrNull { it.index }
+                    ?: Int.MAX_VALUE
+                val prevLastMsgIndex = headerItems + lastScrolledCount - 1
+                val isNearBottom = lastVisible >= (prevLastMsgIndex - 2)
+                if (
+                    shouldAutoScrollOnMessageUpdate(
+                        previousLatestGuid = lastScrolledGuid,
+                        newLatestGuid = latestGuid,
+                        previousCount = lastScrolledCount,
+                        newCount = messages.size,
+                        newLatestIsFromMe = latestIsFromMe,
+                        isNearBottom = isNearBottom
+                    )
+                ) {
+                    columnState.state.animateScrollToItem(targetIndex)
+                }
             }
             lastScrolledGuid = latestGuid
+            lastScrolledCount = messages.size
         }
     }
 
@@ -362,12 +403,13 @@ fun MessageDetailScreen(
                 }
             }
     ) {
-        ScalingLazyColumn(
-            columnState = columnState,
-            modifier = Modifier
-                .fillMaxSize()
-                .background(palette.canvas)
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            ScalingLazyColumn(
+                columnState = columnState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(palette.canvas)
+            ) {
             item(key = "chat_header") {
                 ListHeader(
                     modifier = Modifier
@@ -403,14 +445,12 @@ fun MessageDetailScreen(
                 }
             }
 
-            items(messages.size, key = { messages[it].guid }) { index ->
-                val msg = messages[index]
-                val meta = grouping[index]
-                val prevHadReactions = index > 0 && messages[index - 1].reactions.isNotEmpty()
+            items(items = messageRows, key = { it.message.guid }) { row ->
+                val msg = row.message
                 MessageBubble(
                     message = msg,
-                    meta = meta,
-                    prevHadReactions = prevHadReactions,
+                    meta = row.meta,
+                    prevHadReactions = row.prevHadReactions,
                     maxBubbleWidth = maxBubbleWidth,
                     imageLoader = imageLoader,
                     isPlayingAudio = playingMessageGuid == msg.guid,
@@ -556,6 +596,15 @@ fun MessageDetailScreen(
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
+        }
+
+            WearSyncPill(
+                visible = isLoading && messages.isNotEmpty(),
+                overlay = true,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 22.dp)
+            )
         }
     }
 
@@ -975,8 +1024,7 @@ internal fun PeopleModal(
             }
         }
 
-        items(participants.size, key = { "participant_$it" }) { index ->
-            val (name, address) = participants[index]
+        itemsIndexed(items = participants, key = { index, _ -> "participant_$index" }) { _, (name, address) ->
             val showAddress = address.isNotBlank() && address != name
             Row(
                 modifier = Modifier
@@ -1055,8 +1103,7 @@ internal fun EmojiPickerOverlay(
             }
         }
 
-        items(rows.size, key = { "emoji_row_$it" }) { rowIndex ->
-            val rowEmojis = rows[rowIndex]
+        itemsIndexed(items = rows, key = { rowIndex, _ -> "emoji_row_$rowIndex" }) { _, rowEmojis ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),

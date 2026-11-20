@@ -9,11 +9,14 @@ import com.wearbubbles.data.ContactRepository
 import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.data.UpdateChecker
+import com.wearbubbles.data.shouldRefreshOnResume
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.service.MessageListenerService
 import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,6 +63,9 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private var lastRefreshStartedAtMs = 0L
+    private var wasPaused = false
+
     init {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { contactRepo.loadFromDb() }
@@ -103,13 +109,38 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
+    fun onScreenPaused() {
+        wasPaused = true
+    }
+
+    fun onScreenResumed() {
+        val nowMs = System.currentTimeMillis()
+        if (shouldRefreshOnResume(_isRefreshing.value, wasPaused, lastRefreshStartedAtMs, nowMs)) {
+            wasPaused = false
+            refresh()
+        } else {
+            wasPaused = false
+        }
+    }
+
     fun refresh() {
+        if (_isRefreshing.value) return
         viewModelScope.launch {
+            lastRefreshStartedAtMs = System.currentTimeMillis()
             _isRefreshing.value = true
             _error.value = null
             try {
-                contactRepo.refreshContacts()
-                chatRepo.refreshChats()
+                coroutineScope {
+                    // Refresh contacts alongside chats so contact lookups never block chat list updates.
+                    val contactsJob = async { runCatching { contactRepo.refreshContacts() } }
+                    val chatResult = chatRepo.refreshChats()
+                    contactsJob.await()
+                    chatResult.exceptionOrNull()?.let { err ->
+                        if (_chats.value.isEmpty()) {
+                            _error.value = err.localizedMessage?.take(50) ?: "Refresh failed"
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 _error.value = e.localizedMessage?.take(50) ?: "Refresh failed"
             } finally {
@@ -154,7 +185,7 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
                 for (msg in recent) {
                     val attGuid = msg.attachmentGuid ?: continue
                     val reqBuilder = coil.request.ImageRequest.Builder(getApplication())
-                        .data(com.wearbubbles.api.ApiClient.getAttachmentUrl(url, pass, attGuid))
+                        .data(com.wearbubbles.api.ApiClient.getAttachmentUrl(url, pass, attGuid, msg.attachmentMimeType))
                         .size(250, 250)
                     headers.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
                     loader.enqueue(reqBuilder.build())

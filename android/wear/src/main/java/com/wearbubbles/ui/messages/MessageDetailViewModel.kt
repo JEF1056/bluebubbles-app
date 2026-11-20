@@ -16,6 +16,7 @@ import com.wearbubbles.data.ChatRepository
 import com.wearbubbles.data.ContactRepository
 import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.data.SettingsDataStore
+import com.wearbubbles.data.shouldRefreshOnResume
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.db.MessageDao
 import com.wearbubbles.notifications.NotificationHelper
@@ -46,12 +47,13 @@ import java.util.Collections
 internal fun shouldExposeDirectAttachmentUrl(
     isPhoneConnected: Boolean,
     attachmentGuid: String?,
-    failedRelayGuids: Set<String>,
+    failedRelayGuids: Set<String> = emptySet(),
     serverUrl: String,
     password: String
 ): Boolean {
+    if (isPhoneConnected) return false
     if (attachmentGuid.isNullOrBlank() || serverUrl.isBlank() || password.isBlank()) return false
-    return !isPhoneConnected || attachmentGuid in failedRelayGuids
+    return true
 }
 
 data class MessageUi(
@@ -82,7 +84,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
 
     companion object {
         private const val TAG = "MessageDetailVM"
-        internal const val MAX_EAGER_ATTACHMENTS = 8
+        internal const val MAX_EAGER_ATTACHMENTS = 4
         internal const val MAX_CONCURRENT_ATTACHMENT_REQUESTS = 2
     }
 
@@ -197,6 +199,8 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     private var initialMessageSnapshotSeen = false
     private var lastObservedIncomingGuid: String? = null
     private var hasUnacknowledgedIncoming = false
+    private var lastRefreshStartedAtMs = 0L
+    private var wasPaused = false
     private val _attachmentRevision = MutableStateFlow(0)
     private val attachmentSemaphore = Semaphore(MAX_CONCURRENT_ATTACHMENT_REQUESTS)
     private val inFlightAttachments = Collections.synchronizedSet(hashSetOf<String>())
@@ -339,7 +343,12 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                                     password = password
                                 )
                             ) {
-                                com.wearbubbles.api.ApiClient.getAttachmentUrl(serverUrl, password, entity.attachmentGuid!!)
+                                com.wearbubbles.api.ApiClient.getAttachmentUrl(
+                                    serverUrl,
+                                    password,
+                                    entity.attachmentGuid!!,
+                                    entity.attachmentMimeType
+                                )
                             } else null
 
                             val attGuid = entity.attachmentGuid
@@ -471,9 +480,22 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
+    fun onScreenPaused() {
+        wasPaused = true
+    }
+
     fun onScreenResumed() {
         val guid = chatGuid
-        if (guid.isBlank() || !NotificationHelper.shouldActivateChat(guid)) return
+        if (guid.isBlank()) return
+        val nowMs = System.currentTimeMillis()
+        if (shouldRefreshOnResume(_isLoading.value, wasPaused, lastRefreshStartedAtMs, nowMs, minIntervalMs = 2_000L)) {
+            wasPaused = false
+            refresh()
+        } else {
+            wasPaused = false
+        }
+
+        if (!NotificationHelper.shouldActivateChat(guid)) return
         if (NotificationHelper.activeChatGuid.value != guid) {
             NotificationHelper.setActiveChat(guid)
         }
@@ -532,13 +554,23 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun refresh() {
+        val guid = chatGuid
+        if (guid.isBlank() || _isLoading.value) return
         viewModelScope.launch {
+            lastRefreshStartedAtMs = System.currentTimeMillis()
             _isLoading.value = true
             _error.value = null
             try {
-                messageRepo.refreshMessages(chatGuid)
+                val result = messageRepo.refreshMessages(guid)
+                result.exceptionOrNull()?.let { err ->
+                    if (_messages.value.isEmpty()) {
+                        _error.value = err.localizedMessage?.take(50)
+                    }
+                }
             } catch (e: Exception) {
-                _error.value = e.localizedMessage?.take(50)
+                if (_messages.value.isEmpty()) {
+                    _error.value = e.localizedMessage?.take(50)
+                }
             } finally {
                 _isLoading.value = false
             }
@@ -696,7 +728,8 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         }
 
         val attGuid = msg.attachmentGuid
-        if (relay.isPhoneConnected.value && !attGuid.isNullOrBlank() && attGuid !in failedRelayAttachments) {
+        if (relay.isPhoneConnected.value && !attGuid.isNullOrBlank()) {
+            failedRelayAttachments.remove(attGuid)
             _error.value = "Downloading audio..."
             audioFetchJob = viewModelScope.launch {
                 val fetched = relay.getOrRequestAttachment(attGuid)
@@ -716,7 +749,12 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                             password = password
                         )
                     ) {
-                        val fallbackUrl = com.wearbubbles.api.ApiClient.getAttachmentUrl(serverUrl, password, attGuid)
+                        val fallbackUrl = com.wearbubbles.api.ApiClient.getAttachmentUrl(
+                            serverUrl,
+                            password,
+                            attGuid,
+                            msg.attachmentMimeType
+                        )
                         _error.value = null
                         startMediaPlayer(msg.guid, null, fallbackUrl, msg.customHeaders)
                     } else {
@@ -812,7 +850,8 @@ internal fun selectEagerAttachmentGuids(
         if (!attGuid.isNullOrBlank() &&
             attGuid !in failedGuids &&
             attGuid !in cachedGuids &&
-            (mime.startsWith("image/") || mime.startsWith("audio/"))
+            attGuid !in picked &&
+            mime.startsWith("image/")
         ) {
             picked.add(attGuid)
             if (picked.size >= limit) break

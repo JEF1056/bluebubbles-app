@@ -30,13 +30,15 @@ class ReplySendWorker(
         private const val KEY_CHAT_GUID = "chat_guid"
         private const val KEY_SENDER_NAME = "sender_name"
         private const val KEY_REPLY_TEXT = "reply_text"
+        private const val KEY_TEMP_GUID = "temp_guid"
         private const val FOREGROUND_NOTIFICATION_ID = 1004
 
         fun enqueue(
             context: Context,
             chatGuid: String,
             senderName: String?,
-            replyText: String
+            replyText: String,
+            tempGuid: String? = null
         ) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -45,7 +47,8 @@ class ReplySendWorker(
             val data = workDataOf(
                 KEY_CHAT_GUID to chatGuid,
                 KEY_SENDER_NAME to senderName,
-                KEY_REPLY_TEXT to replyText
+                KEY_REPLY_TEXT to replyText,
+                KEY_TEMP_GUID to tempGuid
             )
 
             val request = OneTimeWorkRequestBuilder<ReplySendWorker>()
@@ -73,6 +76,7 @@ class ReplySendWorker(
         val chatGuid = inputData.getString(KEY_CHAT_GUID) ?: return Result.failure()
         val senderName = inputData.getString(KEY_SENDER_NAME)
         val replyText = inputData.getString(KEY_REPLY_TEXT) ?: return Result.failure()
+        val existingTempGuid = inputData.getString(KEY_TEMP_GUID)
 
         val app = applicationContext as WearBubblesApp
         val db = AppDatabase.getInstance(applicationContext)
@@ -82,7 +86,7 @@ class ReplySendWorker(
         val chatRepo = ChatRepository(db.chatDao(), settings, relay)
 
         return try {
-            val sendResult = messageRepo.sendMessage(chatGuid, replyText)
+            val sendResult = messageRepo.sendMessage(chatGuid, replyText, existingTempGuid)
             if (sendResult.isFailure) {
                 throw sendResult.exceptionOrNull() ?: IllegalStateException("Send failed")
             }

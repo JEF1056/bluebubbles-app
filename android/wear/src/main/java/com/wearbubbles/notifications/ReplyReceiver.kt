@@ -49,8 +49,8 @@ class ReplyReceiver : BroadcastReceiver() {
                         Log.w("ReplyReceiver", "Failed to send reply for $chatGuid: ${outcome.error}")
                         NotificationHelper.showReplyFailureNotification(appContext, chatGuid, senderName, replyText)
                     }
-                    NotificationReplyResult.NeedsStandaloneWorker -> {
-                        ReplySendWorker.enqueue(appContext, chatGuid, senderName, replyText)
+                    is NotificationReplyResult.NeedsStandaloneWorker -> {
+                        ReplySendWorker.enqueue(appContext, chatGuid, senderName, replyText, outcome.tempGuid)
                     }
                 }
             } catch (e: Exception) {

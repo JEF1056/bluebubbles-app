@@ -50,6 +50,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.wear.compose.foundation.lazy.items
+import androidx.wear.compose.foundation.lazy.itemsIndexed
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
 import coil.compose.AsyncImage
@@ -396,9 +398,9 @@ fun NewMessageScreen(
                     )
                 }
 
-                items(DIALPAD_ROWS.size, key = { "dialpad_row_$it" }) { rowIndex ->
+                itemsIndexed(items = DIALPAD_ROWS, key = { rowIndex, _ -> "dialpad_row_$rowIndex" }) { _, keys ->
                     DialpadKeypadRow(
-                        keys = DIALPAD_ROWS[rowIndex],
+                        keys = keys,
                         onAppend = { token -> dialpadNumber = appendDialpadToken(dialpadNumber, token) },
                         onBackspace = {
                             if (dialpadNumber.isNotEmpty()) {
@@ -513,8 +515,7 @@ fun NewMessageScreen(
                         }
                     }
 
-                    items(favoriteRows.size, key = { "fav_row_$it" }) { rowIndex ->
-                        val rowContacts = favoriteRows[rowIndex]
+                    itemsIndexed(items = favoriteRows, key = { rowIndex, _ -> "fav_row_$rowIndex" }) { _, rowContacts ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -584,10 +585,9 @@ fun NewMessageScreen(
                         }
 
                         items(
-                            count = section.contacts.size,
-                            key = { idx -> "contact_${section.letter}_${section.contacts[idx].normalizedAddress}" }
-                        ) { idx ->
-                            val contact = section.contacts[idx]
+                            items = section.contacts,
+                            key = { contact -> "contact_${section.letter}_${contact.normalizedAddress}" }
+                        ) { contact ->
                             val label = contact.displayName.ifBlank { contact.normalizedAddress }
                             val nameKey = contact.displayName.trim().lowercase(Locale.ROOT)
                             val disambiguator = if (nameKey in duplicateNames) {

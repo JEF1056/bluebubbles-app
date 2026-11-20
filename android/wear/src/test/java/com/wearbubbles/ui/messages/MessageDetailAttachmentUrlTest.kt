@@ -20,8 +20,8 @@ class MessageDetailAttachmentUrlTest {
     }
 
     @Test
-    fun `tethered exposes direct url only after relay failure`() {
-        assertTrue(
+    fun `tethered never exposes direct url even after relay failure`() {
+        assertFalse(
             shouldExposeDirectAttachmentUrl(
                 isPhoneConnected = true,
                 attachmentGuid = "att-1",

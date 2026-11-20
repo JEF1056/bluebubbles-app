@@ -33,7 +33,48 @@ sealed class NotificationReplyResult {
     data class Sent(val message: MessageEntity) : NotificationReplyResult()
     data class AcceptedPending(val tempGuid: String) : NotificationReplyResult()
     data class Failed(val error: String?) : NotificationReplyResult()
-    data object NeedsStandaloneWorker : NotificationReplyResult()
+    data class NeedsStandaloneWorker(val tempGuid: String? = null) : NotificationReplyResult()
+}
+
+internal fun shouldRefreshOnResume(
+    isCurrentlyRefreshing: Boolean,
+    wasPaused: Boolean,
+    lastRefreshStartedAtMs: Long,
+    nowMs: Long,
+    minIntervalMs: Long = 3_000L
+): Boolean {
+    if (isCurrentlyRefreshing) return false
+    if (wasPaused) return true
+    if (lastRefreshStartedAtMs <= 0L) return false
+    return (nowMs - lastRefreshStartedAtMs) >= minIntervalMs
+}
+
+internal suspend fun persistOptimisticOutgoing(
+    messageDao: MessageDao,
+    chatDao: ChatDao,
+    chatGuid: String,
+    text: String,
+    dateCreated: Long = System.currentTimeMillis(),
+    existingTempGuid: String? = null
+): MessageEntity {
+    val tempGuid = existingTempGuid?.takeIf { it.isNotBlank() } ?: "temp-${UUID.randomUUID()}"
+    val tempEntity = MessageEntity(
+        guid = tempGuid,
+        chatGuid = chatGuid,
+        text = text,
+        isFromMe = true,
+        dateCreated = dateCreated,
+        handleAddress = null
+    )
+    messageDao.upsert(tempEntity)
+    val identifier = chatGuid.substringAfterLast(";").ifBlank { chatGuid }
+    chatDao.updateOutgoingLastMessage(
+        chatGuid = chatGuid,
+        defaultIdentifier = identifier,
+        text = text,
+        date = dateCreated
+    )
+    return tempEntity
 }
 
 class MessageRepository(
@@ -146,21 +187,15 @@ class MessageRepository(
         text: String,
         senderName: String?
     ): NotificationReplyResult {
+        // Persist optimistic message and chat preview before relay/worker handoff so opening the
+        // watch app right after replying immediately renders the reply and clears unread state.
+        val tempEntity = persistOptimisticOutgoing(messageDao, chatDao, chatGuid, text)
+        val tempGuid = tempEntity.guid
+
         if (phoneRelay == null || !phoneRelay.refreshPhoneConnected()) {
-            return NotificationReplyResult.NeedsStandaloneWorker
+            return NotificationReplyResult.NeedsStandaloneWorker(tempGuid)
         }
 
-        val tempGuid = "temp-${UUID.randomUUID()}"
-        val now = System.currentTimeMillis()
-        val tempEntity = MessageEntity(
-            guid = tempGuid,
-            chatGuid = chatGuid,
-            text = text,
-            isFromMe = true,
-            dateCreated = now,
-            handleAddress = null
-        )
-        messageDao.upsert(tempEntity)
         phoneRelay.registerPendingReply(tempGuid, chatGuid, senderName, text)
 
         val relayRes = phoneRelay.sendMessage(
@@ -172,8 +207,7 @@ class MessageRepository(
         )
         if (relayRes == null) {
             phoneRelay.clearPendingReply(tempGuid)
-            messageDao.deleteByGuid(tempGuid)
-            return NotificationReplyResult.NeedsStandaloneWorker
+            return NotificationReplyResult.NeedsStandaloneWorker(tempGuid)
         }
         if (relayRes.success) {
             phoneRelay.clearPendingReply(tempGuid)
@@ -184,7 +218,6 @@ class MessageRepository(
             return NotificationReplyResult.Sent(realEntity)
         }
         if (relayRes.timedOut) {
-            updateChatLastMessage(chatGuid, text, now)
             return NotificationReplyResult.AcceptedPending(tempGuid)
         }
         phoneRelay.clearPendingReply(tempGuid)
@@ -192,18 +225,20 @@ class MessageRepository(
         return NotificationReplyResult.Failed(relayRes.error ?: "Relay send failed")
     }
 
-    suspend fun sendMessage(chatGuid: String, text: String): Result<MessageEntity> {
-        val tempGuid = "temp-${UUID.randomUUID()}"
-        val now = System.currentTimeMillis()
-        val tempEntity = MessageEntity(
-            guid = tempGuid,
+    suspend fun sendMessage(
+        chatGuid: String,
+        text: String,
+        existingTempGuid: String? = null
+    ): Result<MessageEntity> {
+        val tempEntity = persistOptimisticOutgoing(
+            messageDao = messageDao,
+            chatDao = chatDao,
             chatGuid = chatGuid,
             text = text,
-            isFromMe = true,
-            dateCreated = now,
-            handleAddress = null
+            existingTempGuid = existingTempGuid
         )
-        messageDao.upsert(tempEntity)
+        val tempGuid = tempEntity.guid
+        val now = tempEntity.dateCreated
 
         // Primary: Phone Relay when tethered
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
@@ -219,7 +254,6 @@ class MessageRepository(
                 return Result.success(realEntity)
             }
             if (relayRes != null && relayRes.timedOut) {
-                updateChatLastMessage(chatGuid, text, now)
                 return Result.success(tempEntity)
             }
             if (relayRes != null && !relayRes.success) {

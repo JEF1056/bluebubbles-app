@@ -47,6 +47,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -123,6 +125,24 @@ class PhoneRelayClient(private val context: Context) {
         internal const val PRUNE_WRITE_THRESHOLD = 20
         internal const val MAX_ATTACHMENTS_BYTES = 40L * 1024 * 1024
         internal const val MAX_ATTACHMENTS_FILES = 200
+        internal const val MAX_CHANNEL_ATTACHMENT_BYTES = 2_500_000L
+
+        internal fun copyChannelStreamBounded(
+            input: InputStream,
+            output: OutputStream,
+            maxBytes: Long = MAX_CHANNEL_ATTACHMENT_BYTES
+        ): Long {
+            val buf = ByteArray(16 * 1024)
+            var total = 0L
+            while (true) {
+                val read = input.read(buf)
+                if (read == -1) break
+                total += read
+                if (total > maxBytes) return -1L
+                output.write(buf, 0, read)
+            }
+            return total
+        }
         internal const val MAX_AVATARS_BYTES = 10L * 1024 * 1024
         internal const val MAX_AVATARS_FILES = 150
 
@@ -1034,10 +1054,19 @@ class PhoneRelayClient(private val context: Context) {
                 val tmp = File.createTempFile("tmp_att_", ".tmp", context.cacheDir)
                 tempFile = tmp
                 val input = channelClient.getInputStream(channel).await()
-                input.use { inStream ->
+                val copiedBytes = input.use { inStream ->
                     tmp.outputStream().use { outStream ->
-                        inStream.copyTo(outStream)
+                        copyChannelStreamBounded(inStream, outStream)
                     }
+                }
+                if (copiedBytes <= 0L) {
+                    Log.w(
+                        TAG,
+                        "streamAttachmentFromChannel rejected $attachmentGuid (bytes=$copiedBytes cap=$MAX_CHANNEL_ATTACHMENT_BYTES)"
+                    )
+                    tmp.delete()
+                    failAttachmentRequest(attachmentGuid)
+                    return@launch
                 }
                 saveStreamedAttachment(attachmentGuid, tmp)
             } catch (e: Exception) {

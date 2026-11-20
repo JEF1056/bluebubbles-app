@@ -21,6 +21,9 @@ import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.service.MessageListenerService
 import com.wearbubbles.worker.MessageSyncWorker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -31,12 +34,43 @@ class DataLayerListenerService : WearableListenerService() {
 
     companion object {
         private const val TAG = "DataLayerListener"
+        internal const val DISCONNECT_DEBOUNCE_MS = 25_000L
         private const val PATH_SETUP = "/setup-credentials"
         private const val PATH_SETUP_ACK = "/setup-credentials-ack"
         private const val PATH_RESET = "/reset-watch"
         private const val PATH_RESET_ACK = "/reset-ack"
         private const val PATH_REQUEST_STATUS = "/request-status"
         private const val PATH_WATCH_STATUS = "/watch-status"
+
+        private val disconnectJobLock = Any()
+        @Volatile
+        private var pendingDisconnectJob: Job? = null
+
+        internal fun cancelPendingDisconnect() {
+            synchronized(disconnectJobLock) {
+                pendingDisconnectJob?.cancel()
+                pendingDisconnectJob = null
+            }
+        }
+
+        internal fun scheduleDebouncedDisconnect(
+            scope: CoroutineScope,
+            delayMs: Long = DISCONNECT_DEBOUNCE_MS,
+            confirmStillDisconnected: suspend () -> Boolean,
+            onConfirmedDisconnect: suspend () -> Unit
+        ): Job {
+            val job = scope.launch {
+                delay(delayMs)
+                if (confirmStillDisconnected()) {
+                    onConfirmedDisconnect()
+                }
+            }
+            synchronized(disconnectJobLock) {
+                pendingDisconnectJob?.cancel()
+                pendingDisconnectJob = job
+            }
+            return job
+        }
     }
 
     data class SetupPayload(val url: String = "", val password: String = "")
@@ -53,8 +87,9 @@ class DataLayerListenerService : WearableListenerService() {
                 val userDisconnected = settings.isUserDisconnected()
                 val hasCreds = settings.isConfigured.first()
                 val connected = PhoneRelayClient.selectRelayNode(capabilityInfo.nodes, hasCreds) != null
-                app.phoneRelayClient.updatePhoneConnected(connected)
                 if (connected) {
+                    cancelPendingDisconnect()
+                    app.phoneRelayClient.updatePhoneConnected(true)
                     app.socketManager.disconnect()
                     MessageListenerService.stop(applicationContext)
                     MessageSyncWorker.cancel(applicationContext)
@@ -62,12 +97,25 @@ class DataLayerListenerService : WearableListenerService() {
                         app.phoneRelayClient.requestCredentials()
                     }
                 } else if (hasCreds && !userDisconnected) {
-                    MessageSyncWorker.schedule(applicationContext)
-                    try {
-                        MessageListenerService.start(applicationContext)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Unable to start MessageListenerService from background: ${e.message}")
-                    }
+                    // Debounce brief BTC blips before starting FGS/WorkManager or flipping standalone URLs.
+                    scheduleDebouncedDisconnect(
+                        scope = scope,
+                        confirmStillDisconnected = { !app.phoneRelayClient.refreshPhoneConnected() },
+                        onConfirmedDisconnect = {
+                            val latestSettings = SettingsDataStore(applicationContext)
+                            if (latestSettings.isConfigured.first() && !latestSettings.isUserDisconnected()) {
+                                MessageSyncWorker.schedule(applicationContext)
+                                try {
+                                    MessageListenerService.start(applicationContext)
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Unable to start MessageListenerService from background: ${e.message}")
+                                }
+                            }
+                        }
+                    )
+                } else {
+                    cancelPendingDisconnect()
+                    app.phoneRelayClient.updatePhoneConnected(false)
                 }
             }
         }
