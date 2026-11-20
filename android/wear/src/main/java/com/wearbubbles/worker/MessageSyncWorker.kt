@@ -5,10 +5,13 @@ import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.data.ChatRepository
 import com.wearbubbles.data.ContactRepository
@@ -26,6 +29,11 @@ class MessageSyncWorker(
     companion object {
         private const val TAG = "MessageSyncWorker"
         private const val WORK_NAME = "wearbubbles_message_sync"
+        private const val ONCE_WORK_NAME = "wearbubbles_message_sync_once"
+        const val KEY_FORCE = "force"
+
+        internal fun shouldSkipSync(isSocketConnected: Boolean, force: Boolean): Boolean =
+            isSocketConnected && !force
 
         fun schedule(context: Context) {
             val constraints = Constraints.Builder()
@@ -45,14 +53,39 @@ class MessageSyncWorker(
             )
         }
 
+        fun runOnce(context: Context) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val request = OneTimeWorkRequestBuilder<MessageSyncWorker>()
+                .setConstraints(constraints)
+                .setInputData(workDataOf(KEY_FORCE to true))
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                ONCE_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        }
+
         fun cancel(context: Context) {
-            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            val wm = WorkManager.getInstance(context)
+            wm.cancelUniqueWork(WORK_NAME)
+            wm.cancelUniqueWork(ONCE_WORK_NAME)
         }
     }
 
     override suspend fun doWork(): Result {
         val app = applicationContext as WearBubblesApp
-        if (app.socketManager.isConnected.value) {
+        val settings = SettingsDataStore(applicationContext)
+        if (settings.isUserDisconnected()) {
+            cancel(applicationContext)
+            return Result.success()
+        }
+        val force = inputData.getBoolean(KEY_FORCE, false)
+        if (shouldSkipSync(app.socketManager.isConnected.value, force)) {
             return Result.success()
         }
         if (app.phoneRelayClient.refreshPhoneConnected()) {
@@ -61,7 +94,6 @@ class MessageSyncWorker(
             return Result.success()
         }
 
-        val settings = SettingsDataStore(applicationContext)
         val url = settings.getServerUrl()
         val password = settings.getPassword()
         if (url.isBlank() || password.isBlank()) {

@@ -135,25 +135,23 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 if (dataReply != null && !chatGuid.isNullOrBlank()) {
                     val (mimeType, dataUri) = dataReply
                     val ext = extensionForMime(mimeType)
-                    val tempFile = File(context.cacheDir, "reply_media_${System.currentTimeMillis()}.$ext")
-                    val copied = try {
-                        context.contentResolver.openInputStream(dataUri)?.use { input ->
-                            tempFile.outputStream().use { output -> input.copyTo(output) }
-                            true
-                        } ?: false
-                    } catch (e: Exception) {
-                        PersistentLog.e(context, Constants.logTag, "Failed to read RemoteInput data URI: ${e.message}")
-                        false
-                    }
-                    if (!copied) {
-                        tempFile.delete()
-                        updateReplyNotification(context, notificationId, replyText = "Media reply", succeeded = false)
-                        return
-                    }
                     val pendingResult = goAsync()
                     CoroutineScope(Dispatchers.IO).launch {
+                        val tempFile = File(context.cacheDir, "reply_media_${System.currentTimeMillis()}.$ext")
                         var succeeded = false
                         try {
+                            val copied = try {
+                                context.contentResolver.openInputStream(dataUri)?.use { input ->
+                                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                                    true
+                                } ?: false
+                            } catch (e: Exception) {
+                                PersistentLog.e(context, Constants.logTag, "Failed to read RemoteInput data URI: ${e.message}")
+                                false
+                            }
+                            if (!copied) {
+                                return@launch
+                            }
                             val settings = SettingsHelper(context)
                             if (settings.hasServerUrl() && settings.hasAuthKey()) {
                                 val client = WearSyncManager.buildOkHttpClient(settings, minReadTimeoutMs = 130_000L)

@@ -257,7 +257,7 @@ Future<void> playWebSoundAsset(
   try {
     final ctx = _sharedAudioCtx ??= web.AudioContext();
     if (ctx.state == 'suspended') {
-      ctx.resume();
+      await ctx.resume().toDart;
     }
     if (ctx.state == 'running') {
       final buffer = await _loadDecodedBuffer(ctx, assetPath);

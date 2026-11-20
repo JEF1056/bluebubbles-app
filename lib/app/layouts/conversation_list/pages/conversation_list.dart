@@ -196,19 +196,30 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
     // Extra safety check to make sure Android doesn't open the last chat when opening the app
     if (kIsDesktop || kIsWeb) {
       final lastOpenedChat = PrefsSvc.messaging.getLastOpenedChat();
+      final hasDeepLink = kIsWeb && parseWebHashRoute(Uri.base.fragment).kind != WebHashRouteKind.home;
       if (lastOpenedChat != null &&
+          !hasDeepLink &&
           showAltLayoutContextless &&
           ChatsSvc.activeChat?.chat.guid != lastOpenedChat &&
           !LifecycleSvc.isBubble) {
         WidgetsBinding.instance.addPostFrameCallback((_) async {
           if (kIsWeb) {
             await ChatsSvc.loadedAllChats.future;
+            if (!mounted) return;
+            if (parseWebHashRoute(Uri.base.fragment).kind != WebHashRouteKind.home) return;
           }
+          if (!mounted ||
+              !showAltLayoutContextless ||
+              ChatsSvc.activeChat != null ||
+              NavigationSvc.isSettingsOpen.value) {
+            return;
+          }
+          final chat = kIsWeb ? await Chat.findOneWeb(guid: lastOpenedChat) : Chat.findOne(guid: lastOpenedChat);
+          if (chat == null || !mounted) return;
+          if (ChatsSvc.activeChat != null || NavigationSvc.isSettingsOpen.value) return;
           NavigationSvc.pushAndRemoveUntil(
             context,
-            ConversationView(
-                chat: kIsWeb ? (await Chat.findOneWeb(guid: lastOpenedChat))! : Chat.findOne(guid: lastOpenedChat)!,
-                autoOpened: true),
+            ConversationView(chat: chat, autoOpened: true),
             (route) => route.isFirst,
           );
         });
@@ -311,25 +322,30 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
         rightOpen: NavigationSvc.chatPaneOpen,
         left: LayoutBuilder(builder: (context, constraints) {
           NavigationSvc.maxWidthLeft = constraints.maxWidth;
-          return NavigatorPopHandler(
-            onPopWithResult: (_) => Get.nestedKey(1)?.currentState?.maybePop(),
-            child: SafeArea(
-              top: false,
-              left: false,
-              right: false,
-              bottom: false,
-              child: Navigator(
-                key: Get.nestedKey(1),
-                requestFocus: false,
-                onPopPage: (route, _) {
-                  return false;
-                },
-                pages: [
-                  MaterialPage(
-                    name: "initial",
-                    child: chatList,
-                  )
-                ],
+          // Isolate nested Navigator's ModalBarrier BlockSemantics from hiding sibling panes.
+          return Semantics(
+            container: true,
+            explicitChildNodes: true,
+            child: NavigatorPopHandler(
+              onPopWithResult: (_) => Get.nestedKey(1)?.currentState?.maybePop(),
+              child: SafeArea(
+                top: false,
+                left: false,
+                right: false,
+                bottom: false,
+                child: Navigator(
+                  key: Get.nestedKey(1),
+                  requestFocus: false,
+                  onPopPage: (route, _) {
+                    return false;
+                  },
+                  pages: [
+                    MaterialPage(
+                      name: "initial",
+                      child: chatList,
+                    )
+                  ],
+                ),
               ),
             ),
           );
@@ -337,20 +353,25 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
         right: LayoutBuilder(
           builder: (context, constraints) {
             NavigationSvc.maxWidthRight = constraints.maxWidth;
-            return NavigatorPopHandler(
-              onPopWithResult: (_) => Get.nestedKey(2)?.currentState?.maybePop(),
-              child: Navigator(
-                key: Get.nestedKey(2),
-                observers: [NavigationSvc.chatPaneObserver, NavigationSvc.paneRouteObserver],
-                onPopPage: (route, _) {
-                  return false;
-                },
-                pages: [
-                  const MaterialPage(
-                    name: "initial",
-                    child: InitialWidgetRight(),
-                  ),
-                ],
+            // Isolate nested Navigator's ModalBarrier BlockSemantics from hiding the left pane.
+            return Semantics(
+              container: true,
+              explicitChildNodes: true,
+              child: NavigatorPopHandler(
+                onPopWithResult: (_) => Get.nestedKey(2)?.currentState?.maybePop(),
+                child: Navigator(
+                  key: Get.nestedKey(2),
+                  observers: [NavigationSvc.chatPaneObserver, NavigationSvc.paneRouteObserver],
+                  onPopPage: (route, _) {
+                    return false;
+                  },
+                  pages: [
+                    const MaterialPage(
+                      name: "initial",
+                      child: InitialWidgetRight(),
+                    ),
+                  ],
+                ),
               ),
             );
           },

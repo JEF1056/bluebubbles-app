@@ -10,10 +10,12 @@ import com.wearbubbles.db.MessageDao
 import com.wearbubbles.db.entities.MessageEntity
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.relay.SendResultPayload
+import com.wearbubbles.socket.SocketManager
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -379,6 +381,28 @@ class FailedMessageReconciliationTest {
         assertEquals("real-first", dto.messages?.firstOrNull()?.guid)
     }
 
+    @Test
+    fun `socket message-send-error payload parses and marks matching local row failed without failing unknown guids`() = runBlocking {
+        val payload =
+            """{"guid":"srv-err-1","tempGuid":"temp-err-1","text":"hi","isFromMe":true,"dateCreated":1000,"chats":[{"guid":"$chat"}]}"""
+        val parsed = SocketManager.parseMessageDto(payload)
+        assertEquals("srv-err-1", parsed?.guid)
+        assertEquals("temp-err-1", parsed?.tempGuid)
+
+        val wrappedPayload =
+            """{"data":{"guid":"srv-err-2","tempGuid":"temp-err-2","text":"hi2","isFromMe":true,"dateCreated":1001}}"""
+        val parsedWrapped = SocketManager.parseMessageDto(wrappedPayload)
+        assertEquals("srv-err-2", parsedWrapped?.guid)
+        assertEquals("temp-err-2", parsedWrapped?.tempGuid)
+
+        val dao = FakeMessageDao()
+        dao.upsert(msg("sent-temp-err-1", text = "hi", dateCreated = 1000L, sendFailed = false))
+        assertTrue(dao.markSendFailedFirstMatch(listOf("temp-err-1", "sent-temp-err-1", "srv-err-1")))
+        assertTrue(dao.rows["sent-temp-err-1"]?.sendFailed == true)
+
+        assertFalse(dao.markSendFailedFirstMatch(listOf("other-device-temp", "other-device-srv")))
+    }
+
     private class FakeMessageDao : MessageDao {
         val rows = linkedMapOf<String, MessageEntity>()
         private val flow = MutableStateFlow<List<MessageEntity>>(emptyList())
@@ -433,9 +457,11 @@ class FailedMessageReconciliationTest {
 
         override suspend fun pruneOld() = Unit
 
-        override suspend fun markSendFailed(guid: String) {
-            rows[guid]?.let { rows[guid] = it.copy(sendFailed = true) }
+        override suspend fun markSendFailed(guid: String): Int {
+            val existing = rows[guid] ?: return 0
+            rows[guid] = existing.copy(sendFailed = true)
             publish()
+            return 1
         }
 
         override suspend fun markStalePendingFailed(chatGuid: String, olderThanMs: Long) {

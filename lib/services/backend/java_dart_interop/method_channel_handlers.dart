@@ -295,7 +295,6 @@ class MethodChannelHandlers {
   }
 
   Future<bool> _handleMarkChatRead(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (!service.headless && LifecycleSvc.isAlive) return _ok();
     await Database.waitForInit();
     Logger.info('Received markAsRead from Kotlin');
 
@@ -337,7 +336,7 @@ class MethodChannelHandlers {
   }
 
   Future<bool> _handleChatReadStatusChanged(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (!service.headless && LifecycleSvc.isAlive) return _ok();
+    if (!service.headless && LifecycleSvc.isForeground) return _ok();
     await Database.waitForInit();
 
     try {
@@ -388,7 +387,7 @@ class MethodChannelHandlers {
       final Map<String, dynamic>? data = arguments;
       if (!isNullOrEmpty(data)) {
         final payload = ServerPayload.fromJson(data!);
-        await ActionHandler().handleIncomingFaceTimeCallLegacy(payload.data);
+        await MessageHandlerSvc.handleIncomingFaceTimeCallLegacy(payload.data);
       }
     } catch (e, s) {
       return Future.error(e, s);
@@ -398,7 +397,7 @@ class MethodChannelHandlers {
   }
 
   Future<bool> _handleFtCallStatusChanged(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (!service.headless && LifecycleSvc.isAlive) return _ok();
+    if (!service.headless && LifecycleSvc.isForeground) return _ok();
     await Database.waitForInit();
     Logger.info('Received facetime call status change from FCM');
 
@@ -406,7 +405,7 @@ class MethodChannelHandlers {
       final Map<String, dynamic>? data = arguments;
       if (!isNullOrEmpty(data)) {
         final payload = ServerPayload.fromJson(data!);
-        await ActionHandler().handleFaceTimeStatusChange(payload.data);
+        await MessageHandlerSvc.handleFaceTimeStatusChange(payload.data);
       }
     } catch (e, s) {
       return Future.error(e, s);

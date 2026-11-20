@@ -134,8 +134,8 @@ class _WebVideoPlayerState extends State<WebVideoPlayer> {
 
   late final String _viewType;
   late final web.HTMLVideoElement _video;
-  late final WebVideoController _controller;
-  late final bool _ownsController;
+  late WebVideoController _controller;
+  late bool _ownsController;
 
   String? _resolvedUrl;
   bool _isObjectUrl = false;
@@ -314,13 +314,25 @@ class _WebVideoPlayerState extends State<WebVideoPlayer> {
     super.dispose();
   }
 
+  bool _isVideoFocused() {
+    try {
+      return web.document.activeElement == _video || _video.matches(':focus-within');
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final view = HtmlElementView(viewType: _viewType);
     if (!widget.enableKeyboardShortcuts) return view;
     return CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.space): () => _controller.togglePlayPause(),
+        const SingleActivator(LogicalKeyboardKey.space): () {
+          // Native <video controls> handles Space itself when focused; skip to avoid double-toggling.
+          if (widget.controls && _isVideoFocused()) return;
+          _controller.togglePlayPause();
+        },
       },
       child: Focus(
         autofocus: true,

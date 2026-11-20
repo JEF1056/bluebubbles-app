@@ -67,6 +67,7 @@ class FindMyBleHost private constructor(
         private const val EVENT_CHANNEL = "com.bluebubbles.messaging/findmy_ble_events"
         private const val PREFS_NAME = "findmy_ble_prefs"
         private const val PREF_SAMSUNG_LOCK_PREFIX = "samsung_privacy_id_"
+        private const val PREF_UWB_PROMPTED = "uwb_permission_prompted"
 
         private const val SCAN_TIMEOUT_MS = 120_000L
         private const val EMIT_INTERVAL_MS = 250L
@@ -189,6 +190,15 @@ class FindMyBleHost private constructor(
             }
         }
 
+        fun buildScanFilters(serviceUuid: UUID): List<ScanFilter> {
+            val parcel = ParcelUuid(serviceUuid)
+            // Match both AD 0x03 service UUIDs and AD 0x16 service-data-only beacons (0xFEAA/0xFD5A).
+            return listOf(
+                ScanFilter.Builder().setServiceUuid(parcel).build(),
+                ScanFilter.Builder().setServiceData(parcel, byteArrayOf(0), byteArrayOf(0)).build(),
+            )
+        }
+
         fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
         fun hexToBytes(hex: String): ByteArray {
@@ -231,6 +241,8 @@ class FindMyBleHost private constructor(
     private var expectedPrivacyIds: Set<String> = emptySet()
     private var lockedPrivacyId: String? = null
     private var matchedBleAddress: String? = null
+    private var matchedProvider: String? = null
+    private var matchedDeviceId: String? = null
     private var emaRssi: Double? = null
     private var prevEmittedEma: Double? = null
     private var lastSeenMs: Long = 0L
@@ -269,10 +281,29 @@ class FindMyBleHost private constructor(
         }
     }
 
+    private fun hasUwbHardware(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            activity.packageManager.hasSystemFeature(PackageManager.FEATURE_UWB)
+    }
+
+    private fun requestablePermissions(): Array<String> {
+        val base = requiredPermissions()
+        if (!hasUwbHardware()) return base
+        return base + Manifest.permission.UWB_RANGING
+    }
+
     private fun hasBlePermissions(): Boolean {
         return requiredPermissions().all {
             ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED
         }
+    }
+
+    private fun needsUwbPrompt(): Boolean {
+        if (!hasUwbHardware()) return false
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.UWB_RANGING) == PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        return !prefs.getBoolean(PREF_UWB_PROMPTED, false)
     }
 
     private fun bluetoothAdapter(): BluetoothAdapter? {
@@ -298,7 +329,8 @@ class FindMyBleHost private constructor(
         when (call.method) {
             "checkPermissions" -> result.success(hasBlePermissions())
             "requestPermissions" -> {
-                if (hasBlePermissions()) {
+                val promptUwb = needsUwbPrompt()
+                if (hasBlePermissions() && !promptUwb) {
                     result.success(true)
                     return
                 }
@@ -306,8 +338,16 @@ class FindMyBleHost private constructor(
                     result.error("busy", "Permission request already in progress", null)
                     return
                 }
+                if (promptUwb) {
+                    prefs.edit().putBoolean(PREF_UWB_PROMPTED, true).apply()
+                }
                 pendingPermResult = result
-                permLauncher.launch(requiredPermissions())
+                try {
+                    permLauncher.launch(requestablePermissions())
+                } catch (e: Throwable) {
+                    pendingPermResult = null
+                    result.error("permission_error", e.message ?: "Failed to launch permission prompt", null)
+                }
             }
             "isBluetoothEnabled" -> result.success(bluetoothAdapter()?.isEnabled == true)
             "lockSamsungBeacon" -> {
@@ -320,6 +360,14 @@ class FindMyBleHost private constructor(
                 prefs.edit().putString("$PREF_SAMSUNG_LOCK_PREFIX$deviceId", privacyIdHex).apply()
                 if (scanDeviceId == deviceId) {
                     lockedPrivacyId = privacyIdHex
+                    val promoted = nearbySamsungBeacons.remove(privacyIdHex)
+                    if (promoted != null) {
+                        matchedBleAddress = promoted.address
+                        matchedProvider = "utag"
+                        matchedDeviceId = deviceId
+                        updateRssi(promoted.rssi, promoted.lastSeenMs)
+                        mainHandler.post { emitScanState() }
+                    }
                 }
                 result.success(true)
             }
@@ -373,19 +421,26 @@ class FindMyBleHost private constructor(
     ): Intent? {
         val pm = activity.packageManager
         if (provider == "utag") {
-            val pkg = uwbPackage ?: "com.kieronquinn.app.utag"
-            val action = uwbAction ?: "com.kieronquinn.app.utag.MAP"
-            val cls = uwbClass ?: "com.kieronquinn.app.utag.ui.activities.TagActivity"
-            val extraKey = uwbExtraKey ?: "target_id"
-            val uTagIntent = Intent(action).apply {
-                component = ComponentName(pkg, cls)
-                putExtra(extraKey, rawId)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val pkg = uwbPackage?.takeIf { it.isNotBlank() } ?: "com.kieronquinn.app.utag"
+            if (pkg == "com.kieronquinn.app.utag" || !uwbClass.isNullOrBlank()) {
+                val action = uwbAction?.takeIf { it.isNotBlank() } ?: "com.kieronquinn.app.utag.MAP"
+                val cls = uwbClass?.takeIf { it.isNotBlank() } ?: "com.kieronquinn.app.utag.ui.activities.TagActivity"
+                val extraKey = uwbExtraKey?.takeIf { it.isNotBlank() } ?: "target_id"
+                val uTagIntent = Intent(action).apply {
+                    component = ComponentName(pkg, cls)
+                    if (rawId.isNotBlank()) putExtra(extraKey, rawId)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (pm.resolveActivity(uTagIntent, 0) != null) {
+                    return uTagIntent
+                }
             }
-            if (pm.resolveActivity(uTagIntent, 0) != null) {
-                return uTagIntent
+            if (pkg != "com.kieronquinn.app.utag") {
+                pm.getLaunchIntentForPackage(pkg)?.let {
+                    return it.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                }
             }
-            val fallbackPkg = uwbFallbackPackage ?: "com.samsung.android.oneconnect"
+            val fallbackPkg = uwbFallbackPackage?.takeIf { it.isNotBlank() } ?: "com.samsung.android.oneconnect"
             return pm.getLaunchIntentForPackage(fallbackPkg)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -423,13 +478,15 @@ class FindMyBleHost private constructor(
         expectedPrivacyIds = (args["expectedPrivacyIdsHex"] as? List<*>)?.mapNotNull { (it as? String)?.lowercase() }?.toSet() ?: emptySet()
         lockedPrivacyId = prefs.getString("$PREF_SAMSUNG_LOCK_PREFIX$scanDeviceId", null)?.lowercase()
         matchedBleAddress = null
+        matchedProvider = null
+        matchedDeviceId = null
         emaRssi = null
         prevEmittedEma = null
         lastSeenMs = 0L
         nearbySamsungBeacons.clear()
 
         val targetUuid = if (scanProvider == "utag") UUID_FD5A else UUID_FEAA
-        val filters = listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(targetUuid)).build())
+        val filters = buildScanFilters(targetUuid)
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -489,6 +546,17 @@ class FindMyBleHost private constructor(
         val scanner = activeScanner
         activeScanCallback = null
         activeScanner = null
+        scanDeviceId = ""
+        expectedEids = emptySet()
+        expectedPrivacyIds = emptySet()
+        lockedPrivacyId = null
+        matchedBleAddress = null
+        matchedProvider = null
+        matchedDeviceId = null
+        emaRssi = null
+        prevEmittedEma = null
+        lastSeenMs = 0L
+        nearbySamsungBeacons.clear()
         if (cb != null && scanner != null) {
             try {
                 scanner.stopScan(cb)
@@ -508,6 +576,8 @@ class FindMyBleHost private constructor(
             val frame = parseGoogleFmdnServiceData(data) ?: return
             if (expectedEids.isNotEmpty() && frame.eidHex !in expectedEids) return
             matchedBleAddress = address
+            matchedProvider = "gfind"
+            matchedDeviceId = scanDeviceId
             updateRssi(rssi, now)
         } else if (scanProvider == "utag") {
             val data = record.getServiceData(ParcelUuid(UUID_FD5A)) ?: return
@@ -515,7 +585,10 @@ class FindMyBleHost private constructor(
             val isExpected = frame.privacyIdHex in expectedPrivacyIds ||
                 (lockedPrivacyId != null && frame.privacyIdHex == lockedPrivacyId)
             if (isExpected) {
+                nearbySamsungBeacons.remove(frame.privacyIdHex)
                 matchedBleAddress = address
+                matchedProvider = "utag"
+                matchedDeviceId = scanDeviceId
                 updateRssi(rssi, now)
             } else {
                 nearbySamsungBeacons[frame.privacyIdHex] = NearbyBeacon(
@@ -540,7 +613,6 @@ class FindMyBleHost private constructor(
         val sink = eventSink ?: return
         val now = System.currentTimeMillis()
         val currentEma = emaRssi
-        val stale = currentEma == null || (now - lastSeenMs) > 4_000L
 
         val nearbyList = nearbySamsungBeacons.values
             .filter { now - it.lastSeenMs <= 6_000L }
@@ -555,7 +627,7 @@ class FindMyBleHost private constructor(
                 )
             }
 
-        if (stale || currentEma == null) {
+        if (currentEma == null || (now - lastSeenMs) > 4_000L) {
             sink.success(
                 mapOf(
                     "matched" to false,
@@ -601,6 +673,7 @@ class FindMyBleHost private constructor(
             result.error("invalid_args", "Missing ringKeyHex", null)
             return
         }
+        val requestedDeviceId = call.argument<String>("deviceId")?.takeIf { it.isNotBlank() }
         val eidsHex = call.argument<List<String>>("eidsHex")?.map { it.lowercase() }?.toSet() ?: emptySet()
         val providedAddr = call.argument<String>("bleAddress")?.takeIf { it.isNotBlank() }
         val stop = call.argument<Boolean>("stop") ?: false
@@ -608,15 +681,39 @@ class FindMyBleHost private constructor(
 
         workerExecutor.execute {
             try {
-                val targetAddr = providedAddr ?: matchedBleAddress ?: findGoogleTagAddress(adapter, eidsHex)
+                val activeMatchAddr = if (
+                    matchedProvider == "gfind" &&
+                    matchedDeviceId != null &&
+                    (requestedDeviceId == null || requestedDeviceId == matchedDeviceId)
+                ) {
+                    matchedBleAddress
+                } else {
+                    null
+                }
+                val cachedAddr = providedAddr ?: activeMatchAddr
+                var targetAddr = cachedAddr ?: findGoogleTagAddress(adapter, eidsHex)
                 if (targetAddr == null) {
                     mainHandler.post { result.error("not_found", "Tag not found in BLE range", null) }
                     return@execute
                 }
-                val device = adapter.getRemoteDevice(targetAddr)
                 val ringKey = hexToBytes(ringKeyHex)
                 val stateMask = stateMaskForComponent(stop = stop, component = component)
-                val ok = executeGattRing(device, ringKey, stateMask)
+                var ok = executeGattRing(adapter.getRemoteDevice(targetAddr), ringKey, stateMask)
+                // Cached RPA addresses rotate; rescan once by EID before failing.
+                if (!ok && cachedAddr != null && eidsHex.isNotEmpty()) {
+                    val freshAddr = findGoogleTagAddress(adapter, eidsHex)
+                    if (freshAddr != null && freshAddr != targetAddr) {
+                        targetAddr = freshAddr
+                        ok = executeGattRing(adapter.getRemoteDevice(freshAddr), ringKey, stateMask)
+                        if (ok && activeScanCallback != null && scanProvider == "gfind" &&
+                            (requestedDeviceId == null || requestedDeviceId == scanDeviceId)
+                        ) {
+                            matchedBleAddress = freshAddr
+                            matchedProvider = "gfind"
+                            matchedDeviceId = scanDeviceId
+                        }
+                    }
+                }
                 mainHandler.post {
                     if (ok) {
                         result.success(mapOf("ok" to true, "bleAddress" to targetAddr))
@@ -637,7 +734,7 @@ class FindMyBleHost private constructor(
         val scanner = adapter.bluetoothLeScanner ?: return null
         val latch = CountDownLatch(1)
         val found = AtomicReference<String?>(null)
-        val filters = listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(UUID_FEAA)).build())
+        val filters = buildScanFilters(UUID_FEAA)
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         val cb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, result: ScanResult) {

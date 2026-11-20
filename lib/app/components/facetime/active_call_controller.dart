@@ -323,6 +323,7 @@ class ActiveCallController extends ChangeNotifier {
   Duration get elapsed => _elapsed;
 
   Timer? _ticker;
+  bool _isForeground = true;
 
   String get formattedDuration {
     final totalSeconds = _elapsed.inSeconds < 0 ? 0 : _elapsed.inSeconds;
@@ -1272,10 +1273,24 @@ class ActiveCallController extends ChangeNotifier {
     _pendingCallTab = null;
   }
 
+  void setForeground(bool foreground) {
+    if (_isForeground == foreground) return;
+    _isForeground = foreground;
+    if (!foreground) {
+      _stopTicker();
+      return;
+    }
+    if (_state.phase == ActiveCallPhase.ongoing && _state.connectedAt != null) {
+      _startTickerFrom(_state.connectedAt!);
+      notifyListeners();
+    }
+  }
+
   void _startTickerFrom(DateTime connectedAt) {
     _stopTicker();
     final diff = _now().difference(connectedAt);
     _elapsed = diff.isNegative ? Duration.zero : diff;
+    if (!_isForeground) return;
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
       if (_state.phase != ActiveCallPhase.ongoing || _state.connectedAt == null) return;
       final d = _now().difference(_state.connectedAt!);

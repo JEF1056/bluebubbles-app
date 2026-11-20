@@ -98,6 +98,15 @@ class SocketIOForegroundService : Service() {
 
         internal fun shouldReconnectOnDisconnect(reason: String): Boolean =
             reason == "io server disconnect"
+
+        @Volatile
+        private var activeInstance: SocketIOForegroundService? = null
+
+        fun reloadIfRunning(): Boolean {
+            val instance = activeInstance ?: return false
+            instance.reconnectHandler.post { instance.connectSocketFromPrefs() }
+            return true
+        }
     }
 
     private var mSocket: Socket? = null
@@ -128,7 +137,6 @@ class SocketIOForegroundService : Service() {
 
     private val eventBlacklist: Array<String> = arrayOf(
         "typing-indicator",
-        "new-findmy-location",
         "ft-bridge-answer",
         "ft-bridge-ice",
         "ft-bridge-hangup",
@@ -136,16 +144,20 @@ class SocketIOForegroundService : Service() {
         Socket.EVENT_DISCONNECT
     )
 
+    // Live FindMy socket events belong only to the active UI isolate; never spawn a headless worker for them.
+    private val foregroundOnlyEvents: Set<String> = setOf(
+        "new-findmy-location",
+        "new-findmy-device"
+    )
+
     override fun onCreate() {
         super.onCreate()
         isBeingDestroyed = false
+        activeInstance = this
 
         try {
             val prefs = applicationContext.getSharedPreferences("FlutterSharedPreferences", 0)
-            val serverUrl: String? = prefs.getString("serverAddress", null)
             val keepAppAlive: Boolean = prefs.getBoolean("keepAppAlive", false)
-            val storedPassword: String? = prefs.getString("guidAuthKey", null)
-            val customHeaders: String? = prefs.getString("customHeaders", null)
 
             // Create notification for foreground service before any early stopSelf() to satisfy FGS contract
             createNotificationChannel()
@@ -164,6 +176,26 @@ class SocketIOForegroundService : Service() {
             }
 
             hasStarted = true
+            connectSocketFromPrefs()
+        } catch (e: Exception) {
+            PersistentLog.e(applicationContext, Constants.logTag, "Failed to initialize foreground service", e)
+            stopSelf()
+        }
+    }
+
+    private fun connectSocketFromPrefs() {
+        try {
+            reconnectScheduled = false
+            reconnectHandler.removeCallbacks(reconnectRunnable)
+            activeSocket = null
+            mSocket?.disconnect()
+            mSocket?.close()
+            mSocket = null
+
+            val prefs = applicationContext.getSharedPreferences("FlutterSharedPreferences", 0)
+            val serverUrl: String? = prefs.getString("serverAddress", null)
+            val storedPassword: String? = prefs.getString("guidAuthKey", null)
+            val customHeaders: String? = prefs.getString("customHeaders", null)
 
             // if the service is enabled, but the server URL is missing, update the notification
             if (serverUrl == null || serverUrl.isEmpty()) {
@@ -280,6 +312,10 @@ class SocketIOForegroundService : Service() {
                         PersistentLog.d(applicationContext, Constants.logTag, "Ignored event of type $event from Socket.io...")
                         return@onAnyIncoming
                     }
+                    if (event in foregroundOnlyEvents && (MainActivity.getEngine() == null || !MainActivity.isDartReady())) {
+                        PersistentLog.d(applicationContext, Constants.logTag, "Skipped foreground-only event $event (UI engine not ready)")
+                        return@onAnyIncoming
+                    }
 
                     // The Dart handler decodes this into a Map, so only object-shaped JSON is
                     // usable — forwarding anything else would just burn five headless engine
@@ -305,7 +341,11 @@ class SocketIOForegroundService : Service() {
                         handleNativeFaceTimeStatusChanged(data)
                     }
                     val argsMap = hashMapOf<String, Any>("event" to event, "data" to data)
-                    val enqueueWorker = { DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {} }
+                    val enqueueWorker = {
+                        if (event !in foregroundOnlyEvents) {
+                            DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                        }
+                    }
                     if (MainActivity.getEngine() != null && MainActivity.isDartReady()) {
                         reconnectHandler.post {
                             try {
@@ -412,6 +452,9 @@ class SocketIOForegroundService : Service() {
         PersistentLog.d(applicationContext, Constants.logTag, "BlueBubbles Service is being destroyed!")
 
         super.onDestroy()
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         activeSocket = null
         mSocket?.disconnect()
         mSocket?.close()
@@ -426,13 +469,15 @@ class SocketIOForegroundService : Service() {
             val statusId = json.optInt("status_id", -1)
             val callUuid = json.optString("uuid", "").takeIf { it.isNotBlank() } ?: return
             val isOutgoing = json.optBoolean("is_outgoing", false)
-            when (statusId) {
-                1 -> {
-                    if (!FaceTimeConnectionService.markCallActive(callUuid, recordIfPending = isOutgoing)) {
-                        FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = true)
+            reconnectHandler.post {
+                when (statusId) {
+                    1 -> {
+                        if (!FaceTimeConnectionService.markCallActive(callUuid, recordIfPending = isOutgoing)) {
+                            FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = true)
+                        }
                     }
+                    6 -> FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
                 }
-                6 -> FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
             }
         } catch (e: Exception) {
             PersistentLog.w(applicationContext, Constants.logTag, "Failed native ft-call-status-changed dispatch: ${e.message}")

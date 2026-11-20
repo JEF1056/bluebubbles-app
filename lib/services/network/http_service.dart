@@ -110,7 +110,16 @@ class HttpService implements BaseApi {
       if (statusCode == 402 && GetIt.I.isRegistered<SubscriptionService>()) {
         SubscriptionSvc.refused(e is Response ? e.data : (e as DioException).response?.data);
       }
+      final requestOptions = e is Response
+          ? e.requestOptions
+          : e is DioException
+              ? e.requestOptions
+              : null;
+      final method = requestOptions?.method.toUpperCase();
+      final isIdempotent =
+          method == 'GET' || method == 'HEAD' || method == 'OPTIONS' || requestOptions?.extra['idempotent'] == true;
       if ((statusCode == 502 || statusCode == 503) &&
+          isIdempotent &&
           (apiRoot.contains("trycloudflare") || apiRoot.startsWith("https://"))) {
         try {
           return await func();

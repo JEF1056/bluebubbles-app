@@ -190,4 +190,50 @@ class MessageDetailReceiptTest {
         assertEquals("Now", formatDetailTimestamp(baseNow + 5 * 60_000L, nowMs = baseNow, zoneId = zone, locale = Locale.US))
         assertNotNull(nextDetailTimestampTickDelayMs(baseNow + 5 * 60_000L, nowMs = baseNow))
     }
+
+    @Test
+    fun `nextDisplayedTimestampTickDelayMs skips unexpanded non-boundary messages`() {
+        val nowMs = 1_700_000_000_000L
+        val olderUnexpanded = MessageUi(
+            guid = "m-old",
+            text = "old",
+            isFromMe = true,
+            senderName = null,
+            dateCreated = nowMs - 30_000L,
+            dateDelivered = 0L,
+            dateRead = 0L,
+            sendFailed = false,
+            reactions = emptyList(),
+            attachmentGuid = null,
+            attachmentMimeType = null,
+            attachmentUrl = null,
+            localAttachmentPath = null,
+            customHeaders = emptyMap(),
+            isLatestOutgoing = false,
+            isLastReadOutgoing = false,
+            isLatestIncoming = false
+        )
+        val latestOutgoing = olderUnexpanded.copy(
+            guid = "m-latest",
+            dateCreated = nowMs - 10_000L,
+            isLatestOutgoing = true
+        )
+
+        assertEquals(
+            50_000L,
+            nextDisplayedTimestampTickDelayMs(
+                messages = listOf(olderUnexpanded, latestOutgoing),
+                expandedMessageGuid = null,
+                nowMs = nowMs
+            )
+        )
+        assertEquals(
+            30_000L,
+            nextDisplayedTimestampTickDelayMs(
+                messages = listOf(olderUnexpanded, latestOutgoing),
+                expandedMessageGuid = "m-old",
+                nowMs = nowMs
+            )
+        )
+    }
 }

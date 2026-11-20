@@ -34,17 +34,25 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(SetupUiState())
     val uiState: StateFlow<SetupUiState> = _uiState.asStateFlow()
 
+    companion object {
+        internal fun shouldAutoSyncOnSetup(
+            phoneConnected: Boolean,
+            userDisconnected: Boolean
+        ): Boolean = phoneConnected && !userDisconnected
+    }
+
     init {
         viewModelScope.launch {
             val savedUrl = settings.getServerUrl()
             val savedPass = settings.getPassword()
+            val userDisconnected = settings.isUserDisconnected()
             val phoneConnected = relay.refreshPhoneConnected()
             _uiState.value = _uiState.value.copy(
                 serverUrl = savedUrl,
                 password = savedPass,
                 isPhoneConnected = phoneConnected
             )
-            if (phoneConnected) {
+            if (shouldAutoSyncOnSetup(phoneConnected, userDisconnected)) {
                 syncFromPhone()
             }
         }
@@ -68,6 +76,7 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
     fun syncFromPhone() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSyncingFromPhone = true, error = null)
+            val wasDisconnected = settings.isUserDisconnected()
             val connected = relay.refreshPhoneConnected(force = true)
             if (!connected) {
                 _uiState.value = _uiState.value.copy(
@@ -76,6 +85,9 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
                     error = "Phone app not reachable"
                 )
                 return@launch
+            }
+            if (wasDisconnected) {
+                settings.setUserDisconnected(false)
             }
             if (relay.loadCachedCredentialsFromDataLayer() && settings.isConfigured.first()) {
                 _uiState.value = _uiState.value.copy(isSyncingFromPhone = false, isSuccess = true)
@@ -89,6 +101,9 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             if (configured) {
                 _uiState.value = _uiState.value.copy(isSyncingFromPhone = false, isSuccess = true)
                 return@launch
+            }
+            if (wasDisconnected) {
+                settings.setUserDisconnected(true)
             }
             _uiState.value = _uiState.value.copy(
                 isSyncingFromPhone = false,

@@ -279,54 +279,57 @@ class IntentsService {
         return;
       }
 
-      await StartupTasks.waitForUI();
+      // Mark the navigation as pending BEFORE waitForUI() so onAppResume can see
+      // we are about to switch chats and must not mark the old chat read prematurely.
+      pendingOpenChatGuid = guid;
+      try {
+        await StartupTasks.waitForUI();
 
-      // On the initial-intent path the widget tree is starting fresh (see the
-      // comment in init()), so activeChat may be a stale leftover from before the
-      // Activity was torn down — always navigate explicitly in that case rather
-      // than trusting it to already reflect what's on screen.
-      bool chatIsOpen = !isInitialIntent && ChatsSvc.activeChat?.chat.guid == guid;
-      Logger.debug("Chat is active: $chatIsOpen", tag: "IntentsService");
+        // On the initial-intent path the widget tree is starting fresh (see the
+        // comment in init()), so activeChat may be a stale leftover from before the
+        // Activity was torn down — always navigate explicitly in that case rather
+        // than trusting it to already reflect what's on screen.
+        bool chatIsOpen = !isInitialIntent && ChatsSvc.activeChat?.chat.guid == guid;
+        Logger.debug("Chat is active: $chatIsOpen", tag: "IntentsService");
 
-      setPickedAttachments() {
-        if (attachments.isNotEmpty) {
-          cvc(chat).pickedAttachments.value = attachments;
+        setPickedAttachments() {
+          if (attachments.isNotEmpty) {
+            cvc(chat).pickedAttachments.value = attachments;
+          }
+
+          if (text != null && text.isNotEmpty) {
+            cvc(chat).textController.text = text;
+          }
         }
 
-        if (text != null && text.isNotEmpty) {
-          cvc(chat).textController.text = text;
+        if (!chatIsOpen) {
+          Logger.debug("Navigating to conversation view...", tag: "IntentsService");
+
+          // Rather than waiting for paging to eventually reach this chat,
+          // proactively seed its ChatState now. getOrCreateChatState() inserts
+          // a fully valid ChatState immediately and is a no-op if the batch
+          // loader already added it.
+          ChatsSvc.getOrCreateChatState(chat);
+
+          // Pre-populate text/attachments on the controller before navigating so
+          // the ConversationView text field is pre-filled on first build.
+          setPickedAttachments();
+
+          await NavigationSvc.pushAndRemoveUntil(
+            Get.context!,
+            ConversationView(chat: chat),
+            (route) => route.isFirst,
+          );
+        } else {
+          Logger.debug("Chat is already open, not navigating", tag: "IntentsService");
+          // It may still be open under Settings or Find My: bring it back into view
+          NavigationSvc.closeSections();
+          setPickedAttachments();
         }
-      }
-
-      if (!chatIsOpen) {
-        // Mark the navigation as pending BEFORE any await so that onAppResume,
-        // which fires while we are suspended at waitForUI / Future.delayed, can
-        // see that we are about to switch chats and must not mark the current
-        // active chat as read prematurely.
-        pendingOpenChatGuid = guid;
-        Logger.debug("Navigating to conversation view...", tag: "IntentsService");
-
-        // Rather than waiting for paging to eventually reach this chat,
-        // proactively seed its ChatState now. getOrCreateChatState() inserts
-        // a fully valid ChatState immediately and is a no-op if the batch
-        // loader already added it.
-        ChatsSvc.getOrCreateChatState(chat);
-
-        // Pre-populate text/attachments on the controller before navigating so
-        // the ConversationView text field is pre-filled on first build.
-        setPickedAttachments();
-        pendingOpenChatGuid = null;
-
-        await NavigationSvc.pushAndRemoveUntil(
-          Get.context!,
-          ConversationView(chat: chat),
-          (route) => route.isFirst,
-        );
-      } else {
-        Logger.debug("Chat is already open, not navigating", tag: "IntentsService");
-        // It may still be open under Settings or Find My: bring it back into view
-        NavigationSvc.closeSections();
-        setPickedAttachments();
+      } finally {
+        if (pendingOpenChatGuid == guid) {
+          pendingOpenChatGuid = null;
+        }
       }
     }
   }

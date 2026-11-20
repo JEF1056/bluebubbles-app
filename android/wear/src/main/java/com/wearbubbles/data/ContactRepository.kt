@@ -10,6 +10,7 @@ import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.relay.PhoneRelayClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -24,20 +25,16 @@ class ContactRepository(
         private const val TAG = "ContactRepository"
     }
 
-    private val nameCache = ConcurrentHashMap<String, String>()
-    private val avatarCache = ConcurrentHashMap<String, String>()
+    private val memoryCache = ContactMemoryCache()
     private var loaded = false
 
-    fun getContactsFlow(): Flow<List<ContactEntity>> = contactDao.getAllContactsFlow()
+    fun getContactsFlow(): Flow<List<ContactEntity>> = contactDao.getAllContactsFlow().onEach {
+        memoryCache.update(it)
+        loaded = true
+    }
 
     suspend fun loadFromDb() {
-        val contacts = contactDao.getAllContacts()
-        contacts.forEach {
-            nameCache[it.normalizedAddress] = it.displayName
-            if (!it.avatarPath.isNullOrBlank()) {
-                avatarCache[it.normalizedAddress] = it.avatarPath
-            }
-        }
+        memoryCache.update(contactDao.getAllContacts())
         loaded = true
     }
 
@@ -97,7 +94,7 @@ class ContactRepository(
                                 normalizedAddress = normalized,
                                 displayName = name,
                                 rawAddress = addr,
-                                avatarPath = savedAvatarPath ?: avatarCache[normalized]
+                                avatarPath = savedAvatarPath ?: memoryCache.resolveAvatarPath(normalized)
                             )
                         )
                     }
@@ -106,29 +103,19 @@ class ContactRepository(
 
             if (entities.isNotEmpty()) {
                 contactDao.upsertAll(entities)
-                entities.forEach {
-                    nameCache[it.normalizedAddress] = it.displayName
-                    if (!it.avatarPath.isNullOrBlank()) {
-                        avatarCache[it.normalizedAddress] = it.avatarPath
-                    }
-                }
+                memoryCache.upsert(entities)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to fetch contacts: ${e.message}")
         }
     }
 
-    fun resolveDisplayName(address: String): String {
-        val normalized = AddressNormalizer.normalize(address)
-        return nameCache[normalized] ?: AddressNormalizer.format(address)
-    }
+    fun resolveDisplayName(address: String): String = memoryCache.resolveDisplayName(address)
 
-    fun resolveAvatarPath(address: String): String? {
-        val normalized = AddressNormalizer.normalize(address)
-        val cached = avatarCache[normalized] ?: phoneRelay?.getAvatarFile(normalized)?.absolutePath
-        if (cached != null) avatarCache[normalized] = cached
-        return cached
-    }
+    fun resolveAvatarPath(address: String): String? =
+        memoryCache.resolveAvatarPath(address) { normalized ->
+            phoneRelay?.getAvatarFile(normalized)?.absolutePath
+        }
 
     fun resolveAvatarForChat(chatGuid: String, participantAddresses: String): String? {
         val participants = participantAddresses.split(",").filter { it.isNotBlank() }
@@ -149,5 +136,49 @@ class ContactRepository(
             return participants.take(3).joinToString(", ") { resolveDisplayName(it) }
         }
         return resolveDisplayName(chatIdentifier)
+    }
+}
+
+internal class ContactMemoryCache {
+    private val nameCache = ConcurrentHashMap<String, String>()
+    private val avatarCache = ConcurrentHashMap<String, String>()
+
+    fun update(contacts: List<ContactEntity>) {
+        val nextNames = HashMap<String, String>(contacts.size)
+        val nextAvatars = HashMap<String, String>()
+        contacts.forEach {
+            nextNames[it.normalizedAddress] = it.displayName
+            if (!it.avatarPath.isNullOrBlank()) {
+                nextAvatars[it.normalizedAddress] = it.avatarPath
+            }
+        }
+        nameCache.putAll(nextNames)
+        nameCache.keys.retainAll(nextNames.keys)
+        avatarCache.putAll(nextAvatars)
+        avatarCache.keys.retainAll(nextAvatars.keys)
+    }
+
+    fun upsert(contacts: List<ContactEntity>) {
+        contacts.forEach {
+            nameCache[it.normalizedAddress] = it.displayName
+            if (!it.avatarPath.isNullOrBlank()) {
+                avatarCache[it.normalizedAddress] = it.avatarPath
+            }
+        }
+    }
+
+    fun resolveDisplayName(address: String): String {
+        val normalized = AddressNormalizer.normalize(address)
+        return nameCache[normalized] ?: AddressNormalizer.format(address)
+    }
+
+    fun resolveAvatarPath(
+        address: String,
+        fallbackLookup: (String) -> String? = { null }
+    ): String? {
+        val normalized = AddressNormalizer.normalize(address)
+        val cached = avatarCache[normalized] ?: fallbackLookup(normalized)
+        if (cached != null) avatarCache[normalized] = cached
+        return cached
     }
 }

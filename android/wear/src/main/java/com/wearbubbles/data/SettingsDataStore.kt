@@ -30,6 +30,7 @@ class SettingsDataStore(private val context: Context) {
         private val USER_NAME = stringPreferencesKey("user_name")
         private val USER_HANDLE = stringPreferencesKey("user_handle")
         private val USER_AVATAR_PATH = stringPreferencesKey("user_avatar_path")
+        private val USER_DISCONNECTED = booleanPreferencesKey("user_disconnected")
         private val gson = Gson()
         private val mapType = object : TypeToken<Map<String, String>>() {}.type
     }
@@ -74,6 +75,22 @@ class SettingsDataStore(private val context: Context) {
         !prefs[SERVER_URL].isNullOrBlank() && !prefs[PASSWORD].isNullOrBlank()
     }
 
+    val userDisconnected: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[USER_DISCONNECTED] ?: false
+    }
+
+    suspend fun isUserDisconnected(): Boolean = userDisconnected.first()
+
+    suspend fun setUserDisconnected(disconnected: Boolean) {
+        context.dataStore.edit { prefs ->
+            if (disconnected) {
+                prefs[USER_DISCONNECTED] = true
+            } else {
+                prefs.remove(USER_DISCONNECTED)
+            }
+        }
+    }
+
     suspend fun getServerUrl(): String = serverUrl.first()
 
     suspend fun getPassword(): String = password.first()
@@ -91,12 +108,14 @@ class SettingsDataStore(private val context: Context) {
         val normalized = url.trim().trimEnd('/')
         context.dataStore.edit { prefs ->
             prefs[SERVER_URL] = normalized
+            prefs.remove(USER_DISCONNECTED)
         }
     }
 
     suspend fun savePassword(pass: String) {
         context.dataStore.edit { prefs ->
             prefs[PASSWORD] = pass
+            prefs.remove(USER_DISCONNECTED)
         }
     }
 
@@ -105,6 +124,7 @@ class SettingsDataStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[SERVER_URL] = normalized
             prefs[PASSWORD] = pass
+            prefs.remove(USER_DISCONNECTED)
         }
     }
 
@@ -156,8 +176,13 @@ class SettingsDataStore(private val context: Context) {
         }
     }
 
-    suspend fun clearAll() {
-        context.dataStore.edit { it.clear() }
+    suspend fun clearAll(markDisconnected: Boolean = false) {
+        context.dataStore.edit { prefs ->
+            prefs.clear()
+            if (markDisconnected) {
+                prefs[USER_DISCONNECTED] = true
+            }
+        }
     }
 
     fun parseHeaders(raw: String): Map<String, String> {

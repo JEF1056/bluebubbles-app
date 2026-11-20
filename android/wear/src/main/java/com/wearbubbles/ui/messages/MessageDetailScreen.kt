@@ -225,6 +225,7 @@ fun MessageDetailScreen(
 
     val lifecycleOwner = LocalLifecycleOwner.current
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var expandedMessageGuid by remember(chatGuid) { mutableStateOf<String?>(null) }
     var isResumed by remember(lifecycleOwner) {
         mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
@@ -246,19 +247,13 @@ fun MessageDetailScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    LaunchedEffect(isResumed, nowMs, messages) {
+    LaunchedEffect(isResumed, nowMs, messages, expandedMessageGuid) {
         if (!isResumed) return@LaunchedEffect
-        val minDelayMs = messages.asSequence()
-            .filterNot { it.sendFailed || MessageDao.isTempPlaceholderGuid(it.guid) }
-            .mapNotNull { msg ->
-                val ts = when {
-                    msg.dateRead > 0L -> msg.dateRead
-                    msg.dateDelivered > 0L -> msg.dateDelivered
-                    else -> msg.dateCreated
-                }
-                nextDetailTimestampTickDelayMs(ts, nowMs)
-            }
-            .minOrNull() ?: return@LaunchedEffect
+        val minDelayMs = nextDisplayedTimestampTickDelayMs(
+            messages = messages,
+            expandedMessageGuid = expandedMessageGuid,
+            nowMs = nowMs
+        ) ?: return@LaunchedEffect
         delay(minDelayMs)
         nowMs = System.currentTimeMillis()
     }
@@ -420,6 +415,10 @@ fun MessageDetailScreen(
                     imageLoader = imageLoader,
                     isPlayingAudio = playingMessageGuid == msg.guid,
                     nowMs = nowMs,
+                    isDetailExpanded = expandedMessageGuid == msg.guid,
+                    onToggleDetailExpand = {
+                        expandedMessageGuid = if (expandedMessageGuid == msg.guid) null else msg.guid
+                    },
                     onLongPress = {
                         when {
                             msg.sendFailed -> failedActionMsg = msg
@@ -553,7 +552,7 @@ fun MessageDetailScreen(
                 MoreActionPill(
                     label = "Open on phone",
                     icon = Icons.AutoMirrored.Rounded.SendToMobile,
-                    onClick = { RemoteLauncher.openServerOnPhoneAsync(context) },
+                    onClick = { RemoteLauncher.openChatOnPhoneAsync(context, chatGuid) },
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
@@ -1216,6 +1215,8 @@ private fun MessageBubble(
     imageLoader: ImageLoader,
     isPlayingAudio: Boolean,
     nowMs: Long,
+    isDetailExpanded: Boolean,
+    onToggleDetailExpand: () -> Unit,
     onLongPress: () -> Unit,
     onFailedClick: () -> Unit,
     onImageClick: () -> Unit,
@@ -1225,7 +1226,6 @@ private fun MessageBubble(
     val palette = LocalWearPalette.current
     val alignment = if (message.isFromMe) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleShape = remember(meta.corners) { meta.corners.toShape() }
-    var showExpandedDetail by remember(message.guid) { mutableStateOf(false) }
     val detailStatus = remember(
         message.isFromMe,
         message.sendFailed,
@@ -1502,9 +1502,7 @@ private fun MessageBubble(
                                 onClick = {
                                     when {
                                         message.sendFailed -> onFailedClick()
-                                        detailStatus != null && !detailStatus.showAlways -> {
-                                            showExpandedDetail = !showExpandedDetail
-                                        }
+                                        detailStatus != null && !detailStatus.showAlways -> onToggleDetailExpand()
                                     }
                                 },
                                 onLongClick = onLongPress
@@ -1578,7 +1576,7 @@ private fun MessageBubble(
                     color = ErrorColor
                 )
             }
-        } else if (detailStatus != null && (detailStatus.showAlways || showExpandedDetail)) {
+        } else if (detailStatus != null && (detailStatus.showAlways || isDetailExpanded)) {
             val detailColor = if (detailStatus.kind == MessageDetailKind.READ && message.isLatestOutgoing) {
                 palette.onSurface.copy(alpha = 0.88f)
             } else {

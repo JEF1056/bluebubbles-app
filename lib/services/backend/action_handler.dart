@@ -77,7 +77,6 @@ class ActionHandler extends GetxService {
     if (statusId == 4) {
       ActiveCallController.instance.applyServerSession(enriched);
       await handleIncomingFaceTimeCall(enriched);
-      ActiveCallController.instance.applyServerSession(enriched);
       return;
     }
 
@@ -114,7 +113,7 @@ class ActionHandler extends GetxService {
         isTelephony: isTelephony,
       );
       if (handledByTelecom) return;
-      if (LifecycleSvc.isAlive) {
+      if (LifecycleSvc.isForeground) {
         await showFaceTimeOverlay(
           callUuid,
           caller,
@@ -127,7 +126,7 @@ class ActionHandler extends GetxService {
       return;
     }
 
-    if (!LifecycleSvc.isAlive) {
+    if (!LifecycleSvc.isForeground) {
       if (kIsDesktop) {
         await showFaceTimeOverlay(
           callUuid,
@@ -218,15 +217,24 @@ class ActionHandler extends GetxService {
         }
         return;
       case "updated-message":
+      case "message-send-error":
         if (!isNullOrEmpty(data)) {
           final payload = ServerPayload.fromJson(data);
           final updatedMessage = Message.fromMap(payload.data);
+          if (event == "message-send-error" && updatedMessage.error == 0) {
+            updatedMessage.error = 4;
+          }
           if (updatedMessage.error > 0) updatedMessage.errorMessage = serverErrorMessage(updatedMessage.error);
+          final rawChats = payload.data['chats'] as List?;
+          final Chat? chat = (rawChats != null && rawChats.isNotEmpty)
+              ? Chat.fromMap((rawChats.first as Map).cast<String, dynamic>())
+              : Message.findOne(guid: payload.data['tempGuid'] ?? updatedMessage.guid)?.chat.target;
+          if (chat == null) return;
           await IncomingMsgHandler.handle(
               IncomingPayload(
                 type: MessageEventType.updatedMessage,
                 source: MessageSource.socket,
-                chat: Chat.fromMap(payload.data['chats'].first.cast<String, dynamic>()),
+                chat: chat,
                 message: updatedMessage,
                 attachments: ((payload.data['attachments'] as List?) ?? const [])
                     .whereType<Map>()
@@ -283,6 +291,10 @@ class ActionHandler extends GetxService {
       case "imessage-aliases-removed":
         Logger.info("Alias(es) removed ${data["aliases"]}");
         await NotificationsSvc.createAliasesRemovedNotification((data["aliases"] as List).cast<String>());
+        return;
+      case "new-findmy-location":
+      case "new-findmy-device":
+        EventDispatcherSvc.emit(event, data);
         return;
       default:
         return;

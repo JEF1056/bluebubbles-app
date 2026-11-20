@@ -2,6 +2,7 @@ package com.wearbubbles.socket
 
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.wearbubbles.api.dto.MessageDto
 import io.socket.client.IO
 import io.socket.client.Socket
@@ -17,6 +18,7 @@ import java.net.URLEncoder
 sealed class SocketEvent {
     data class NewMessage(val message: MessageDto) : SocketEvent()
     data class UpdatedMessage(val message: MessageDto) : SocketEvent()
+    data class MessageSendError(val message: MessageDto) : SocketEvent()
     data class TypingIndicator(val chatGuid: String, val display: Boolean) : SocketEvent()
     data class PinnedChatsUpdated(val pinnedChatGuids: List<String>) : SocketEvent()
     data class IncomingFaceTime(
@@ -34,10 +36,46 @@ class SocketManager {
 
     companion object {
         private const val TAG = "SocketManager"
+        private val gsonStatic = Gson()
+
+        internal fun parseMessageDto(arg: Any?): MessageDto? {
+            val raw = when (arg) {
+                is JSONObject -> arg.toString()
+                is String -> arg
+                else -> return null
+            }
+            return try {
+                val elem = JsonParser.parseString(raw)
+                if (!elem.isJsonObject) return null
+                val obj = elem.asJsonObject
+                val target = if (!obj.has("guid") && obj.get("data")?.isJsonObject == true) {
+                    obj.getAsJsonObject("data")
+                } else {
+                    obj
+                }
+                gsonStatic.fromJson(target, MessageDto::class.java)
+                    ?.takeIf { !it.guid.isNullOrBlank() || !it.tempGuid.isNullOrBlank() }
+            } catch (e: Exception) {
+                try {
+                    Log.e(TAG, "Failed to parse message payload", e)
+                } catch (_: Throwable) {
+                }
+                null
+            }
+        }
+
+        private fun parseJsonArg(arg: Any?): JSONObject? = when (arg) {
+            is JSONObject -> arg
+            is String -> try {
+                JSONObject(arg)
+            } catch (_: Exception) {
+                null
+            }
+            else -> null
+        }
     }
 
     private var socket: Socket? = null
-    private val gson = Gson()
 
     private val _events = MutableSharedFlow<SocketEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<SocketEvent> = _events.asSharedFlow()
@@ -109,26 +147,20 @@ class SocketManager {
                 }
 
                 on("new-message") { args ->
-                    val json = args.firstOrNull() as? JSONObject ?: return@on
-                    try {
-                        val msg = gson.fromJson(json.toString(), MessageDto::class.java)
-                        if (msg != null) {
-                            _events.tryEmit(SocketEvent.NewMessage(msg))
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to parse new-message", e)
+                    parseMessageDto(args.firstOrNull())?.let { msg ->
+                        _events.tryEmit(SocketEvent.NewMessage(msg))
                     }
                 }
 
                 on("updated-message") { args ->
-                    val json = args.firstOrNull() as? JSONObject ?: return@on
-                    try {
-                        val msg = gson.fromJson(json.toString(), MessageDto::class.java)
-                        if (msg != null) {
-                            _events.tryEmit(SocketEvent.UpdatedMessage(msg))
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to parse updated-message", e)
+                    parseMessageDto(args.firstOrNull())?.let { msg ->
+                        _events.tryEmit(SocketEvent.UpdatedMessage(msg))
+                    }
+                }
+
+                on("message-send-error") { args ->
+                    parseMessageDto(args.firstOrNull())?.let { msg ->
+                        _events.tryEmit(SocketEvent.MessageSendError(msg))
                     }
                 }
 
@@ -206,16 +238,6 @@ class SocketManager {
         } catch (e: Exception) {
             Log.e(TAG, "Socket connection setup failed", e)
         }
-    }
-
-    private fun parseJsonArg(arg: Any?): JSONObject? = when (arg) {
-        is JSONObject -> arg
-        is String -> try {
-            JSONObject(arg)
-        } catch (_: Exception) {
-            null
-        }
-        else -> null
     }
 
     @Synchronized

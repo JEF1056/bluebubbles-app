@@ -406,7 +406,7 @@ class NotificationsService {
     // Already read on another device, e.g. a message the socket missed that arrived late.
     if (message.dateRead != null) return;
     if (chat.shouldMuteNotification(message)) return;
-    if (!headless && LifecycleSvc.isAlive) {
+    if (!headless && LifecycleSvc.isForeground) {
       if (ChatsSvc.isChatActive(chat.guid)) return;
       // Desktop always notifies for inactive chats; this chat-list suppression is mobile-only.
       if (!kIsDesktop &&

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bluebubbles/services/network/http_service.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -237,23 +238,45 @@ class FindMyBleService {
     });
   }
 
+  /// Human-readable error message from the most recent [ringGoogleTag] attempt, if it failed.
+  String? lastRingError;
+
   Future<bool> ringGoogleTag({
     required FindMyBleSpec spec,
     String? bleAddress,
     bool stop = false,
     String? component,
   }) async {
-    if (!isSupported || spec.ringKeyHex == null || spec.ringKeyHex!.isEmpty) return false;
+    lastRingError = null;
+    if (!isSupported) {
+      lastRingError = 'BLE tag ringing is only supported on Android';
+      return false;
+    }
+    if (spec.ringKeyHex == null || spec.ringKeyHex!.isEmpty) {
+      lastRingError = 'Missing Google Find My ring key';
+      return false;
+    }
     try {
       final res = await _methodChannel.invokeMethod<dynamic>('ringGoogleTag', {
+        'deviceId': spec.deviceId,
         'bleAddress': bleAddress,
         'eidsHex': spec.eidsHex,
         'ringKeyHex': spec.ringKeyHex,
         'stop': stop,
         'component': component,
       });
-      return res is Map && res['ok'] == true;
-    } catch (_) {
+      final ok = res is Map && res['ok'] == true;
+      if (!ok) {
+        lastRingError = 'Direct BLE GATT ring failed';
+      }
+      return ok;
+    } on PlatformException catch (e) {
+      lastRingError = e.message ?? e.code;
+      Logger.warn('FindMyBleService.ringGoogleTag failed: ${e.code} ${e.message}');
+      return false;
+    } catch (e) {
+      lastRingError = e.toString();
+      Logger.warn('FindMyBleService.ringGoogleTag failed', error: e);
       return false;
     }
   }

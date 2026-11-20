@@ -25,6 +25,7 @@ import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.socket.SocketEvent
+import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -241,6 +242,10 @@ class MessageListenerService : Service() {
 
                     is SocketEvent.FaceTimeCallEnded -> {
                         CallNotificationHelper.endCall(this@MessageListenerService, event.callUuid)
+                    }
+
+                    is SocketEvent.Connected -> {
+                        MessageSyncWorker.runOnce(this@MessageListenerService)
                     }
 
                     else -> {}

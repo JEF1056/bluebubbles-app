@@ -1,6 +1,7 @@
 package com.bluebubbles.messaging
 
 import android.app.Activity
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.LocusId
@@ -76,6 +77,7 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureEdgeToEdge()
+        dismissIncomingFaceTimeNotificationIfAnswering(intent)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
         updateLocusContext(intent?.getStringExtra("chatGuid"))
@@ -116,7 +118,17 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        dismissIncomingFaceTimeNotificationIfAnswering(intent)
         updateLocusContext(intent.getStringExtra("chatGuid"))
+    }
+
+    private fun dismissIncomingFaceTimeNotificationIfAnswering(intent: Intent?) {
+        if (intent?.type != "AnswerFaceTime" || !intent.getBooleanExtra("answer", false)) return
+        val notificationId = intent.getIntExtra("notificationId", 0)
+        if (notificationId != 0) {
+            getSystemService(NotificationManager::class.java)
+                ?.cancel(Constants.newFaceTimeNotificationTag, notificationId)
+        }
     }
 
     fun updateLocusContext(chatGuid: String?) {

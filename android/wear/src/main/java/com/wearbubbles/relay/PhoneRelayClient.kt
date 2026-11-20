@@ -186,6 +186,44 @@ class PhoneRelayClient(private val context: Context) {
             timedOut = true
         )
 
+        internal fun computeAckWaitBudgetMs(
+            timeoutMs: Long,
+            totalCeilingMs: Long?,
+            elapsedSinceStartMs: Long
+        ): Long {
+            val clampedTimeout = timeoutMs.coerceAtLeast(0L)
+            if (totalCeilingMs == null) return clampedTimeout
+            val remaining = (totalCeilingMs - elapsedSinceStartMs.coerceAtLeast(0L)).coerceAtLeast(0L)
+            return minOf(clampedTimeout, remaining)
+        }
+
+        internal fun applySelfAvatarUpdate(
+            outFile: File,
+            avatarBytes: ByteArray?,
+            compress: (ByteArray) -> ByteArray? = { compressSelfAvatar(it) }
+        ): Pair<String?, Boolean> {
+            val existed = outFile.exists()
+            if (avatarBytes == null || avatarBytes.isEmpty()) {
+                if (existed) {
+                    outFile.delete()
+                }
+                return null to existed
+            }
+            val toWrite = if (avatarBytes.size <= SELF_AVATAR_MAX_BYTES) {
+                avatarBytes
+            } else {
+                compress(avatarBytes) ?: avatarBytes
+            }
+            outFile.parentFile?.mkdirs()
+            val tmpFile = File(outFile.parentFile, "${outFile.name}.tmp")
+            tmpFile.writeBytes(toWrite)
+            if (!tmpFile.renameTo(outFile)) {
+                tmpFile.copyTo(outFile, overwrite = true)
+                tmpFile.delete()
+            }
+            return "${outFile.absolutePath}?v=${outFile.lastModified()}" to true
+        }
+
         internal suspend fun reconcileOrphanedSendResult(
             result: SendResultPayload,
             messageDao: MessageDao
@@ -485,18 +523,25 @@ class PhoneRelayClient(private val context: Context) {
 
     fun getSelfAvatarFile(): File = File(context.filesDir, SELF_AVATAR_FILE)
 
+    fun clearLocalCaches() {
+        getSelfAvatarFile().delete()
+        File(context.filesDir, "${SELF_AVATAR_FILE}.tmp").delete()
+        File(context.filesDir, "avatars").deleteRecursively()
+        File(context.cacheDir, "attachments").deleteRecursively()
+        pendingReplies.clear()
+        pendingResults.clear()
+        pendingAttachments.values.forEach { it.complete(null) }
+        pendingAttachments.clear()
+        pendingSyncs.clear()
+        invalidateNodeCache()
+    }
+
     suspend fun handleProfileSync(userName: String, userHandle: String, avatarBytes: ByteArray?) =
         withContext(ingestionDispatcher) {
             try {
                 val outFile = getSelfAvatarFile()
-                val avatarPath = if (avatarBytes != null && avatarBytes.isNotEmpty()) {
-                    val toWrite = if (avatarBytes.size <= SELF_AVATAR_MAX_BYTES) avatarBytes else (compressSelfAvatar(avatarBytes) ?: avatarBytes)
-                    outFile.writeBytes(toWrite)
-                    "${outFile.absolutePath}?v=${outFile.lastModified()}"
-                } else {
-                    outFile.takeIf { it.exists() }?.let { "${it.absolutePath}?v=${it.lastModified()}" }
-                }
-                if (userName.isNotBlank() || userHandle.isNotBlank() || avatarPath != null) {
+                val (avatarPath, avatarClearedOrUpdated) = applySelfAvatarUpdate(outFile, avatarBytes)
+                if (userName.isNotBlank() || userHandle.isNotBlank() || avatarPath != null || avatarClearedOrUpdated) {
                     settings.saveUserProfile(userName, userHandle, avatarPath)
                 }
             } catch (e: Exception) {
@@ -570,8 +615,10 @@ class PhoneRelayClient(private val context: Context) {
         chatGuid: String,
         text: String,
         tempGuid: String,
-        timeoutMs: Long = SEND_TIMEOUT_MS
+        timeoutMs: Long = SEND_TIMEOUT_MS,
+        totalCeilingMs: Long? = null
     ): SendResultPayload? {
+        val startMs = System.currentTimeMillis()
         val requestId = UUID.randomUUID().toString()
         val deferred = CompletableDeferred<SendResultPayload>()
         pendingResults[requestId] = deferred
@@ -588,11 +635,16 @@ class PhoneRelayClient(private val context: Context) {
             return null
         }
 
+        val waitMs = computeAckWaitBudgetMs(
+            timeoutMs = timeoutMs,
+            totalCeilingMs = totalCeilingMs,
+            elapsedSinceStartMs = System.currentTimeMillis() - startMs
+        )
         return try {
             // Once the phone accepted tempGuid, never return null on timeout: falling back to
             // direct server with the same tempGuid hits HTTP 400 (already queued).
             orTimedOutResult(
-                withTimeoutOrNull(timeoutMs) { deferred.await() },
+                if (waitMs <= 0L) null else withTimeoutOrNull(waitMs) { deferred.await() },
                 requestId = requestId,
                 tempGuid = tempGuid
             )
@@ -869,36 +921,18 @@ class PhoneRelayClient(private val context: Context) {
                     } ?: if (!entity.attachmentGuid.isNullOrBlank()) "Attachment" else null
                 }
                 val unread = !entity.isFromMe && NotificationHelper.activeChatGuid.value != entity.chatGuid
-                val existingChat = db.chatDao().getChat(entity.chatGuid)
-                if (existingChat != null) {
-                    val isNewerOrEqual = entity.dateCreated >= existingChat.lastMessageDate
-                    db.chatDao().upsert(
-                        existingChat.copy(
-                            lastMessageText = if (isNewerOrEqual) (displayText ?: existingChat.lastMessageText) else existingChat.lastMessageText,
-                            lastMessageDate = maxOf(existingChat.lastMessageDate, entity.dateCreated),
-                            lastMessageIsFromMe = if (isNewerOrEqual) entity.isFromMe else existingChat.lastMessageIsFromMe,
-                            hasUnreadMessage = if (unread) true else existingChat.hasUnreadMessage,
-                            lastMessageAttachmentGuid = if (isNewerOrEqual) entity.attachmentGuid else existingChat.lastMessageAttachmentGuid,
-                            lastMessageAttachmentMimeType = if (isNewerOrEqual) entity.attachmentMimeType else existingChat.lastMessageAttachmentMimeType
-                        )
-                    )
-                } else {
-                    val identifier = entity.chatGuid.substringAfterLast(";").ifBlank { entity.chatGuid }
-                    db.chatDao().upsert(
-                        ChatEntity(
-                            guid = entity.chatGuid,
-                            chatIdentifier = identifier,
-                            displayName = null,
-                            participantAddresses = entity.handleAddress ?: identifier,
-                            lastMessageText = displayText,
-                            lastMessageDate = entity.dateCreated,
-                            lastMessageIsFromMe = entity.isFromMe,
-                            hasUnreadMessage = unread,
-                            lastMessageAttachmentGuid = entity.attachmentGuid,
-                            lastMessageAttachmentMimeType = entity.attachmentMimeType
-                        )
-                    )
-                }
+                val identifier = entity.chatGuid.substringAfterLast(";").ifBlank { entity.chatGuid }
+                db.chatDao().upsertChatFromIncomingMessage(
+                    chatGuid = entity.chatGuid,
+                    defaultIdentifier = identifier,
+                    defaultParticipantAddresses = entity.handleAddress ?: identifier,
+                    lastMessageText = displayText,
+                    lastMessageDate = entity.dateCreated,
+                    lastMessageIsFromMe = entity.isFromMe,
+                    hasUnreadMessage = unread,
+                    lastMessageAttachmentGuid = entity.attachmentGuid,
+                    lastMessageAttachmentMimeType = entity.attachmentMimeType
+                )
             }
             if (isUpdate) {
                 _events.tryEmit(RelayEvent.UpdatedMessage(entity))
@@ -991,6 +1025,7 @@ class PhoneRelayClient(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "streamAttachmentFromChannel failed: ${e.message}")
                 tempFile?.delete()
+                failAttachmentRequest(attachmentGuid)
             } finally {
                 withContext(NonCancellable) {
                     try {

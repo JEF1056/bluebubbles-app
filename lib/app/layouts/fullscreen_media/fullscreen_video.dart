@@ -413,78 +413,83 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                 // widget (ConversationFullscreenHolder's "Done" app bar, or
                 // SingleAttachmentFullscreenViewer's own), driven by `onOverlayToggle`.
                 if (!iOS)
-                  Obx(() {
-                    final visible = showPlayPauseOverlay.value || _hover.value;
-                    return MouseRegion(
-                      onEnter: (event) => _hover.value = true,
-                      onExit: (event) => _hover.value = false,
-                      child: AbsorbPointer(
-                        absorbing: !visible,
-                        child: AnimatedOpacity(
-                          opacity: visible ? 1.0 : 0.0,
-                          duration: const Duration(milliseconds: 125),
-                          child: Container(
-                            width: NavigationSvc.width(context),
-                            color: context.theme.colorScheme.shadow.withValues(alpha: samsung ? 1 : 0.65),
-                            child: SafeArea(
-                              left: false,
-                              right: false,
-                              bottom: false,
-                              child: SizedBox(
-                                height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 56.0),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.only(left: 5),
-                                      child: iOS
-                                          ? CupertinoButton(
-                                              padding: const EdgeInsets.symmetric(horizontal: 5),
-                                              onPressed: () => Navigator.of(context).pop(),
-                                              child: const Icon(
-                                                Icons.close,
-                                                color: Colors.white,
-                                              ),
-                                            )
-                                          : IconButton(
-                                              padding: const EdgeInsets.symmetric(horizontal: 5),
-                                              onPressed: () => Navigator.of(context).pop(),
-                                              icon: const Icon(
-                                                Icons.close,
-                                                color: Colors.white,
-                                              ),
-                                            ),
-                                    ),
-                                    if (widget.showInteractions && widget.onOpenCollectionGallery != null)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Obx(() {
+                      final visible = showPlayPauseOverlay.value || _hover.value;
+                      return MouseRegion(
+                        onEnter: (event) => _hover.value = true,
+                        onExit: (event) => _hover.value = false,
+                        child: AbsorbPointer(
+                          absorbing: !visible,
+                          child: AnimatedOpacity(
+                            opacity: visible ? 1.0 : 0.0,
+                            duration: const Duration(milliseconds: 125),
+                            child: Container(
+                              width: NavigationSvc.width(context),
+                              color: context.theme.colorScheme.shadow.withValues(alpha: samsung ? 1 : 0.65),
+                              child: SafeArea(
+                                left: false,
+                                right: false,
+                                bottom: false,
+                                child: SizedBox(
+                                  height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 56.0),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
                                       Padding(
-                                        padding: const EdgeInsets.only(right: 5),
+                                        padding: const EdgeInsets.only(left: 5),
                                         child: iOS
                                             ? CupertinoButton(
                                                 padding: const EdgeInsets.symmetric(horizontal: 5),
-                                                onPressed: widget.onOpenCollectionGallery,
-                                                child: Icon(
-                                                  iOS ? CupertinoIcons.square_grid_2x2 : Icons.grid_view_outlined,
+                                                onPressed: () => Navigator.of(context).pop(),
+                                                child: const Icon(
+                                                  Icons.close,
                                                   color: Colors.white,
                                                 ),
                                               )
                                             : IconButton(
                                                 padding: const EdgeInsets.symmetric(horizontal: 5),
-                                                onPressed: widget.onOpenCollectionGallery,
+                                                onPressed: () => Navigator.of(context).pop(),
                                                 icon: const Icon(
-                                                  Icons.grid_view_outlined,
+                                                  Icons.close,
                                                   color: Colors.white,
                                                 ),
                                               ),
                                       ),
-                                  ],
+                                      if (widget.showInteractions && widget.onOpenCollectionGallery != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(right: 5),
+                                          child: iOS
+                                              ? CupertinoButton(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                                                  onPressed: widget.onOpenCollectionGallery,
+                                                  child: Icon(
+                                                    iOS ? CupertinoIcons.square_grid_2x2 : Icons.grid_view_outlined,
+                                                    color: Colors.white,
+                                                  ),
+                                                )
+                                              : IconButton(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                                                  onPressed: widget.onOpenCollectionGallery,
+                                                  icon: const Icon(
+                                                    Icons.grid_view_outlined,
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    );
-                  }),
+                      );
+                    }),
+                  ),
                 // Floating M3E dark tonal bottom action pill (!iOS)
                 if (!iOS && widget.showInteractions)
                   Positioned(

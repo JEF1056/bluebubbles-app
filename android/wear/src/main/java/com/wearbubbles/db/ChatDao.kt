@@ -100,6 +100,43 @@ interface ChatDao {
             }
             return merged
         }
+
+        internal fun mergeIncomingChat(
+            existing: ChatEntity?,
+            chatGuid: String,
+            defaultIdentifier: String,
+            defaultParticipantAddresses: String,
+            lastMessageText: String?,
+            lastMessageDate: Long,
+            lastMessageIsFromMe: Boolean,
+            hasUnreadMessage: Boolean,
+            lastMessageAttachmentGuid: String?,
+            lastMessageAttachmentMimeType: String?
+        ): ChatEntity {
+            if (existing == null) {
+                return ChatEntity(
+                    guid = chatGuid,
+                    chatIdentifier = defaultIdentifier,
+                    displayName = null,
+                    participantAddresses = defaultParticipantAddresses,
+                    lastMessageText = lastMessageText,
+                    lastMessageDate = lastMessageDate,
+                    lastMessageIsFromMe = lastMessageIsFromMe,
+                    hasUnreadMessage = hasUnreadMessage,
+                    lastMessageAttachmentGuid = lastMessageAttachmentGuid,
+                    lastMessageAttachmentMimeType = lastMessageAttachmentMimeType
+                )
+            }
+            val isNewerOrEqual = lastMessageDate >= existing.lastMessageDate
+            return existing.copy(
+                lastMessageText = if (isNewerOrEqual) (lastMessageText ?: existing.lastMessageText) else existing.lastMessageText,
+                lastMessageDate = maxOf(existing.lastMessageDate, lastMessageDate),
+                lastMessageIsFromMe = if (isNewerOrEqual) lastMessageIsFromMe else existing.lastMessageIsFromMe,
+                hasUnreadMessage = if (hasUnreadMessage) true else existing.hasUnreadMessage,
+                lastMessageAttachmentGuid = if (isNewerOrEqual) lastMessageAttachmentGuid else existing.lastMessageAttachmentGuid,
+                lastMessageAttachmentMimeType = if (isNewerOrEqual) lastMessageAttachmentMimeType else existing.lastMessageAttachmentMimeType
+            )
+        }
     }
 
     @Transaction
@@ -107,6 +144,68 @@ interface ChatDao {
         clearAllPins()
         pinnedGuids.forEachIndexed { index, guid ->
             setPinned(guid, index)
+        }
+    }
+
+    @Transaction
+    suspend fun upsertChatFromIncomingMessage(
+        chatGuid: String,
+        defaultIdentifier: String,
+        defaultParticipantAddresses: String,
+        lastMessageText: String?,
+        lastMessageDate: Long,
+        lastMessageIsFromMe: Boolean,
+        hasUnreadMessage: Boolean,
+        lastMessageAttachmentGuid: String?,
+        lastMessageAttachmentMimeType: String?
+    ) {
+        val existingChat = getChat(chatGuid)
+        val merged = mergeIncomingChat(
+            existing = existingChat,
+            chatGuid = chatGuid,
+            defaultIdentifier = defaultIdentifier,
+            defaultParticipantAddresses = defaultParticipantAddresses,
+            lastMessageText = lastMessageText,
+            lastMessageDate = lastMessageDate,
+            lastMessageIsFromMe = lastMessageIsFromMe,
+            hasUnreadMessage = hasUnreadMessage,
+            lastMessageAttachmentGuid = lastMessageAttachmentGuid,
+            lastMessageAttachmentMimeType = lastMessageAttachmentMimeType
+        )
+        upsert(merged)
+    }
+
+    @Transaction
+    suspend fun updateOutgoingLastMessage(
+        chatGuid: String,
+        defaultIdentifier: String,
+        text: String,
+        date: Long
+    ) {
+        val existingChat = getChat(chatGuid)
+        if (existingChat != null) {
+            val isNewerOrEqual = date >= existingChat.lastMessageDate
+            upsert(
+                existingChat.copy(
+                    lastMessageText = if (isNewerOrEqual) text else existingChat.lastMessageText,
+                    lastMessageDate = maxOf(existingChat.lastMessageDate, date),
+                    lastMessageIsFromMe = if (isNewerOrEqual) true else existingChat.lastMessageIsFromMe,
+                    hasUnreadMessage = false
+                )
+            )
+        } else {
+            upsert(
+                ChatEntity(
+                    guid = chatGuid,
+                    chatIdentifier = defaultIdentifier,
+                    displayName = null,
+                    participantAddresses = defaultIdentifier,
+                    lastMessageText = text,
+                    lastMessageDate = date,
+                    lastMessageIsFromMe = true,
+                    hasUnreadMessage = false
+                )
+            )
         }
     }
 }

@@ -96,7 +96,8 @@ class WearBridgeService : WearableListenerService() {
                     context = applicationContext,
                     callUuid = callUuid,
                     callerNameArg = obj.str("callerName"),
-                    callerAddressArg = obj.str("callerAddress")
+                    callerAddressArg = obj.str("callerAddress"),
+                    isTelephonyArg = obj.bool("isTelephony")
                 )
             }
             WearSyncManager.PATH_DECLINE_CALL -> {

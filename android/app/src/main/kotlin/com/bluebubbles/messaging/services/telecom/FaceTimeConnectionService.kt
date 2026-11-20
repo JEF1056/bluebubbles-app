@@ -175,12 +175,15 @@ class FaceTimeConnectionService : ConnectionService() {
             }
         }
 
-        fun openCallingAccountsSettings(context: Context) {
+        fun callingAccountsIntent(context: Context): Intent {
             registerPhoneAccount(context)
-            val intent = Intent(TelecomManager.ACTION_CHANGE_PHONE_ACCOUNTS).apply {
+            return Intent(TelecomManager.ACTION_CHANGE_PHONE_ACCOUNTS).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            context.startActivity(intent)
+        }
+
+        fun openCallingAccountsSettings(context: Context) {
+            context.startActivity(callingAccountsIntent(context))
         }
 
         fun addIncomingCall(

@@ -71,7 +71,17 @@ interface MessageDao {
     }
 
     @Query("UPDATE messages SET sendFailed = 1 WHERE guid = :guid")
-    suspend fun markSendFailed(guid: String)
+    suspend fun markSendFailed(guid: String): Int
+
+    @Transaction
+    suspend fun markSendFailedFirstMatch(candidateGuids: List<String>): Boolean {
+        for (guid in candidateGuids) {
+            if (guid.isNotBlank() && markSendFailed(guid) > 0) {
+                return true
+            }
+        }
+        return false
+    }
 
     @Query("UPDATE messages SET sendFailed = 1 WHERE chatGuid = :chatGuid AND sendFailed = 0 AND guid LIKE 'temp-%' AND guid NOT LIKE 'temp-react-%' AND dateCreated < :olderThanMs")
     suspend fun markStalePendingFailed(chatGuid: String, olderThanMs: Long)

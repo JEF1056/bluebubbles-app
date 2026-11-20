@@ -2,6 +2,8 @@ package com.wearbubbles.ui.messages
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
+import com.wearbubbles.api.dto.TapbackType
+import com.wearbubbles.db.MessageDao
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -218,6 +220,28 @@ fun nextDetailTimestampTickDelayMs(
     val nextBoundaryElapsedMs = (elapsedMs / 60_000L + 1L) * 60_000L
     return (nextBoundaryElapsedMs - elapsedMs).coerceAtLeast(1L)
 }
+
+internal fun nextDisplayedTimestampTickDelayMs(
+    messages: List<MessageUi>,
+    expandedMessageGuid: String?,
+    nowMs: Long = System.currentTimeMillis()
+): Long? = messages.asSequence()
+    .filter { msg ->
+        msg.isLatestOutgoing ||
+            msg.isLastReadOutgoing ||
+            msg.isLatestIncoming ||
+            msg.guid == expandedMessageGuid
+    }
+    .filterNot { it.sendFailed || MessageDao.isTempPlaceholderGuid(it.guid) }
+    .mapNotNull { msg ->
+        val ts = when {
+            msg.dateRead > 0L -> msg.dateRead
+            msg.dateDelivered > 0L -> msg.dateDelivered
+            else -> msg.dateCreated
+        }
+        nextDetailTimestampTickDelayMs(ts, nowMs)
+    }
+    .minOrNull()
 
 enum class MessageDetailKind {
     FAILED,

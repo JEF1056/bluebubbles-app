@@ -198,11 +198,9 @@ class GlobalIsolate {
       Logger.debug('Received SendPort from isolate');
     } catch (e) {
       Logger.error('Failed to receive SendPort: $e');
-      // Clean up the isolate if we failed to get the SendPort
+      // Clean up the isolate, ports, and drain state if we failed to get the SendPort
       _isolate?.kill(priority: Isolate.immediate);
-      _isolate = null;
-      _sendPort = null;
-      _isRunning = false;
+      _cleanupDeadIsolate();
       rethrow;
     }
   }
@@ -561,6 +559,9 @@ class GlobalIsolate {
 
     // Don't try to kill the isolate since it's already dead
     // Just clean up our local state
+    _idleTimer?.cancel();
+    _idleTimer = null;
+
     _receivePort?.close();
     _receivePort = null;
     _exitPort?.close();
@@ -583,10 +584,18 @@ class GlobalIsolate {
       }
     }
     _pendingRequests.clear();
+    _shutdownPending = false;
 
     // Unblock anything waiting on init — the isolate is dead, it will never signal.
     if (_initCompleter != null && !_initCompleter!.isCompleted) _initCompleter!.complete();
     _initCompleter = null;
+
+    // Resolve any awaiter of drainAndStop() so they aren't left hanging.
+    final drainCompleter = _drainCompleter;
+    _drainCompleter = null;
+    if (drainCompleter != null && !drainCompleter.isCompleted) {
+      drainCompleter.complete();
+    }
 
     _isolate = null;
     _sendPort = null;

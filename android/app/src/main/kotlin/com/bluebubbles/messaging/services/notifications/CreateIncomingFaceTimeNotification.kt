@@ -158,14 +158,10 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             .build()
 
         // Create intent to open Calling Accounts settings when Telecom PhoneAccount is disabled
-        val enableCallingIntent = PendingIntent.getBroadcast(
+        val enableCallingIntent = PendingIntent.getActivity(
             context,
             notificationId + Constants.pendingIntentOpenCallingAccountsOffset,
-            Intent(context, InternalIntentReceiver::class.java)
-                .putExtra("notificationId", notificationId)
-                .putExtra("tag", Constants.newFaceTimeNotificationTag)
-                .putExtra("callUuid", callUuid)
-                .setType("OpenCallingAccounts"),
+            FaceTimeConnectionService.callingAccountsIntent(context),
             piFlags
         )
         val enableCallingAction = NotificationCompat.Action.Builder(0, "Enable calling", enableCallingIntent)
@@ -174,25 +170,41 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
 
         // Create intent for handing off video call to Telecom audio-only (autoAnswer=true)
         val audioAnswerIntent = if (!isOngoing && !callUuid.isNullOrBlank()) {
-            PendingIntent.getBroadcast(
-                context,
-                notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
-                Intent(context, InternalIntentReceiver::class.java)
-                    .putExtra("notificationId", notificationId)
-                    .putExtra("tag", Constants.newFaceTimeNotificationTag)
-                    .putExtra("callUuid", callUuid)
-                    .putExtra("callerName", callerName)
-                    .putExtra("callerAddress", callerAddress)
-                    .putExtra("isTelephony", isTelephony)
-                    .setType("AnswerFaceTimeAudio"),
-                piFlags
-            )
+            if (phoneAccountEnabled) {
+                PendingIntent.getBroadcast(
+                    context,
+                    notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
+                    Intent(context, InternalIntentReceiver::class.java)
+                        .putExtra("notificationId", notificationId)
+                        .putExtra("tag", Constants.newFaceTimeNotificationTag)
+                        .putExtra("callUuid", callUuid)
+                        .putExtra("callerName", callerName)
+                        .putExtra("callerAddress", callerAddress)
+                        .putExtra("isTelephony", isTelephony)
+                        .setType("AnswerFaceTimeAudio"),
+                    piFlags
+                )
+            } else {
+                PendingIntent.getActivity(
+                    context,
+                    notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
+                    Intent(context, MainActivity::class.java)
+                        .putExtras(extras)
+                        .putExtra("notificationId", notificationId)
+                        .putExtra("answer", true)
+                        .putExtra("audioOnly", true)
+                        .putExtra("isTelephony", isTelephony)
+                        .putExtra("caller", callerName)
+                        .setType("AnswerFaceTime"),
+                    piFlags
+                )
+            }
         } else {
             null
         }
         val audioAnswerAction = audioAnswerIntent?.let {
             NotificationCompat.Action.Builder(0, "Audio", it)
-                .setShowsUserInterface(false)
+                .setShowsUserInterface(!phoneAccountEnabled)
                 .build()
         }
 

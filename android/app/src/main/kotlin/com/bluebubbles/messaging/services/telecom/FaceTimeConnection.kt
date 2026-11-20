@@ -117,7 +117,10 @@ class FaceTimeConnection(
         PersistentLog.d(context, TAG, "onAnswer for $callUuid")
         setActive()
         startAudioBridge(answerCall = true)
-        callUuid?.let { emitCallState("active", it) }
+        callUuid?.let {
+            emitCallState("active", it)
+            com.bluebubbles.messaging.services.wear.WearSyncManager.notifyCallEndedIfNotWatchAnswered(context, it)
+        }
     }
 
     override fun onReject() {
@@ -219,6 +222,7 @@ class FaceTimeConnection(
         if (!uuid.isNullOrBlank()) {
             FaceTimeConnectionService.unregisterActiveConnection(uuid, this)
             emitCallState("ended", uuid)
+            com.bluebubbles.messaging.services.wear.WearSyncManager.notifyCallEnded(context, uuid)
         }
         setDisconnected(cause)
         if (onUuid != null && !uuid.isNullOrBlank()) {

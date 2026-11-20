@@ -76,6 +76,8 @@ class SyncService {
     );
     if (!connectionDesired || authFailed) {
       _cancelFailureRetry();
+      _catchUpTimer?.cancel();
+      _catchUpTimer = null;
       return;
     }
     if (_socketConnected && _needsRecoverySync && (!wasConnected || _failureRetryTimer == null)) {
@@ -378,21 +380,34 @@ class SyncService {
       }
 
       var contactSyncResult = true;
+      var contactUploadResult = true;
+      final address = SettingsSvc.settings.serverAddress.value;
       if (!kIsDesktop && !kIsWeb) {
-        contactSyncResult = await performContactSyncToHandles();
-      } else if (!chatSyncFailed &&
-          (_lastServerContactSync == null ||
-              _lastServerContactSyncAddress != SettingsSvc.settings.serverAddress.value ||
-              now.difference(_lastServerContactSync!) >= _serverContactSyncInterval)) {
-        // A failed pull is swallowed in the isolate; a chat sync that reached the server stands in for its success
-        final address = SettingsSvc.settings.serverAddress.value;
-        contactSyncResult = await performContactSyncToHandles();
-        if (contactSyncResult) {
-          _lastServerContactSync = now;
-          _lastServerContactSyncAddress = address;
+        if (!chatSyncFailed &&
+            (_lastServerContactSync == null ||
+                _lastServerContactSyncAddress != address ||
+                now.difference(_lastServerContactSync!) >= const Duration(hours: 6))) {
+          contactSyncResult = await performContactSyncToHandles();
+          contactUploadResult = await performContactSyncToServer();
+          if (contactSyncResult && contactUploadResult) {
+            _lastServerContactSync = now;
+            _lastServerContactSyncAddress = address;
+          }
         }
+      } else {
+        if (!chatSyncFailed &&
+            (_lastServerContactSync == null ||
+                _lastServerContactSyncAddress != address ||
+                now.difference(_lastServerContactSync!) >= _serverContactSyncInterval)) {
+          // A failed pull is swallowed in the isolate; a chat sync that reached the server stands in for its success
+          contactSyncResult = await performContactSyncToHandles();
+          if (contactSyncResult) {
+            _lastServerContactSync = now;
+            _lastServerContactSyncAddress = address;
+          }
+        }
+        contactUploadResult = await performContactSyncToServer();
       }
-      final contactUploadResult = await performContactSyncToServer();
 
       // The chat sync is the one that matters, so its failure is reported alone via SyncSvc.status
       // (no repeated flapping toast/snackbar). Contact failures get their own deduped error toast.
@@ -474,11 +489,13 @@ class SyncService {
   }
 
   void _scheduleCatchUp(Duration wait, bool useGlobalIsolate) {
+    if (!_connectionDesired || _authFailed) return;
     if (_catchUpTimer?.isActive ?? false) return;
     // A sync still running past the cooldown is retried shortly after
     final delay = wait > Duration.zero ? wait : const Duration(seconds: 5);
     _catchUpTimer = Timer(delay, () {
       _catchUpTimer = null;
+      if (!_connectionDesired || _authFailed) return;
       unawaited(startIncrementalSync(useGlobalIsolate: useGlobalIsolate, catchUp: true));
     });
   }

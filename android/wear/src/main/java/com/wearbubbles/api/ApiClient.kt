@@ -68,4 +68,11 @@ object ApiClient {
         val encodedPass = URLEncoder.encode(password, "UTF-8")
         return "$base/api/v1/attachment/$encodedGuid/download?password=$encodedPass"
     }
+
+    @Synchronized
+    fun reset() {
+        currentBaseUrl = ""
+        currentHeaders = emptyMap()
+        api = null
+    }
 }

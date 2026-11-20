@@ -3,6 +3,7 @@ import 'dart:ui' hide window;
 
 import 'lifecycle_port_io.dart' if (dart.library.js_interop) 'lifecycle_port_web.dart';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -232,6 +233,7 @@ class LifecycleService with WidgetsBindingObserver {
       }
 
       await Database.waitForInit();
+      if (currentState != AppLifecycleState.resumed) return;
 
       if (GetIt.I.isRegistered<SyncService>()) {
         SyncSvc.onResumeReconnectGrace();
@@ -304,6 +306,7 @@ class LifecycleService with WidgetsBindingObserver {
   }
 
   void open() {
+    ActiveCallController.instance.setForeground(true);
     // If we haven't finished setup, don't do anything
     if (!SettingsSvc.settings.finishedSetup.value) return;
     StartupTasks.onAppResume();
@@ -332,6 +335,9 @@ class LifecycleService with WidgetsBindingObserver {
     // (share sheet, file picker) hide the activity without the user leaving
     // the app, and we don't want liveness or sync behavior to change for those.
     final backgrounded = triggerState == AppLifecycleState.paused || triggerState == AppLifecycleState.detached;
+    if (backgrounded) {
+      ActiveCallController.instance.setForeground(false);
+    }
     if (!kIsWeb && Platform.isAndroid && backgrounded) {
       IsolateNameServer.removePortNameMapping('bg_isolate');
     }
@@ -351,7 +357,7 @@ class LifecycleService with WidgetsBindingObserver {
     // in the background.
     if (GetIt.I.isRegistered<TypingIndicatorService>()) {
       try {
-        await TypingIndicatorSvc.stopAllTyping();
+        await TypingIndicatorSvc.stopAllTyping().timeout(const Duration(seconds: 2), onTimeout: () {});
       } catch (e, stack) {
         Logger.warn("Failed to stop typing indicators during close", error: e, trace: stack, tag: "LifecycleService");
       }

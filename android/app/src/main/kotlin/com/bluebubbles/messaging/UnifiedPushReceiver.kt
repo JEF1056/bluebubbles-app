@@ -86,6 +86,7 @@ class UnifiedPushReceiver : MessagingReceiver() {
                 override fun success(result: Any?) {
                     PersistentLog.w(applicationContext, tag, "Got URL: $result - sending to Tasker...")
                     val intent = Intent()
+                    intent.setPackage("net.dinglisch.android.taskerm")
                     intent.setAction(TASKER_EVENT_ACTION)
                     intent.putExtra("url", result.toString())
                     intent.putExtra("event", type)

@@ -8,6 +8,7 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.service.MessageListenerService
 import com.wearbubbles.worker.MessageSyncWorker
@@ -137,9 +138,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             app.socketManager.disconnect()
             MessageSyncWorker.cancel(getApplication())
             MessageListenerService.stop(getApplication())
-            settings.clearAll()
+            NotificationHelper.cancelAll(getApplication())
+            ApiClient.reset()
+            settings.clearAll(markDisconnected = true)
             withContext(Dispatchers.IO) {
-                relay.getSelfAvatarFile().delete()
+                relay.clearLocalCaches()
                 db.clearAllTables()
             }
             _uiState.value = _uiState.value.copy(isResetDone = true)

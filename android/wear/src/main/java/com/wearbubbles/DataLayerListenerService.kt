@@ -21,10 +21,6 @@ import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.service.MessageListenerService
 import com.wearbubbles.worker.MessageSyncWorker
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -45,7 +41,7 @@ class DataLayerListenerService : WearableListenerService() {
 
     data class SetupPayload(val url: String = "", val password: String = "")
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope get() = (applicationContext as WearBubblesApp).applicationScope
     private val gson = Gson()
 
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
@@ -54,6 +50,7 @@ class DataLayerListenerService : WearableListenerService() {
             app.phoneRelayClient.invalidateNodeCache()
             scope.launch {
                 val settings = SettingsDataStore(applicationContext)
+                val userDisconnected = settings.isUserDisconnected()
                 val hasCreds = settings.isConfigured.first()
                 val connected = PhoneRelayClient.selectRelayNode(capabilityInfo.nodes, hasCreds) != null
                 app.phoneRelayClient.updatePhoneConnected(connected)
@@ -61,8 +58,10 @@ class DataLayerListenerService : WearableListenerService() {
                     app.socketManager.disconnect()
                     MessageListenerService.stop(applicationContext)
                     MessageSyncWorker.cancel(applicationContext)
-                    app.phoneRelayClient.requestCredentials()
-                } else if (hasCreds) {
+                    if (!userDisconnected) {
+                        app.phoneRelayClient.requestCredentials()
+                    }
+                } else if (hasCreds && !userDisconnected) {
                     MessageSyncWorker.schedule(applicationContext)
                     try {
                         MessageListenerService.start(applicationContext)
@@ -94,6 +93,7 @@ class DataLayerListenerService : WearableListenerService() {
                     if (url.isNotBlank() && pass.isNotBlank()) {
                         scope.launch {
                             val settings = SettingsDataStore(applicationContext)
+                            if (settings.isUserDisconnected()) return@launch
                             settings.saveCredentials(url, pass, headers, privateApi, privateMarkChatAsRead)
                             ApiClient.configureHeaders(url, settings.parseHeaders(headers))
                         }
@@ -104,6 +104,7 @@ class DataLayerListenerService : WearableListenerService() {
                     val map = DataMapItem.fromDataItem(item).dataMap
                     val asset = map.getAsset("payload") ?: map.getAsset("chatsAsset") ?: continue
                     scope.launch {
+                        if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
                         readAssetText(asset)?.let { relay.handleChatsSyncJson(it) }
                     }
                 }
@@ -113,6 +114,7 @@ class DataLayerListenerService : WearableListenerService() {
                     val map = DataMapItem.fromDataItem(item).dataMap
                     val asset = map.getAsset("payload") ?: map.getAsset("messagesAsset") ?: continue
                     scope.launch {
+                        if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
                         readAssetText(asset)?.let { relay.handleMessagesSyncJson(it) }
                     }
                 }
@@ -121,6 +123,7 @@ class DataLayerListenerService : WearableListenerService() {
                     val map = DataMapItem.fromDataItem(item).dataMap
                     val asset = map.getAsset("payload") ?: map.getAsset("contactsAsset") ?: continue
                     scope.launch {
+                        if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
                         readAssetText(asset)?.let { relay.handleContactsSyncJson(it) }
                     }
                 }
@@ -130,7 +133,10 @@ class DataLayerListenerService : WearableListenerService() {
                     val key = map.getString("key")
                         ?: Uri.decode(path.removePrefix(PhoneRelayClient.PATH_AVATAR_PREFIX))
                     val asset = map.getAsset("avatar") ?: continue
-                    scope.launch { relay.handleAvatarAsset(key, asset) }
+                    scope.launch {
+                        if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                        relay.handleAvatarAsset(key, asset)
+                    }
                 }
 
                 path == PhoneRelayClient.PATH_PROFILE -> {
@@ -139,6 +145,7 @@ class DataLayerListenerService : WearableListenerService() {
                     val userHandle = map.getString("userHandle") ?: ""
                     val asset = map.getAsset("avatar")
                     scope.launch {
+                        if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
                         val bytes = asset?.let { readAssetBytes(it) }
                         relay.handleProfileSync(userName, userHandle, bytes)
                     }
@@ -165,25 +172,46 @@ class DataLayerListenerService : WearableListenerService() {
 
         when (messageEvent.path) {
             PhoneRelayClient.PATH_CREDENTIALS -> {
-                scope.launch { relay.handleCredentialsJson(dataStr) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleCredentialsJson(dataStr)
+                }
             }
             PhoneRelayClient.PATH_PROFILE -> {
-                scope.launch { relay.handleProfileJson(dataStr) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleProfileJson(dataStr)
+                }
             }
             PhoneRelayClient.PATH_SYNC_CHATS -> {
-                scope.launch { relay.handleChatsSyncJson(dataStr) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleChatsSyncJson(dataStr)
+                }
             }
             PhoneRelayClient.PATH_SYNC_MESSAGES -> {
-                scope.launch { relay.handleMessagesSyncJson(dataStr) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleMessagesSyncJson(dataStr)
+                }
             }
             PhoneRelayClient.PATH_SYNC_CONTACTS -> {
-                scope.launch { relay.handleContactsSyncJson(dataStr) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleContactsSyncJson(dataStr)
+                }
             }
             PhoneRelayClient.PATH_NEW_MESSAGE -> {
-                scope.launch { relay.handleIncomingMessageJson(dataStr, isUpdate = false) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleIncomingMessageJson(dataStr, isUpdate = false)
+                }
             }
             PhoneRelayClient.PATH_UPDATED_MESSAGE -> {
-                scope.launch { relay.handleIncomingMessageJson(dataStr, isUpdate = true) }
+                scope.launch {
+                    if (SettingsDataStore(applicationContext).isUserDisconnected()) return@launch
+                    relay.handleIncomingMessageJson(dataStr, isUpdate = true)
+                }
             }
             PhoneRelayClient.PATH_TYPING_INDICATOR -> {
                 relay.handleTypingJson(dataStr)
@@ -283,10 +311,14 @@ class DataLayerListenerService : WearableListenerService() {
     private fun handleReset(messageEvent: MessageEvent) {
         scope.launch {
             try {
-                (applicationContext as WearBubblesApp).socketManager.disconnect()
+                val app = applicationContext as WearBubblesApp
+                app.socketManager.disconnect()
                 MessageListenerService.stop(applicationContext)
                 MessageSyncWorker.cancel(applicationContext)
-                SettingsDataStore(applicationContext).clearAll()
+                NotificationHelper.cancelAll(applicationContext)
+                ApiClient.reset()
+                app.phoneRelayClient.clearLocalCaches()
+                SettingsDataStore(applicationContext).clearAll(markDisconnected = true)
                 AppDatabase.getInstance(applicationContext).clearAllTables()
 
                 try {
@@ -348,9 +380,4 @@ class DataLayerListenerService : WearableListenerService() {
 
     private fun com.google.gson.JsonObject.stringOrNull(key: String): String? =
         get(key)?.takeIf { !it.isJsonNull }?.asString
-
-    override fun onDestroy() {
-        super.onDestroy()
-        scope.cancel()
-    }
 }

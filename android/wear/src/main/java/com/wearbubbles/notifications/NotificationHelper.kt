@@ -536,6 +536,15 @@ object NotificationHelper {
         }
     }
 
+    fun cancelAll(context: Context) {
+        messageHistory.clear()
+        chatMetadata.clear()
+        personIconCache.evictAll()
+        _activeChatGuid.value = null
+        pendingLaunchChatGuid = null
+        NotificationManagerCompat.from(context).cancelAll()
+    }
+
     private fun recoverHistoryFromActive(
         manager: NotificationManager,
         notificationId: Int,

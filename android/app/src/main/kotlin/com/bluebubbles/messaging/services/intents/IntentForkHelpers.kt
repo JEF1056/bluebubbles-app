@@ -72,16 +72,23 @@ class AdbProvisionReceiver : android.content.BroadcastReceiver() {
             val prefs = context.getSharedPreferences("FlutterSharedPreferences", android.content.Context.MODE_PRIVATE)
             prefs.edit().putString("customHeaders", clean.toString()).commit()
             com.bluebubbles.messaging.services.wear.WearSyncManager.syncCredentials(context.applicationContext)
-            if (prefs.getBoolean("keepAppAlive", false)) {
-                val restart = android.content.Intent(
+            if (prefs.getBoolean("keepAppAlive", false) &&
+                !com.bluebubbles.messaging.services.foreground.SocketIOForegroundService.reloadIfRunning()
+            ) {
+                val startIntent = android.content.Intent(
                     context,
                     com.bluebubbles.messaging.services.foreground.SocketIOForegroundService::class.java
                 )
-                context.stopService(restart)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    context.startForegroundService(restart)
-                } else {
-                    context.startService(restart)
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.startForegroundService(startIntent)
+                    } else {
+                        context.startService(startIntent)
+                    }
+                } catch (e: Exception) {
+                    com.bluebubbles.messaging.utils.PersistentLog.w(
+                        context, Constants.logTag, "Unable to start foreground service from background: ${e.message}"
+                    )
                 }
             }
             com.bluebubbles.messaging.utils.PersistentLog.i(

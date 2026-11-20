@@ -33,6 +33,7 @@ import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/layouts/startup/splash_screen.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
 import 'package:bluebubbles/app/wrappers/web_shortcuts_and_routing.dart';
+import 'package:bluebubbles/database/html/web_tab_lock.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/notifications/web_notifications_interop_stub.dart'
     if (dart.library.js_interop) 'package:bluebubbles/services/backend/notifications/web_notifications_interop_web.dart';
@@ -58,6 +59,24 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:universal_io/io.dart';
 
 bool isAuthing = false;
+bool _blockedTabSocketGuardInstalled = false;
+
+void _installBlockedTabSocketGuard() {
+  if (_blockedTabSocketGuardInstalled || !GetIt.I.isRegistered<SocketService>()) return;
+  _blockedTabSocketGuardInstalled = true;
+  ever<SocketState>(SocketSvc.state, (state) {
+    if (!WebTabLock.instance.isBlocked) return;
+    if (state != SocketState.disconnected) {
+      SocketSvc.disconnect();
+    }
+    if (GetIt.I.isRegistered<ChatsService>()) {
+      ChatsSvc.setActiveToDead();
+    }
+    if (GetIt.I.isRegistered<SyncService>()) {
+      SyncSvc.onNetworkOnlineChanged(false);
+    }
+  });
+}
 
 @pragma('vm:entry-point')
 //ignore: prefer_void_to_null
@@ -77,6 +96,40 @@ Future<Null> initApp(bool bubble, List<String> arguments) async {
   runZonedGuarded<Future<void>>(() async {
     WidgetsFlutterBinding.ensureInitialized();
 
+    if (kIsWeb) {
+      WebTabLock.instance.onRelinquish = () async {
+        _installBlockedTabSocketGuard();
+        if (GetIt.I.isRegistered<SocketService>()) {
+          SocketSvc.disconnect();
+        }
+        if (GetIt.I.isRegistered<ChatsService>()) {
+          ChatsSvc.setActiveToDead();
+        }
+        if (GetIt.I.isRegistered<SyncService>()) {
+          SyncSvc.onNetworkOnlineChanged(false);
+        }
+      };
+      final acquired = await WebTabLock.instance.acquireOnStartup();
+      if (!acquired) {
+        runApp(_WebTabBlockedApp(
+          onUseHere: () async {
+            await WebTabLock.instance.takeOver();
+            await _bootApp(bubble, arguments);
+          },
+        ));
+        return;
+      }
+    }
+
+    await _bootApp(bubble, arguments);
+  }, (dynamic error, StackTrace stackTrace) {
+    print("Failure during app initialization: $error");
+    print(stackTrace);
+    Logger.error("Unhandled Exception", trace: stackTrace, error: error);
+  });
+}
+
+Future<void> _bootApp(bool bubble, List<String> arguments) async {
     /* ----- DESKTOP NATIVE SPLASH STATUS ----- */
     // Pushes startup status to the native splash; detached once it's dismissed.
     void Function()? detachSplashStatus;
@@ -272,11 +325,6 @@ Future<Null> initApp(bool bubble, List<String> arguments) async {
       runApp(FailureToStart(e: exception, s: stacktrace));
       throw Exception("$exception $stacktrace");
     }
-  }, (dynamic error, StackTrace stackTrace) {
-    print("Failure during app initialization: $error");
-    print(stackTrace);
-    Logger.error("Unhandled Exception", trace: stackTrace, error: error);
-  });
 }
 
 bool get isWaylandSession =>
@@ -335,6 +383,119 @@ class DesktopWindowListener extends WindowListener {
     } else if (Platform.isLinux) {
       exit(0);
     }
+  }
+}
+
+class _WebTabBlockedApp extends StatelessWidget {
+  const _WebTabBlockedApp({required this.onUseHere});
+
+  final Future<void> Function() onUseHere;
+
+  @override
+  Widget build(BuildContext context) {
+    final brightness = PlatformDispatcher.instance.platformBrightness;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'BlueBubbles',
+      theme: ThemeData(
+        fontFamily: kDefaultAppFontFamily,
+        colorSchemeSeed: Colors.blue,
+        brightness: Brightness.light,
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        fontFamily: kDefaultAppFontFamily,
+        colorSchemeSeed: Colors.blue,
+        brightness: Brightness.dark,
+        useMaterial3: true,
+      ),
+      themeMode: brightness == Brightness.dark ? ThemeMode.dark : ThemeMode.light,
+      home: _WebTabBlockedView(onUseHere: onUseHere),
+    );
+  }
+}
+
+class _WebTabBlockedView extends StatefulWidget {
+  const _WebTabBlockedView({required this.onUseHere});
+
+  final Future<void> Function() onUseHere;
+
+  @override
+  State<_WebTabBlockedView> createState() => _WebTabBlockedViewState();
+}
+
+class _WebTabBlockedViewState extends State<_WebTabBlockedView> {
+  bool _switching = false;
+
+  Future<void> _handleUseHere() async {
+    if (_switching) return;
+    setState(() => _switching = true);
+    try {
+      await widget.onUseHere();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _switching = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      backgroundColor: theme.colorScheme.surface,
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Card(
+              elevation: 0,
+              color: theme.colorScheme.surfaceContainerLow,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.tab_rounded,
+                      size: 48,
+                      color: theme.colorScheme.primary,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'BlueBubbles is open in another tab',
+                      style: theme.textTheme.titleLarge,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Only one tab can access the local message database at a time to keep your messages in sync.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    FilledButton(
+                      onPressed: _switching ? null : _handleUseHere,
+                      child: _switching
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Use here'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -449,9 +610,23 @@ class Main extends StatelessWidget {
           // event, which breaks window close/hide once the app is past setup.
           // Bypass the secure wrapper entirely on Linux.
           child: (kIsWeb || Platform.isLinux)
-              ? TitleBarWrapper(
-                  child: AppShellFrame(
-                    navigator: _withBackAction(context, navigator),
+              ? ValueListenableBuilder<bool>(
+                  valueListenable: WebTabLock.instance.blockedListenable,
+                  builder: (context, blocked, child) {
+                    if (kIsWeb && blocked) {
+                      return _WebTabBlockedView(
+                        onUseHere: () async {
+                          await WebTabLock.instance.takeOver();
+                          WebTabLock.instance.reloadPage();
+                        },
+                      );
+                    }
+                    return child!;
+                  },
+                  child: TitleBarWrapper(
+                    child: AppShellFrame(
+                      navigator: _withBackAction(context, navigator),
+                    ),
                   ),
                 )
               : SecureApplication(
@@ -567,6 +742,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Worker? _chatUrlWorker;
   Worker? _settingsUrlWorker;
   Worker? _webBadgeWorker;
+  Worker? _setupFinishedWorker;
+  bool _webPostSetupInitialized = false;
   bool _syncingFromUrl = false;
   bool _handledShareTarget = false;
   String? _lastPushedHashPath;
@@ -654,52 +831,17 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         );
       };
       /* ----- SERVER VERSION CHECK ----- */
-      if (kIsWeb && SettingsSvc.settings.finishedSetup.value) {
-        final serverDetails = SettingsSvc.getServerDetails();
-        if (!serverDetails.minimumWebSupportedVersion) {
-          setState(() {
-            serverCompatible = false;
+      if (kIsWeb) {
+        if (SettingsSvc.settings.finishedSetup.value) {
+          _initWebPostSetup();
+        } else {
+          _setupFinishedWorker ??= ever<bool>(SettingsSvc.settings.finishedSetup, (finished) {
+            if (finished && mounted) {
+              _setupFinishedWorker?.dispose();
+              _setupFinishedWorker = null;
+              _initWebPostSetup();
+            }
           });
-        }
-
-        /* ----- CTRL-F & CONTEXT MENU OVERRIDE ----- */
-        suppressBrowserFindShortcut();
-        suppressBrowserContextMenu();
-
-        /* ----- HASH URL SYNC ----- */
-        _chatUrlWorker = ever(ChatsSvc.activeChatGuid, (_) => _pushWebHashRoute());
-        _settingsUrlWorker = ever(NavigationSvc.isSettingsOpen, (_) => _pushWebHashRoute());
-        updateWebTitleAndBadge(ChatsSvc.unreadCount.value);
-        _webBadgeWorker = ever<int>(ChatsSvc.unreadCount, updateWebTitleAndBadge);
-
-        // Handle PWA share_target (title/text/url) without touching setup/auth params.
-        final qp = Uri.base.queryParameters;
-        final sharedText = [qp['title'], qp['text'], qp['url']]
-            .where((v) => v != null && v.trim().isNotEmpty)
-            .map((v) => v!.trim())
-            .join('\n');
-        if (sharedText.isNotEmpty && !_handledShareTarget && SettingsSvc.settings.finishedSetup.value) {
-          _handledShareTarget = true;
-          unawaited(ChatsSvc.loadedAllChats.future.then((_) {
-            if (!mounted) return;
-            final navContext = NavigationSvc.key.currentContext ?? context;
-            if (!navContext.mounted) return;
-            NavigationSvc.pushAndRemoveUntil(
-              navContext,
-              NewChatCreator(initialText: sharedText),
-              (route) => route.isFirst,
-            );
-          }));
-        }
-
-        final initialFragment = Uri.base.fragment;
-        if (initialFragment.isNotEmpty) {
-          unawaited(ChatsSvc.loadedAllChats.future.then((_) async {
-            if (!mounted) return;
-            await _applyWebHashRoute(initialFragment);
-          }));
-        } else if (ChatsSvc.activeChatGuid.value != null) {
-          _pushWebHashRoute(replace: true);
         }
       }
 
@@ -765,11 +907,63 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     });
   }
 
+  void _initWebPostSetup() {
+    if (_webPostSetupInitialized || !kIsWeb || !mounted) return;
+    _webPostSetupInitialized = true;
+    final serverDetails = SettingsSvc.getServerDetails();
+    if (!serverDetails.minimumWebSupportedVersion) {
+      setState(() {
+        serverCompatible = false;
+      });
+    }
+
+    /* ----- CTRL-F & CONTEXT MENU OVERRIDE ----- */
+    suppressBrowserFindShortcut();
+    suppressBrowserContextMenu();
+
+    /* ----- HASH URL SYNC ----- */
+    _chatUrlWorker ??= ever(ChatsSvc.activeChatGuid, (_) => _pushWebHashRoute());
+    _settingsUrlWorker ??= ever(NavigationSvc.isSettingsOpen, (_) => _pushWebHashRoute());
+    updateWebTitleAndBadge(ChatsSvc.unreadCount.value);
+    _webBadgeWorker ??= ever<int>(ChatsSvc.unreadCount, updateWebTitleAndBadge);
+
+    // Handle PWA share_target (title/text/url) without touching setup/auth params.
+    final qp = Uri.base.queryParameters;
+    final sharedText = [qp['title'], qp['text'], qp['url']]
+        .where((v) => v != null && v.trim().isNotEmpty)
+        .map((v) => v!.trim())
+        .join('\n');
+    if (sharedText.isNotEmpty && !_handledShareTarget && SettingsSvc.settings.finishedSetup.value) {
+      _handledShareTarget = true;
+      unawaited(ChatsSvc.loadedAllChats.future.then((_) {
+        if (!mounted) return;
+        final navContext = NavigationSvc.key.currentContext ?? context;
+        if (!navContext.mounted) return;
+        NavigationSvc.pushAndRemoveUntil(
+          navContext,
+          NewChatCreator(initialText: sharedText),
+          (route) => route.isFirst,
+        );
+      }));
+    }
+
+    final initialFragment = Uri.base.fragment;
+    if (initialFragment.isNotEmpty) {
+      unawaited(ChatsSvc.loadedAllChats.future.then((_) async {
+        if (!mounted) return;
+        await _applyWebHashRoute(initialFragment);
+      }));
+    } else if (ChatsSvc.activeChatGuid.value != null) {
+      _pushWebHashRoute(replace: true);
+    }
+  }
+
   @override
   void dispose() {
     _chatUrlWorker?.dispose();
     _settingsUrlWorker?.dispose();
     _webBadgeWorker?.dispose();
+    _setupFinishedWorker?.dispose();
     // Clean up observer when app is fully closed
     WidgetsBinding.instance.removeObserver(this);
     windowManager.removeListener(DesktopWindowListener.instance);

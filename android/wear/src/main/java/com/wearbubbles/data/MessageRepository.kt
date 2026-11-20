@@ -163,37 +163,33 @@ class MessageRepository(
         messageDao.upsert(tempEntity)
         phoneRelay.registerPendingReply(tempGuid, chatGuid, senderName, text)
 
-        return withTimeoutOrNull(NOTIFICATION_REPLY_CEILING_MS) {
-            val relayRes = phoneRelay.sendMessage(
-                chatGuid = chatGuid,
-                text = text,
-                tempGuid = tempGuid,
-                timeoutMs = NOTIFICATION_REPLY_WAIT_MS
-            )
-            if (relayRes == null) {
-                phoneRelay.clearPendingReply(tempGuid)
-                messageDao.deleteByGuid(tempGuid)
-                return@withTimeoutOrNull NotificationReplyResult.NeedsStandaloneWorker
-            }
-            if (relayRes.success) {
-                phoneRelay.clearPendingReply(tempGuid)
-                val realEntity = relayRes.message?.toEntity(chatGuid)
-                    ?: tempEntity.copy(guid = "sent-$tempGuid")
-                messageDao.replaceTempMessage(tempGuid, realEntity)
-                updateChatLastMessage(realEntity.chatGuid, text, realEntity.dateCreated)
-                return@withTimeoutOrNull NotificationReplyResult.Sent(realEntity)
-            }
-            if (relayRes.timedOut) {
-                updateChatLastMessage(chatGuid, text, now)
-                return@withTimeoutOrNull NotificationReplyResult.AcceptedPending(tempGuid)
-            }
+        val relayRes = phoneRelay.sendMessage(
+            chatGuid = chatGuid,
+            text = text,
+            tempGuid = tempGuid,
+            timeoutMs = NOTIFICATION_REPLY_WAIT_MS,
+            totalCeilingMs = NOTIFICATION_REPLY_CEILING_MS
+        )
+        if (relayRes == null) {
             phoneRelay.clearPendingReply(tempGuid)
-            messageDao.markSendFailed(tempGuid)
-            NotificationReplyResult.Failed(relayRes.error ?: "Relay send failed")
-        } ?: run {
-            updateChatLastMessage(chatGuid, text, now)
-            NotificationReplyResult.AcceptedPending(tempGuid)
+            messageDao.deleteByGuid(tempGuid)
+            return NotificationReplyResult.NeedsStandaloneWorker
         }
+        if (relayRes.success) {
+            phoneRelay.clearPendingReply(tempGuid)
+            val realEntity = relayRes.message?.toEntity(chatGuid)
+                ?: tempEntity.copy(guid = "sent-$tempGuid")
+            messageDao.replaceTempMessage(tempGuid, realEntity)
+            updateChatLastMessage(realEntity.chatGuid, text, realEntity.dateCreated)
+            return NotificationReplyResult.Sent(realEntity)
+        }
+        if (relayRes.timedOut) {
+            updateChatLastMessage(chatGuid, text, now)
+            return NotificationReplyResult.AcceptedPending(tempGuid)
+        }
+        phoneRelay.clearPendingReply(tempGuid)
+        messageDao.markSendFailed(tempGuid)
+        return NotificationReplyResult.Failed(relayRes.error ?: "Relay send failed")
     }
 
     suspend fun sendMessage(chatGuid: String, text: String): Result<MessageEntity> {
@@ -444,13 +440,22 @@ class MessageRepository(
         }
     }
 
+    suspend fun handleMessageSendError(dto: MessageDto) {
+        val candidates = listOfNotNull(
+            dto.tempGuid?.takeIf { it.isNotBlank() },
+            dto.tempGuid?.takeIf { it.isNotBlank() }?.let { "sent-$it" },
+            dto.guid.takeIf { it.isNotBlank() }
+        ).distinct()
+        if (candidates.isEmpty()) return
+        messageDao.markSendFailedFirstMatch(candidates)
+    }
+
     suspend fun handleIncomingSocketMessage(dto: MessageDto, isUpdate: Boolean = false) {
         val chatGuid = dto.chats?.firstOrNull()?.guid ?: return
         val entity = dto.toEntity(chatGuid)
         messageDao.upsertAndReconcile(entity, tempGuid = dto.tempGuid)
         if (isUpdate) return
 
-        val existingChat = chatDao.getChat(chatGuid)
         val firstAttachment = dto.attachments?.firstOrNull()
         val displayText = if (TapbackUtils.isTapbackCode(dto.associatedMessageType)) {
             val tapback = TapbackType.fromAddCode(dto.associatedMessageType)
@@ -471,64 +476,28 @@ class MessageRepository(
             }
         }
         val unread = !dto.isFromMe && NotificationHelper.activeChatGuid.value != chatGuid
-
-        if (existingChat != null) {
-            val isNewerOrEqual = dto.dateCreated >= existingChat.lastMessageDate
-            chatDao.upsert(
-                existingChat.copy(
-                    lastMessageText = if (isNewerOrEqual) (displayText ?: existingChat.lastMessageText) else existingChat.lastMessageText,
-                    lastMessageDate = maxOf(existingChat.lastMessageDate, dto.dateCreated),
-                    lastMessageIsFromMe = if (isNewerOrEqual) dto.isFromMe else existingChat.lastMessageIsFromMe,
-                    hasUnreadMessage = if (unread) true else existingChat.hasUnreadMessage,
-                    lastMessageAttachmentGuid = if (isNewerOrEqual) firstAttachment?.guid else existingChat.lastMessageAttachmentGuid,
-                    lastMessageAttachmentMimeType = if (isNewerOrEqual) firstAttachment?.mimeType else existingChat.lastMessageAttachmentMimeType
-                )
-            )
-        } else {
-            val identifier = chatGuid.substringAfterLast(";").ifBlank { chatGuid }
-            chatDao.upsert(
-                ChatEntity(
-                    guid = chatGuid,
-                    chatIdentifier = identifier,
-                    displayName = null,
-                    participantAddresses = dto.handle?.address ?: identifier,
-                    lastMessageText = displayText,
-                    lastMessageDate = dto.dateCreated,
-                    lastMessageIsFromMe = dto.isFromMe,
-                    hasUnreadMessage = unread,
-                    lastMessageAttachmentGuid = firstAttachment?.guid,
-                    lastMessageAttachmentMimeType = firstAttachment?.mimeType
-                )
-            )
-        }
+        val identifier = chatGuid.substringAfterLast(";").ifBlank { chatGuid }
+        chatDao.upsertChatFromIncomingMessage(
+            chatGuid = chatGuid,
+            defaultIdentifier = identifier,
+            defaultParticipantAddresses = dto.handle?.address ?: identifier,
+            lastMessageText = displayText,
+            lastMessageDate = dto.dateCreated,
+            lastMessageIsFromMe = dto.isFromMe,
+            hasUnreadMessage = unread,
+            lastMessageAttachmentGuid = firstAttachment?.guid,
+            lastMessageAttachmentMimeType = firstAttachment?.mimeType
+        )
     }
 
     private suspend fun updateChatLastMessage(chatGuid: String, text: String, date: Long) {
-        val existingChat = chatDao.getChat(chatGuid)
-        if (existingChat != null) {
-            chatDao.upsert(
-                existingChat.copy(
-                    lastMessageText = text,
-                    lastMessageDate = maxOf(existingChat.lastMessageDate, date),
-                    lastMessageIsFromMe = true,
-                    hasUnreadMessage = false
-                )
-            )
-        } else {
-            val identifier = chatGuid.substringAfterLast(";").ifBlank { chatGuid }
-            chatDao.upsert(
-                ChatEntity(
-                    guid = chatGuid,
-                    chatIdentifier = identifier,
-                    displayName = null,
-                    participantAddresses = identifier,
-                    lastMessageText = text,
-                    lastMessageDate = date,
-                    lastMessageIsFromMe = true,
-                    hasUnreadMessage = false
-                )
-            )
-        }
+        val identifier = chatGuid.substringAfterLast(";").ifBlank { chatGuid }
+        chatDao.updateOutgoingLastMessage(
+            chatGuid = chatGuid,
+            defaultIdentifier = identifier,
+            text = text,
+            date = date
+        )
     }
 
     private fun MessageRelayDto.toEntity(fallbackChatGuid: String) = MessageEntity(

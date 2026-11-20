@@ -51,7 +51,9 @@ Future<void> showWebNotificationEx({
     }
   } catch (_) {}
 
-  showWindowNotification();
+  try {
+    showWindowNotification();
+  } catch (_) {}
 }
 
 void _ignorePromise(JSAny? value) {

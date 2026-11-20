@@ -171,6 +171,13 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
             if (notification == null) {
                 PersistentLog.d(context, Constants.logTag, "Notification with ID $notificationId not found!")
             } else if (keepBubble && hideBubbledNotification(context, notificationManager, notification)) {
+                val chatGuid = resolveDismissedChatGuid(
+                    notification.notification.extras.getString("chatGuid"),
+                    chatGuidFallback
+                )
+                if (chatGuid != null) {
+                    WearSyncManager.notifyDismissed(context, chatGuid)
+                }
                 // Skip the summary cleanup: an app cancelling a group summary also cancels its bubbled children, which
                 // would take this bubble down too. SystemUI hides a summary whose only children are suppressed bubbles.
                 PersistentLog.d(context, Constants.logTag, "Hid bubbled notification with ID $notificationId instead of cancelling it")

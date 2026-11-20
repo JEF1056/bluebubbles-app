@@ -285,7 +285,7 @@ class ContactServiceV2 {
 
   bool get _isAppAlive {
     if (!GetIt.I.isRegistered<LifecycleService>() || !GetIt.I.isReadySync<LifecycleService>()) return true;
-    return LifecycleSvc.isAlive;
+    return LifecycleSvc.isForeground;
   }
 
   /// Handle a device contacts DB change event.

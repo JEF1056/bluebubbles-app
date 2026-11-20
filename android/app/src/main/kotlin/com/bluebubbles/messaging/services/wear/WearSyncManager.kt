@@ -66,6 +66,7 @@ object WearSyncManager {
     private const val PREFS_NAME = "wear_sync_prefs"
     private const val KEY_WATCH_CONNECTED = "watch_connected"
     private const val KEY_WATCH_CHECKED_AT = "watch_checked_at"
+    private const val KEY_CALL_TELEPHONY_PREFIX = "call_telephony_"
     private const val SOCKET_IDLE_TIMEOUT_MS = 120_000L
 
     const val PATH_CREDENTIALS = "/bb/credentials"
@@ -135,6 +136,23 @@ object WearSyncManager {
         }
     }
 
+    private fun persistCallTelephony(context: Context, callUuid: String, isTelephony: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_CALL_TELEPHONY_PREFIX + callUuid, isTelephony)
+            .apply()
+    }
+
+    private fun takePersistedCallTelephony(context: Context, callUuid: String): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val key = KEY_CALL_TELEPHONY_PREFIX + callUuid
+        val value = prefs.getBoolean(key, false)
+        if (prefs.contains(key)) {
+            prefs.edit().remove(key).apply()
+        }
+        return value
+    }
+
     @JvmStatic
     fun notifyIncomingCall(
         context: Context,
@@ -146,6 +164,7 @@ object WearSyncManager {
     ) {
         if (callUuid.isBlank()) return
         incomingCalls[callUuid] = IncomingCallMeta(callerName, callerAddress, isVideo, isTelephony)
+        persistCallTelephony(context, callUuid, isTelephony)
         scope.launch {
             val payload = JsonObject().apply {
                 addProperty("callUuid", callUuid)
@@ -165,6 +184,7 @@ object WearSyncManager {
         if (callUuid.isBlank()) return
         incomingCalls.remove(callUuid)
         watchAnsweredCalls.remove(callUuid)
+        takePersistedCallTelephony(context, callUuid)
         scope.launch {
             val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString()
             sendMessageToWatchNodes(context, PATH_CALL_ENDED, payload.toByteArray())
@@ -181,16 +201,18 @@ object WearSyncManager {
         context: Context,
         callUuid: String,
         callerNameArg: String? = null,
-        callerAddressArg: String? = null
+        callerAddressArg: String? = null,
+        isTelephonyArg: Boolean? = null
     ) {
         if (callUuid.isBlank()) return
         val cached = incomingCalls.remove(callUuid)
+        val persistedTelephony = takePersistedCallTelephony(context, callUuid)
         watchAnsweredCalls.add(callUuid)
         val callerName = callerNameArg?.takeIf { it.isNotBlank() }
             ?: cached?.callerName
             ?: "Unknown Caller"
         val callerAddress = callerAddressArg?.takeIf { it.isNotBlank() } ?: cached?.callerAddress
-        val isTelephony = cached?.isTelephony ?: false
+        val isTelephony = isTelephonyArg ?: cached?.isTelephony ?: persistedTelephony
         cancelCallNotifications(context, callUuid)
         val routed = com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.addIncomingCall(
             context = context,

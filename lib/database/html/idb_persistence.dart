@@ -36,6 +36,9 @@ class IdbPersistence {
 
   static IdbPersistence? active;
   static void Function()? onClearAllInMemory;
+  static bool Function()? ownershipCheck;
+
+  static bool get _isOwnershipBlocked => ownershipCheck != null && !ownershipCheck!();
 
   final IdbFactory factory;
   final Database _db;
@@ -52,6 +55,9 @@ class IdbPersistence {
     String dbName = IdbPersistence.dbName,
     bool registerAsActive = true,
   }) async {
+    if (registerAsActive && _isOwnershipBlocked) {
+      throw StateError('IDB ownership held by another tab');
+    }
     final resolvedFactory = factory ?? idbFactoryWeb;
     final db = await resolvedFactory.open(
       dbName,
@@ -66,6 +72,10 @@ class IdbPersistence {
       },
     );
     final persistence = IdbPersistence._(resolvedFactory, db);
+    if (registerAsActive && _isOwnershipBlocked) {
+      db.close();
+      throw StateError('IDB ownership held by another tab');
+    }
     if (registerAsActive) {
       active = persistence;
     }
@@ -76,7 +86,15 @@ class IdbPersistence {
     await active?.flush();
   }
 
+  static Future<void> relinquishActive() async {
+    final current = active;
+    if (current != null) {
+      await current.close(flushPending: false);
+    }
+  }
+
   static Future<void> clearActive() async {
+    if (_isOwnershipBlocked) return;
     onClearAllInMemory?.call();
     if (active != null && !active!._closed) {
       await active!.clearAll();
@@ -108,30 +126,30 @@ class IdbPersistence {
   }
 
   void enqueuePut(String storeName, int id, Map<String, dynamic> record) {
-    if (_closed) return;
+    if (_closed || _isOwnershipBlocked) return;
     (_pending[storeName] ??= <int, Map<String, dynamic>?>{})[id] = record;
     _scheduleMicrotask();
   }
 
   void enqueueDelete(String storeName, int id) {
-    if (_closed) return;
+    if (_closed || _isOwnershipBlocked) return;
     (_pending[storeName] ??= <int, Map<String, dynamic>?>{})[id] = null;
     _scheduleMicrotask();
   }
 
   void enqueueClear(String storeName) {
-    if (_closed) return;
+    if (_closed || _isOwnershipBlocked) return;
     _pending.remove(storeName);
     _pendingClearedStores.add(storeName);
     _scheduleMicrotask();
   }
 
   void _scheduleMicrotask() {
-    if (_microtaskScheduled || _closed) return;
+    if (_microtaskScheduled || _closed || _isOwnershipBlocked) return;
     _microtaskScheduled = true;
     scheduleMicrotask(() {
       _microtaskScheduled = false;
-      if (!_closed) {
+      if (!_closed && !_isOwnershipBlocked) {
         unawaited(flush().catchError((Object e, StackTrace s) {
           Logger.warn('Web IDB microtask flush failed: $e', tag: 'WebIDB');
         }));
@@ -140,12 +158,17 @@ class IdbPersistence {
   }
 
   Future<void> flush() async {
-    while (!_closed && (_activeFlush != null || _pending.isNotEmpty || _pendingClearedStores.isNotEmpty)) {
+    if (_isOwnershipBlocked) {
+      _pending.clear();
+      _pendingClearedStores.clear();
+      return;
+    }
+    while (!_closed && !_isOwnershipBlocked && (_activeFlush != null || _pending.isNotEmpty || _pendingClearedStores.isNotEmpty)) {
       if (_activeFlush != null) {
         await _activeFlush;
         continue;
       }
-      if (_closed || (_pending.isEmpty && _pendingClearedStores.isEmpty)) break;
+      if (_closed || _isOwnershipBlocked || (_pending.isEmpty && _pendingClearedStores.isEmpty)) break;
 
       final touchedStores = <String>{..._pendingClearedStores, ..._pending.keys}.toList(growable: false);
       final clearedSnapshot = Set<String>.from(_pendingClearedStores);
@@ -182,7 +205,7 @@ class IdbPersistence {
         await txn.completed;
         completer.complete();
       } catch (e, s) {
-        if (!_closed) {
+        if (!_closed && !_isOwnershipBlocked) {
           for (final entry in pendingSnapshot.entries) {
             if (_pendingClearedStores.contains(entry.key)) continue;
             final target = _pending.putIfAbsent(entry.key, () => <int, Map<String, dynamic>?>{});
@@ -210,7 +233,7 @@ class IdbPersistence {
     }
     _pending.clear();
     _pendingClearedStores.clear();
-    if (_closed) return;
+    if (_closed || _isOwnershipBlocked) return;
     final txn = _db.transaction(storeNames, idbModeReadWrite);
     for (final name in storeNames) {
       await txn.objectStore(name).clear();

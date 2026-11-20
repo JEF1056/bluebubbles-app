@@ -50,19 +50,22 @@ fun WearApp(
     var configured by remember { mutableStateOf(false) }
 
     val isConfiguredFlow by settings.isConfigured.collectAsStateWithLifecycle(initialValue = null)
+    val isUserDisconnectedFlow by settings.userDisconnected.collectAsStateWithLifecycle(initialValue = null)
     val isPhoneConnected by app.phoneRelayClient.isPhoneConnected.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         val phoneConnected = app.phoneRelayClient.refreshPhoneConnected()
-        app.phoneRelayClient.loadCachedCredentialsFromDataLayer()
-        if (phoneConnected) {
-            app.phoneRelayClient.requestCredentials()
+        if (!settings.isUserDisconnected()) {
+            app.phoneRelayClient.loadCachedCredentialsFromDataLayer()
+            if (phoneConnected) {
+                app.phoneRelayClient.requestCredentials()
+            }
         }
     }
 
-    LaunchedEffect(isConfiguredFlow, isPhoneConnected) {
-        if (isConfiguredFlow != null) {
-            val isReady = (isConfiguredFlow == true) || isPhoneConnected
+    LaunchedEffect(isConfiguredFlow, isPhoneConnected, isUserDisconnectedFlow) {
+        if (isConfiguredFlow != null && isUserDisconnectedFlow != null) {
+            val isReady = (isConfiguredFlow == true) || (isPhoneConnected && isUserDisconnectedFlow == false)
             configured = isReady
             if (initialStartDestination == null) {
                 initialStartDestination = if (isReady) "conversations" else "setup"

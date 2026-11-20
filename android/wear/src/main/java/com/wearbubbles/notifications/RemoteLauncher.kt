@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import androidx.wear.remote.interactions.RemoteActivityHelper
+import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.data.SettingsDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,27 @@ import java.util.concurrent.TimeUnit
 
 object RemoteLauncher {
     private const val TAG = "RemoteLauncher"
+
+    fun openChatOnPhoneAsync(context: Context, chatGuid: String) {
+        val appContext = context.applicationContext
+        val scope = (appContext as? WearBubblesApp)?.applicationScope ?: CoroutineScope(Dispatchers.IO)
+        scope.launch {
+            openChatOnPhone(appContext, chatGuid)
+        }
+    }
+
+    suspend fun openChatOnPhone(context: Context, chatGuid: String) {
+        val appContext = context.applicationContext
+        val relay = (appContext as? WearBubblesApp)?.phoneRelayClient
+        val openedViaPhone = if (relay != null && chatGuid.isNotBlank() && relay.refreshPhoneConnected()) {
+            relay.sendOpenChatAwait(chatGuid)
+        } else {
+            false
+        }
+        if (!openedViaPhone) {
+            openServerOnPhone(appContext)
+        }
+    }
 
     fun openServerOnPhoneAsync(context: Context) {
         val appContext = context.applicationContext

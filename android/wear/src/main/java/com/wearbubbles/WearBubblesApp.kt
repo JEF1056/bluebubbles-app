@@ -72,6 +72,9 @@ class WearBubblesApp : Application(), ImageLoaderFactory {
                         is SocketEvent.UpdatedMessage -> {
                             messageRepo.handleIncomingSocketMessage(event.message, isUpdate = true)
                         }
+                        is SocketEvent.MessageSendError -> {
+                            messageRepo.handleMessageSendError(event.message)
+                        }
                         is SocketEvent.PinnedChatsUpdated -> {
                             chatRepo.updatePinnedOrder(event.pinnedChatGuids)
                         }
