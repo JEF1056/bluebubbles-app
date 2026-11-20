@@ -1,11 +1,13 @@
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/attachment_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/collection_style.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/media_collection.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_holder.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -40,6 +42,19 @@ class CollectionAttachmentReactions extends StatelessWidget {
       final targetPart = collectionPart.partIdForAttachment(attachmentIndex);
       final reactions = state.tapbacksForPartId(targetPart);
       if (reactions.isEmpty) return const SizedBox.shrink();
+
+      // Google Messages (Material): tuck reaction pills cleanly inside the bottom-end corner of
+      // media tiles/cards so neither 2x2 grid neighbors nor rotated stack cards collide or clip.
+      if (CurrentSkin.material) {
+        return Positioned(
+          bottom: 6.0,
+          right: 6.0,
+          child: ReactionHolder(
+            reactions: reactions,
+            tailType: tailType,
+          ),
+        );
+      }
 
       // Inside-tail (fan stack) stays on the trailing edge for both sides. Standard
       // (collage and similar) follows author side like a normal bubble.
@@ -166,12 +181,17 @@ class CollectionAttachmentCard extends StatelessWidget {
       clipBehavior: Clip.none,
       children: [
         media,
-        if (!hideReactions)
+        if (!hideReactions) ...[
+          CollectionAttachmentStickers(
+            collectionPart: messagePart,
+            attachmentIndex: attachmentIndex,
+          ),
           CollectionAttachmentReactions(
             collectionPart: messagePart,
             attachmentIndex: attachmentIndex,
             tailType: reactionTailType,
           ),
+        ],
       ],
     );
   }

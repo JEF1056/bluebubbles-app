@@ -86,7 +86,9 @@ Future<void> retryReaction({
       ? reaction.dbAttachments.firstOrNull
       : null;
   final stickerFile = sticker == null || kIsWeb ? null : File(sticker.path);
-  final stickerBytes = stickerFile != null && await stickerFile.exists() ? await stickerFile.readAsBytes() : null;
+  final stickerBytes = kIsWeb
+      ? sticker?.bytes
+      : (stickerFile != null && await stickerFile.exists() ? await stickerFile.readAsBytes() : null);
 
   // Remove the original message and notification
   await MessagesSvc(chat.guid).deleteMessage(reaction);

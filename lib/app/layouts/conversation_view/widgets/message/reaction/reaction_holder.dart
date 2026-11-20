@@ -1,8 +1,12 @@
+import 'dart:math';
+
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_clipper.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/services.dart';
 import 'package:defer_pointer/defer_pointer.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -77,9 +81,30 @@ class ReactionHolder extends StatefulWidget {
   final ReactionTailType tailType;
   final ReactionTailDirection? tailDirection;
 
-  /// How far a holder pinned to a bubble's top corner hangs past the bubble's top / side edge.
+  /// How far a holder pinned to a bubble's top corner hangs past the bubble's top / side edge (iOS).
   static const double bubbleOverhangTop = -14;
   static const double bubbleOverhangSide = -20;
+
+  /// Google Messages bottom-corner badge row layout tokens (APK `ezbb.java#L5227,5859-5863,6414`,
+  /// `ewsm.java#L2833-2843`, `amqp.java#L168`).
+  static const double materialBubbleOverlap = 9.0;
+  static const double materialBottomPadding = 2.0;
+  static const double materialBadgeGap = 4.0;
+  static const int materialMaxVisibleGroups = 5;
+
+  /// Tallest badge height in [reactions] under Material skin (28dp emoji, 36dp sticker).
+  static double materialMaxBadgeHeight(Iterable<Message> reactions) {
+    if (reactions.isEmpty) return 0.0;
+    final hasSticker = reactions.any((m) => ReactionTypes.isStickerTapback(m.associatedMessageType));
+    return hasSticker ? ReactionWidget.materialStickerBadgeSize : ReactionWidget.materialBadgeSize;
+  }
+
+  /// Vertical clearance reserved below a bubble in Material skin (`ezbb.java#L5227,6414`:
+  /// `max(badgeHeight - 9dp + 2dp, 0)` -> 21dp for emoji, 29dp for sticker).
+  static double materialBottomClearance(Iterable<Message> reactions) {
+    if (reactions.isEmpty) return 0.0;
+    return max(0.0, materialMaxBadgeHeight(reactions) - materialBubbleOverlap + materialBottomPadding);
+  }
 
   @override
   State<ReactionHolder> createState() => _ReactionHolderState();
@@ -94,6 +119,44 @@ class _ReactionHolderState extends State<ReactionHolder> {
   // Track which reaction keys have been animated
   // This prevents re-animation on rebuilds, but allows animation on first appearance
   final Set<String> _seenReactionKeys = {};
+
+  void _removeOwnReaction(BuildContext context, Message ownReaction) {
+    if (!context.mounted) return;
+    final parent = MessageStateScope.maybeOf(context)?.message;
+    if (parent == null) return;
+    final chat = ChatStateScope.maybeChatOf(context) ??
+        ChatsSvc.getChatState(parent.chat.target?.guid ?? '')?.chat ??
+        ChatsSvc.activeChat?.chat;
+    if (chat == null) return;
+    if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+      Get.find<ConversationViewController>(tag: chat.guid).onUserChatInteraction(immediate: true);
+    }
+    final rawType = ownReaction.associatedMessageType ?? '';
+    final isEmoji = ReactionTypes.isEmojiTapback(rawType);
+    final isSticker = ReactionTypes.isStickerTapback(rawType);
+    final removalType = isEmoji
+        ? ReactionTypes.REMOVED_EMOJI
+        : isSticker
+            ? ReactionTypes.REMOVED_STICKER
+            : (rawType.startsWith('-') ? rawType : '-$rawType');
+    OutgoingMsgHandler.queue(
+      OutgoingReaction(
+        chat: chat,
+        message: Message(
+          associatedMessageGuid: parent.guid,
+          associatedMessageType: removalType,
+          associatedMessageEmoji: isEmoji ? ownReaction.associatedMessageEmoji : null,
+          associatedMessagePart: ownReaction.associatedMessagePart,
+          dateCreated: DateTime.now(),
+          hasAttachments: false,
+          isFromMe: true,
+          handleId: 0,
+        ),
+        selectedMessage: parent,
+        reaction: removalType,
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -119,38 +182,43 @@ class _ReactionHolderState extends State<ReactionHolder> {
 
     final isFromMe = MessageStateScope.of(context).isFromMe.value;
     if (CurrentSkin.material) {
-      // Group identical reaction types/emojis into 30px badges overlapping by -8px (22px step)
+      // Group identical emoji / tapbacks (merging classic Apple tapbacks with matching custom emoji)
+      // into side-by-side Google Messages pills with 4dp gap and up to 5 badges (`amqp.java#L168`).
       final Map<String, List<Message>> grouped = {};
       for (final r in _cachedReactions) {
         final type = r.associatedMessageType ?? '';
         final key = ReactionTypes.isStickerTapback(type)
-            ? 'sticker:${r.guid}'
-            : '${ReactionTypes.emojiFor(r)}:${type == ReactionTypes.DISLIKE ? 'd' : 'g'}';
+            ? 'sticker:${r.dbAttachments.firstOrNull?.guid ?? r.guid}'
+            : 'emoji:${ReactionTypes.emojiFor(r)}';
         grouped.putIfAbsent(key, () => []).add(r);
       }
       final entries = grouped.entries.toList();
-      const double badgeSize = 30.0;
-      const double step = 22.0;
-      return SizedBox(
-        width: badgeSize + (entries.length - 1) * step,
-        height: badgeSize,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: entries.asMap().entries.map((entry) {
-            final i = entry.key;
-            final groupKey = entry.value.key;
-            final group = entry.value.value;
-            final rep = group.firstWhereOrNull((m) => m.isFromMe ?? false) ?? group.first;
-            final stableKey = '${rep.associatedMessageGuid}-$groupKey';
-            final shouldAnimate = !_seenReactionKeys.contains(stableKey);
-            if (shouldAnimate) {
-              _seenReactionKeys.add(stableKey);
-            }
-            return Positioned(
-              key: ValueKey(stableKey),
-              left: i * step,
-              top: 0,
-              child: DeferPointer(
+      final isTruncated = entries.length > ReactionHolder.materialMaxVisibleGroups;
+      final visibleEntries =
+          isTruncated ? entries.sublist(0, ReactionHolder.materialMaxVisibleGroups - 1) : entries;
+      final hiddenCount = isTruncated
+          ? entries
+              .sublist(ReactionHolder.materialMaxVisibleGroups - 1)
+              .fold<int>(0, (sum, e) => sum + e.value.length)
+          : 0;
+
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          for (int i = 0; i < visibleEntries.length; i++) ...[
+            if (i > 0) const SizedBox(width: ReactionHolder.materialBadgeGap),
+            Builder(builder: (context) {
+              final groupKey = visibleEntries[i].key;
+              final group = visibleEntries[i].value;
+              final rep = group.firstWhereOrNull((m) => m.isFromMe ?? false) ?? group.first;
+              final stableKey = '${rep.associatedMessageGuid}-$groupKey';
+              final shouldAnimate = !_seenReactionKeys.contains(stableKey);
+              if (shouldAnimate) {
+                _seenReactionKeys.add(stableKey);
+              }
+              return DeferPointer(
+                key: ValueKey(stableKey),
                 child: _ReactionAnimator(
                   key: ValueKey(stableKey),
                   stableKey: stableKey,
@@ -163,10 +231,21 @@ class _ReactionHolderState extends State<ReactionHolder> {
                     tailDirection: widget.tailDirection,
                   ),
                 ),
+              );
+            }),
+          ],
+          if (isTruncated) ...[
+            const SizedBox(width: ReactionHolder.materialBadgeGap),
+            DeferPointer(
+              key: const ValueKey('material-rxn-overflow'),
+              child: MaterialReactionOverflowBadge(
+                extraCount: hiddenCount,
+                reactions: _cachedReactions,
+                onRemoveOwnReaction: (own) => _removeOwnReaction(context, own),
               ),
-            );
-          }).toList(),
-        ),
+            ),
+          ],
+        ],
       );
     }
 

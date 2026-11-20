@@ -135,6 +135,7 @@ class Attachment {
     newAttachment.height = updatedAttachment.height;
     newAttachment.metadata = updatedAttachment.metadata;
     newAttachment.exif = updatedAttachment.exif;
+    newAttachment.stickerPlacement ??= updatedAttachment.stickerPlacement;
     newAttachment.isDownloaded = updatedAttachment.isDownloaded;
     return newAttachment;
   }

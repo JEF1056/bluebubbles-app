@@ -7,6 +7,7 @@ import 'package:bluebubbles/models/models.dart' show StickerPlacement;
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 
 /// A placed sticker as [StickerHolder.space] lays it out: where its sender put it, and its image's size in pixels
@@ -36,14 +37,14 @@ class StickerHolder extends StatefulWidget {
   const StickerHolder({
     super.key,
     required this.stickerMessages,
-    required this.controller,
+    this.controller,
     this.placed = false,
     this.hidden = false,
     this.isFromMe = false,
     this.tailGutter = true,
   });
   final Iterable<Message> stickerMessages;
-  final ConversationViewController controller;
+  final ConversationViewController? controller;
 
   /// Which side of the parent bubble its tail is on
   final bool isFromMe;
@@ -60,10 +61,13 @@ class StickerHolder extends StatefulWidget {
 
   /// Where a sticker placed at [p] has its center, relative to a [bubble] of that size
   static Offset placedCenter(StickerPlacement p, Size bubble, bool isFromMe, bool tailGutter) {
-    // The bubble's body: not the gutter its tail draws in (see TailClipper), and inset a little on the other side
+    // The bubble's body: not the gutter its tail draws in (see TailClipper), and inset a little on the other side.
+    // Material and media-collection bubbles have no tail, so their body spans the full bubble width symmetrically.
     final gutter = tailGutter ? _tailGutter : 0.0;
-    final left = isFromMe ? _bodyInset : gutter;
-    return Offset(left + p.xScalar * (bubble.width - gutter - _bodyInset), p.yScalar * bubble.height);
+    final inset = tailGutter ? _bodyInset : 0.0;
+    final left = isFromMe ? inset : gutter;
+    final bodyWidth = max(0.0, bubble.width - gutter - inset);
+    return Offset(left + p.xScalar * bodyWidth, p.yScalar * bubble.height);
   }
 
   /// The placement scale that draws a sticker image whose longest side is [pixels] at [points] on its longest side
@@ -72,9 +76,10 @@ class StickerHolder extends StatefulWidget {
   /// The inverse of [placedCenter]: the placement that centers an unrotated sticker at [center] in [bubble]
   static StickerPlacement placementAt(Offset center, Size bubble, bool isFromMe, bool tailGutter) {
     final gutter = tailGutter ? _tailGutter : 0.0;
-    final left = isFromMe ? _bodyInset : gutter;
+    final inset = tailGutter ? _bodyInset : 0.0;
+    final left = isFromMe ? inset : gutter;
     return StickerPlacement(
-      xScalar: (center.dx - left) / max(1.0, bubble.width - gutter - _bodyInset),
+      xScalar: (center.dx - left) / max(1.0, bubble.width - gutter - inset),
       yScalar: center.dy / max(1.0, bubble.height),
       scale: 1,
       rotation: 0,
@@ -84,8 +89,10 @@ class StickerHolder extends StatefulWidget {
 
   /// [p]'s scale on a [bubble] of that size: it was placed on one [StickerPlacement.parentPreviewWidth] wide, and
   /// grows and shrinks with the bubble as Messages draws it
-  static double drawScale(StickerPlacement p, Size bubble) =>
-      p.parentPreviewWidth > 0 ? p.scale * bubble.width / p.parentPreviewWidth : p.scale;
+  static double drawScale(StickerPlacement p, Size bubble) {
+    if (p.scale <= 0) return 0;
+    return p.parentPreviewWidth > 0 ? p.scale * bubble.width / p.parentPreviewWidth : p.scale;
+  }
 
   /// Where a placed sticker draws (its rotated bounding box) relative to a [bubble] of that size
   static Rect placedRect(PlacedSticker sticker, Size bubble, bool isFromMe, bool tailGutter) {
@@ -150,17 +157,17 @@ class _StickerHolderState extends State<StickerHolder> {
   List<Attachment> _stickers = const [];
 
   /// Keys ([_keyOf]) of the stickers whose image is on disk (or in memory on web), ready to draw
-  final Set<int> _ready = {};
+  final Set<Object> _ready = {};
 
   /// Cached sticker bytes for web / in-memory rendering, keyed by [_keyOf]
-  final Map<int, Uint8List> _bytes = {};
+  final Map<Object, Uint8List> _bytes = {};
 
   /// Guids being downloaded, so an update doesn't add another callback to the same download. Keyed by guid rather
   /// than [_keyOf], since the guid names the file being fetched.
   final Set<String> _downloading = {};
 
   /// Keys whose image has drawn, so a new provider for the same sticker (its moved file) doesn't pop it in again
-  final Set<int> _shown = {};
+  final Set<Object> _shown = {};
 
   /// Where [_measure] reports each placed sticker's decoded size, for [StickerSpace]
   MessageState? _state;
@@ -168,25 +175,29 @@ class _StickerHolderState extends State<StickerHolder> {
   /// Guids of the placed stickers whose image size is being or has been read
   final Set<String> _measured = {};
 
+  bool _loaded = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _state = MessageStateScope.maybeOf(context);
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    loadStickers();
+    if (!_loaded) {
+      _loaded = true;
+      loadStickers(inLifecycle: true);
+    } else if (widget.placed && _state != null) {
+      for (final attachment in _stickers) {
+        if (_ready.contains(_keyOf(attachment))) _measure(attachment);
+      }
+    }
   }
 
   @override
   void didUpdateWidget(StickerHolder oldWidget) {
     super.didUpdateWidget(oldWidget);
-    loadStickers();
+    loadStickers(inLifecycle: true);
   }
 
-  Future<void> loadStickers() async {
+  Future<void> loadStickers({bool inLifecycle = false}) async {
     final epoch = DateTime.fromMillisecondsSinceEpoch(0);
     final messages = widget.stickerMessages.toList()
       ..sort((a, b) {
@@ -196,29 +207,39 @@ class _StickerHolderState extends State<StickerHolder> {
     // Rebuilt from the current messages each time, so a sticker that left (unsent, or moved to the other holder once
     // its placement arrived) stops drawing here. One per attachment row, in case two copies of a message link the same
     // one; each key draws one widget.
-    _stickers = <int, Attachment>{
+    _stickers = <Object, Attachment>{
       for (final message in messages)
         for (final attachment in message.dbAttachments)
-          if (attachment.id != null &&
-              attachment.guid != null &&
+          if (attachment.guid != null &&
               (!widget.placed || StickerPlacement.tryParse(attachment.stickerPlacement) != null))
-            attachment.id!: attachment,
+            _keyOf(attachment): attachment,
     }.values.toList();
     final keys = _stickers.map(_keyOf).toSet();
     _ready.retainAll(keys);
     _bytes.removeWhere((k, _) => !keys.contains(k));
 
+    bool awaited = false;
     for (final attachment in List.of(_stickers)) {
       final guid = attachment.guid!;
       final key = _keyOf(attachment);
-      if (_ready.contains(key) || _downloading.contains(guid)) continue;
+      if (_ready.contains(key)) {
+        _measure(attachment);
+        continue;
+      }
+      if (_downloading.contains(guid)) continue;
+      final inMemory = _bytes[key] ?? attachment.bytes;
+      if (inMemory != null && inMemory.isNotEmpty) {
+        _bytes[key] = inMemory;
+        attachment.bytes ??= inMemory;
+        _markReady(key, attachment, notify: !inLifecycle || awaited);
+        continue;
+      }
       if (kIsWeb) {
-        Uint8List? bytes = _bytes[key] ?? attachment.bytes;
-        if (bytes == null) {
-          try {
-            bytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, guid);
-          } catch (_) {}
-        }
+        Uint8List? bytes;
+        try {
+          awaited = true;
+          bytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, guid);
+        } catch (_) {}
         if (!mounted || _ready.contains(key) || _downloading.contains(guid)) continue;
         if (bytes != null && bytes.isNotEmpty) {
           _bytes[key] = bytes;
@@ -242,6 +263,7 @@ class _StickerHolderState extends State<StickerHolder> {
         }
         continue;
       }
+      awaited = true;
       final exists = await FileSystemEntity.type(attachment.path) != FileSystemEntityType.notFound;
       if (!mounted || _ready.contains(key) || _downloading.contains(guid)) continue;
       if (exists) {
@@ -260,13 +282,18 @@ class _StickerHolderState extends State<StickerHolder> {
     }
   }
 
-  /// A sent sticker keeps its attachment row when the server's copy replaces it, but not its guid or file. Every
-  /// sticker here has been saved ([loadStickers] skips any that haven't), so it has a row.
-  int _keyOf(Attachment attachment) => attachment.id!;
+  /// A sent sticker keeps its attachment row id when the server's copy replaces it, so saved rows key on id
+  /// while unsaved/web-only attachments fall back to guid.
+  Object _keyOf(Attachment attachment) =>
+      (attachment.id != null && attachment.id != 0) ? attachment.id! : attachment.guid!;
 
-  void _markReady(int key, Attachment attachment) {
+  void _markReady(Object key, Attachment attachment, {bool notify = true}) {
     if (!mounted) return;
-    setState(() => _ready.add(key));
+    if (notify) {
+      setState(() => _ready.add(key));
+    } else {
+      _ready.add(key);
+    }
     _measure(attachment);
   }
 
@@ -279,12 +306,22 @@ class _StickerHolderState extends State<StickerHolder> {
     final stream = _provider(attachment, StickerHolder._stickerPixelRatio).resolve(ImageConfiguration.empty);
     late final ImageStreamListener listener;
     listener = ImageStreamListener(
-      (info, _) {
-        state.updateStickerSizeInternal(guid, Size(info.image.width.toDouble(), info.image.height.toDouble()));
+      (info, synchronousCall) {
+        final size = Size(info.image.width.toDouble(), info.image.height.toDouble());
         info.dispose();
         stream.removeListener(listener);
+        if (synchronousCall) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) state.updateStickerSizeInternal(guid, size);
+          });
+        } else {
+          state.updateStickerSizeInternal(guid, size);
+        }
       },
-      onError: (_, _) => stream.removeListener(listener),
+      onError: (_, _) {
+        _measured.remove(guid);
+        stream.removeListener(listener);
+      },
     );
     stream.addListener(listener);
   }
@@ -342,6 +379,8 @@ class _StickerHolderState extends State<StickerHolder> {
   }
 
   Widget _placed(Attachment attachment, StickerPlacement p, Size bubble) {
+    final scale = StickerHolder.drawScale(p, bubble);
+    if (scale <= 0) return const SizedBox.shrink();
     final center = StickerHolder.placedCenter(p, bubble, widget.isFromMe, widget.tailGutter);
     return Positioned(
       key: ValueKey(_keyOf(attachment)),
@@ -353,11 +392,10 @@ class _StickerHolderState extends State<StickerHolder> {
           angle: p.rotation,
           child: _shrinkable(
             Transform.scale(
-              scale: StickerHolder.drawScale(p, bubble),
+              scale: scale,
               // Before the scale, so the cap is what draws
               child: ConstrainedBox(
-                constraints: BoxConstraints.loose(
-                    Size.square(StickerHolder.maxPoints / max(0.01, StickerHolder.drawScale(p, bubble)))),
+                constraints: BoxConstraints.loose(Size.square(StickerHolder.maxPoints / max(0.01, scale))),
                 // Only a sticker still sending is new here: the one just dropped. It sticks rather than popping in.
                 child: _StickIn(
                   play: attachment.guid!.startsWith("temp") && !_shown.contains(_keyOf(attachment)),
@@ -386,7 +424,7 @@ class _StickerHolderState extends State<StickerHolder> {
 
   Widget _image(
     Attachment attachment, [
-    FilterQuality quality = FilterQuality.none,
+    FilterQuality quality = FilterQuality.medium,
     double scale = 1,
     bool popIn = true,
   ]) => Image(
@@ -474,6 +512,43 @@ class _StickInState extends State<_StickIn> with SingleTickerProviderStateMixin 
           ),
         );
       },
+    );
+  }
+}
+
+/// Placed stickers for one attachment inside a media collection, positioned over that card's own bounds.
+class CollectionAttachmentStickers extends StatelessWidget {
+  const CollectionAttachmentStickers({
+    super.key,
+    required this.collectionPart,
+    required this.attachmentIndex,
+  });
+
+  final MessagePart collectionPart;
+  final int attachmentIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = MessageStateScope.of(context);
+    final partId = collectionPart.partIdForAttachment(attachmentIndex);
+    return Positioned.fill(
+      child: Obx(() {
+        final placed = state.associatedMessages
+            .where((s) =>
+                s.associatedMessageType == "sticker" &&
+                (s.associatedMessagePart ?? 0) == partId &&
+                s.dbAttachments.any((a) => StickerPlacement.tryParse(a.stickerPlacement) != null))
+            .toList();
+        if (placed.isEmpty) return const SizedBox.shrink();
+        return StickerHolder(
+          stickerMessages: placed,
+          controller: state.cvController,
+          placed: true,
+          hidden: state.showingPopup.value,
+          isFromMe: state.isFromMe.value,
+          tailGutter: false,
+        );
+      }),
     );
   }
 }

@@ -578,8 +578,9 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                               ),
                                                             ),
                                                           Stack(
-                                                            alignment:
-                                                                isFromMe ? Alignment.centerRight : Alignment.centerLeft,
+                                                            alignment: isFromMe
+                                                                ? Alignment.centerRight
+                                                                : Alignment.centerLeft,
                                                             fit: StackFit.loose,
                                                             clipBehavior: Clip.none,
                                                             children: [
@@ -588,15 +589,18 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                               StickerSpace(
                                                                 part: e,
                                                                 columnWidth: constraints.maxWidth,
-                                                                child: Stack(
-                                                                  alignment: isFromMe
-                                                                      ? Alignment.centerRight
-                                                                      : Alignment.centerLeft,
-                                                                  fit: StackFit.loose,
-                                                                  clipBehavior: Clip.none,
-                                                                  children: [
-                                                                    // actual message content
-                                                                    BubbleEffects(
+                                                                child: MaterialReactionBubble(
+                                                                  part: e,
+                                                                  enabled: !e.isMediaCollection,
+                                                                  child: Stack(
+                                                                    alignment: isFromMe
+                                                                        ? Alignment.centerRight
+                                                                        : Alignment.centerLeft,
+                                                                    fit: StackFit.loose,
+                                                                    clipBehavior: Clip.none,
+                                                                    children: [
+                                                                      // actual message content
+                                                                      BubbleEffects(
                                                                       part: e.part,
                                                                       globalKey: keys.length > index ? keys[index] : null,
                                                                       showTail: !_isThreadOriginator &&
@@ -695,7 +699,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                           message: message,
                                                                           part: e.part,
                                                                           chat: widget.cvController.chat,
-                                                                          tailGutter: !e.isMediaCollection,
+                                                                          tailGutter: CurrentSkin.iOS && !e.isMediaCollection,
                                                                         ),
                                                                       ),
                                                                     // Reactions are in the inner Stack so they are always
@@ -707,9 +711,11 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                       MessageReactions(
                                                                         part: e,
                                                                         chatGuid: chat.guid,
+                                                                        showInMaterial: false,
                                                                       ),
                                                                   ],
                                                                 ),
+                                                              ),
                                                               ),
                                                               // Stickers are in the outer Stack so they contribute to
                                                               // the message holder's size but don't affect bubble alignment

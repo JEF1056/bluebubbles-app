@@ -242,7 +242,8 @@ void main() {
       expect(BubbleConnect.lower(state2, p2), isFalse);
     });
 
-    testWidgets('ReactionSpacing clears Material 14dp tapback overhang when tapbacks exist', (tester) async {
+    testWidgets('ReactionSpacing uses 0 top overhang on Material (bottom-anchored via MaterialReactionBubble)',
+        (tester) async {
       final msg = Message(guid: 'm1', text: 'Hello', isFromMe: true, dateCreated: DateTime.now());
       final reaction = Message(
         guid: 'r1',
@@ -266,7 +267,7 @@ void main() {
           ),
         ),
       );
-      expect(tester.getSize(find.byType(ReactionSpacing)).height, 14.0);
+      expect(tester.getSize(find.byType(ReactionSpacing)).height, 0.0);
     });
   });
 

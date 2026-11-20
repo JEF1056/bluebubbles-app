@@ -8,9 +8,9 @@
 |------|---------|
 | `../message_holder.dart` | Main widget; lives one level up in `widgets/message/` |
 | `message_holder_wrappers.dart` | `SelectModeWrapper` — Obx wrapper for selection-mode checkbox visibility |
-| `message_holder_reactions.dart` | `ReactionObserver`, `StickerObserver` — isolated Obx scopes for reactions and sticker overlays |
+| `message_holder_reactions.dart` | `ReactionObserver`, `MaterialReactionBubble`, `ReactionSpacing`, `StickerObserver`, `StickerSpace` — isolated Obx scopes for reactions and sticker overlays |
 | `message_holder_timestamps.dart` | `SamsungTimestampObserver` — Samsung-only always-visible timestamp widget |
-| `message_reactions.dart` | Positioned reaction row (renders above top-left or top-right of bubble) |
+| `message_reactions.dart` | Positioned reaction row (iOS/Samsung top-corner overlay; Material delegates to `MaterialReactionBubble` at bottom-end) |
 | `reply_bubble_section.dart` | Quoted-reply bubble shown above the message (iOS & Material) |
 
 ## Layout Structure

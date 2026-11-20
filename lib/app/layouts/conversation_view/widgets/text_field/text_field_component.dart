@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:collection/collection.dart';
@@ -313,18 +314,24 @@ class TextFieldComponentState extends State<TextFieldComponent> {
               // buttons beside it. The TextField inside already needs a bounded width
               child: SizedBox(
                 width: double.infinity,
-                child: AnimatedSize(
-                duration: const Duration(milliseconds: 400),
-                alignment: Alignment.bottomCenter,
-                // easeOutBack overshoots its target size, which works fine in the full
-                // conversation view but causes a brief layout overflow in chat creator
-                // where the available vertical space is tighter (keyboard is open).
-                curve: isChatCreator ? Curves.easeOut : Curves.easeOutBack,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (widget.controller != null) ComposerSuggestions(controller: widget.controller!),
-                    if (widget.controller != null) ReplyHolder(controller: widget.controller!),
+                child: LayoutBuilder(builder: (context, pillConstraints) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (widget.controller != null) ComposerSuggestions(controller: widget.controller!),
+                      Flexible(
+                        fit: FlexFit.loose,
+                        child: SingleChildScrollView(
+                          reverse: true,
+                          physics: const ClampingScrollPhysics(),
+                          child: AnimatedSize(
+                            duration: const Duration(milliseconds: 250),
+                            alignment: Alignment.bottomCenter,
+                            curve: Curves.easeOut,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (widget.controller != null) ReplyHolder(controller: widget.controller!),
                     if (initialAttachments.isNotEmpty || !isChatCreator || widget.controller != null)
                       PickedAttachmentsHolder(
                         controller: widget.controller,
@@ -407,8 +414,34 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         indent: 10,
                         color: context.theme.colorScheme.surfaceContainerHighest,
                       ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
                     Obx(() {
                       final baseBubbleText = context.theme.extension<BubbleText>()!.bubbleText;
+                      final fontSize = baseBubbleText.fontSize ?? 15.0;
+                      final lineHeight = MediaQuery.textScalerOf(context).scale(
+                        fontSize * (baseBubbleText.height ?? 1.4),
+                      );
+                      final hasUpperContent = (!isChatCreator &&
+                              controller != null &&
+                              (controller!.pickedAttachments.isNotEmpty ||
+                                  controller!.pendingGame.value != null ||
+                                  controller!.replyToMessage != null ||
+                                  (SettingsSvc.settings.enablePrivateAPI.value &&
+                                      SettingsSvc.settings.privateSubjectLine.value &&
+                                      (chat?.isIMessage ?? false)))) ||
+                          initialAttachments.isNotEmpty;
+                      final verticalChrome = (iOS && !kIsDesktop && !kIsWeb ? 10.0 : 13.0) * 2 + 4.0;
+                      final int bodyMaxLines;
+                      if (pillConstraints.hasBoundedHeight) {
+                        final budget = pillConstraints.maxHeight * (hasUpperContent ? 0.5 : 0.95);
+                        bodyMaxLines = ((budget - verticalChrome) / lineHeight).floor().clamp(1, 14);
+                      } else {
+                        bodyMaxLines = 14;
+                      }
                       final field = TextField(
                         textCapitalization: TextCapitalization.sentences,
                         focusNode: controller?.focusNode ?? focusNode,
@@ -423,7 +456,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         // With the formatting panel up, selection changes would otherwise bring the keyboard back.
                         // Turning it off again (a tap closes the panel) reopens the input, and the keyboard with it.
                         readOnly: controller?.showTextFormattingPanel.value ?? false,
-                        maxLines: 14,
+                        maxLines: bodyMaxLines,
                         minLines: 1,
                         autofocus: (kIsWeb || kIsDesktop) && !isChatCreator,
                         enableSuggestions: true,
@@ -733,9 +766,10 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                       );
                     }),
                   ],
-                ),
-              )),
-            );
+                );
+              }),
+            ),
+          );
             return chatState != null ? Obx(() => buildPill(chatState.hasCustomWallpaper)) : buildPill(false);
           }),
     );
@@ -764,57 +798,75 @@ class TextFieldComponentState extends State<TextFieldComponent> {
       textInput = focusWidget;
     }
     if (!showIcons) return textInput;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 10),
-            child: Builder(builder: (context) {
-              Widget button(VoidCallback onPressed) => IconButton(
-                    style: IconButton.styleFrom(
-                      backgroundColor: context.theme.colorScheme.outline.withValues(alpha: 0.2),
-                      shape: const CircleBorder(),
-                      padding: EdgeInsets.zero,
-                      minimumSize: const Size(36, 36),
-                      fixedSize: const Size(36, 36),
-                    ),
-                    icon: Icon(
-                      Icons.add,
-                      color: context.theme.colorScheme.outline,
-                      size: 22,
-                    ),
-                    visualDensity: Platform.isAndroid ? VisualDensity.compact : null,
-                    onPressed: onPressed,
-                  );
-              // Desktop and web have no attachment sheet: `+` opens a menu of the same actions instead.
-              if (kIsDesktop || kIsWeb) {
-                return DesktopAttachmentMenu(
-                  controller: controller!,
-                  // The chat creator has no button row, and no messages to drop stickers on; this keeps these out of its
-                  // menu
-                  inRow: const [TextFieldButton.Gif, TextFieldButton.Emoji, TextFieldButton.Stickers],
-                  builder: (_, toggle) => button(toggle),
-                );
-              }
-              return button(() {
-                if (!_showAttachmentPickerLocal) FocusScope.of(context).unfocus();
-                setState(() => _showAttachmentPickerLocal = !_showAttachmentPickerLocal);
-              });
-            }),
+    return LayoutBuilder(builder: (context, constraints) {
+      final maxPickerHeight = constraints.hasBoundedHeight
+          ? math.max(0.0, constraints.maxHeight - 72.0)
+          : null;
+      Widget pickerChild = _showAttachmentPickerLocal
+          ? AttachmentPicker(controller: controller!)
+          : SizedBox(width: NavigationSvc.width(context));
+      if (maxPickerHeight != null && _showAttachmentPickerLocal) {
+        pickerChild = ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxPickerHeight),
+          child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            child: pickerChild,
           ),
-          Expanded(child: textInput),
-        ]),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeIn,
-          alignment: Alignment.bottomCenter,
-          child: _showAttachmentPickerLocal
-              ? AttachmentPicker(controller: controller!)
-              : SizedBox(width: NavigationSvc.width(context)),
-        ),
-      ],
-    );
+        );
+      }
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            fit: FlexFit.loose,
+            child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 10),
+                child: Builder(builder: (context) {
+                  Widget button(VoidCallback onPressed) => IconButton(
+                        style: IconButton.styleFrom(
+                          backgroundColor: context.theme.colorScheme.outline.withValues(alpha: 0.2),
+                          shape: const CircleBorder(),
+                          padding: EdgeInsets.zero,
+                          minimumSize: const Size(36, 36),
+                          fixedSize: const Size(36, 36),
+                        ),
+                        icon: Icon(
+                          Icons.add,
+                          color: context.theme.colorScheme.outline,
+                          size: 22,
+                        ),
+                        visualDensity: Platform.isAndroid ? VisualDensity.compact : null,
+                        onPressed: onPressed,
+                      );
+                  // Desktop and web have no attachment sheet: `+` opens a menu of the same actions instead.
+                  if (kIsDesktop || kIsWeb) {
+                    return DesktopAttachmentMenu(
+                      controller: controller!,
+                      // The chat creator has no button row, and no messages to drop stickers on; this keeps these out of its
+                      // menu
+                      inRow: const [TextFieldButton.Gif, TextFieldButton.Emoji, TextFieldButton.Stickers],
+                      builder: (_, toggle) => button(toggle),
+                    );
+                  }
+                  return button(() {
+                    if (!_showAttachmentPickerLocal) FocusScope.of(context).unfocus();
+                    setState(() => _showAttachmentPickerLocal = !_showAttachmentPickerLocal);
+                  });
+                }),
+              ),
+              Expanded(child: textInput),
+            ]),
+          ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeIn,
+            alignment: Alignment.bottomCenter,
+            child: pickerChild,
+          ),
+        ],
+      );
+    });
   }
 
   void onContentCommit(KeyboardInsertedContent content) async {

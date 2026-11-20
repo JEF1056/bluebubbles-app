@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:bluebubbles/helpers/ui/recent_emojis.dart';
 
 import 'package:bluebubbles/platform/shims/native_media.dart';
@@ -467,19 +468,55 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
             bottom: showAttachmentPicker ? 0 : 10.0,
             top: 10.0,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                if (!material) TextFieldIconBar(controller: controller, localController: localController),
-                if (material) const SizedBox(width: 12),
-                Expanded(
-                  child: Stack(
-                    alignment: Alignment.centerLeft,
-                    clipBehavior: Clip.none,
-                    children: [
-                      TextFieldComponent(
-                        key: controller.textFieldKey,
+          child: LayoutBuilder(builder: (context, constraints) {
+            // Capture width outside the Obx lambda so the reactive builder does not
+            // register a MediaQuery.of dependency and rebuild on keyboard animation frames.
+            // sizeOf only notifies on actual display-size changes (rotation / resize).
+            final pickerWidth = MediaQuery.sizeOf(context).width;
+            final maxPickerHeight = constraints.hasBoundedHeight
+                ? math.max(0.0, constraints.maxHeight - 76.0)
+                : null;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  if (!material) TextFieldIconBar(controller: controller, localController: localController),
+                  if (material) const SizedBox(width: 12),
+                  Expanded(
+                    child: Stack(
+                      alignment: Alignment.centerLeft,
+                      clipBehavior: Clip.none,
+                      children: [
+                        TextFieldComponent(
+                          key: controller.textFieldKey,
+                          subjectTextController: controller.subjectTextController,
+                          textController: controller.textController,
+                          controller: controller,
+                          recorderController: recorderController,
+                          audioRecorder: audioRecorder,
+                          sendMessage: sendMessage,
+                        ),
+                        Positioned(
+                          top: 0,
+                          bottom: 0,
+                          child: TextFieldRecordingOverlay(
+                            controller: controller,
+                            recorderController: recorderController,
+                            audioRecorder: audioRecorder,
+                          ),
+                        ),
+                        SendAnimation(parentController: controller),
+                      ],
+                    ),
+                  ),
+                  if (iOS) const SizedBox(width: 10),
+                  if (material) const SizedBox(width: 8),
+                  if (samsung || material)
+                    Padding(
+                      padding: EdgeInsets.only(right: material ? 12.0 : 5.0),
+                      child: TextFieldSuffix(
                         subjectTextController: controller.subjectTextController,
                         textController: controller.textController,
                         controller: controller,
@@ -487,65 +524,50 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                         audioRecorder: audioRecorder,
                         sendMessage: sendMessage,
                       ),
-                      Positioned(
-                        top: 0,
-                        bottom: 0,
-                        child: TextFieldRecordingOverlay(
-                          controller: controller,
-                          recorderController: recorderController,
-                          audioRecorder: audioRecorder,
-                        ),
-                      ),
-                      SendAnimation(parentController: controller),
-                    ],
-                  ),
-                ),
-                if (iOS) const SizedBox(width: 10),
-                if (material) const SizedBox(width: 8),
-                if (samsung || material)
-                  Padding(
-                    padding: EdgeInsets.only(right: material ? 12.0 : 5.0),
-                    child: TextFieldSuffix(
-                      subjectTextController: controller.subjectTextController,
-                      textController: controller.textController,
-                      controller: controller,
-                      recorderController: recorderController,
-                      audioRecorder: audioRecorder,
-                      sendMessage: sendMessage,
                     ),
-                  ),
-              ]),
-              Builder(builder: (context) {
-                // Capture width outside the Obx lambda so the reactive builder does not
-                // register a MediaQuery.of dependency and rebuild on keyboard animation frames.
-                // sizeOf only notifies on actual display-size changes (rotation / resize).
-                final pickerWidth = MediaQuery.sizeOf(context).width;
-                return Obx(() => AnimatedSize(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeIn,
-                      alignment: Alignment.bottomCenter,
-                      child: controller.showGamePicker.value
-                          ? OpenPigeonKeyboard(controller: controller)
-                          : controller.showTextFormattingPanel.value
-                          ? TextFormattingPanel(
-                              controller: controller.textController,
-                              height: controller.textFormattingPanelHeight,
-                            )
-                          : !showAttachmentPicker
-                              ? SizedBox(width: pickerWidth)
-                              : Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const SizedBox(height: 8),
-                                    AttachmentPicker(
-                                      controller: controller,
-                                    ),
-                                  ],
-                                ),
-                    ));
+                ]),
+              ),
+              Obx(() {
+                final pickerOpen = controller.showGamePicker.value ||
+                    controller.showTextFormattingPanel.value ||
+                    showAttachmentPicker;
+                Widget pickerChild = controller.showGamePicker.value
+                    ? OpenPigeonKeyboard(controller: controller)
+                    : controller.showTextFormattingPanel.value
+                        ? TextFormattingPanel(
+                            controller: controller.textController,
+                            height: controller.textFormattingPanelHeight,
+                          )
+                        : !showAttachmentPicker
+                            ? SizedBox(width: pickerWidth)
+                            : Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(height: 8),
+                                  AttachmentPicker(
+                                    controller: controller,
+                                  ),
+                                ],
+                              );
+                if (maxPickerHeight != null && pickerOpen) {
+                  pickerChild = ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: maxPickerHeight),
+                    child: SingleChildScrollView(
+                      physics: const ClampingScrollPhysics(),
+                      child: pickerChild,
+                    ),
+                  );
+                }
+                return AnimatedSize(
+                  duration: const Duration(milliseconds: 250),
+                  curve: Curves.easeOut,
+                  alignment: Alignment.bottomCenter,
+                  child: pickerChild,
+                );
               }),
             ],
-          ),
+          );
+        }),
         )),
     );
     return content;

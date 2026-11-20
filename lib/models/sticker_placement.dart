@@ -34,6 +34,7 @@ class StickerPlacement {
     final x = v('xScalar'), y = v('yScalar'), scale = v('scale'), rotation = v('rotation');
     final width = v('parentPreviewWidth');
     if (x == null || y == null || scale == null || rotation == null || width == null) return null;
+    if (scale <= 0 || width < 0) return null;
     return StickerPlacement(xScalar: x, yScalar: y, scale: scale, rotation: rotation, parentPreviewWidth: width);
   }
 

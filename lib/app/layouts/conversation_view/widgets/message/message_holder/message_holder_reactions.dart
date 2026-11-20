@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_holder.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_holder.dart';
@@ -23,21 +25,37 @@ class ReactionObserver extends StatelessWidget {
     super.key,
     required this.part,
     required this.chatGuid,
+    this.showInMaterial = true,
   });
 
   final MessagePart part;
   final String chatGuid;
+  final bool showInMaterial;
 
   @override
   Widget build(BuildContext context) {
     final state = MessageStateScope.of(context);
     return Obx(() {
+      final isMaterial = CurrentSkin.material;
+      if (isMaterial && !showInMaterial) return const SizedBox.shrink();
+
       // Directly observe MessageState for all reactive data
       final isFromMe = state.isFromMe.value;
       final reactionList = state.tapbacksForBubble(part);
+      if (reactionList.isEmpty) return const SizedBox.shrink();
 
-      final top = CurrentSkin.material ? -10.0 : ReactionHolder.bubbleOverhangTop;
-      final side = CurrentSkin.material ? -6.0 : ReactionHolder.bubbleOverhangSide;
+      if (isMaterial) {
+        return Positioned(
+          bottom: -10.0,
+          right: 4.0,
+          child: ReactionHolder(
+            reactions: reactionList,
+          ),
+        );
+      }
+
+      const top = ReactionHolder.bubbleOverhangTop;
+      const side = ReactionHolder.bubbleOverhangSide;
       return Positioned(
         top: top,
         left: isFromMe ? side : null,
@@ -47,6 +65,188 @@ class ReactionObserver extends StatelessWidget {
         ),
       );
     });
+  }
+}
+
+/// Wraps a message bubble so Google Messages (`CurrentSkin.material`) reactions overlap the
+/// bubble's bottom-end edge by `9dp` (`ezbb.java#L5863`) with `2dp` bottom padding (`ezbb.java#L5859`),
+/// exact bottom clearance (`21dp` emoji / `29dp` sticker), and full hit-testing across the entire
+/// overlapping pill — without ever reparenting [child] when reactions or skin toggle.
+class MaterialReactionBubble extends StatelessWidget {
+  const MaterialReactionBubble({
+    super.key,
+    required this.part,
+    required this.child,
+    this.enabled = true,
+  });
+
+  final MessagePart part;
+  final Widget child;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = MessageStateScope.of(context);
+    return Obx(() {
+      final isFromMe = state.isFromMe.value;
+      final reactions = (enabled && CurrentSkin.material) ? state.tapbacksForBubble(part) : const <Message>[];
+      return _MaterialReactionBubbleLayout(
+        isFromMe: isFromMe,
+        children: [
+          child,
+          if (reactions.isNotEmpty)
+            ReactionHolder(reactions: reactions)
+          else
+            const SizedBox.shrink(),
+        ],
+      );
+    });
+  }
+}
+
+class _MaterialReactionBubbleParentData extends ContainerBoxParentData<RenderBox> {}
+
+class _MaterialReactionBubbleLayout extends MultiChildRenderObjectWidget {
+  const _MaterialReactionBubbleLayout({
+    required this.isFromMe,
+    required super.children,
+  });
+
+  final bool isFromMe;
+
+  @override
+  _RenderMaterialReactionBubble createRenderObject(BuildContext context) {
+    return _RenderMaterialReactionBubble(isFromMe);
+  }
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderMaterialReactionBubble renderObject) {
+    renderObject.isFromMe = isFromMe;
+  }
+}
+
+class _RenderMaterialReactionBubble extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _MaterialReactionBubbleParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _MaterialReactionBubbleParentData> {
+  _RenderMaterialReactionBubble(this._isFromMe);
+
+  bool _isFromMe;
+  bool get isFromMe => _isFromMe;
+  set isFromMe(bool value) {
+    if (_isFromMe == value) return;
+    _isFromMe = value;
+    markNeedsLayout();
+  }
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _MaterialReactionBubbleParentData) {
+      child.parentData = _MaterialReactionBubbleParentData();
+    }
+  }
+
+  @override
+  void performLayout() {
+    final bubble = firstChild;
+    if (bubble == null) {
+      size = constraints.smallest;
+      return;
+    }
+    final reactions = childAfter(bubble);
+    final bubbleData = bubble.parentData as _MaterialReactionBubbleParentData;
+
+    bubble.layout(constraints, parentUsesSize: true);
+    if (reactions == null) {
+      bubbleData.offset = Offset.zero;
+      size = bubble.size;
+      return;
+    }
+
+    final reactionsData = reactions.parentData as _MaterialReactionBubbleParentData;
+    reactions.layout(
+      BoxConstraints(maxWidth: constraints.maxWidth),
+      parentUsesSize: true,
+    );
+
+    if (reactions.size.isEmpty) {
+      bubbleData.offset = Offset.zero;
+      reactionsData.offset = Offset.zero;
+      size = bubble.size;
+      return;
+    }
+
+    const double edgeInset = 4.0;
+    const double overlap = ReactionHolder.materialBubbleOverlap;
+    const double bottomPad = ReactionHolder.materialBottomPadding;
+
+    final bubbleW = bubble.size.width;
+    final bubbleH = bubble.size.height;
+    final rxnW = reactions.size.width;
+    final rxnH = reactions.size.height;
+
+    late final double totalW;
+    late final double bubbleX;
+    late final double rxnX;
+
+    if (_isFromMe) {
+      // Sent bubble (right-aligned): pin bubble to right edge; anchor reactions to bottom-end,
+      // expanding leftward inside bounds when wider than a short bubble.
+      totalW = min(constraints.maxWidth, max(bubbleW, rxnW + edgeInset));
+      bubbleX = max(0.0, totalW - bubbleW);
+      rxnX = max(0.0, totalW - rxnW - edgeInset);
+    } else {
+      // Received bubble (left-aligned): pin bubble to left edge next to avatar; anchor reactions
+      // to bottom-end when bubble fits, otherwise start at +4dp growing rightward away from avatar.
+      bubbleX = 0.0;
+      final candidateX = bubbleW >= rxnW + edgeInset * 2 ? bubbleW - rxnW - edgeInset : edgeInset;
+      totalW = min(constraints.maxWidth, max(bubbleW, candidateX + rxnW));
+      rxnX = min(candidateX, max(0.0, totalW - rxnW));
+    }
+
+    final rxnY = max(0.0, bubbleH - overlap);
+    final totalH = max(bubbleH, rxnY + rxnH + bottomPad);
+
+    bubbleData.offset = Offset(bubbleX, 0.0);
+    reactionsData.offset = Offset(rxnX, rxnY);
+    size = constraints.constrain(Size(totalW, totalH));
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final bubble = firstChild;
+    if (bubble == null) return;
+    final bubbleData = bubble.parentData as _MaterialReactionBubbleParentData;
+    context.paintChild(bubble, offset + bubbleData.offset);
+
+    final reactions = childAfter(bubble);
+    if (reactions != null && !reactions.size.isEmpty) {
+      final reactionsData = reactions.parentData as _MaterialReactionBubbleParentData;
+      context.paintChild(reactions, offset + reactionsData.offset);
+    }
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    final bubble = firstChild;
+    if (bubble == null) return false;
+    final reactions = childAfter(bubble);
+    // Hit-test the overlapping reactions pill BEFORE the bubble so tapping any pixel on the badge wins.
+    if (reactions != null && !reactions.size.isEmpty) {
+      final reactionsData = reactions.parentData as _MaterialReactionBubbleParentData;
+      final hitReactions = result.addWithPaintOffset(
+        offset: reactionsData.offset,
+        position: position,
+        hitTest: (result, transformed) => reactions.hitTest(result, position: transformed),
+      );
+      if (hitReactions) return true;
+    }
+    final bubbleData = bubble.parentData as _MaterialReactionBubbleParentData;
+    return result.addWithPaintOffset(
+      offset: bubbleData.offset,
+      position: position,
+      hitTest: (result, transformed) => bubble.hitTest(result, position: transformed),
+    );
   }
 }
 
@@ -69,6 +269,9 @@ class StickerObserver extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Media collection items render their own per-card placed stickers (CollectionAttachmentStickers),
+    // matching how CollectionAttachmentReactions owns per-card tapbacks.
+    if (placed && part.isMediaCollection) return const SizedBox.shrink();
     final state = MessageStateScope.of(context);
     return Obx(() {
       final stickersForPart = state
@@ -91,8 +294,10 @@ class StickerObserver extends StatelessWidget {
   }
 }
 
-/// Isolated widget for reaction spacing calculation
-/// Only rebuilds when reactions change, not the entire message part
+/// Isolated widget for reaction spacing calculation above a bubble (iOS/Samsung top overhang).
+///
+/// On Material skin (`CurrentSkin.material`), reactions overlap the bottom edge via
+/// [MaterialReactionBubble], so top spacing returns [minHeightWhenNoReactions].
 class ReactionSpacing extends StatelessWidget {
   const ReactionSpacing({
     super.key,
@@ -111,7 +316,7 @@ class ReactionSpacing extends StatelessWidget {
       final state = MessageStateScope.of(context);
       // Reads associatedMessages, so this rebuilds when tapbacks change. Collapsed collection spans are
       // matched via MessagePart.coversPartId.
-      if (state.hasVisibleTapbacks(part)) {
+      if (!CurrentSkin.material && state.hasVisibleTapbacks(part)) {
         return SizedBox(height: tapbackHeight ?? (CurrentSkin.iOS ? 15.0 : 14.0));
       }
 
@@ -137,6 +342,7 @@ class StickerSpace extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (part.isMediaCollection) return child;
     final state = MessageStateScope.of(context);
     return Obx(() => _StickerOverhang(
           stickers: state

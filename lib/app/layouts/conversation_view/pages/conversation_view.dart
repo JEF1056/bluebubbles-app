@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:bluebubbles/app/components/wallpaper/wallpaper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/cupertino_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/material_header.dart';
@@ -34,6 +36,48 @@ class ConversationView extends StatefulWidget {
   final String? initialScrollToGuid;
   final bool fromChatCreator;
   final bool autoOpened;
+
+  /// Builds the conversation body column and keyboard-inset wrapper. Exposed
+  /// for layout overlap tests across mobile/keyboard and web viewport sizes.
+  @visibleForTesting
+  static Widget buildBodyLayout({
+    required Widget messagesArea,
+    required Widget composer,
+  }) {
+    // Use the same Column layout across all skins so MessagesView and ScrollDownButton
+    // always resize cleanly above the composer without hardcoded bottom padding, and cap
+    // composer height below the extended AppBar on tight mobile/web viewports.
+    final Widget bodyChild = LayoutBuilder(
+      builder: (context, constraints) {
+        final topPadding = MediaQuery.paddingOf(context).top;
+        final usableHeight = math.max(0.0, constraints.maxHeight - topPadding);
+        final maxComposerHeight = usableHeight > 260.0
+            ? math.max(180.0, usableHeight - 80.0)
+            : usableHeight;
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Expanded(child: messagesArea),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: maxComposerHeight),
+              child: composer,
+            ),
+          ],
+        );
+      },
+    );
+    return Builder(
+      builder: (context) {
+        final viewInsetsBottom = MediaQuery.viewInsetsOf(context).bottom;
+        final bottomInset =
+            viewInsetsBottom > 0 ? viewInsetsBottom : MediaQuery.viewPaddingOf(context).bottom;
+        return Padding(
+          padding: EdgeInsets.only(bottom: bottomInset),
+          child: bodyChild,
+        );
+      },
+    );
+  }
 
   @override
   ConversationViewState createState() => ConversationViewState();
@@ -127,62 +171,24 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
         parentController: controller,
       ),
     );
-    final Widget bodyChild = (!iOS && !samsung)
-        ? Stack(
-            children: [
-              Positioned.fill(
-                child: MessagesView(
-                  key: Key(chat.guid),
-                  customService: widget.customService,
-                  initialScrollToGuid: widget.initialScrollToGuid,
-                  controller: controller,
-                  bottomPadding: 88.0,
-                  unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 88.0,
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: ScrollDownButton(
-                    controller: controller,
-                    unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                  ),
-                ),
-              ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                child: composer,
-              ),
-            ],
-          )
-        : Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Expanded(
-                child: Stack(
-                  children: [
-                    MessagesView(
-                      key: Key(chat.guid),
-                      customService: widget.customService,
-                      initialScrollToGuid: widget.initialScrollToGuid,
-                      controller: controller,
-                      unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                    ),
-                    ScrollDownButton(
-                      controller: controller,
-                      unreadWhileScrolledCount: _unreadWhileScrolledCount,
-                    ),
-                  ],
-                ),
-              ),
-              composer,
-            ],
-          );
+    final bodyLayout = ConversationView.buildBodyLayout(
+      messagesArea: Stack(
+        children: [
+          MessagesView(
+            key: Key(chat.guid),
+            customService: widget.customService,
+            initialScrollToGuid: widget.initialScrollToGuid,
+            controller: controller,
+            unreadWhileScrolledCount: _unreadWhileScrolledCount,
+          ),
+          ScrollDownButton(
+            controller: controller,
+            unreadWhileScrolledCount: _unreadWhileScrolledCount,
+          ),
+        ],
+      ),
+      composer: composer,
+    );
     final content = GradientBackground(
       controller: controller,
       child: Stack(
@@ -208,17 +214,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                   ));
             },
           ),
-          Builder(
-            builder: (context) {
-              final viewInsetsBottom = MediaQuery.viewInsetsOf(context).bottom;
-              final bottomInset =
-                  viewInsetsBottom > 0 ? viewInsetsBottom : MediaQuery.viewPaddingOf(context).bottom;
-              return Padding(
-                padding: EdgeInsets.only(bottom: bottomInset),
-                child: bodyChild,
-              );
-            },
-          ),
+          bodyLayout,
           // The body extends behind the header, whose height is in the top padding
           Builder(
             builder: (context) => Positioned(

@@ -6,9 +6,9 @@ Renders the tapback emoji row that appears above or below a message bubble.
 
 | File | Purpose |
 |------|---------|
-| `reaction.dart` | `ReactionWidget` — single tapback emoji with skin-specific styling |
-| `reaction_holder.dart` | Horizontal row container for all reactions on a message part |
-| `reaction_clipper.dart` | `CustomClipper` for the pill-shaped reaction bubble |
+| `reaction.dart` | `ReactionWidget` (skin-specific tapback badge) & `MaterialReactionOverflowBadge` (`+N`) |
+| `reaction_holder.dart` | Horizontal row container (Material side-by-side pills, up to 5 + `+N`; iOS stacked thought bubbles) |
+| `reaction_clipper.dart` | iOS thought-bubble clippers & `MaterialReactionBadgeShape` (fused circle + count lobe) |
 
 ## Data Source
 
@@ -21,14 +21,15 @@ Use `ReactionTypes` string constants (from `lib/helpers/ui/`) — never hardcode
 ## Key Pattern
 
 `ReactionWidget` looks up the reaction by GUID or by `(type, part, isFromMe)` tuple:
-- iOS: solid circle, no border
-- Material: solid circle with border
+- iOS: `35x40` thought-bubble clip with `TapbackIcon` SVGs and top-corner overhang
+- Material (Google Messages): `28dp` circular pill (`36dp` for sticker tapbacks, `+8dp` fused count lobe for `count > 1`), `1.5dp` `surface` cutout stroke, tonal `surfaceContainerLowest`/`surfaceContainerHighest` fill (`primaryContainer` for self), full-color emoji glyphs, tapping opens vertical `ReactionDetails` summary sheet
 
 The widget observes its reaction's `MessageState` so it re-renders when a temp GUID is swapped for a real one or when error state changes.
 
 ## Placement
 
-`ReactionHolder` is placed as a `Positioned` overlay inside the bubble `Stack` in `MessageHolder`. The x/y offset is calculated based on `isFromMe` (left or right alignment) and the bubble size.
+- iOS/Samsung: `ReactionHolder` is a `Positioned` overlay at the bubble's top corner inside `MessageHolder`'s inner `Stack` (`ReactionSpacing` reserves `15dp`/`14dp` above).
+- Material: `MaterialReactionBubble` wraps the bubble `Stack` in `MessageHolder`, overlapping the bottom-end edge by `9dp` with `2dp` bottom padding (`21dp` emoji / `29dp` sticker clearance) and hit-testing the badge before the bubble. Media collection items inset badges at bottom-right via `CollectionAttachmentReactions`.
 
 ## Sending a Tapback
 

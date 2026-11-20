@@ -193,6 +193,7 @@ class Attachment {
     newAttachment.height = updatedAttachment.height;
     newAttachment.metadata = updatedAttachment.metadata;
     newAttachment.exif = updatedAttachment.exif;
+    newAttachment.stickerPlacement ??= updatedAttachment.stickerPlacement;
     // Preserve isDownloaded from the DB record — the action layer does not overwrite it,
     // so if prepAttachments set it to true the value survives the GUID swap.
     newAttachment.isDownloaded = updatedAttachment.isDownloaded;

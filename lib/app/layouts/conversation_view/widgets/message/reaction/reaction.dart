@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math';
+
 import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/reaction_details.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
@@ -18,6 +21,62 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reacti
 import 'package:get/get.dart';
 
 class ReactionWidget extends StatefulWidget {
+  /// Google Messages badge geometry (APK `ewsm.java#L317-468,762-879,2250-2269`, `amqp.java#L16`).
+  /// Default circular badge diameter = `headlineMedium.fontSize` (28dp); sticker/emotify scale = 1.3x (36dp).
+  static const double materialBadgeSize = 28.0;
+  static const double materialStickerScale = 1.3;
+  static const double materialStickerBadgeSize = 36.0;
+  static const double materialCountExtraWidth = 8.0;
+  static const double materialEmojiFontSize = 16.0;
+  static const double materialCountFontSize = 11.0;
+  static const double materialCutoutBorderWidth = 1.5;
+
+  /// Total pill width for a Material badge with [count] reactions (`ewsm.c#L340`).
+  static double materialWidthForCount(int count, {bool isSticker = false}) {
+    final base = isSticker ? materialStickerBadgeSize : materialBadgeSize;
+    if (count <= 1) return base;
+    final extra = count >= 10 ? 14.0 : materialCountExtraWidth;
+    return base + extra;
+  }
+
+  /// Tonal fill matching Google Messages `ewsm.w#L3003-3018` (`surfaceContainerHighest` dark,
+  /// `surfaceContainerLowest` light), highlighted with `primaryContainer` for self-reactions.
+  static Color materialFillColor(
+    ColorScheme cs,
+    Brightness brightness, {
+    bool isOwn = false,
+    bool hasError = false,
+  }) {
+    if (hasError) return cs.errorContainer;
+    if (isOwn) return cs.primaryContainer;
+    return brightness == Brightness.dark ? cs.surfaceContainerHighest : cs.surfaceContainerLowest;
+  }
+
+  /// Elevation shadow matching Google Messages `ewsm.c#L346-368` (`badgeShadow`).
+  static List<BoxShadow> materialShadows(ColorScheme cs, Brightness brightness) {
+    if (brightness == Brightness.dark) {
+      return [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.45),
+          blurRadius: 4.0,
+          offset: const Offset(0, 1.5),
+        ),
+      ];
+    }
+    return [
+      BoxShadow(
+        color: cs.primary.withValues(alpha: 0.28),
+        blurRadius: 7.0,
+        offset: const Offset(0, 2.0),
+      ),
+      BoxShadow(
+        color: cs.shadow.withValues(alpha: 0.08),
+        blurRadius: 2.0,
+        offset: const Offset(0, 1.0),
+      ),
+    ];
+  }
+
   const ReactionWidget({
     super.key,
     required this.reaction,
@@ -47,6 +106,69 @@ class ReactionWidget extends StatefulWidget {
 
   @override
   ReactionWidgetState createState() => ReactionWidgetState();
+}
+
+/// Google Messages truncated overflow badge (`+N` / `99+`, APK `ewqs.java` / `ewsm.l#L1380-1420` / `amqp.java#L239-273`).
+class MaterialReactionOverflowBadge extends StatelessWidget {
+  const MaterialReactionOverflowBadge({
+    super.key,
+    required this.extraCount,
+    required this.reactions,
+    this.onRemoveOwnReaction,
+  });
+
+  final int extraCount;
+  final List<Message> reactions;
+  final ValueChanged<Message>? onRemoveOwnReaction;
+
+  String get _label => extraCount > 99 ? '99+' : '+$extraCount';
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.theme;
+    final cs = theme.colorScheme;
+    final fill = ReactionWidget.materialFillColor(cs, theme.brightness);
+    final shape = MaterialReactionBadgeShape(
+      hasCount: false,
+      side: BorderSide(color: cs.surface, width: ReactionWidget.materialCutoutBorderWidth),
+    );
+    return Semantics(
+      button: true,
+      label: '$extraCount more reactions',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => unawaited(showMaterialReactionDetailsSheet(
+            context,
+            reactions: reactions,
+            onRemoveOwnReaction: onRemoveOwnReaction,
+          )),
+          child: Container(
+            height: ReactionWidget.materialBadgeSize,
+            constraints: const BoxConstraints(minWidth: ReactionWidget.materialBadgeSize),
+            padding: const EdgeInsets.symmetric(horizontal: 7.0),
+            decoration: ShapeDecoration(
+              color: fill,
+              shape: shape,
+              shadows: ReactionWidget.materialShadows(cs, theme.brightness),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              _label,
+              textScaler: TextScaler.noScaling,
+              style: theme.textTheme.labelSmall?.copyWith(
+                fontSize: 12.0,
+                fontWeight: FontWeight.w600,
+                height: 1.0,
+                color: cs.onSurface,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProviderStateMixin, ThemeHelpers {
@@ -195,6 +317,7 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
   }
 
   void _toggleOwnReactionOff(BuildContext context, Message ownReaction) {
+    if (!context.mounted) return;
     final parent = _parentMessage;
     if (parent == null) return;
     final chat = ChatStateScope.maybeChatOf(context) ??
@@ -206,9 +329,12 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
     }
     final rawType = ownReaction.associatedMessageType ?? '';
     final isEmoji = ReactionTypes.isEmojiTapback(rawType);
+    final isSticker = ReactionTypes.isStickerTapback(rawType);
     final removalType = isEmoji
         ? ReactionTypes.REMOVED_EMOJI
-        : (rawType.startsWith('-') ? rawType : '-$rawType');
+        : isSticker
+            ? ReactionTypes.REMOVED_STICKER
+            : (rawType.startsWith('-') ? rawType : '-$rawType');
     OutgoingMsgHandler.queue(
       OutgoingReaction(
         chat: chat,
@@ -229,8 +355,16 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
   }
 
   void _openReactionDetails(BuildContext context) {
-    final list = reactions;
-    if (list == null) return;
+    final list = reactions ?? widget.groupedReactions ?? [reaction];
+    if (CurrentSkin.material) {
+      unawaited(showMaterialReactionDetailsSheet(
+        context,
+        reactions: list,
+        onRemoveOwnReaction: (own) => _toggleOwnReactionOff(context, own),
+      ));
+      return;
+    }
+    if (reactions == null) return;
     // Capture the conversation's theme before pushing — if adaptive
     // theming is active, context.theme is already the per-chat theme.
     final capturedTheme = context.theme;
@@ -283,6 +417,192 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
     );
   }
 
+  /// Build the Google Messages Material glyph (`ewsm.e#L762-798`, `ewsm.f#L837-879`):
+  /// full-color emoji for standard Apple tapbacks + custom emoji; 1.3x circular image for stickers.
+  Widget _materialGlyph(Message r) {
+    if (ReactionTypes.isStickerTapback(r.associatedMessageType)) {
+      return Padding(
+        padding: const EdgeInsets.all(2.5),
+        child: ClipOval(
+          child: StickerTapbackImage(attachment: r.dbAttachments.firstOrNull),
+        ),
+      );
+    }
+    return Text(
+      ReactionTypes.emojiFor(r),
+      textScaler: TextScaler.noScaling,
+      style: const TextStyle(
+        fontSize: ReactionWidget.materialEmojiFontSize,
+        height: 1.0,
+        leadingDistribution: TextLeadingDistribution.even,
+        fontFamilyFallback: ['Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji'],
+      ),
+      textAlign: TextAlign.center,
+    );
+  }
+
+  void _openFailedReactionDialog(BuildContext context, Message failed) {
+    final chat = ChatStateScope.maybeChatOf(context) ??
+        ChatsSvc.getChatState(widget.chatGuid ?? _parentMessage?.chat.target?.guid ?? '')?.chat ??
+        ChatsSvc.activeChat?.chat;
+    if (chat == null) return;
+    final selected = maybeFindMessagesSvc(chat.guid)
+            ?.getMessageStateIfExists(failed.associatedMessageGuid ?? '')
+            ?.message ??
+        _parentMessage;
+    if (selected == null) return;
+
+    showMessageErrorDialog(
+      context,
+      errorCode: failed.error,
+      errorText: ErrorHelper.getErrorText(failed),
+      chatId: chat.id!,
+      onRetry: () => retryReaction(reaction: failed, chat: chat, selected: selected),
+      onRemove: () => removeReaction(reaction: failed, chat: chat),
+      removeLabel: ReactionTypes.isRemoval(failed.associatedMessageType) ? "OK" : "Remove",
+      title: ReactionTypes.isRemoval(failed.associatedMessageType) ? "Couldn't Remove Reaction" : null,
+    );
+  }
+
+  /// Google Messages badge pill (`ewsm.java#L290-468`, `ewso.java#L13-32`).
+  Widget _buildMaterialBadge(
+    BuildContext context, {
+    required Message current,
+    required List<Message> group,
+    required bool interactive,
+  }) {
+    final theme = context.theme;
+    final cs = theme.colorScheme;
+    final isSticker = ReactionTypes.isStickerTapback(current.associatedMessageType);
+    final ownReaction = group.firstWhereOrNull((m) => m.isFromMe ?? false);
+    final hasOwn = ownReaction != null;
+    final failedReaction = group.firstWhereOrNull((m) => m.error > 0) ??
+        ((reactionController?.hasError.value ?? false) ? current : null);
+    final hasError = failedReaction != null;
+    final count = group.length;
+    final hasCount = count > 1;
+
+    final baseHeight = isSticker ? ReactionWidget.materialStickerBadgeSize : ReactionWidget.materialBadgeSize;
+    final extraWidth = hasCount ? (count >= 10 ? 14.0 : ReactionWidget.materialCountExtraWidth) : 0.0;
+    final badgeWidth = baseHeight + extraWidth;
+    final earHeight = baseHeight / 2;
+    final earWidth = max(earHeight, earHeight + (extraWidth - 8.0).clamp(0.0, 32.0));
+
+    final fill = ReactionWidget.materialFillColor(
+      cs,
+      theme.brightness,
+      isOwn: hasOwn,
+      hasError: hasError,
+    );
+    final countFg = hasError
+        ? cs.onErrorContainer
+        : hasOwn
+            ? cs.onPrimaryContainer
+            : cs.onSurface;
+    final shape = MaterialReactionBadgeShape(
+      hasCount: hasCount,
+      countExtraWidth: extraWidth,
+      side: BorderSide(
+        color: hasError ? cs.error : cs.surface,
+        width: ReactionWidget.materialCutoutBorderWidth,
+      ),
+    );
+
+    final badge = Container(
+      width: badgeWidth,
+      height: baseHeight,
+      decoration: ShapeDecoration(
+        color: fill,
+        shape: shape,
+        shadows: ReactionWidget.materialShadows(cs, theme.brightness),
+      ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.directional(
+            textDirection: Directionality.of(context),
+            start: 0,
+            top: 0,
+            width: baseHeight,
+            height: baseHeight,
+            child: Center(child: _materialGlyph(current)),
+          ),
+          if (hasCount)
+            Positioned.directional(
+              textDirection: Directionality.of(context),
+              end: 0,
+              top: 0,
+              width: earWidth,
+              height: earHeight,
+              child: Center(
+                child: Text(
+                  count > 99 ? '99+' : '$count',
+                  textScaler: TextScaler.noScaling,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontSize: ReactionWidget.materialCountFontSize,
+                    fontWeight: FontWeight.w600,
+                    height: 1.0,
+                    color: countFg,
+                  ),
+                ),
+              ),
+            ),
+          if (hasError)
+            Positioned.directional(
+              textDirection: Directionality.of(context),
+              end: -3,
+              bottom: -3,
+              child: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: cs.error,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: cs.surface, width: 1.25),
+                ),
+                child: Icon(Icons.priority_high, color: cs.onError, size: 9),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    if (!interactive) return badge;
+
+    final subject = isSticker ? 'Sticker reaction' : '${ReactionTypes.emojiFor(current)} reaction';
+    final semanticLabel = '$subject${count > 1 ? ', $count' : ''}${hasOwn ? ', includes yours' : ''}';
+
+    Widget result = Semantics(
+      button: true,
+      label: semanticLabel,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          if (hasError) {
+            _openFailedReactionDialog(context, failedReaction);
+          } else {
+            _openReactionDetails(context);
+          }
+        },
+        onSecondaryTap: () => _openReactionDetails(context),
+        child: badge,
+      ),
+    );
+
+    if (kIsWeb || kIsDesktop) {
+      result = MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Tooltip(
+          message: _reactorTooltip(group),
+          waitDuration: const Duration(milliseconds: 250),
+          child: result,
+        ),
+      );
+    }
+
+    return result;
+  }
+
   @override
   Widget build(BuildContext context) {
     // When there is no parent message (e.g. pinned-tile context), there is no
@@ -311,20 +631,28 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
       // Guard: if the reaction type is unknown we cannot render the SVG asset safely.
       if (reactionType.isEmpty) return const SizedBox.shrink();
 
+      if (SettingsSvc.settings.skin.value == Skins.Material) {
+        final group = widget.groupedReactions ?? [current];
+        return ScaleTransition(
+          scale: _springController,
+          child: _buildMaterialBadge(
+            context,
+            current: current,
+            group: group,
+            interactive: true,
+          ),
+        );
+      }
+
       if (SettingsSvc.settings.skin.value != Skins.iOS) {
-        final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
+        // Samsung / non-iOS circular badge path (preserved intact).
         final group = widget.groupedReactions ?? [current];
         final ownReaction = group.firstWhereOrNull((m) => m.isFromMe ?? false);
         final hasOwn = ownReaction != null;
-        final count = group.length;
         final badgeColor = hasOwn
-            ? (isMaterial
-                ? context.theme.colorScheme.primaryContainer
-                : context.theme.colorScheme.primary)
-            : (isMaterial
-                ? (context.isDarkMode ? const Color(0xFF1F1F1F) : Colors.white)
-                : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                    context.theme.colorScheme.surfaceContainerHighest));
+            ? context.theme.colorScheme.primary
+            : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                context.theme.colorScheme.surfaceContainerHighest);
 
         Widget pill = Container(
           width: 30,
@@ -333,18 +661,9 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
             color: badgeColor,
             border: Border.all(
               color: context.theme.colorScheme.surface,
-              width: isMaterial ? 1.5 : 1.0,
+              width: 1.0,
             ),
             shape: BoxShape.circle,
-            boxShadow: isMaterial
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.14),
-                      blurRadius: 6,
-                      offset: const Offset(0, 1.5),
-                    ),
-                  ]
-                : null,
           ),
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -359,42 +678,6 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
             child: Center(child: _circleGlyph(current, reactionType)),
           ),
         );
-
-        if (isMaterial && count > 1) {
-          pill = Stack(
-            clipBehavior: Clip.none,
-            children: [
-              pill,
-              Positioned(
-                right: -3,
-                top: -3,
-                child: Container(
-                  width: 14,
-                  height: 14,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: hasOwn
-                        ? context.theme.colorScheme.primary
-                        : context.theme.colorScheme.surfaceContainerHighest,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: context.theme.colorScheme.surface, width: 1),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w600,
-                      height: 1,
-                      color: hasOwn
-                          ? context.theme.colorScheme.onPrimary
-                          : context.theme.colorScheme.onSurface,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          );
-        }
 
         if (kIsWeb || kIsDesktop) {
           pill = MouseRegion(
@@ -440,28 +723,34 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
                 tailDirection: _effectiveTailDirection,
                 tailType: widget.tailType,
               ),
-              child: Obx(() {
+              child: Builder(builder: (context) {
+                Widget buildBubble(bool isSending) {
+                  return Container(
+                      width: iosSize,
+                      height: _clipHeight,
+                      color: reactionIsFromMe
+                          ? context.theme.colorScheme.primary.darkenAmount(isSending ? 0.2 : 0)
+                          : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                              context.theme.colorScheme.surfaceContainerHighest),
+                      alignment: _alignToEnd ? Alignment.topRight : Alignment.topLeft,
+                      child: SizedBox(
+                        width: iosSize * 0.8,
+                        height: iosSize * 0.8,
+                        child: Center(
+                            child: Padding(
+                          padding: _glyphPadding(reactionType),
+                          child: _customGlyph(reaction) ?? TapbackIcon(reactionType),
+                        )),
+                      ));
+                }
+
                 // reactionController is null when no MessageState exists for the reaction (typical).
                 // Fall back to checking the GUID prefix so temp reactions always show as pending.
-                final isSending = reactionController?.isSending.value ??
-                    (reaction.guid?.startsWith('temp') == true && reaction.error == 0);
-                return Container(
-                    width: iosSize,
-                    height: _clipHeight,
-                    color: reactionIsFromMe
-                        ? context.theme.colorScheme.primary.darkenAmount(isSending ? 0.2 : 0)
-                        : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                            context.theme.colorScheme.surfaceContainerHighest),
-                    alignment: _alignToEnd ? Alignment.topRight : Alignment.topLeft,
-                    child: SizedBox(
-                      width: iosSize * 0.8,
-                      height: iosSize * 0.8,
-                      child: Center(
-                          child: Padding(
-                        padding: _glyphPadding(reactionType),
-                        child: _customGlyph(reaction) ?? TapbackIcon(reactionType),
-                      )),
-                    ));
+                final rc = reactionController;
+                if (rc != null) {
+                  return Obx(() => buildBubble(rc.isSending.value));
+                }
+                return buildBubble(reaction.guid?.startsWith('temp') == true && reaction.error == 0);
               })),
           Positioned(
             left: !_alignToEnd ? 0 : -75,
@@ -533,28 +822,29 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
 
     if (rType.isEmpty) return const SizedBox.shrink();
 
+    if (SettingsSvc.settings.skin.value == Skins.Material) {
+      return _buildMaterialBadge(
+        context,
+        current: reaction,
+        group: [reaction],
+        interactive: false,
+      );
+    }
+
     if (SettingsSvc.settings.skin.value != Skins.iOS) {
-      final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
       return Container(
-        width: isMaterial ? null : 30,
-        height: isMaterial ? 26 : 30,
-        constraints: isMaterial ? const BoxConstraints(minWidth: 34) : null,
-        padding: isMaterial ? const EdgeInsets.symmetric(horizontal: 8) : null,
+        width: 30,
+        height: 30,
         decoration: BoxDecoration(
           color: isFromMe
-              ? (isMaterial
-                  ? context.theme.colorScheme.primaryContainer
-                  : context.theme.colorScheme.primary)
-              : (isMaterial
-                  ? context.theme.colorScheme.surfaceContainerHighest
-                  : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                      context.theme.colorScheme.surfaceContainerHighest)),
+              ? context.theme.colorScheme.primary
+              : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                  context.theme.colorScheme.surfaceContainerHighest),
           border: Border.all(
             color: context.theme.colorScheme.surface,
-            width: isMaterial ? 1.5 : 1.0,
+            width: 1.0,
           ),
-          shape: isMaterial ? BoxShape.rectangle : BoxShape.circle,
-          borderRadius: isMaterial ? BorderRadius.circular(999) : null,
+          shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.15),

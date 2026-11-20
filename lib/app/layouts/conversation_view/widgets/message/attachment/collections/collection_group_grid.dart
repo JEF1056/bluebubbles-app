@@ -6,6 +6,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attach
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/media_collection.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/collection_style.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/collection_title.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_clipper.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -242,11 +243,15 @@ class _CollectionGroupGridState extends State<CollectionGroupGrid> with ThemeHel
     ];
   }
 
-  /// Tapbacks for one tile; none on the `+N` tile, which stands in for several attachments.
+  /// Placed stickers and tapbacks for one tile; none on the `+N` tile, which stands in for several attachments.
   List<Widget> _buildReactionCell(CollectionGridCell cell) {
     final moreCount = cell.moreCount;
     if (moreCount != null && moreCount > 0) return const [];
     return [
+      CollectionAttachmentStickers(
+        collectionPart: messagePart,
+        attachmentIndex: cell.index,
+      ),
       CollectionAttachmentReactions(
         collectionPart: messagePart,
         attachmentIndex: cell.index,

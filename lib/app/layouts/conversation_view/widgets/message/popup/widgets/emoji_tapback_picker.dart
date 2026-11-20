@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/sticker_library_dialog.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/library_sticker.dart';
@@ -27,6 +28,7 @@ class StickerTapbackPick extends TapbackPick {
 Future<TapbackPick?> showEmojiTapbackPicker(BuildContext context, {bool stickers = false}) {
   if (stickers) unawaited(StickerLibrarySvc.sync());
   final colors = context.theme.colorScheme;
+  final isMaterial = CurrentSkin.material;
   const tabBarHeight = 46.0;
 
   Widget buildPickerContent(BuildContext pickerContext, Color background, double totalHeight) {
@@ -46,8 +48,8 @@ Future<TapbackPick?> showEmojiTapbackPicker(BuildContext context, {bool stickers
             child: TabBar(
               indicatorColor: colors.primary,
               labelColor: colors.primary,
-              unselectedLabelColor: colors.outline,
-              dividerColor: colors.outline.withValues(alpha: 0.2),
+              unselectedLabelColor: isMaterial ? colors.onSurfaceVariant : colors.outline,
+              dividerColor: (isMaterial ? colors.outlineVariant : colors.outline).withValues(alpha: 0.4),
               tabs: const [
                 Tab(icon: Icon(Icons.emoji_emotions_outlined), iconMargin: EdgeInsets.zero),
                 Tab(icon: Icon(Icons.sticky_note_2_outlined), iconMargin: EdgeInsets.zero),
@@ -75,21 +77,24 @@ Future<TapbackPick?> showEmojiTapbackPicker(BuildContext context, {bool stickers
     final width = min(360.0, size.width - 32);
     // Fits short screens: the dialog's own insets take 48 of the height
     final height = min(420.0, size.height - MediaQuery.paddingOf(context).vertical - 48);
-    // Same surface as the app's dialogs (showBBDialog)
-    final background = colors.surfaceContainerHighest;
+    // Google Messages uses surfaceContainerLow + 28dp corners (reaction_picker_fragment_compose_background_corner_radius)
+    final background = isMaterial ? colors.surfaceContainerLow : colors.surfaceContainerHighest;
     return showDialog<TapbackPick>(
       context: context,
       builder: (dialogContext) => Dialog(
         backgroundColor: background,
         surfaceTintColor: Colors.transparent,
+        shape: isMaterial
+            ? RoundedRectangleBorder(borderRadius: BorderRadius.circular(M3EShapes.xl))
+            : null,
         clipBehavior: Clip.antiAlias,
         insetPadding: const EdgeInsets.all(16),
         child: SizedBox(
           width: width,
           height: height,
           child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: buildPickerContent(dialogContext, background, height - 16),
+            padding: const EdgeInsets.all(10),
+            child: buildPickerContent(dialogContext, background, height - 20),
           ),
         ),
       ),
@@ -97,6 +102,44 @@ Future<TapbackPick?> showEmojiTapbackPicker(BuildContext context, {bool stickers
   }
 
   final height = min(400.0, MediaQuery.sizeOf(context).height * 0.6);
+  if (isMaterial) {
+    final background = colors.surfaceContainerLow;
+    return showModalBottomSheet<TapbackPick>(
+      context: context,
+      backgroundColor: background,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(M3EShapes.xl)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 6),
+              width: 32,
+              height: 4,
+              decoration: BoxDecoration(
+                color: colors.outlineVariant,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            SizedBox(
+              height: height,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+                child: buildPickerContent(sheetContext, background, height - 10),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   return showBBBottomSheet<TapbackPick>(
     context: context,
     title: "Tapback",
@@ -110,6 +153,7 @@ Future<TapbackPick?> showEmojiTapbackPicker(BuildContext context, {bool stickers
 
 Widget _emojiPicker(BuildContext context, Color background, double height, ValueChanged<String> onPicked) {
   final colors = context.theme.colorScheme;
+  final mutedIconColor = CurrentSkin.material ? colors.onSurfaceVariant : colors.outline;
   return EmojiPicker(
     onEmojiSelected: (_, emoji) => onPicked(emoji.emoji),
     config: Config(
@@ -120,7 +164,7 @@ Widget _emojiPicker(BuildContext context, Color background, double height, Value
         emojiSizeMax: 28,
         backgroundColor: background,
         columns: 8,
-        noRecents: Text("No Recents", style: context.textTheme.bodyLarge!.copyWith(color: colors.outline)),
+        noRecents: Text("No Recents", style: context.textTheme.bodyLarge!.copyWith(color: mutedIconColor)),
       ),
       viewOrderConfig: const ViewOrderConfig(
         top: EmojiPickerItem.categoryBar,
@@ -132,24 +176,24 @@ Widget _emojiPicker(BuildContext context, Color background, double height, Value
       categoryViewConfig: CategoryViewConfig(
         recentTabBehavior: RecentTabBehavior.NONE,
         backgroundColor: background,
-        dividerColor: colors.outline.withValues(alpha: 0.2),
+        dividerColor: colors.outlineVariant.withValues(alpha: 0.4),
         indicatorColor: colors.primary,
-        iconColor: colors.outline,
+        iconColor: mutedIconColor,
         iconColorSelected: colors.primary,
-        backspaceColor: colors.outline,
+        backspaceColor: mutedIconColor,
       ),
       // Search only: there's no text to backspace
       bottomActionBarConfig: BottomActionBarConfig(
         showBackspaceButton: false,
         backgroundColor: background,
         buttonColor: background,
-        buttonIconColor: colors.outline,
+        buttonIconColor: mutedIconColor,
       ),
       searchViewConfig: SearchViewConfig(
         backgroundColor: background,
-        buttonIconColor: colors.outline,
+        buttonIconColor: mutedIconColor,
         hintText: "Search emoji",
-        hintTextStyle: context.textTheme.bodyLarge!.copyWith(color: colors.outline),
+        hintTextStyle: context.textTheme.bodyLarge!.copyWith(color: mutedIconColor),
         inputTextStyle: context.textTheme.bodyLarge!.copyWith(color: colors.onSurface),
       ),
     ),
