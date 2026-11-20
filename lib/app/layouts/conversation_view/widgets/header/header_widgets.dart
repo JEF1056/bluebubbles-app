@@ -1,8 +1,8 @@
-import 'dart:async';
-import 'dart:typed_data';
-
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/conversation_details.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
+import 'package:bluebubbles/app/wrappers/tablet_mode_wrapper.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -11,6 +11,234 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
+
+const Duration kHeaderHoverDuration = Duration(milliseconds: 140);
+const Curve kHeaderHoverCurve = Curves.easeOutCubic;
+
+@visibleForTesting
+bool? webHeaderIsWebOverride;
+
+@visibleForTesting
+Widget Function(Chat chat)? webHeaderDetailsBuilderOverride;
+
+bool get isWebHeader => webHeaderIsWebOverride ?? kIsWeb;
+
+bool canToggleWebInspector(BuildContext context) {
+  if (!isWebHeader) return false;
+  final size = MediaQuery.sizeOf(context);
+  final aspectRatio = size.height > 0 ? size.width / size.height : 1.0;
+  final tabletWrapper = context.findAncestorWidgetOfExactType<TabletModeWrapper>();
+  final inspectorEnabled = tabletWrapper?.enableInspector ?? true;
+  return inspectorEnabled &&
+      SettingsSvc.settings.tabletMode.value &&
+      !LifecycleSvc.isBubble &&
+      (!context.isPhone || aspectRatio > 0.8) &&
+      size.width > 1024;
+}
+
+void openOrToggleConversationDetails(
+  BuildContext context,
+  Chat chat, {
+  bool preferOpenInspector = false,
+}) {
+  if (canToggleWebInspector(context)) {
+    if (preferOpenInspector) {
+      NavigationSvc.showInspectorDrawer.value = true;
+    } else {
+      NavigationSvc.toggleInspectorDrawer();
+    }
+    return;
+  }
+  NavigationSvc.push(
+    context,
+    webHeaderDetailsBuilderOverride?.call(chat) ?? ConversationDetails(chat: chat),
+  );
+}
+
+Color resolveHeaderHoverColor(
+  BuildContext context, {
+  required bool hovered,
+  required bool pressed,
+  required bool hasWallpaper,
+}) {
+  if (!hovered && !pressed) return Colors.transparent;
+  if (hasWallpaper) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (pressed) {
+      return Colors.white.withValues(alpha: isDark ? 0.16 : 0.30);
+    }
+    return Colors.white.withValues(alpha: isDark ? 0.10 : 0.20);
+  }
+  final onSurface = Theme.of(context).colorScheme.onSurface;
+  return onSurface.withValues(alpha: pressed ? 0.11 : 0.07);
+}
+
+class HeaderHitRegion extends StatelessWidget {
+  const HeaderHitRegion({
+    super.key,
+    required this.child,
+    required this.onHoverChanged,
+    required this.onPressChanged,
+    required this.onTap,
+    this.semanticLabel,
+  });
+
+  final Widget child;
+  final ValueChanged<bool> onHoverChanged;
+  final ValueChanged<bool> onPressChanged;
+  final VoidCallback? onTap;
+  final String? semanticLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      enabled: onTap != null,
+      label: semanticLabel,
+      child: MouseRegion(
+        cursor: onTap != null ? SystemMouseCursors.click : MouseCursor.defer,
+        onEnter: (_) => onHoverChanged(true),
+        onExit: (_) {
+          onHoverChanged(false);
+          onPressChanged(false);
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => onPressChanged(true),
+          onTapUp: (_) => onPressChanged(false),
+          onTapCancel: () => onPressChanged(false),
+          onTap: onTap,
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class HeaderHoverSurface extends StatefulWidget {
+  const HeaderHoverSurface({
+    super.key,
+    required this.child,
+    required this.onTap,
+    this.borderRadius = const BorderRadius.all(Radius.circular(14)),
+    this.padding = EdgeInsets.zero,
+    this.hasWallpaper = false,
+    this.semanticLabel,
+  });
+
+  final Widget child;
+  final VoidCallback? onTap;
+  final BorderRadius borderRadius;
+  final EdgeInsetsGeometry padding;
+  final bool hasWallpaper;
+  final String? semanticLabel;
+
+  @override
+  State<HeaderHoverSurface> createState() => _HeaderHoverSurfaceState();
+}
+
+class _HeaderHoverSurfaceState extends State<HeaderHoverSurface> {
+  bool _hovered = false;
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return HeaderHitRegion(
+      onHoverChanged: (v) {
+        if (_hovered != v) setState(() => _hovered = v);
+      },
+      onPressChanged: (v) {
+        if (_pressed != v) setState(() => _pressed = v);
+      },
+      onTap: widget.onTap,
+      semanticLabel: widget.semanticLabel,
+      child: AnimatedContainer(
+        duration: kHeaderHoverDuration,
+        curve: kHeaderHoverCurve,
+        padding: widget.padding,
+        decoration: BoxDecoration(
+          color: resolveHeaderHoverColor(
+            context,
+            hovered: _hovered,
+            pressed: _pressed,
+            hasWallpaper: widget.hasWallpaper,
+          ),
+          borderRadius: widget.borderRadius,
+        ),
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+class HeaderLocationChip extends StatelessWidget {
+  const HeaderLocationChip({
+    super.key,
+    required this.loc,
+    required this.isCupertino,
+    required this.onTap,
+    this.hasWallpaper = false,
+    this.maxWidth,
+  });
+
+  final FindMyChatLocation loc;
+  final bool isCupertino;
+  final VoidCallback onTap;
+  final bool hasWallpaper;
+  final double? maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final labelText = loc.distanceLabel != null && loc.distanceLabel!.isNotEmpty
+        ? '${loc.shortLabel} · ${loc.distanceLabel}'
+        : loc.shortLabel;
+    final textWidget = Text(
+      labelText,
+      style: theme.textTheme.labelSmall?.copyWith(
+        color: theme.colorScheme.onSurfaceVariant,
+        fontWeight: isCupertino ? null : FontWeight.w500,
+        fontSize: isCupertino ? 11 : null,
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+
+    return HeaderHoverSurface(
+      borderRadius: BorderRadius.circular(999),
+      padding: EdgeInsets.symmetric(horizontal: isCupertino ? 7 : 6, vertical: 1.5),
+      hasWallpaper: hasWallpaper,
+      semanticLabel: labelText,
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isCupertino ? CupertinoIcons.location_fill : Icons.location_on_outlined,
+            size: isCupertino ? 10 : 12,
+            color: theme.colorScheme.primary,
+          ),
+          const SizedBox(width: 3),
+          if (maxWidth != null)
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxWidth!),
+              child: textWidget,
+            )
+          else
+            Flexible(child: textWidget),
+          if (loc.isLive) ...[
+            SizedBox(width: isCupertino ? 4 : 5),
+            Container(
+              width: isCupertino ? 5 : 6,
+              height: isCupertino ? 5 : 6,
+              decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
 
 class ManualMark extends StatefulWidget {
   const ManualMark({super.key, required this.controller});
@@ -133,100 +361,6 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
         ],
       );
     });
-  }
-}
-
-class ConnectionIndicator extends StatefulWidget {
-  const ConnectionIndicator({super.key});
-
-  @override
-  State<ConnectionIndicator> createState() => _ConnectionIndicatorState();
-}
-
-class _ConnectionIndicatorState extends State<ConnectionIndicator> {
-  bool _isVisible = false;
-  bool _hasHadConnectionFailure = false;
-  SocketState _displayState = SocketState.connected;
-  Timer? _hideTimer;
-  Worker? _worker;
-
-  @override
-  void initState() {
-    super.initState();
-    // Only show when genuinely degraded/offline (avoid noisy stripe during normal startup connecting)
-    final initial = SocketSvc.state.value;
-    if (SettingsSvc.settings.finishedSetup.value &&
-        (initial == SocketState.reconnecting || initial == SocketState.error || initial == SocketState.disconnected)) {
-      _isVisible = true;
-      _displayState = initial;
-      _hasHadConnectionFailure = true;
-    }
-    _worker = ever(SocketSvc.state, _onSocketStateChanged);
-  }
-
-  void _onSocketStateChanged(SocketState state) {
-    if (!mounted) return;
-    if (!SettingsSvc.settings.finishedSetup.value) return;
-    if (state == SocketState.reconnecting || state == SocketState.error || state == SocketState.disconnected) {
-      _hasHadConnectionFailure = true;
-      _hideTimer?.cancel();
-      setState(() {
-        _displayState = state;
-        _isVisible = true;
-      });
-    } else if (state == SocketState.connecting) {
-      // Quiet during normal initial connect; keep hairline visible only if recovering from failure.
-      if (_hasHadConnectionFailure) {
-        _hideTimer?.cancel();
-        setState(() {
-          _displayState = SocketState.reconnecting;
-          _isVisible = true;
-        });
-      }
-    } else if (state == SocketState.connected) {
-      _hideTimer?.cancel();
-      if (_hasHadConnectionFailure) {
-        setState(() {
-          _displayState = SocketState.connected;
-          _isVisible = true;
-        });
-        _hideTimer = Timer(const Duration(milliseconds: 500), () {
-          if (mounted) {
-            setState(() {
-              _isVisible = false;
-              _hasHadConnectionFailure = false;
-            });
-          }
-        });
-      } else if (_isVisible) {
-        setState(() => _isVisible = false);
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _worker?.dispose();
-    _hideTimer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final topPadding = MediaQuery.of(context).viewPadding.top;
-    return Positioned(
-      top: topPadding,
-      left: 0,
-      right: 0,
-      child: IgnorePointer(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          height: _isVisible ? 1.5 : 0.0,
-          color: getIndicatorColor(_displayState).withValues(alpha: 0.85),
-        ),
-      ),
-    );
   }
 }
 

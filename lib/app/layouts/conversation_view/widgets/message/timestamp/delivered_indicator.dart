@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/relative_timestamp_ticker.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -35,6 +37,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
   bool _isSendingDisplayed = false;
   Timer? _sendingTimer;
   Worker? _isSendingWorker;
+  late final RelativeTimestampTicker _ticker;
   static const int _sendingMinDisplayMs = 700;
 
   @override
@@ -45,6 +48,15 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     _isGroup = controller.cvController?.chat.isGroup ?? fallbackChat?.isGroup ?? false;
     _isSendingDisplayed = controller.isSending.value;
     _isSendingWorker = ever(controller.isSending, _onIsSendingChange);
+    _ticker = RelativeTimestampTicker(onTick: () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ticker.setVisible(TickerMode.valuesOf(context).enabled);
   }
 
   void _onIsSendingChange(bool newVal) {
@@ -60,6 +72,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
 
   @override
   void dispose() {
+    _ticker.dispose();
     _isSendingWorker?.dispose();
     _sendingTimer?.cancel();
     super.dispose();
@@ -83,126 +96,108 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
   List<InlineSpan> buildTwoPiece(String action, String? date) {
     final material = !iOS && !samsung;
     final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
-    final color = hasBackground
-        ? Colors.white.withValues(alpha: 0.86)
-        : (material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline);
-    final shadows = hasBackground ? const [Shadow(color: Colors.black54, blurRadius: 3)] : null;
-    final baseStyle = material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!;
+    final fallbackColor = material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final baseStyle = WallpaperContrast.unbubbledStyle(
+      material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!,
+      hasWallpaper: hasBackground,
+      fallbackColor: fallbackColor,
+    );
     final hasDate = date != null && date.isNotEmpty;
     return [
       TextSpan(
         text: action,
-        style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600, color: color, shadows: shadows),
+        style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600),
       ),
       if (hasDate)
         TextSpan(
           text: " · $date",
-          style: baseStyle.copyWith(color: color, fontWeight: FontWeight.normal, shadows: shadows),
+          style: baseStyle.copyWith(fontWeight: FontWeight.normal),
         ),
     ];
   }
 
-  List<InlineSpan> getText() {
-    // Use reactive MessageState fields for Obx subscription
-    final material = !iOS && !samsung;
+  ({
+    IconData? icon,
+    _GMsgStatusKind? gmsgKind,
+    Color? iconColor,
+    String? semanticLabel,
+    List<InlineSpan> spans,
+    DateTime? timestamp,
+  }) _resolveStatus({required bool material, required bool hasBackground}) {
     final dateRead = controller.dateRead.value ?? message.dateRead;
     final dateDelivered = controller.dateDelivered.value ?? message.dateDelivered;
     final dateCreated = controller.dateCreated.value ?? message.dateCreated;
     final wasDeliveredQuietly = controller.wasDeliveredQuietly.value;
     final didNotifyRecipient = controller.didNotifyRecipient.value;
+    ({
+      IconData? icon,
+      _GMsgStatusKind? gmsgKind,
+      Color? iconColor,
+      String? semanticLabel,
+      List<InlineSpan> spans,
+      DateTime? timestamp,
+    }) status(
+      String label,
+      DateTime? timestamp, {
+      IconData? icon,
+      _GMsgStatusKind? gmsgKind,
+      Color? iconColor,
+      String? semanticLabel,
+    }) =>
+        (
+          icon: icon,
+          gmsgKind: gmsgKind,
+          iconColor: iconColor,
+          semanticLabel: semanticLabel ?? label,
+          spans: buildTwoPiece(label, timestamp == null ? null : buildDate(timestamp)),
+          timestamp: timestamp,
+        );
 
     if (controller.audioWasKept.value != null) {
-      return buildTwoPiece("Kept", buildDate(controller.audioWasKept.value!));
-    } else if (!(message.isFromMe ?? false)) {
-      return buildTwoPiece("Received", buildDate(dateCreated));
-    } else if (dateRead != null) {
-      return buildTwoPiece("Read", buildDate(dateRead));
-    } else if (dateDelivered != null) {
-      return buildTwoPiece(
-        "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
-        buildDate(dateDelivered),
-      );
-    } else if (message.isDelivered) {
-      return buildTwoPiece("Delivered", buildDate(dateCreated));
-    } else if (_isSendingDisplayed && (material || !(controller.cvController?.chat.isGroup ?? _isGroup)) && !iOS) {
-      return buildTwoPiece("Sending...", null);
-    } else if (controller.showSentIndicator.value || widget.forceShow) {
-      return buildTwoPiece("Sent", buildDate(dateCreated));
+      return status("Kept", controller.audioWasKept.value!, icon: Icons.check_circle_outline);
     }
-
-    return [];
-  }
-
-  ({IconData? icon, _GMsgStatusKind? gmsgKind, Color? iconColor, String? semanticLabel, List<InlineSpan> spans})
-      _materialStatus(bool hasBackground) {
-    final dateRead = controller.dateRead.value ?? message.dateRead;
-    final dateDelivered = controller.dateDelivered.value ?? message.dateDelivered;
-    final dateCreated = controller.dateCreated.value ?? message.dateCreated;
-    final wasDeliveredQuietly = controller.wasDeliveredQuietly.value;
-    final didNotifyRecipient = controller.didNotifyRecipient.value;
-
-    if (controller.audioWasKept.value != null) {
-      return (
-        icon: Icons.check_circle_outline,
-        gmsgKind: null,
-        iconColor: null,
-        semanticLabel: 'Kept',
-        spans: buildTwoPiece("Kept", buildDate(controller.audioWasKept.value!)),
-      );
-    } else if (!(message.isFromMe ?? false)) {
-      return (
-        icon: null,
-        gmsgKind: null,
-        iconColor: null,
-        semanticLabel: 'Received',
-        spans: buildTwoPiece("Received", buildDate(dateCreated)),
-      );
-    } else if (_isSendingDisplayed) {
-      return (
-        icon: Icons.schedule,
-        gmsgKind: null,
-        iconColor: null,
-        semanticLabel: 'Sending',
-        spans: buildTwoPiece("Sending...", null),
-      );
-    } else if (dateRead != null) {
-      return (
-        icon: null,
+    if (!(message.isFromMe ?? false)) {
+      return status("Received", dateCreated);
+    }
+    if (material && _isSendingDisplayed) {
+      return status("Sending...", null, icon: Icons.schedule, semanticLabel: 'Sending');
+    }
+    if (dateRead != null) {
+      return status(
+        "Read",
+        dateRead,
         gmsgKind: _GMsgStatusKind.read,
         iconColor: hasBackground ? Colors.white.withValues(alpha: 0.92) : context.theme.colorScheme.primary,
-        semanticLabel: 'Read',
-        spans: buildTwoPiece("Read", buildDate(dateRead)),
-      );
-    } else if (dateDelivered != null) {
-      return (
-        icon: null,
-        gmsgKind: _GMsgStatusKind.delivered,
-        iconColor: null,
-        semanticLabel: 'Delivered',
-        spans: buildTwoPiece(
-          "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
-          buildDate(dateDelivered),
-        ),
-      );
-    } else if (message.isDelivered) {
-      return (
-        icon: null,
-        gmsgKind: _GMsgStatusKind.delivered,
-        iconColor: null,
-        semanticLabel: 'Delivered',
-        spans: buildTwoPiece("Delivered", buildDate(dateCreated)),
-      );
-    } else if (controller.showSentIndicator.value || widget.forceShow) {
-      return (
-        icon: null,
-        gmsgKind: _GMsgStatusKind.sent,
-        iconColor: null,
-        semanticLabel: 'Sent',
-        spans: buildTwoPiece("Sent", buildDate(dateCreated)),
       );
     }
-    return (icon: null, gmsgKind: null, iconColor: null, semanticLabel: null, spans: const []);
+    if (dateDelivered != null) {
+      return status(
+        "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
+        dateDelivered,
+        gmsgKind: _GMsgStatusKind.delivered,
+        semanticLabel: 'Delivered',
+      );
+    }
+    if (message.isDelivered) {
+      return status("Delivered", dateCreated, gmsgKind: _GMsgStatusKind.delivered);
+    }
+    if (!material && _isSendingDisplayed && !(controller.cvController?.chat.isGroup ?? _isGroup) && !iOS) {
+      return status("Sending...", null, semanticLabel: 'Sending');
+    }
+    if (controller.showSentIndicator.value || widget.forceShow) {
+      return status("Sent", dateCreated, gmsgKind: _GMsgStatusKind.sent);
+    }
+    return (icon: null, gmsgKind: null, iconColor: null, semanticLabel: null, spans: const [], timestamp: null);
   }
+
+  ({
+    IconData? icon,
+    _GMsgStatusKind? gmsgKind,
+    Color? iconColor,
+    String? semanticLabel,
+    List<InlineSpan> spans,
+    DateTime? timestamp,
+  }) _materialStatus(bool hasBackground) => _resolveStatus(material: true, hasBackground: hasBackground);
 
   @override
   Widget build(BuildContext context) {
@@ -236,10 +231,15 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         controller.dateCreated.value;
         controller.dateEdited.value;
         controller.parts.length;
-        if (!shouldShow) return const SizedBox.shrink();
+        final isRelative = SettingsSvc.settings.skin.value != Skins.iOS;
+        if (!shouldShow) {
+          _ticker.sync(null, isRelative: false);
+          return const SizedBox.shrink();
+        }
 
         if (material) {
           final status = _materialStatus(hasBackground);
+          _ticker.sync(status.timestamp, isRelative: isRelative);
           final hasIcon = status.icon != null || status.gmsgKind != null;
           if (!hasIcon && status.spans.isEmpty) {
             return const SizedBox.shrink();
@@ -267,6 +267,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
                     status.icon,
                     size: 14,
                     color: status.iconColor ?? mutedColor,
+                    shadows: hasBackground ? WallpaperContrast.unbubbledTextShadows : null,
                     semanticLabel: status.semanticLabel,
                   ),
                 AnimatedSize(
@@ -291,7 +292,9 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
           );
         }
 
-        final spans = getText();
+        final status = _resolveStatus(material: false, hasBackground: hasBackground);
+        _ticker.sync(status.timestamp, isRelative: isRelative);
+        final spans = status.spans;
         return spans.isNotEmpty
             ? Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 15).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
@@ -344,27 +347,19 @@ class _GMsgStatusPainter extends CustomPainter {
       return;
     }
 
-    final c1 = Offset(5.5, cy);
-    final c2 = Offset(12.0, cy);
-    if (kind == _GMsgStatusKind.read) {
-      final fill = Paint()
-        ..color = color
-        ..style = PaintingStyle.fill;
-      final innerCheck = Paint()
-        ..color = checkColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.25
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
-      canvas.drawCircle(c1, r, fill);
-      canvas.drawCircle(c2, r, fill);
-      _drawCheck(canvas, c1, r, innerCheck);
-      _drawCheck(canvas, c2, r, innerCheck);
-    } else {
-      canvas.drawCircle(c1, r, stroke);
-      canvas.drawCircle(c2, r, stroke);
-      _drawCheck(canvas, c1, r, stroke);
-      _drawCheck(canvas, c2, r, stroke);
+    final isRead = kind == _GMsgStatusKind.read;
+    final circlePaint = isRead ? (Paint()..color = color..style = PaintingStyle.fill) : stroke;
+    final checkPaint = isRead
+        ? (Paint()
+          ..color = checkColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.25
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round)
+        : stroke;
+    for (final c in [Offset(5.5, cy), Offset(12.0, cy)]) {
+      canvas.drawCircle(c, r, circlePaint);
+      _drawCheck(canvas, c, r, checkPaint);
     }
   }
 

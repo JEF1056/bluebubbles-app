@@ -272,12 +272,13 @@ class _FontPickerTile extends StatelessWidget {
       title: "Select Font Family",
       icon: Icons.font_download_outlined,
       padding: EdgeInsets.zero,
-      builder: (ctx) => SizedBox(
-        height: MediaQuery.sizeOf(ctx).height * 0.65,
-        child: _FontPickerSheet(
-          currentFont: currentFont,
-          onSelected: onChanged,
-        ),
+      initialChildSize: 0.65,
+      minChildSize: 0.35,
+      maxChildSize: 0.92,
+      scrollableBuilder: (ctx, scrollController) => _FontPickerSheet(
+        currentFont: currentFont,
+        onSelected: onChanged,
+        scrollController: scrollController,
       ),
     );
   }
@@ -324,10 +325,15 @@ class _FontPickerTile extends StatelessWidget {
 }
 
 class _FontPickerSheet extends StatefulWidget {
-  const _FontPickerSheet({required this.currentFont, required this.onSelected});
+  const _FontPickerSheet({
+    required this.currentFont,
+    required this.onSelected,
+    required this.scrollController,
+  });
 
   final String currentFont;
   final void Function(String) onSelected;
+  final ScrollController scrollController;
 
   @override
   State<_FontPickerSheet> createState() => _FontPickerSheetState();
@@ -380,6 +386,9 @@ class _FontPickerSheetState extends State<_FontPickerSheet> {
         ),
         Expanded(
           child: ListView.builder(
+            controller: widget.scrollController,
+            physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+            padding: EdgeInsets.only(bottom: 24 + MediaQuery.viewPaddingOf(context).bottom),
             itemCount: _filtered.length,
             itemBuilder: (_, i) {
               final font = _filtered[i];

@@ -177,8 +177,9 @@ class ContactV2 {
     });
   }
 
-  Map<String, dynamic> toServerMap() {
+  Map<String, dynamic> toServerMap({required String deviceId}) {
     return {
+      'externalId': '$deviceId:$nativeContactId',
       'displayName': displayName,
       'firstName': firstName,
       'lastName': lastName,

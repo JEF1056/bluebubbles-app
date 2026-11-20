@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
-import 'package:bluebubbles/app/layouts/findmy/findmy_location_clipper.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
@@ -14,49 +12,39 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:flutter_map_marker_popup/flutter_map_marker_popup.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:get_it/get_it.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre/maplibre.dart' as maplibre;
 import 'package:sliding_up_panel2/sliding_up_panel2.dart';
 import 'package:universal_io/io.dart';
 
+int _compareOptionalTimestamps(int? existingMs, int? incomingMs) {
+  if (existingMs != null && incomingMs != null) return incomingMs.compareTo(existingMs);
+  if (incomingMs != null) return 1;
+  if (existingMs != null) return -1;
+  return 0;
+}
+
 bool shouldSupersedeFriendLocation(FindMyFriend? existing, FindMyFriend incoming) {
   if (existing == null) return true;
-
-  final existingTs = existing.lastUpdated;
-  final incomingTs = incoming.lastUpdated;
-  if (existingTs != null && incomingTs != null) {
-    if (incomingTs.isAfter(existingTs)) return true;
-    if (incomingTs.isBefore(existingTs)) return false;
-  } else if (incomingTs != null && existingTs == null) {
-    return true;
-  } else if (existingTs != null && incomingTs == null) {
-    return false;
-  }
-
-  if (incoming.locatingInProgress) return true;
-  if (existing.status == null) return true;
+  final cmp = _compareOptionalTimestamps(
+    existing.lastUpdated?.millisecondsSinceEpoch,
+    incoming.lastUpdated?.millisecondsSinceEpoch,
+  );
+  if (cmp != 0) return cmp > 0;
+  if (incoming.locatingInProgress || existing.status == null) return true;
   return LocationStatus.values.indexOf(existing.status!) <=
       LocationStatus.values.indexOf(incoming.status ?? LocationStatus.legacy);
 }
 
 bool shouldSupersedeDeviceLocation(FindMyDevice? existing, FindMyDevice incoming) {
   if (existing == null) return true;
-  final existingTs = existing.location?.timeStamp;
-  final incomingTs = incoming.location?.timeStamp;
-  if (existingTs != null && incomingTs != null) {
-    if (incomingTs > existingTs) return true;
-    if (incomingTs < existingTs) return false;
-  } else if (incomingTs != null && existingTs == null) {
-    return true;
-  } else if (existingTs != null && incomingTs == null) {
-    return false;
-  }
-  return incoming.isLocatingInProgress || incomingTs == existingTs;
+  final cmp = _compareOptionalTimestamps(existing.location?.timeStamp, incoming.location?.timeStamp);
+  if (cmp != 0) return cmp > 0;
+  return incoming.isLocatingInProgress || incoming.location?.timeStamp == existing.location?.timeStamp;
 }
 
 typedef FindMyFriendsRefreshFn = Future<Response> Function({
@@ -83,6 +71,8 @@ typedef FindMyPinnedChatHandlesFn = Iterable<String> Function();
 
 const String kFindMyPinnedFriendsPrefKey = 'findmy_pinned_friends';
 const String kFindMyUnpinnedFriendsPrefKey = 'findmy_unpinned_friends';
+const String kFindMyMapStylePrefKey = 'findmy_map_style';
+const String kFindMy3DEnabledPrefKey = 'findmy_3d_tilt_enabled';
 
 /// Normalizes a phone number or email handle for reliable matching across
 /// Find My friends, 1:1 chats, and persisted pin state.
@@ -161,41 +151,24 @@ List<FindMyFriend> sortFindMyFriends(
   double? userLongitude,
 }) {
   final hasUserCoords = _hasValidFriendCoords(userLatitude, userLongitude);
-
-  double? distanceFor(FindMyFriend f) {
-    if (!hasUserCoords || !_hasValidFriendCoords(f.latitude, f.longitude)) return null;
-    return haversineDistanceMeters(userLatitude!, userLongitude!, f.latitude!, f.longitude!);
-  }
-
-  final pinned = <(int, FindMyFriend, double?)>[];
-  final unpinned = <(int, FindMyFriend, double?)>[];
   var index = 0;
-  for (final f in friends) {
-    final entry = (index++, f, distanceFor(f));
-    if (isPinned(f)) {
-      pinned.add(entry);
-    } else {
-      unpinned.add(entry);
-    }
-  }
-
-  int compareEntries((int, FindMyFriend, double?) a, (int, FindMyFriend, double?) b) {
-    final da = a.$3;
-    final db = b.$3;
-    if (da != null && db != null) {
-      final cmp = da.compareTo(db);
-      if (cmp != 0) return cmp;
-    } else if (da != null) {
-      return -1;
-    } else if (db != null) {
-      return 1;
-    }
-    return a.$1.compareTo(b.$1);
-  }
-
-  pinned.sort(compareEntries);
-  unpinned.sort(compareEntries);
-  return [...pinned.map((e) => e.$2), ...unpinned.map((e) => e.$2)];
+  final entries = [
+    for (final f in friends)
+      (
+        index++,
+        f,
+        isPinned(f) ? 0 : 1,
+        hasUserCoords && _hasValidFriendCoords(f.latitude, f.longitude)
+            ? haversineDistanceMeters(userLatitude!, userLongitude!, f.latitude!, f.longitude!)
+            : double.infinity,
+      ),
+  ]..sort((a, b) {
+      final pinCmp = a.$3.compareTo(b.$3);
+      if (pinCmp != 0) return pinCmp;
+      final distCmp = a.$4.compareTo(b.$4);
+      return distCmp != 0 ? distCmp : a.$1.compareTo(b.$1);
+    });
+  return [for (final e in entries) e.$2];
 }
 
 class FindMyChatLocation {
@@ -310,10 +283,18 @@ class FindMyController extends GetxController {
   final ScrollController friendsController = ScrollController();
 
   // Map & Panel Controllers
-  final PopupController popupController = PopupController();
-  final MapController mapController = MapController();
+  maplibre.MapController? mapLibreController;
+  maplibre.StyleController? mapStyleController;
   final PanelController panelController = PanelController();
+  final DraggableScrollableController sheetController = DraggableScrollableController();
+  ScrollController? activeSheetScrollController;
   Completer<void> completer = Completer<void>();
+
+  static const double default3DPitch = 32.0;
+  static const double pitch3DSyncThreshold = 12.0;
+  static const double minZoomFor3DPitch = 14.0;
+  static const double defaultInitialZoom = 16.0;
+  static const double defaultFocusZoom = 16.2;
 
   // Tab Controller (needs to be created with vsync in the widget)
   TabController? tabController;
@@ -324,7 +305,7 @@ class FindMyController extends GetxController {
   final RxList<FindMyFriend> friends = <FindMyFriend>[].obs;
   final RxList<FindMyFriend> friendsWithLocation = <FindMyFriend>[].obs;
   final RxList<FindMyFriend> friendsWithoutLocation = <FindMyFriend>[].obs;
-  final RxMap<String, Marker> markers = <String, Marker>{}.obs;
+  final RxMap<String, maplibre.Marker> markers = <String, maplibre.Marker>{}.obs;
   final RxMap<String, LatLng> animatedPoints = <String, LatLng>{}.obs;
   final Rxn<Position> location = Rxn<Position>();
   final Rxn<bool> fetching = Rxn<bool>(true);
@@ -335,10 +316,23 @@ class FindMyController extends GetxController {
   final RxBool hasMovedToCurrentLocation = false.obs;
   final RxnString selectedFriendId = RxnString();
   final RxnString selectedDeviceId = RxnString();
+  final RxnString ringingDeviceId = RxnString();
+  final RxBool ringBusy = false.obs;
+  Timer? _ringAutoClearTimer;
+  FindMyBleService bleService = FindMyBleService.instance;
+  Future<Response> Function(String deviceId, {bool stop, String? component})? cloudRingOverride;
   final RxnString locatingFriendId = RxnString();
   final RxInt freshnessTick = 0.obs;
   final RxInt livePulseNonce = 0.obs;
   final Rx<FindMyMapStyle> mapStyle = FindMyMapStyle.standard.obs;
+  final RxBool is3DEnabled = true.obs;
+  final RxDouble cameraPitch = default3DPitch.obs;
+  final RxDouble cameraBearing = 0.0.obs;
+  final RxDouble cameraZoom = defaultInitialZoom.obs;
+  final Rx<LatLng> cameraCenter = const LatLng(37.7749, -122.4194).obs;
+  final RxnString hoveredMarkerKey = RxnString();
+  EdgeInsets cameraPadding = EdgeInsets.zero;
+  Size mapViewportSize = const Size(390, 844);
   final RxBool liveTrackingEnabled = true.obs;
   final RxnString lastRefreshFeedback = RxnString();
   final RxSet<String> _explicitlyPinnedKeys = <String>{}.obs;
@@ -370,6 +364,8 @@ class FindMyController extends GetxController {
   bool _fetchingUserLocation = false;
   bool _hasAutoFittedInitialPins = false;
   bool _waitingMapReadyForAutoFit = false;
+  bool _hasUserInteractedWithMap = false;
+  LatLng? _lastFollowedTargetPoint;
   DateTime? _lastHardRefreshAt;
   DateTime? _lastFriendsRefreshAt;
   DateTime? _lastDevicesRefreshAt;
@@ -385,6 +381,15 @@ class FindMyController extends GetxController {
   DateTime? _lastLiveStreamUpdateAt;
 
   void Function(LatLng center, double zoom, {Offset offset})? _cameraAnimator;
+  void Function(
+    LatLng center,
+    double zoom, {
+    Offset offset,
+    double? pitch,
+    double? bearing,
+    EdgeInsets? padding,
+    bool fly,
+  })? _camera3DAnimator;
   void Function(String key, LatLng from, LatLng to, void Function(LatLng) onStep)? _pinInterpolator;
   VoidCallback? onRequestDetailSheetOpen;
   double Function()? detailSheetOffsetProvider;
@@ -398,12 +403,12 @@ class FindMyController extends GetxController {
   StreamSubscription? _redactedModeListener;
   StreamSubscription? _hideContactInfoListener;
   StreamSubscription? _findMyLocationListener;
-  StreamSubscription? _findMyDeviceListener;
 
   @override
   void onInit() {
     super.onInit();
     _loadPinPrefs();
+    _loadMapPrefs();
     if (autoFetch) {
       activatePage();
     }
@@ -455,6 +460,8 @@ class FindMyController extends GetxController {
     _pageActivated = false;
     _waitingMapReadyForAutoFit = false;
     _hasAutoFittedInitialPins = false;
+    _hasUserInteractedWithMap = false;
+    _lastFollowedTargetPoint = null;
     hasMovedToCurrentLocation.value = false;
     locationSub?.cancel();
     locationSub = null;
@@ -481,26 +488,252 @@ class FindMyController extends GetxController {
     _cameraAnimator = animator;
   }
 
+  void registerCamera3DAnimator(
+    void Function(
+      LatLng center,
+      double zoom, {
+      Offset offset,
+      double? pitch,
+      double? bearing,
+      EdgeInsets? padding,
+      bool fly,
+    })? animator,
+  ) {
+    _camera3DAnimator = animator;
+  }
+
   void registerPinInterpolator(
     void Function(String key, LatLng from, LatLng to, void Function(LatLng) onStep)? interpolator,
   ) {
     _pinInterpolator = interpolator;
   }
 
-  void animateCameraTo(LatLng center, double zoom, {Offset offset = Offset.zero}) {
+  static EdgeInsets _offsetToPadding(Offset offset) => EdgeInsets.fromLTRB(
+        offset.dx > 0 ? offset.dx * 2.0 : 0.0,
+        offset.dy > 0 ? offset.dy * 2.0 : 0.0,
+        offset.dx < 0 ? -offset.dx * 2.0 : 0.0,
+        offset.dy < 0 ? -offset.dy * 2.0 : 0.0,
+      );
+
+  static double _normalizeBearing(double degrees) => ((degrees % 360.0) + 360.0) % 360.0;
+
+  void animateCameraTo(
+    LatLng center,
+    double zoom, {
+    Offset offset = Offset.zero,
+    double? pitch,
+    double? bearing,
+    EdgeInsets? padding,
+    bool fly = false,
+  }) {
+    final effectivePadding = padding ?? _offsetToPadding(offset);
+    final effectivePitch = (pitch ?? cameraPitch.value).clamp(0.0, 60.0);
+    final effectiveBearing = _normalizeBearing(bearing ?? cameraBearing.value);
+    final clampedZoom = zoom.clamp(1.0, 19.0);
+
+    cameraCenter.value = center;
+    cameraZoom.value = clampedZoom;
+    cameraPitch.value = effectivePitch;
+    cameraBearing.value = effectiveBearing;
+    cameraPadding = effectivePadding;
+
     if (_cameraAnimator != null) {
-      _cameraAnimator!(center, zoom, offset: offset);
+      _cameraAnimator!(center, clampedZoom, offset: offset);
+    }
+    if (_camera3DAnimator != null) {
+      _camera3DAnimator!(
+        center,
+        clampedZoom,
+        offset: offset,
+        pitch: effectivePitch,
+        bearing: effectiveBearing,
+        padding: effectivePadding,
+        fly: fly,
+      );
       return;
     }
+    if (_cameraAnimator != null) return;
+
+    final mlController = mapLibreController;
+    if (mlController == null) return;
     try {
-      mapController.move(center, zoom, offset: offset);
+      final update = maplibre.CameraUpdate.position(
+        center: toGeographic(center),
+        zoom: clampedZoom,
+        pitch: effectivePitch,
+        bearing: effectiveBearing,
+        padding: effectivePadding,
+      );
+      final animation = fly
+          ? const maplibre.CameraAnimation.fly(duration: Duration(milliseconds: 780), curve: Curves.easeOutCubic)
+          : const maplibre.CameraAnimation.ease(duration: Duration(milliseconds: 480), curve: Curves.easeOutCubic);
+      unawaited(mlController.animateCamera(update, animation: animation));
     } catch (_) {
       // MapController may not be attached yet in tests or early mount.
     }
   }
 
+  void flyToCamera(
+    LatLng center,
+    double zoom, {
+    Offset offset = Offset.zero,
+    double? pitch,
+    double? bearing,
+    EdgeInsets? padding,
+  }) {
+    final targetPitch = pitch ??
+        (is3DEnabled.value && zoom >= minZoomFor3DPitch ? default3DPitch : cameraPitch.value);
+    animateCameraTo(
+      center,
+      zoom,
+      offset: offset,
+      pitch: targetPitch,
+      bearing: bearing,
+      padding: padding,
+      fly: true,
+    );
+  }
+
+  void toggle3D({bool? enabled}) {
+    final next = enabled ?? !is3DEnabled.value;
+    if (is3DEnabled.value == next && (next ? cameraPitch.value >= pitch3DSyncThreshold : cameraPitch.value == 0.0)) {
+      return;
+    }
+    is3DEnabled.value = next;
+    _writePrefBool(kFindMy3DEnabledPrefKey, next);
+    sync3DBuildingsLayer();
+    animateCameraTo(
+      cameraCenter.value,
+      cameraZoom.value,
+      pitch: next ? default3DPitch : 0.0,
+      bearing: cameraBearing.value,
+      padding: cameraPadding,
+    );
+  }
+
+  void resetNorth() {
+    animateCameraTo(
+      cameraCenter.value,
+      cameraZoom.value,
+      pitch: cameraPitch.value,
+      bearing: 0.0,
+      padding: cameraPadding,
+    );
+  }
+
+  void zoomBy(double delta) {
+    final nextZoom = (cameraZoom.value + delta).clamp(1.0, 19.0);
+    animateCameraTo(
+      cameraCenter.value,
+      nextZoom,
+      pitch: cameraPitch.value,
+      bearing: cameraBearing.value,
+      padding: cameraPadding,
+    );
+  }
+
+  void onMapCameraChanged({
+    required LatLng center,
+    required double zoom,
+    required double pitch,
+    required double bearing,
+    maplibre.CameraChangeReason? reason,
+  }) {
+    cameraCenter.value = center;
+    cameraZoom.value = zoom;
+    cameraPitch.value = pitch.clamp(0.0, 60.0);
+    cameraBearing.value = _normalizeBearing(bearing);
+    if (reason == maplibre.CameraChangeReason.gesture) {
+      _hasUserInteractedWithMap = true;
+      if (cameraPitch.value >= pitch3DSyncThreshold && !is3DEnabled.value) {
+        is3DEnabled.value = true;
+        _writePrefBool(kFindMy3DEnabledPrefKey, true);
+        sync3DBuildingsLayer();
+      } else if (cameraPitch.value < 5.0 && is3DEnabled.value) {
+        is3DEnabled.value = false;
+        _writePrefBool(kFindMy3DEnabledPrefKey, false);
+        sync3DBuildingsLayer();
+      }
+    }
+  }
+
+  void sync3DBuildingsLayer({Brightness brightness = Brightness.light}) {
+    final styleCtrl = mapStyleController;
+    if (styleCtrl == null) return;
+    try {
+      bool hasExtrusion = false;
+      final layerDescriptors = <({String id, String type, String? sourceLayer})>[];
+      for (final layer in styleCtrl.layers) {
+        final String? sourceLayer = switch (layer) {
+          maplibre.FillStyleLayer(:final sourceLayerId) => sourceLayerId,
+          maplibre.LineStyleLayer(:final sourceLayerId) => sourceLayerId,
+          maplibre.SymbolStyleLayer(:final sourceLayerId) => sourceLayerId,
+          maplibre.FillExtrusionStyleLayer(:final sourceLayerId) => sourceLayerId,
+          _ => null,
+        };
+        layerDescriptors.add((id: layer.id, type: layer.type, sourceLayer: sourceLayer));
+
+        if (layer is maplibre.FillStyleLayer &&
+            isFindMyBuildingFillLayer(id: layer.id, type: layer.type, sourceLayer: sourceLayer) &&
+            layer.maxZoom > 14.0) {
+          layer.maxZoom = 14.0;
+        }
+
+        if (layer is maplibre.FillExtrusionStyleLayer) {
+          hasExtrusion = true;
+          // Keep 3D building extrusions visible in both 2D and 3D modes.
+          layer.visible = true;
+          if (layer.id == findMy3DBuildingsLayerId) {
+            layer.color = buildFindMy3DExtrusionColorExpression(mapStyle.value, brightness);
+            layer.opacity = maplibre.Expression.literal(
+              resolveFindMyBuildingExtrusionOpacity(mapStyle.value, brightness),
+            );
+          }
+        }
+      }
+      if (!hasExtrusion && styleCtrl.sources['openmaptiles'] != null) {
+        final anchorLayerId = resolveFindMy3DAnchorLayerId(layerDescriptors);
+        final buildingLayer = maplibre.FillExtrusionStyleLayer(
+          id: findMy3DBuildingsLayerId,
+          sourceId: 'openmaptiles',
+          sourceLayerId: 'building',
+          minZoom: 14.0,
+          visible: true,
+          filter: const maplibre.Expression<bool>.raw(['!', ['has', 'hide_3d']]),
+          color: buildFindMy3DExtrusionColorExpression(mapStyle.value, brightness),
+          opacity: maplibre.Expression.literal(
+            resolveFindMyBuildingExtrusionOpacity(mapStyle.value, brightness),
+          ),
+          height: const maplibre.Expression<num>.raw([
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            14,
+            0,
+            14.3,
+            ['coalesce', ['get', 'render_height'], 0],
+          ]),
+          base: const maplibre.Expression<num>.raw([
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            14,
+            0,
+            14.3,
+            ['coalesce', ['get', 'render_min_height'], 0],
+          ]),
+          verticalGradient: const maplibre.Expression.literal(true),
+        );
+        unawaited(styleCtrl.layers.add(buildingLayer, belowLayerId: anchorLayerId));
+      }
+    } catch (_) {
+      // Style may be detached during rapid style switches or disposal.
+    }
+  }
+
   void setMapStyle(FindMyMapStyle style) {
     mapStyle.value = style;
+    _writePrefString(kFindMyMapStylePrefKey, style.name);
   }
 
   String? _selectedFriendHandle() {
@@ -519,42 +752,23 @@ class FindMyController extends GetxController {
     bool force = false,
     bool live = false,
     CancelToken? cancelToken,
-  }) {
-    if (_refreshFriendsFn != null) {
-      return _refreshFriendsFn(
+  }) =>
+      (_refreshFriendsFn ?? HttpSvc.icloud.refreshFriends)(
         handle: handle,
         force: force,
         live: live,
         cancelToken: cancelToken,
       );
-    }
-    return HttpSvc.icloud.refreshFriends(
-      handle: handle,
-      force: force,
-      live: live,
-      cancelToken: cancelToken,
-    );
-  }
 
-  Future<Response> _performStartLiveFriend({
-    required String handle,
-    CancelToken? cancelToken,
-  }) {
-    if (_startLiveFriendFn != null) {
-      return _startLiveFriendFn(handle: handle, cancelToken: cancelToken);
-    }
-    return HttpSvc.icloud.startLiveFindMyFriend(handle, cancelToken: cancelToken);
-  }
+  Future<Response> _performStartLiveFriend({required String handle, CancelToken? cancelToken}) =>
+      _startLiveFriendFn != null
+          ? _startLiveFriendFn(handle: handle, cancelToken: cancelToken)
+          : HttpSvc.icloud.startLiveFindMyFriend(handle, cancelToken: cancelToken);
 
-  Future<Response> _performStopLiveFriend({
-    String? handle,
-    CancelToken? cancelToken,
-  }) {
-    if (_stopLiveFriendFn != null) {
-      return _stopLiveFriendFn(handle: handle, cancelToken: cancelToken);
-    }
-    return HttpSvc.icloud.stopLiveFindMyFriend(handle: handle, cancelToken: cancelToken);
-  }
+  Future<Response> _performStopLiveFriend({String? handle, CancelToken? cancelToken}) =>
+      _stopLiveFriendFn != null
+          ? _stopLiveFriendFn(handle: handle, cancelToken: cancelToken)
+          : HttpSvc.icloud.stopLiveFindMyFriend(handle: handle, cancelToken: cancelToken);
 
   Future<void> _startLiveFriendStream({
     required String? friendId,
@@ -668,9 +882,13 @@ class FindMyController extends GetxController {
     selectedFriendId.value = targetId;
     selectedDeviceId.value = null;
     _selectedFriendTargetHandle = targetHandle;
+    if (_hasValidFriendCoords(friend.latitude, friend.longitude)) {
+      _lastFollowedTargetPoint = markerPointForFriend(friend);
+    }
     if (changed) {
       _forcedLiveForSelection = liveTrackingEnabled.value;
       _cancelPendingFriendRefresh();
+      _scrollToTop(friendsController);
     }
     _syncLiveHeartbeat();
     if (_canStartLiveFriend &&
@@ -703,7 +921,15 @@ class FindMyController extends GetxController {
     }
     selectedDeviceId.value = device.id;
     selectedFriendId.value = null;
-    if (changed) _forcedLiveForSelection = false;
+    final devLat = device.location?.latitude;
+    final devLng = device.location?.longitude;
+    if (_hasValidFriendCoords(devLat, devLng)) {
+      _lastFollowedTargetPoint = markerPointForDevice(device);
+    }
+    if (changed) {
+      _forcedLiveForSelection = false;
+      _scrollToTop(device.isConsideredAccessory ? itemsController : devicesController);
+    }
     _syncLiveHeartbeat();
     if (_interactive) {
       refreshOnView(
@@ -715,15 +941,21 @@ class FindMyController extends GetxController {
   }
 
   void _scrollToTop(ScrollController scrollController) {
-    if (!scrollController.hasClients) return;
-    for (final position in scrollController.positions) {
-      if (position.pixels > 0) {
-        position.jumpTo(0);
+    for (final c in [scrollController, if (activeSheetScrollController != null && !identical(activeSheetScrollController, scrollController)) activeSheetScrollController]) {
+      if (c == null || !c.hasClients) continue;
+      for (final position in c.positions) {
+        if (position.pixels > 0) {
+          position.animateTo(
+            0,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          );
+        }
       }
     }
   }
 
-  void focusFriend(FindMyFriend friend, {double? sheetOffsetPx, double minZoom = 14.5}) {
+  void focusFriend(FindMyFriend friend, {double? sheetOffsetPx, double minZoom = defaultFocusZoom}) {
     selectFriend(friend);
     final hasCoords = (friend.latitude ?? 0) != 0 && (friend.longitude ?? 0) != 0;
     final key = friend.stableId ?? friend.title ?? 'friend';
@@ -736,7 +968,7 @@ class FindMyController extends GetxController {
     );
   }
 
-  void focusDevice(FindMyDevice device, {double? sheetOffsetPx, double minZoom = 14.5}) {
+  void focusDevice(FindMyDevice device, {double? sheetOffsetPx, double minZoom = defaultFocusZoom}) {
     selectDevice(device);
     final isAcc = device.isConsideredAccessory;
     final hasCoords = device.location?.latitude != null && device.location?.longitude != null;
@@ -755,7 +987,7 @@ class FindMyController extends GetxController {
     required ScrollController scrollController,
     required LatLng? point,
     double? sheetOffsetPx,
-    double minZoom = 14.5,
+    double minZoom = defaultFocusZoom,
   }) {
     if (tabIndex.value != targetTab) {
       tabIndex.value = targetTab;
@@ -765,16 +997,17 @@ class FindMyController extends GetxController {
     onRequestDetailSheetOpen?.call();
     if (point != null) {
       final offsetY = sheetOffsetPx ?? detailSheetOffsetProvider?.call() ?? 0;
-      animateCameraTo(point, _targetFocusZoom(minZoom), offset: Offset(0, -offsetY));
+      final targetZoom = _targetFocusZoom(minZoom);
+      flyToCamera(
+        point,
+        is3DEnabled.value ? math.max(targetZoom, minZoomFor3DPitch) : targetZoom,
+        offset: Offset(0, -offsetY),
+      );
     }
   }
 
   double _targetFocusZoom(double minZoom) {
-    try {
-      return math.max(mapController.camera.zoom, minZoom);
-    } catch (_) {
-      return minZoom;
-    }
+    return math.max(cameraZoom.value, minZoom);
   }
 
   void clearSelection() {
@@ -787,10 +1020,10 @@ class FindMyController extends GetxController {
     selectedFriendId.value = null;
     selectedDeviceId.value = null;
     _selectedFriendTargetHandle = null;
+    _lastFollowedTargetPoint = null;
     _forcedLiveForSelection = false;
     _cancelPendingFriendRefresh();
     unawaited(_stopLiveFriendStream());
-    popupController.hideAllPopups();
     _syncLiveHeartbeat();
   }
 
@@ -833,26 +1066,89 @@ class FindMyController extends GetxController {
     }
   }
 
-  void _scheduleInitialAutoFitIfNeeded() {
-    if (_hasAutoFittedInitialPins) return;
-    if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
-    if (!_hasAnyPins) return;
+  LatLng? _resolveInitialFocusPoint() {
+    final loc = location.value;
+    if (loc != null) {
+      return LatLng(loc.latitude, loc.longitude);
+    }
+    FindMyFriend? bestFriend;
+    for (final f in friendsWithLocation) {
+      if (bestFriend == null ||
+          _compareOptionalTimestamps(
+                bestFriend.lastUpdated?.millisecondsSinceEpoch,
+                f.lastUpdated?.millisecondsSinceEpoch,
+              ) >
+              0) {
+        bestFriend = f;
+      }
+    }
+    if (bestFriend != null) {
+      final key = bestFriend.stableId ?? bestFriend.title ?? 'friend';
+      return animatedPoints[key] ?? markerPointForFriend(bestFriend);
+    }
+    FindMyDevice? bestDevice;
+    for (final d in devices) {
+      if (d.location?.latitude == null || d.location?.longitude == null) continue;
+      if (bestDevice == null ||
+          _compareOptionalTimestamps(bestDevice.location?.timeStamp, d.location?.timeStamp) > 0) {
+        bestDevice = d;
+      }
+    }
+    if (bestDevice != null) {
+      final key = bestDevice.id ?? bestDevice.name ?? 'device';
+      return animatedPoints[key] ?? markerPointForDevice(bestDevice);
+    }
+    return null;
+  }
 
-    void runFit() {
-      if (!_isAlive || _hasAutoFittedInitialPins) return;
+  void _scheduleInitialAutoFitIfNeeded() {
+    if (_hasAutoFittedInitialPins || _hasUserInteractedWithMap) return;
+    if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
+    // Do not consume initial camera focus on a random friend/device while initial GPS fetch is in flight.
+    if (location.value == null && _fetchingUserLocation) return;
+    if (location.value == null && !_hasAnyPins) return;
+
+    void runInitialFocus() {
+      if (!_isAlive || _hasAutoFittedInitialPins || _hasUserInteractedWithMap) return;
       if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
-      if (!_hasAnyPins) return;
+      if (location.value == null && _fetchingUserLocation) return;
+      if (location.value == null && !_hasAnyPins) return;
+
+      final offsetY = detailSheetOffsetProvider?.call() ?? 0;
+      final userLoc = location.value;
+      if (userLoc != null) {
+        _hasAutoFittedInitialPins = true;
+        hasMovedToCurrentLocation.value = true;
+        flyToCamera(
+          LatLng(userLoc.latitude, userLoc.longitude),
+          defaultInitialZoom,
+          offset: Offset(0, -offsetY),
+          pitch: is3DEnabled.value ? default3DPitch : 0.0,
+        );
+        return;
+      }
+
       _hasAutoFittedInitialPins = true;
-      fitAllPins();
+      final target = _resolveInitialFocusPoint();
+      if (target != null) {
+        flyToCamera(
+          target,
+          defaultInitialZoom,
+          offset: Offset(0, -offsetY),
+          pitch: is3DEnabled.value ? default3DPitch : 0.0,
+        );
+      } else {
+        fitAllPins();
+      }
     }
 
     if (completer.isCompleted) {
-      runFit();
+      runInitialFocus();
     } else if (!_waitingMapReadyForAutoFit) {
       _waitingMapReadyForAutoFit = true;
       unawaited(completer.future.then((_) {
         _waitingMapReadyForAutoFit = false;
-        runFit();
+        runInitialFocus();
       }));
     }
   }
@@ -860,53 +1156,48 @@ class FindMyController extends GetxController {
   Future<void> _initUserLocation({bool requestPermission = true, bool startStream = true}) async {
     if (_fetchingUserLocation || !_isAlive) return;
     _fetchingUserLocation = true;
-    try {
-      final loc = await _performFetchCurrentPosition(requestPermission: requestPermission);
-      if (!_isAlive || loc == null) return;
-      location.value = loc;
+
+    void applyPosition(Position pos, bool allowAutoMove) {
+      location.value = pos;
       _resortFriendsLists();
-      buildLocationMarker(loc);
-      if (startStream &&
+      buildLocationMarker(pos);
+      if (allowAutoMove &&
           !hasMovedToCurrentLocation.value &&
           !_hasAutoFittedInitialPins &&
-          !_hasAnyPins &&
+          !_hasUserInteractedWithMap &&
           selectedFriendId.value == null &&
           selectedDeviceId.value == null &&
           _pendingFocusFriendId == null) {
         hasMovedToCurrentLocation.value = true;
+        _hasAutoFittedInitialPins = true;
         _runWhenMapReady(() {
           if (!_isAlive ||
-              _hasAutoFittedInitialPins ||
-              _hasAnyPins ||
+              _hasUserInteractedWithMap ||
               selectedFriendId.value != null ||
-              selectedDeviceId.value != null) return;
-          animateCameraTo(LatLng(loc.latitude, loc.longitude), 10);
+              selectedDeviceId.value != null ||
+              _pendingFocusFriendId != null) {
+            return;
+          }
+          final offsetY = detailSheetOffsetProvider?.call() ?? 0.0;
+          animateCameraTo(
+            LatLng(pos.latitude, pos.longitude),
+            defaultInitialZoom,
+            offset: Offset(0, -offsetY),
+            pitch: is3DEnabled.value ? default3DPitch : 0.0,
+          );
         });
       }
+    }
+
+    try {
+      final loc = await _performFetchCurrentPosition(requestPermission: requestPermission);
+      if (!_isAlive || loc == null) return;
+      applyPosition(loc, startStream);
       if (startStream && (_positionStreamFn != null || !kIsDesktop) && locationSub == null) {
         final stream = _positionStreamFn != null ? _positionStreamFn() : Geolocator.getPositionStream();
         locationSub = stream.listen(
           (event) {
-            if (!_isAlive) return;
-            location.value = event;
-            _resortFriendsLists();
-            buildLocationMarker(event);
-            if (!hasMovedToCurrentLocation.value &&
-                !_hasAutoFittedInitialPins &&
-                !_hasAnyPins &&
-                selectedFriendId.value == null &&
-                selectedDeviceId.value == null &&
-                _pendingFocusFriendId == null) {
-              hasMovedToCurrentLocation.value = true;
-              _runWhenMapReady(() {
-                if (!_isAlive ||
-                    _hasAutoFittedInitialPins ||
-                    _hasAnyPins ||
-                    selectedFriendId.value != null ||
-                    selectedDeviceId.value != null) return;
-                animateCameraTo(LatLng(event.latitude, event.longitude), 10);
-              });
-            }
+            if (_isAlive) applyPosition(event, true);
           },
           onError: (Object error, StackTrace stack) {
             _logWarn("FindMy position stream error", error: error, trace: stack);
@@ -918,10 +1209,13 @@ class FindMyController extends GetxController {
       _logWarn("Failed to fetch initial FindMy location", error: e, trace: s);
     } finally {
       _fetchingUserLocation = false;
+      if (_isAlive && _pageActivated && location.value == null) {
+        _scheduleInitialAutoFitIfNeeded();
+      }
     }
   }
 
-  Future<void> recenterToUser({double zoom = 14.5}) async {
+  Future<void> recenterToUser({double zoom = defaultInitialZoom}) async {
     final current = location.value;
     if (current != null) {
       animateCameraTo(LatLng(current.latitude, current.longitude), _targetFocusZoom(zoom));
@@ -965,26 +1259,24 @@ class FindMyController extends GetxController {
     if (pts.length == 1 ||
         (bounds.north == bounds.south && bounds.east == bounds.west)) {
       final offsetY = detailSheetOffsetProvider?.call() ?? 0;
-      animateCameraTo(bounds.center, 14.0, offset: Offset(0, -offsetY));
+      flyToCamera(bounds.center, defaultInitialZoom, offset: Offset(0, -offsetY));
       return;
     }
-    try {
-      final camera = mapController.camera;
-      if (camera.nonRotatedSize.width <= 0 || camera.nonRotatedSize.height <= 0) {
-        animateCameraTo(bounds.center, 12.0);
-        return;
-      }
-      final rawPadding = padding ?? fitAllPinsPaddingProvider?.call() ?? defaultFitAllPinsPadding;
-      final resolvedPadding = clampFindMyFitPadding(rawPadding, camera.nonRotatedSize);
-      final fitted = CameraFit.bounds(
-        bounds: bounds,
-        padding: resolvedPadding,
-        maxZoom: 15.0,
-      ).fit(camera);
-      animateCameraTo(fitted.center, fitted.zoom.isFinite ? fitted.zoom : 12.0);
-    } catch (_) {
-      animateCameraTo(bounds.center, 12.0);
-    }
+    final rawPadding = padding ?? fitAllPinsPaddingProvider?.call() ?? defaultFitAllPinsPadding;
+    final resolvedPadding = clampFindMyFitPadding(rawPadding, mapViewportSize);
+    final fitted = computeFindMyFitCamera(
+      bounds,
+      mapViewportSize,
+      resolvedPadding,
+      maxZoom: 15.0,
+    );
+    animateCameraTo(
+      fitted.center,
+      fitted.zoom.isFinite ? fitted.zoom : 12.0,
+      padding: resolvedPadding,
+      pitch: is3DEnabled.value ? default3DPitch : 0.0,
+      fly: true,
+    );
   }
 
   Future<void> toggleLiveTracking() async {
@@ -1017,10 +1309,89 @@ class FindMyController extends GetxController {
       );
       return;
     }
+    final devId = selectedDeviceId.value;
+    if (devId != null && (devId.startsWith('utag:') || devId.startsWith('gfind:'))) {
+      await hardRefresh(
+        refreshFriends: false,
+        refreshDevices: true,
+        focusedDeviceId: devId,
+      );
+      return;
+    }
     await hardRefresh(
       focusedHandle: _selectedFriendHandle(),
-      focusedDeviceId: selectedDeviceId.value,
+      focusedDeviceId: devId,
     );
+  }
+
+  Future<bool> toggleRingDevice(FindMyDevice device, {String? component}) async {
+    final deviceId = device.id;
+    if (deviceId == null || deviceId.isEmpty || ringBusy.value) return false;
+    final isStopping = ringingDeviceId.value == deviceId;
+    ringBusy.value = true;
+    try {
+      bool ok = false;
+      final canBleRing =
+          bleService.isSupported && device.hasBleRing && device.trackerProvider == 'gfind';
+
+      if (isStopping) {
+        if (canBleRing) {
+          try {
+            final spec = await bleService.getBleSpec(deviceId);
+            if (spec != null && spec.ringKeyHex != null && spec.ringKeyHex!.isNotEmpty) {
+              ok = await bleService.ringGoogleTag(
+                spec: spec,
+                stop: true,
+                component: component,
+              );
+            }
+          } catch (_) {}
+        }
+        try {
+          final res = await (cloudRingOverride != null
+              ? cloudRingOverride!(deviceId, stop: true, component: component)
+              : HttpSvc.icloud.ringDevice(deviceId, stop: true, component: component));
+          if (res.statusCode == 200) ok = true;
+        } catch (_) {}
+        _ringAutoClearTimer?.cancel();
+        _ringAutoClearTimer = null;
+        ringingDeviceId.value = null;
+        return ok;
+      }
+
+      if (canBleRing) {
+        try {
+          final spec = await bleService.getBleSpec(deviceId);
+          if (spec != null && spec.ringKeyHex != null && spec.ringKeyHex!.isNotEmpty) {
+            ok = await bleService.ringGoogleTag(
+              spec: spec,
+              stop: false,
+              component: component,
+            );
+          }
+        } catch (_) {}
+      }
+      if (!ok) {
+        try {
+          final res = await (cloudRingOverride != null
+              ? cloudRingOverride!(deviceId, stop: false, component: component)
+              : HttpSvc.icloud.ringDevice(deviceId, stop: false, component: component));
+          ok = res.statusCode == 200;
+        } catch (_) {}
+      }
+      if (ok) {
+        ringingDeviceId.value = deviceId;
+        _ringAutoClearTimer?.cancel();
+        _ringAutoClearTimer = Timer(const Duration(seconds: 60), () {
+          if (ringingDeviceId.value == deviceId) {
+            ringingDeviceId.value = null;
+          }
+        });
+      }
+      return ok;
+    } finally {
+      ringBusy.value = false;
+    }
   }
 
   void _setRefreshFeedback(String message) {
@@ -1152,13 +1523,8 @@ class FindMyController extends GetxController {
       }
       _lastFriendsRefreshAt = _now();
       _applyRefreshedFriendsResponse(response, targeted: true);
-    } on DioException catch (e, s) {
-      if (CancelToken.isCancel(e) || cancelToken.isCancelled) return;
-      if (_isAlive && seq == _friendRefreshSeq) {
-        _logWarn("Live friend refresh failed", error: e, trace: s);
-      }
     } catch (e, s) {
-      if (cancelToken.isCancelled) return;
+      if ((e is DioException && CancelToken.isCancel(e)) || cancelToken.isCancelled) return;
       if (_isAlive && seq == _friendRefreshSeq) {
         _logWarn("Live friend refresh failed", error: e, trace: s);
       }
@@ -1228,6 +1594,7 @@ class FindMyController extends GetxController {
         if (_pageActivated) {
           _scheduleInitialAutoFitIfNeeded();
         }
+        _followSelectedTargetIfNeeded();
       }
       fetching2.value = false;
       refreshing2.value = false;
@@ -1297,6 +1664,47 @@ class FindMyController extends GetxController {
     try {
       await PrefsSvc.admin.setString(key, jsonEncode(values));
     } catch (_) {}
+  }
+
+  String? _readPrefString(String key) {
+    if (!GetIt.I.isRegistered<SharedPreferencesService>()) return null;
+    try {
+      final raw = PrefsSvc.admin.get(key);
+      return raw is String ? raw : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writePrefString(String key, String value) async {
+    if (!GetIt.I.isRegistered<SharedPreferencesService>()) return;
+    try {
+      await PrefsSvc.admin.setString(key, value);
+    } catch (_) {}
+  }
+
+  bool? _readPrefBool(String key) {
+    if (!GetIt.I.isRegistered<SharedPreferencesService>()) return null;
+    try {
+      final raw = PrefsSvc.admin.get(key);
+      return raw is bool ? raw : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _writePrefBool(String key, bool value) async {
+    if (!GetIt.I.isRegistered<SharedPreferencesService>()) return;
+    try {
+      await PrefsSvc.admin.setBool(key, value);
+    } catch (_) {}
+  }
+
+  void _loadMapPrefs() {
+    mapStyle.value = parseFindMyMapStyle(_readPrefString(kFindMyMapStylePrefKey));
+    final saved3D = _readPrefBool(kFindMy3DEnabledPrefKey) ?? true;
+    is3DEnabled.value = saved3D;
+    cameraPitch.value = saved3D ? default3DPitch : 0.0;
   }
 
   void _loadPinPrefs() {
@@ -1574,7 +1982,12 @@ class FindMyController extends GetxController {
     }
   }
 
-  Future<void> hardRefresh({String? focusedHandle, String? focusedDeviceId}) async {
+  Future<void> hardRefresh({
+    String? focusedHandle,
+    String? focusedDeviceId,
+    bool refreshFriends = true,
+    bool refreshDevices = true,
+  }) async {
     if (!_isAlive || _hardRefreshInFlight) return;
     final now = _now();
     if (_lastHardRefreshAt != null && now.difference(_lastHardRefreshAt!) < const Duration(seconds: 3)) {
@@ -1589,8 +2002,8 @@ class FindMyController extends GetxController {
 
     try {
       await getLocations(
-        refreshFriends: true,
-        refreshDevices: true,
+        refreshFriends: refreshFriends,
+        refreshDevices: refreshDevices,
         force: true,
         focusedHandle: focusedHandle ?? _selectedFriendHandle(),
         focusedDeviceId: focusedDeviceId ?? selectedDeviceId.value,
@@ -1799,6 +2212,47 @@ class FindMyController extends GetxController {
     }
   }
 
+  void _followSelectedTargetIfNeeded() {
+    if (!_pageActivated) return;
+    LatLng? target;
+    final friendId = selectedFriendId.value;
+    if (friendId != null) {
+      final friend = friends.firstWhereOrNull((e) => e.stableId == friendId);
+      if (friend != null && _hasValidFriendCoords(friend.latitude, friend.longitude)) {
+        target = markerPointForFriend(friend);
+      }
+    } else {
+      final deviceId = selectedDeviceId.value;
+      if (deviceId != null) {
+        final device = devices.firstWhereOrNull((e) => e.id == deviceId);
+        final lat = device?.location?.latitude;
+        final lng = device?.location?.longitude;
+        if (device != null && _hasValidFriendCoords(lat, lng)) {
+          target = markerPointForDevice(device);
+        }
+      }
+    }
+    if (target == null) return;
+    final prev = _lastFollowedTargetPoint;
+    if (prev != null &&
+        (prev.latitude - target.latitude).abs() < 1e-6 &&
+        (prev.longitude - target.longitude).abs() < 1e-6) {
+      return;
+    }
+    _lastFollowedTargetPoint = target;
+    final offsetY = detailSheetOffsetProvider?.call() ?? 0.0;
+    _runWhenMapReady(() {
+      if (!_isAlive) return;
+      animateCameraTo(
+        target!,
+        cameraZoom.value,
+        offset: Offset(0, -offsetY),
+        pitch: cameraPitch.value,
+        fly: false,
+      );
+    });
+  }
+
   void handleNewFindMyLocation(dynamic data) {
     if (!_isAlive || data == null) return;
     try {
@@ -1832,6 +2286,7 @@ class FindMyController extends GetxController {
             locatingFriendId.value = null;
           }
           _syncLiveHeartbeat();
+          _followSelectedTargetIfNeeded();
         }
       }
     } catch (e, s) {
@@ -1872,6 +2327,7 @@ class FindMyController extends GetxController {
         }
         if (selectedDeviceId.value != null && selectedDeviceId.value == device.id) {
           _syncLiveHeartbeat();
+          _followSelectedTargetIfNeeded();
         }
       }
       if (anyUpdated) {
@@ -1899,6 +2355,12 @@ class FindMyController extends GetxController {
       unawaited(_initUserLocation());
     }
 
+    Response emptyResponse() => Response(requestOptions: RequestOptions(path: ''));
+    Future<Response> safeFetch(Future<Response> future, void Function() onError) => future.catchError((_) {
+          if (_isAlive) onError();
+          return emptyResponse();
+        });
+
     try {
       // Fetch friends data
       if (refreshFriends || !skipFetchWhenNotRefreshing) {
@@ -1907,21 +2369,18 @@ class FindMyController extends GetxController {
         Response response2;
         try {
           response2 = refreshFriends
-              ? await _performRefreshFriends(
-                  handle: focusedHandle,
-                  force: force,
-                  live: focusedHandle != null && liveTrackingEnabled.value,
-                ).catchError((_) async {
-                  if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                  refreshing2.value = false;
-                  showSnackbar("Error", "Something went wrong refreshing FindMy Friends data!", type: SnackbarType.error);
-                  return Response(requestOptions: RequestOptions(path: ''));
-                })
-              : await HttpSvc.icloud.getFriends().catchError((_) async {
-                  if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                  fetching2.value = null;
-                  return Response(requestOptions: RequestOptions(path: ''));
-                });
+              ? await safeFetch(
+                  _performRefreshFriends(
+                    handle: focusedHandle,
+                    force: force,
+                    live: focusedHandle != null && liveTrackingEnabled.value,
+                  ),
+                  () {
+                    refreshing2.value = false;
+                    showSnackbar("Error", "Something went wrong refreshing FindMy Friends data!", type: SnackbarType.error);
+                  },
+                )
+              : await safeFetch(HttpSvc.icloud.getFriends(), () => fetching2.value = null);
         } finally {
           if (refreshFriends && friendSeq == _friendRefreshSeq) {
             _refreshFriendsInFlight = false;
@@ -1941,28 +2400,25 @@ class FindMyController extends GetxController {
         if (refreshDevices) _refreshDevicesInFlight = true;
         Response response;
         try {
+          void onDevicesRefreshError() {
+            refreshing.value = false;
+            showSnackbar("Error", "Something went wrong refreshing FindMy Devices data!", type: SnackbarType.error);
+          }
+
           if (refreshDevices && _refreshDevicesFn != null) {
-            response = await _refreshDevicesFn(deviceId: focusedDeviceId, force: force).catchError((_) async {
-              if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-              refreshing.value = false;
-              showSnackbar("Error", "Something went wrong refreshing FindMy Devices data!", type: SnackbarType.error);
-              return Response(requestOptions: RequestOptions(path: ''));
-            });
+            response = await safeFetch(
+              _refreshDevicesFn(deviceId: focusedDeviceId, force: force),
+              onDevicesRefreshError,
+            );
           } else if (_refreshDevicesFn == null && !GetIt.I.isRegistered<HttpService>()) {
-            response = Response(requestOptions: RequestOptions(path: ''));
+            response = emptyResponse();
           } else {
             response = refreshDevices
-                ? await HttpSvc.icloud.refreshDevices(deviceId: focusedDeviceId, force: force).catchError((_) async {
-                    if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                    refreshing.value = false;
-                    showSnackbar("Error", "Something went wrong refreshing FindMy Devices data!", type: SnackbarType.error);
-                    return Response(requestOptions: RequestOptions(path: ''));
-                  })
-                : await HttpSvc.icloud.getDevices().catchError((_) async {
-                    if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                    fetching.value = null;
-                    return Response(requestOptions: RequestOptions(path: ''));
-                  });
+                ? await safeFetch(
+                    HttpSvc.icloud.refreshDevices(deviceId: focusedDeviceId, force: force),
+                    onDevicesRefreshError,
+                  )
+                : await safeFetch(HttpSvc.icloud.getDevices(), () => fetching.value = null);
           }
         } finally {
           if (refreshDevices) {
@@ -1990,6 +2446,7 @@ class FindMyController extends GetxController {
             fetching.value = false;
             refreshing.value = false;
             _syncLiveHeartbeat();
+            _followSelectedTargetIfNeeded();
           } catch (e, s) {
             _logWarn("Failed to parse FindMy Devices location data!", error: e, trace: s);
             fetching.value = null;
@@ -2008,56 +2465,64 @@ class FindMyController extends GetxController {
     }
   }
 
+  final Map<String, int> _markerStaggerOrder = {};
+
+  int _staggerIndexFor(String key) =>
+      _markerStaggerOrder.putIfAbsent(key, () => _markerStaggerOrder.length);
+
   void _setOrAnimateMarkerPoint({
     required String markerKey,
-    required ValueKey<String> widgetKey,
     required LatLng targetPoint,
+    required Size size,
+    required Alignment alignment,
     required Widget child,
     required bool animate,
   }) {
+    void setMarker(LatLng pt) {
+      animatedPoints[markerKey] = pt;
+      markers[markerKey] = maplibre.Marker(
+        point: toGeographic(pt),
+        size: size,
+        alignment: alignment,
+        child: child,
+      );
+    }
+
     final prevPoint = animatedPoints[markerKey];
     if (prevPoint == null ||
         !animate ||
         _pinInterpolator == null ||
         (prevPoint.latitude == targetPoint.latitude && prevPoint.longitude == targetPoint.longitude)) {
-      animatedPoints[markerKey] = targetPoint;
-      markers[markerKey] = Marker(
-        key: widgetKey,
-        point: targetPoint,
-        width: 116,
-        height: 92,
-        alignment: Alignment.center,
-        child: child,
-      );
+      setMarker(targetPoint);
       return;
     }
 
     _pinInterpolator!(markerKey, prevPoint, targetPoint, (stepPoint) {
-      if (!_isAlive) return;
-      animatedPoints[markerKey] = stepPoint;
-      markers[markerKey] = Marker(
-        key: widgetKey,
-        point: stepPoint,
-        width: 116,
-        height: 92,
-        alignment: Alignment.center,
-        child: child,
-      );
+      if (_isAlive) setMarker(stepPoint);
     });
   }
 
   void buildDeviceMarker(FindMyDevice e, {bool animate = true}) {
     final markerKey = e.id ?? randomString(6);
+    final fullKey = 'device-$markerKey';
+    final staggerIndex = _staggerIndexFor(fullKey);
     final targetPoint = markerPointForDevice(e);
-    final child = FindMyDeviceMarker(
-      key: ValueKey('device-widget-$markerKey'),
-      controller: this,
-      device: e,
+    final child = Obx(
+      key: ValueKey(fullKey),
+      () => FindMyDeviceMarker(
+        key: ValueKey('device-widget-$markerKey'),
+        controller: this,
+        device: e,
+        pitchDegrees: cameraPitch.value,
+        isHovered: hoveredMarkerKey.value == fullKey,
+        staggerIndex: staggerIndex,
+      ),
     );
     _setOrAnimateMarkerPoint(
       markerKey: markerKey,
-      widgetKey: ValueKey('device-$markerKey'),
       targetPoint: targetPoint,
+      size: const Size(96, 76),
+      alignment: Alignment.bottomCenter,
       child: child,
       animate: animate,
     );
@@ -2065,113 +2530,58 @@ class FindMyController extends GetxController {
 
   void buildFriendMarker(FindMyFriend friend, {bool animate = true}) {
     final markerKey = friend.stableId ?? randomString(6);
+    final fullKey = 'friend-$markerKey';
+    final staggerIndex = _staggerIndexFor(fullKey);
     final targetPoint = markerPointForFriend(friend);
-    final child = FindMyFriendMarker(
-      key: ValueKey('friend-widget-$markerKey'),
-      controller: this,
-      friend: friend,
-      avatarHandle: friend.handle ??
-          Handle(
-            address: friend.handleAddress ?? friend.title ?? "Unknown",
-            formattedAddress: friend.handleAddress != null ? formatPhoneNumber(friend.handleAddress!) : null,
-          ),
+    final avatarHandle = friend.handle ??
+        Handle(
+          address: friend.handleAddress ?? friend.title ?? "Unknown",
+          formattedAddress: friend.handleAddress != null ? formatPhoneNumber(friend.handleAddress!) : null,
+        );
+    final child = Obx(
+      key: ValueKey(fullKey),
+      () => FindMyFriendMarker(
+        key: ValueKey('friend-widget-$markerKey'),
+        controller: this,
+        friend: friend,
+        avatarHandle: avatarHandle,
+        pitchDegrees: cameraPitch.value,
+        isHovered: hoveredMarkerKey.value == fullKey,
+        staggerIndex: staggerIndex,
+      ),
     );
     _setOrAnimateMarkerPoint(
       markerKey: markerKey,
-      widgetKey: ValueKey('friend-$markerKey'),
       targetPoint: targetPoint,
+      size: const Size(96, 76),
+      alignment: Alignment.bottomCenter,
       child: child,
       animate: animate,
     );
   }
 
   void buildLocationMarker(Position pos) {
-    markers['current'] = Marker(
-      key: const ValueKey('current'),
-      point: LatLng(pos.latitude, pos.longitude),
-      width: 28,
-      height: 56,
+    final headingRadians = pos.heading.isFinite ? pos.heading : null;
+    markers['current'] = maplibre.Marker(
+      point: maplibre.Geographic(lon: pos.longitude, lat: pos.latitude),
+      size: const Size(72, 72),
       alignment: Alignment.center,
-      child: Builder(
-        builder: (context) {
-          final primary = context.theme.colorScheme.primary;
-          return Stack(
-            alignment: Alignment.center,
-            children: [
-              if (pos.heading.isFinite)
-                Transform.rotate(
-                  angle: pos.heading,
-                  child: ClipPath(
-                    clipper: const FindMyLocationClipper(),
-                    child: Container(
-                      width: 26,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: AlignmentDirectional.center,
-                          end: Alignment.topCenter,
-                          colors: [
-                            primary,
-                            primary.withAlpha(50),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              Builder(
-                builder: (_) {
-                  final hasSelfAvatar = GetIt.I.isRegistered<SettingsService>() &&
-                      (SettingsSvc.settings.userAvatarPath.value != null ||
-                          SettingsSvc.userAvatarBytes.value != null ||
-                          SettingsSvc.effectiveUserName != 'You');
-                  if (hasSelfAvatar && GetIt.I.isRegistered<ThemesService>()) {
-                    return Container(
-                      width: 26,
-                      height: 26,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.25),
-                            blurRadius: 6,
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.all(2),
-                      child: const ContactAvatarWidget(
-                        handle: null,
-                        size: 22,
-                        borderThickness: 0,
-                        editable: false,
-                      ),
-                    );
-                  }
-                  return Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.25),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
-                    padding: const EdgeInsets.all(4.5),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: primary,
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ],
+      child: Obx(
+        key: const ValueKey('current'),
+        () {
+          bool showAvatar = false;
+          if (GetIt.I.isRegistered<SettingsService>() && GetIt.I.isRegistered<ThemesService>()) {
+            final hasPath = !isNullOrEmpty(SettingsSvc.settings.userAvatarPath.value);
+            final hasBytes = SettingsSvc.userAvatarBytes.value != null;
+            final hasName = SettingsSvc.effectiveUserName != 'You';
+            showAvatar = hasPath || hasBytes || hasName;
+          }
+          return FindMySelfMarker(
+            key: const ValueKey('current-widget'),
+            headingRadians: headingRadians,
+            pitchDegrees: cameraPitch.value,
+            isHovered: hoveredMarkerKey.value == 'current',
+            showAvatar: showAvatar,
           );
         },
       ),
@@ -2180,6 +2590,8 @@ class FindMyController extends GetxController {
 
   @override
   void onClose() {
+    _ringAutoClearTimer?.cancel();
+    _ringAutoClearTimer = null;
     _cancelPendingFriendRefresh();
     unawaited(_stopLiveFriendStream());
     _hardRefreshDebounceTimer?.cancel();
@@ -2190,11 +2602,12 @@ class FindMyController extends GetxController {
     _redactedModeListener?.cancel();
     _hideContactInfoListener?.cancel();
     _findMyLocationListener?.cancel();
-    _findMyDeviceListener?.cancel();
     locationSub?.cancel();
-    mapController.dispose();
-    popupController.dispose();
+    mapLibreController = null;
+    mapStyleController = null;
     tabController?.dispose();
+    activeSheetScrollController = null;
+    sheetController.dispose();
     itemsController.dispose();
     devicesController.dispose();
     friendsController.dispose();
@@ -2204,22 +2617,20 @@ class FindMyController extends GetxController {
 
 /// Clamps fit padding so [CameraFit.bounds] always has positive interior space.
 EdgeInsets clampFindMyFitPadding(EdgeInsets padding, Size viewportSize) {
-  final maxHoriz = (viewportSize.width - 80.0).clamp(0.0, double.infinity);
-  final maxVert = (viewportSize.height - 80.0).clamp(0.0, double.infinity);
-  double left = padding.left.clamp(0.0, maxHoriz);
-  double right = padding.right.clamp(0.0, maxHoriz);
-  if (left + right > maxHoriz && (left + right) > 0) {
-    final scale = maxHoriz / (left + right);
-    left *= scale;
-    right *= scale;
+  (double, double) clampAxis(double a, double b, double extent) {
+    final maxTotal = (extent - 80.0).clamp(0.0, double.infinity);
+    var lo = a.clamp(0.0, maxTotal);
+    var hi = b.clamp(0.0, maxTotal);
+    if (lo + hi > maxTotal && lo + hi > 0) {
+      final scale = maxTotal / (lo + hi);
+      lo *= scale;
+      hi *= scale;
+    }
+    return (lo, hi);
   }
-  double top = padding.top.clamp(0.0, maxVert);
-  double bottom = padding.bottom.clamp(0.0, maxVert);
-  if (top + bottom > maxVert && (top + bottom) > 0) {
-    final scale = maxVert / (top + bottom);
-    top *= scale;
-    bottom *= scale;
-  }
+
+  final (left, right) = clampAxis(padding.left, padding.right, viewportSize.width);
+  final (top, bottom) = clampAxis(padding.top, padding.bottom, viewportSize.height);
   return EdgeInsets.fromLTRB(left, top, right, bottom);
 }
 

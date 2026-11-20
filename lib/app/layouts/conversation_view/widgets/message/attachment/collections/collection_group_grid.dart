@@ -113,12 +113,14 @@ class _CollectionGroupGridState extends State<CollectionGroupGrid> with ThemeHel
     // Connected author-edge corners follow the same BubbleConnect rule as TailClipper bubbles (Material/Samsung
     // only). The subject bubble sits above the leading part, so it counts as a neighbour above too.
     final count = _attachments.length;
+    final isGhost = GhostBubbleScope.of(context);
     final silhouette = _silhouetteBorderRadius(
       cardRadius: CollectionStyle.cardRadius,
       connectedRadius: CollectionStyle.connectedCornerRadius,
       isFromMe: isFromMe,
-      tightenTop: BubbleConnect.upper(messageState, messagePart) || (!iOS && messageState.hasSubjectAbove(messagePart)),
-      tightenBottom: BubbleConnect.lower(messageState, messagePart),
+      tightenTop: !isGhost &&
+          (BubbleConnect.upper(messageState, messagePart) || (!iOS && messageState.hasSubjectAbove(messagePart))),
+      tightenBottom: !isGhost && BubbleConnect.lower(messageState, messagePart),
     );
     final gridWidth = min(NavigationSvc.width(context) * CollectionStyle.gridWidthFactor, CollectionStyle.maxGridWidth);
     final layout = CollectionGridLayout.compute(count: count, width: gridWidth, expanded: _expanded);

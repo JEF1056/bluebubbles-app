@@ -15,7 +15,6 @@ import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_vie
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart' hide Intent;
 import 'package:get/get.dart';
 import 'package:bluebubbles/models/models.dart' show HandleLookupKey;
 import 'package:path/path.dart';
@@ -139,24 +138,65 @@ class IntentsService {
           await openChat(guid, isInitialIntent: isInitialIntent);
         } else if (intent.extra?["callUuid"] != null) {
           await StartupTasks.waitForUI();
+          final isTelephony = intent.extra?["isTelephony"] == true;
+          final isAudio = isTelephony || intent.extra?["audioOnly"] == true;
           if (intent.extra?["answer"] == true) {
             await answerFaceTime(
               intent.extra?["callUuid"]!,
-              audioOnly: intent.extra?["audioOnly"] == true,
+              audioOnly: isAudio,
+              isTelephony: isTelephony,
             );
           } else {
-            await showFaceTimeOverlay(intent.extra?["callUuid"], intent.extra?["caller"], null, false);
+            await showFaceTimeOverlay(
+              intent.extra?["callUuid"],
+              intent.extra?["caller"] ?? (isTelephony ? "iPhone call" : "FaceTime Call"),
+              null,
+              isAudio,
+              isTelephony: isTelephony,
+            );
           }
         }
     }
   }
 
-  Future<void> answerFaceTime(String callUuid, {bool audioOnly = false}) async {
+  Future<void> answerFaceTime(
+    String callUuid, {
+    bool audioOnly = false,
+    bool isTelephony = false,
+  }) async {
     final prevState = ActiveCallController.instance.state;
     final matchesPrev = prevState.callUuid == callUuid;
-    final callerName = matchesPrev && prevState.callerName.isNotEmpty ? prevState.callerName : "FaceTime Call";
+    final effectiveTelephony = isTelephony || (matchesPrev && prevState.isTelephony);
+    final callerName = matchesPrev && prevState.callerName.isNotEmpty
+        ? prevState.callerName
+        : (effectiveTelephony ? "iPhone Call" : "FaceTime Call");
+    final callerAddress = matchesPrev ? prevState.callerAddress : null;
     final avatarBytes = matchesPrev ? prevState.avatarBytes : null;
-    final wasVideo = matchesPrev ? prevState.isVideo : !audioOnly;
+    final chatGuid = matchesPrev ? prevState.chatGuid : null;
+    final wasVideo = matchesPrev ? prevState.isVideo : !(audioOnly || effectiveTelephony);
+
+    if (effectiveTelephony) {
+      if (!kIsWeb && Platform.isAndroid) {
+        final answered = await ActiveCallController.instance.answerCall(audioOnly: true);
+        if (answered) {
+          return;
+        }
+        hideFaceTimeOverlay(callUuid);
+        await MethodChannelSvc.actions.openCallingAccounts();
+        showSnackbar(
+          "Enable Calling Accounts",
+          "Turn on BlueBubbles in Calling Accounts to answer iPhone calls.",
+          type: SnackbarType.info,
+        );
+        return;
+      }
+      hideFaceTimeOverlay(callUuid);
+      return showSnackbar(
+        "Unsupported",
+        "iPhone cellular calls require Android Calling Accounts.",
+        type: SnackbarType.error,
+      );
+    }
 
     await showFaceTimeConnectingOverlay(
       callUuid,
@@ -167,8 +207,13 @@ class IntentsService {
 
     String? link;
     try {
-      final call = await HttpSvc.faceTime.answer(callUuid);
-      link = call.data?["data"]?["link"];
+      final placed = await HttpSvc.faceTime.answerFaceTime(
+        callUuid,
+        audioOnly: audioOnly && !kIsWeb,
+        displayName: callerName,
+        chatGuid: chatGuid,
+      );
+      link = placed.link;
     } catch (e, s) {
       Logger.warn("Failed to fetch FaceTime answer link", error: e, trace: s, tag: 'IntentsService');
     }
@@ -179,7 +224,7 @@ class IntentsService {
     hideFaceTimeOverlay(callUuid, keepCallState: true);
     if (!stillConnecting) return;
 
-    if (link == null) {
+    if (link == null || link.isEmpty) {
       ActiveCallController.instance.clearPendingIfMatches(callUuid);
       return showSnackbar("Failed to answer FaceTime", "Unable to generate FaceTime link!", type: SnackbarType.error);
     }
@@ -187,9 +232,11 @@ class IntentsService {
     ActiveCallController.instance.startOngoing(
       callUuid: callUuid,
       callerName: callerName,
+      callerAddress: callerAddress,
       avatarBytes: avatarBytes,
       isVideo: !audioOnly && wasVideo,
       joinLink: link,
+      chatGuid: chatGuid,
     );
 
     await openFaceTimeJoinLink(link, context: Get.context);

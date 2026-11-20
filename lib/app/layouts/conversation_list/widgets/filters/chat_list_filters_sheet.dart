@@ -37,8 +37,11 @@ void showChatListFilterSheet(
     context: pageContext,
     isScrollControlled: true,
     showDragHandle: true,
-    padding: const EdgeInsets.only(left: 10, right: 10, bottom: 24, top: 8),
-    builder: (sheetContext) {
+    padding: EdgeInsets.zero,
+    initialChildSize: 0.6,
+    minChildSize: 0.3,
+    maxChildSize: 0.9,
+    scrollableBuilder: (sheetContext, scrollController) {
       var currentFilters = current0;
 
       return StatefulBuilder(
@@ -137,10 +140,11 @@ void showChatListFilterSheet(
           );
           final routeBackgroundColor = context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9);
 
-          return ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.75),
-            child: SingleChildScrollView(
-              child: Column(
+          return SingleChildScrollView(
+            controller: scrollController,
+            physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+            padding: EdgeInsets.fromLTRB(10, 8, 10, 24 + MediaQuery.viewPaddingOf(context).bottom),
+            child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -345,8 +349,7 @@ void showChatListFilterSheet(
                   // ]),
                 ],
               ),
-            ),
-          );
+            );
         },
       );
     },

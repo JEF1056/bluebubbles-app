@@ -194,6 +194,9 @@ fun formatDetailTimestamp(
     locale: Locale = Locale.getDefault()
 ): String {
     if (epochMs <= 0L) return ""
+    val elapsedMs = (nowMs - epochMs).coerceAtLeast(0L)
+    if (elapsedMs < 60_000L) return "Now"
+    if (elapsedMs < 3_600_000L) return "${elapsedMs / 60_000L} min"
     val target = Instant.ofEpochMilli(epochMs).atZone(zoneId)
     val targetDate = target.toLocalDate()
     val today = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
@@ -203,6 +206,17 @@ fun formatDetailTimestamp(
         today.minusDays(1) -> "Yesterday $timePart"
         else -> "${target.format(DateTimeFormatter.ofPattern("MMM d", locale))}, $timePart"
     }
+}
+
+fun nextDetailTimestampTickDelayMs(
+    epochMs: Long,
+    nowMs: Long = System.currentTimeMillis()
+): Long? {
+    if (epochMs <= 0L) return null
+    val elapsedMs = (nowMs - epochMs).coerceAtLeast(0L)
+    if (elapsedMs >= 3_600_000L) return null
+    val nextBoundaryElapsedMs = (elapsedMs / 60_000L + 1L) * 60_000L
+    return (nextBoundaryElapsedMs - elapsedMs).coerceAtLeast(1L)
 }
 
 enum class MessageDetailKind {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/send_effect_picker.dart';
@@ -261,6 +263,9 @@ class _RecordingButton extends StatelessWidget {
           controller!.showRecording.toggle();
 
           if (controller!.showRecording.value) {
+            if (controller!.isDictating.value) {
+              await controller!.stopDictation?.call();
+            }
             // Start recording
             if (isWeb) {
               try {
@@ -283,6 +288,11 @@ class _RecordingButton extends StatelessWidget {
                   controller!.showRecording.value = false;
                   showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
                       type: SnackbarType.error);
+                } else if (SettingsSvc.settings.soundVolume.value > 0) {
+                  unawaited(playAppSound(
+                    AppSounds.recordingStart,
+                    volume: SettingsSvc.settings.soundVolume.value / 100.0,
+                  ));
                 }
               } catch (e, stack) {
                 controller!.showRecording.value = false;
@@ -304,6 +314,12 @@ class _RecordingButton extends StatelessWidget {
                 // Windows Media Foundation AAC encoder strictly supports up to 192 kbps (192000 bps).
                 // Requesting an unsupported bitrate causes MF_E_INVALIDMEDIATYPE (0xC00D36B4).
                 await audioRecorder.start(const RecordConfig(bitRate: 192000), path: temp.path);
+                if (SettingsSvc.settings.soundVolume.value > 0) {
+                  unawaited(playAppSound(
+                    AppSounds.recordingStart,
+                    volume: SettingsSvc.settings.soundVolume.value / 100.0,
+                  ));
+                }
               } catch (e, stack) {
                 controller!.showRecording.value = false;
                 showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
@@ -325,6 +341,11 @@ class _RecordingButton extends StatelessWidget {
                 controller!.showRecording.value = false;
                 showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
                     type: SnackbarType.error);
+              } else if (SettingsSvc.settings.soundVolume.value > 0) {
+                unawaited(playAppSound(
+                  AppSounds.recordingStart,
+                  volume: SettingsSvc.settings.soundVolume.value / 100.0,
+                ));
               }
             } catch (e, stack) {
               controller!.showRecording.value = false;
@@ -393,6 +414,12 @@ class _RecordingButton extends StatelessWidget {
                 bytes: await _file.readAsBytes(),
                 size: await _file.length(),
               );
+            }
+            if (SettingsSvc.settings.soundVolume.value > 0) {
+              unawaited(playAppSound(
+                AppSounds.recordingStop,
+                volume: SettingsSvc.settings.soundVolume.value / 100.0,
+              ));
             }
 
             final String path = stoppedPath;

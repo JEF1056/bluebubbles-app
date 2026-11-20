@@ -93,6 +93,10 @@ class SocketService {
   /// is expensive, so only the last event in a burst is acted on.
   static const Duration _connectivityReconnectDebounce = Duration(seconds: 3);
 
+  /// Hold off reporting `Offline` across transient `ConnectivityResult.none` spikes
+  /// during network transitions or app wake.
+  static const Duration _offlineDebounce = Duration(milliseconds: 2500);
+
   /// `SocketException.address` is null for DNS failures — the hostname only ever
   /// appears inside the message, e.g.
   /// `Failed host lookup: 'example.com' (OS Error: ..., errno = 7)`.
@@ -138,10 +142,21 @@ class SocketService {
   bool _connectionDesired = true;
   bool get connectionDesired => _connectionDesired;
 
+  void _notifySyncStatus([String? errorMessage]) {
+    if (!GetIt.I.isRegistered<SyncService>()) return;
+    SyncSvc.onSocketStatusChanged(
+      state: state.value,
+      connectionDesired: _connectionDesired,
+      authFailed: authFailed.value,
+      errorMessage: errorMessage ?? (lastError.value.isNotEmpty ? lastError.value : null),
+    );
+  }
+
   void _setConnectionDesired(bool value) {
     if (_connectionDesired == value) return;
     _connectionDesired = value;
     Logger.debug(tag: _tag, "Connection is now ${value ? "wanted" : "unwanted"}");
+    _notifySyncStatus();
   }
 
   // ── URL rediscovery state ──────────────────────────────────────────────────
@@ -163,6 +178,8 @@ class SocketService {
 
   StreamSubscription? _connectivitySubscription;
   bool _networkAvailable = true;
+  bool _forceStartOnCheck = false;
+  Timer? _offlineDebounceTimer;
   Timer? _connectivityReconnectTimer;
 
   Timer? _heartbeatTimer;
@@ -189,6 +206,11 @@ class SocketService {
     unawaited(Connectivity().checkConnectivity().then(_onConnectivityChanged, onError: _logConnectivityError));
   }
 
+  void _cancelOfflineDebounce() {
+    _offlineDebounceTimer?.cancel();
+    _offlineDebounceTimer = null;
+  }
+
   // Throws on Linux without NetworkManager (or a Flatpak without DBus access to it).
   void _logConnectivityError(Object e) => Logger.warn(tag: _tag, "Connectivity check failed", error: e);
 
@@ -196,15 +218,28 @@ class SocketService {
     if (!connectionDesired) return;
 
     if (event.every((result) => result == ConnectivityResult.none)) {
+      _forceStartOnCheck = false;
       // Windows reports `none` whenever NCSI finds no internet, even with the server reachable on the LAN,
       // so desktop leaves it to socket.io's retries.
       if (kIsDesktop || !_networkAvailable) return;
-      _networkAvailable = false;
-      Logger.info(tag: _tag, "Network lost — closing socket until it's back");
-      closeSocket();
-      _reportOffline();
+      if (socket?.connected == true || state.value == SocketState.connected) {
+        _cancelOfflineDebounce();
+        return;
+      }
+      if (_offlineDebounceTimer?.isActive ?? false) return;
+      _offlineDebounceTimer = Timer(_offlineDebounce, () {
+        _offlineDebounceTimer = null;
+        if (!connectionDesired || !_networkAvailable) return;
+        if (socket?.connected == true || state.value == SocketState.connected) return;
+        _networkAvailable = false;
+        Logger.info(tag: _tag, "Network lost — closing socket until it's back");
+        closeSocket();
+        _reportOffline();
+      });
       return;
     }
+
+    _cancelOfflineDebounce();
 
     if (!event.contains(ConnectivityResult.wifi) &&
         !event.contains(ConnectivityResult.ethernet) &&
@@ -214,9 +249,15 @@ class SocketService {
       followOrigin();
     }
 
-    if (!_networkAvailable) {
-      _networkAvailable = true;
+    final wasOffline = !_networkAvailable;
+    final forceStart = _forceStartOnCheck;
+    _forceStartOnCheck = false;
+    _networkAvailable = true;
+
+    if (wasOffline) {
       Logger.info(tag: _tag, "Network is back — connecting");
+      startSocket();
+    } else if (forceStart && socket == null) {
       startSocket();
     } else {
       _scheduleConnectivityReconnect();
@@ -226,6 +267,7 @@ class SocketService {
   void _reportOffline() {
     lastError.value = "No network connection";
     state.value = SocketState.error;
+    _notifySyncStatus("Offline");
   }
 
   /// Cuts short socket.io's backoff wait when the network comes back.
@@ -295,6 +337,8 @@ class SocketService {
       // WebsocketAdapter allows socket io client
       // to trust user certificates on Android
       options.setHttpClientAdapter(WebsocketAdapter());
+    } else {
+      options.enableWithCredentials();
     }
 
     return options.build();
@@ -432,11 +476,14 @@ class SocketService {
     // from, since every restart path now refuses to run.
     _connectivityReconnectTimer?.cancel();
     _connectivityReconnectTimer = null;
+    _cancelOfflineDebounce();
+    _forceStartOnCheck = false;
     _stopHeartbeat();
     socket?.disconnect();
     _connectivitySubscription?.cancel();
     _connectivitySubscription = null;
     state.value = SocketState.disconnected;
+    _notifySyncStatus();
   }
 
   /// Marks the connection as wanted again and clears the rediscovery backoff, so a
@@ -449,8 +496,11 @@ class SocketService {
   void resumeConnection() {
     _setConnectionDesired(true);
     _cancelUrlDiscovery();
-    // Reset so _checkConnectivity takes the immediate startSocket() path when online.
-    _networkAvailable = false;
+    _cancelOfflineDebounce();
+    // Keep _networkAvailable true across resume unless a debounced none event proves
+    // otherwise; use _forceStartOnCheck so _checkConnectivity starts a closed socket.
+    _networkAvailable = true;
+    _forceStartOnCheck = true;
     _checkConnectivity();
   }
 
@@ -461,6 +511,7 @@ class SocketService {
   /// should be running.
   void closeSocket() {
     _cancelUrlDiscovery();
+    _cancelOfflineDebounce();
     // No isNullOrEmpty(serverAddress) guard — see [disconnect]. The guard used to
     // sit above this teardown, so restartSocket() with an unresolvable origin left
     // the old socket connected and listening while startSocket() bailed out on
@@ -477,6 +528,7 @@ class SocketService {
     // Set directly rather than through handleStatusUpdate — the disconnect event
     // that would normally report this was just unsubscribed above.
     state.value = SocketState.disconnected;
+    _notifySyncStatus();
   }
 
   /// Rebuilds the connection from scratch.
@@ -713,10 +765,16 @@ class SocketService {
 
     switch (status) {
       case SocketState.connected:
+        _cancelOfflineDebounce();
+        _networkAvailable = true;
+        _forceStartOnCheck = false;
         if (stateChanged) {
           state.value = SocketState.connected;
           _cancelUrlDiscovery();
           _resetErrorLog();
+          if (GetIt.I.isRegistered<SyncService>()) {
+            SyncSvc.onNetworkOnlineChanged(true);
+          }
           // A rejected password still connects briefly, and the sync would just 401.
           if (!authFailed.value) NetworkTasks.onConnect();
           Logger.info("Socket connected successfully to $serverAddress");
@@ -765,6 +823,7 @@ class SocketService {
         // clock, and is a no-op if that check is already armed or running.
         _noteConnectionFailure();
     }
+    _notifySyncStatus();
   }
 
   /// Best-effort hostname for [e].
@@ -853,6 +912,7 @@ class SocketService {
     state.value = SocketState.error;
     _logSocketError(signature: 'start|$reason', message: "Cannot start socket: $reason");
     _noteConnectionFailure();
+    _notifySyncStatus(reason);
   }
 }
 

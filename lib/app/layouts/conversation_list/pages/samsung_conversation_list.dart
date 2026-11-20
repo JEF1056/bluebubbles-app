@@ -51,26 +51,21 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: <T>(bool didPop, T? other) {
-        if (didPop) return;
-        if (controller.selectedChats.isNotEmpty) {
-          controller.clearSelectedChats();
-          return;
-        } else if (controller.showArchivedChats || controller.showUnknownSenders) {
-          // Pop the current page
-          Navigator.of(context).pop();
-        } else {
-          // Pop the app to exit the app
-          SystemNavigator.pop();
-        }
-      },
-      child: Scaffold(
+    return Obx(
+      () => PopScope(
+        canPop: controller.selectedChats.isEmpty,
+        onPopInvokedWithResult: <T>(bool didPop, T? other) {
+          if (didPop) return;
+          if (controller.selectedChats.isNotEmpty) {
+            controller.clearSelectedChats();
+          }
+        },
+        child: Scaffold(
         backgroundColor: backgroundColor,
         floatingActionButton:
             !showArchived && !showUnknown ? ConversationListFAB(parentController: controller) : const SizedBox.shrink(),
         body: SafeArea(
+          bottom: false,
           child: NotificationListener<ScrollEndNotification>(
             onNotification: (_) {
               if (kIsWeb || kIsDesktop) return false;
@@ -147,7 +142,7 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                         ),
                       ),
                     SliverPadding(
-                      padding: const EdgeInsets.only(bottom: 15),
+                      padding: EdgeInsets.only(bottom: 15 + MediaQuery.paddingOf(context).bottom),
                       sliver: SliverDecoration(
                         color: _tileColor,
                         borderRadius: BorderRadius.circular(25),
@@ -180,6 +175,7 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
         ),
         bottomNavigationBar: SamsungFooter(parentController: controller),
       ),
+    ),
     );
   }
 }

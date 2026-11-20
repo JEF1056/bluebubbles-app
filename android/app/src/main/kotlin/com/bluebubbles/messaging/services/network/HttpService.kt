@@ -33,6 +33,12 @@ class HttpService(private val context: Context) {
         private const val DEFAULT_TIMEOUT_MS = 30000L
         private const val CLOUDFLARE_RETRY_ATTEMPTS = 2
         private val SENSITIVE_QUERY_REGEX = Regex("([?&](?:guid|password)=)([^&#\\s]+)", RegexOption.IGNORE_CASE)
+        private val DTMF_DIGIT_REGEX = Regex("^[0-9*#ABCD]$")
+
+        internal fun normalizeDtmfDigit(digit: String): String? {
+            val normalized = digit.trim().uppercase()
+            return normalized.takeIf { DTMF_DIGIT_REGEX.matches(it) }
+        }
 
         internal val sharedClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
@@ -339,6 +345,31 @@ class HttpService(private val context: Context) {
         }
         executeApiCall(
             call = api.leaveFaceTimeCall(callUuid, settings.guidAuthKey),
+            onSuccess = { onSuccess?.invoke() },
+            onError = onError
+        )
+    }
+
+    fun sendFaceTimeDtmf(
+        callUuid: String,
+        digit: String,
+        onSuccess: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null
+    ) {
+        val normalizedDigit = normalizeDtmfDigit(digit)
+        if (callUuid.isBlank() || normalizedDigit == null) {
+            onError?.invoke("Invalid DTMF input")
+            return
+        }
+        if (!validateConnection()) {
+            onError?.invoke("No server URL configured")
+            return
+        }
+        executeApiCall(
+            call = api.sendFaceTimeDtmf(
+                settings.guidAuthKey,
+                FaceTimeDtmfRequest(callUuid = callUuid, digit = normalizedDigit)
+            ),
             onSuccess = { onSuccess?.invoke() },
             onError = onError
         )

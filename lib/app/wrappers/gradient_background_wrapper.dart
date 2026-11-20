@@ -100,10 +100,24 @@ class _GradientBackgroundState extends CustomState<GradientBackground, void, Con
       children: [
         Positioned.fill(
           child: Obx(() {
+            final scrim = Positioned.fill(
+              child: IgnorePointer(
+                child: ColoredBox(
+                  color: WallpaperContrast.scrimColor(Theme.of(context).brightness),
+                ),
+              ),
+            );
+
             if (_chatState?.wallpaperType.value == ChatWallpaperType.dynamic) {
-              return DynamicWallpaperView(
-                wallpaperId: _chatState?.dynamicWallpaperId.value,
-                config: _chatState?.dynamicWallpaperConfig.value,
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  DynamicWallpaperView(
+                    wallpaperId: _chatState?.dynamicWallpaperId.value,
+                    config: _chatState?.dynamicWallpaperConfig.value,
+                  ),
+                  scrim,
+                ],
               );
             }
 
@@ -111,16 +125,22 @@ class _GradientBackgroundState extends CustomState<GradientBackground, void, Con
 
             if (bgPath != null) {
               final (Size size, double dpr) = _geometryToDecodeFor(context);
-              return Container(
-                decoration: BoxDecoration(
-                  image: DecorationImage(
-                    // Decoded at window size, not file size: see static_wallpaper_image.dart.
-                    image: chatBackgroundImageProviderForWindow(bgPath, size, dpr),
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.high,
-                    onError: (_, _) {},
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      image: DecorationImage(
+                        // Decoded at window size, not file size: see static_wallpaper_image.dart.
+                        image: chatBackgroundImageProviderForWindow(bgPath, size, dpr),
+                        fit: BoxFit.cover,
+                        filterQuality: FilterQuality.high,
+                        onError: (_, _) {},
+                      ),
+                    ),
                   ),
-                ),
+                  scrim,
+                ],
               );
             }
 

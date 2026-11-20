@@ -29,6 +29,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:version/version.dart';
 import 'package:get_it/get_it.dart';
 
+part 'settings_service_fork.dart';
+
 // ignore: non_constant_identifier_names
 SettingsService get SettingsSvc => GetIt.I<SettingsService>();
 
@@ -53,6 +55,8 @@ class SettingsService {
   final RxMap<String, dynamic> iCloudContactInfo = <String, dynamic>{}.obs;
 
   Future<void>? _icloudProfileRefreshFuture;
+  bool _icloudProfileRefreshForced = false;
+  int _icloudProfileGeneration = 0;
   DateTime? _lastIcloudProfileRefresh;
 
   /// Returns the user's configured display name, falling back to `'You'`.
@@ -66,6 +70,19 @@ class SettingsService {
 
   Future<void> init({bool headless = false}) async {
     settings = Settings.getSettings();
+    final prefsHeadersJson = PrefsSvc.network.getCustomHeadersJson();
+    if (!kIsWeb && prefsHeadersJson != null && prefsHeadersJson.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(prefsHeadersJson);
+        if (decoded is Map) {
+          final fromPrefs = decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+          if (!mapEquals(settings.customHeaders.value, fromPrefs)) {
+            settings.customHeaders.value = fromPrefs;
+            unawaited(settings.saveOneAsync('customHeaders'));
+          }
+        }
+      } catch (_) {}
+    }
     // Populate server details from prefs so sync getters are usable immediately.
     _serverDetails.value = ServerDetails(
       macOSVersion: PrefsSvc.server.getMacOSVersion() ?? 11,
@@ -99,10 +116,8 @@ class SettingsService {
         Logger.warn("Failed to apply display mode or biometric check at startup",
             error: e, trace: s, tag: 'SettingsService');
       }
-      // system appearance
-      if (settings.immersiveMode.value) {
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      }
+      // system appearance — always keep edge-to-edge enabled on mobile
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeRight,
         DeviceOrientation.landscapeLeft,
@@ -122,6 +137,10 @@ class SettingsService {
         settings.launchAtStartup.value =
             await setupLaunchAtStartup(settings.launchAtStartup.value, settings.launchAtStartupMinimized.value);
       });
+    }
+
+    if (!headless) {
+      await hydrateCachedUserAvatar();
     }
 
     initCompleted.complete();
@@ -232,182 +251,10 @@ class SettingsService {
   }
 
   /// Decodes base64 avatar data (stripping optional `data:image/...;base64,` URI prefix).
-  static Uint8List? decodeAvatarBase64(String? raw) {
-    if (raw == null) return null;
-    var trimmed = raw.trim();
-    if (trimmed.isEmpty) return null;
-    final commaIdx = trimmed.indexOf(',');
-    if (trimmed.startsWith('data:') && commaIdx != -1) {
-      trimmed = trimmed.substring(commaIdx + 1).trim();
-    }
-    if (trimmed.isEmpty) return null;
-    try {
-      final bytes = base64Decode(trimmed);
-      return bytes.isEmpty ? null : bytes;
-    } catch (_) {
-      return null;
-    }
-  }
+  static Uint8List? decodeAvatarBase64(String? raw) => _decodeIcloudAvatarBase64(raw);
 
   /// Extracts a non-generic display name from an iCloud account or contact payload.
-  static String? extractDisplayName(Map<String, dynamic>? map) {
-    if (map == null || map.isEmpty) return null;
-    for (final key in const ['name', 'full_name', 'fullName', 'display_name', 'displayName', 'account_name', 'accountName']) {
-      final val = map[key]?.toString().trim();
-      if (val != null && val.isNotEmpty && val != 'You') return val;
-    }
-    final first = (map['first_name'] ?? map['firstName'])?.toString().trim() ?? '';
-    final last = (map['last_name'] ?? map['lastName'])?.toString().trim() ?? '';
-    final combined = '$first $last'.trim();
-    if (combined.isNotEmpty && combined != 'You') return combined;
-    return null;
-  }
-
-  /// Fetches `/api/v1/icloud/account` and `/api/v1/icloud/contact` on all platforms
-  /// (including Web) and populates `userName`, `iCloudAccount`, aliases, and self avatar.
-  /// Errors are silently swallowed without snackbars.
-  Future<void> refreshIcloudProfile({bool force = false}) {
-    if (_icloudProfileRefreshFuture != null) return _icloudProfileRefreshFuture!;
-    final future = _refreshIcloudProfileImpl(force: force).whenComplete(() {
-      _icloudProfileRefreshFuture = null;
-    });
-    _icloudProfileRefreshFuture = future;
-    return future;
-  }
-
-  Future<void> _refreshIcloudProfileImpl({bool force = false}) async {
-    if (!force && !settings.finishedSetup.value) return;
-    final now = DateTime.now();
-    if (!force && _lastIcloudProfileRefresh != null && now.difference(_lastIcloudProfileRefresh!).inSeconds < 60) {
-      return;
-    }
-
-    // Hydrate in-memory web avatar bytes if already cached from a prior session.
-    if (kIsWeb && userAvatarBytes.value == null && settings.userAvatarPath.value != null) {
-      userAvatarBytes.value = FilesystemSvc.getCachedWebAvatarByPath(settings.userAvatarPath.value!);
-    }
-
-    Map<String, dynamic>? accountData;
-    Map<String, dynamic>? contactData;
-
-    try {
-      final res = await HttpSvc.icloud.getAccountInfo();
-      final data = res.data is Map ? res.data['data'] : null;
-      if (data is Map) {
-        accountData = Map<String, dynamic>.from(data);
-      }
-    } catch (_) {
-      // Silently swallow per requirement (no snackbar on startup/socket connect).
-    }
-
-    try {
-      final res = await HttpSvc.icloud.getAccountContact();
-      final data = res.data is Map ? res.data['data'] : null;
-      if (data is Map) {
-        contactData = Map<String, dynamic>.from(data);
-      }
-    } catch (_) {
-      // Silently swallow per requirement.
-    }
-
-    if (accountData != null || contactData != null) {
-      _lastIcloudProfileRefresh = now;
-      await applyIcloudProfileData(account: accountData, contact: contactData);
-    }
-  }
-
-  /// Applies fetched `/icloud/account` and `/icloud/contact` payloads into [settings]
-  /// and reactive profile fields, persisting `userName`, `iCloudAccount`, and `userAvatarPath`.
-  Future<void> applyIcloudProfileData({
-    Map<String, dynamic>? account,
-    Map<String, dynamic>? contact,
-    bool persist = true,
-  }) async {
-    final List<String> toSave = [];
-
-    if (account != null && account.isNotEmpty) {
-      iCloudAccountInfo.assignAll(account);
-      final activeAlias =
-          (account['active_alias'] ?? account['activeAlias'] ?? contact?['active_alias'] ?? contact?['activeAlias'])
-                  ?.toString()
-                  .trim() ??
-              '';
-      if (activeAlias.isNotEmpty) {
-        iCloudActiveAlias.value = activeAlias;
-      }
-      final rawAliases = account['vetted_aliases'] ??
-          account['vettedAliases'] ??
-          account['aliases'] ??
-          account['active_aliases'] ??
-          contact?['aliases'] ??
-          contact?['active_aliases'];
-      if (rawAliases is List) {
-        final parsed = rawAliases
-            .map((e) => e is Map ? (e['Alias'] ?? e['alias'])?.toString().trim() : e?.toString().trim())
-            .whereType<String>()
-            .where((e) => e.isNotEmpty)
-            .toList();
-        iCloudAliases.assignAll(parsed);
-      }
-      final appleId =
-          (account['apple_id'] ?? account['appleId'] ?? account['email'] ?? contact?['apple_id'] ?? contact?['appleId'])
-                  ?.toString()
-                  .trim() ??
-              '';
-      final preferredAccount = appleId.isNotEmpty ? appleId : activeAlias;
-      if (preferredAccount.isNotEmpty && settings.iCloudAccount.value != preferredAccount) {
-        settings.iCloudAccount.value = preferredAccount;
-        toSave.add('iCloudAccount');
-      }
-    }
-
-    if (contact != null && contact.isNotEmpty) {
-      iCloudContactInfo.assignAll(contact);
-    }
-
-    final fetchedName = extractDisplayName(contact) ?? extractDisplayName(account);
-    final currentName = settings.userName.value.trim();
-    if (fetchedName != null && (currentName.isEmpty || currentName == 'You')) {
-      settings.userName.value = fetchedName;
-      toSave.add('userName');
-    }
-
-    final avatarBytes = decodeAvatarBase64((contact?['avatar'] ?? account?['avatar'])?.toString());
-    if (avatarBytes != null) {
-      userAvatarBytes.value = avatarBytes;
-      final existingPath = settings.userAvatarPath.value;
-      final bool hasExistingAvatar = existingPath != null &&
-          existingPath.isNotEmpty &&
-          (kIsWeb ? FilesystemSvc.getCachedWebAvatarByPath(existingPath) != null : File(existingPath).existsSync());
-      if (!hasExistingAvatar && persist) {
-        if (kIsWeb) {
-          if (GetIt.I.isRegistered<FilesystemService>()) {
-            final webPath = await FilesystemSvc.saveWebAvatar('you', avatarBytes);
-            settings.userAvatarPath.value = webPath;
-            toSave.add('userAvatarPath');
-          }
-        } else if (GetIt.I.isRegistered<FilesystemService>()) {
-          try {
-            final file = File(join(FilesystemSvc.avatarsPath, 'you', 'avatar-icloud.jpg'));
-            await file.create(recursive: true);
-            await file.writeAsBytes(avatarBytes, flush: true);
-            settings.userAvatarPath.value = file.path;
-            toSave.add('userAvatarPath');
-          } catch (e, s) {
-            Logger.warn("Failed to persist iCloud avatar file", error: e, trace: s, tag: 'SettingsService');
-          }
-        }
-      }
-    }
-
-    if (persist && toSave.isNotEmpty) {
-      try {
-        await settings.saveManyAsync(toSave);
-      } catch (_) {
-        // Silently ignore persistence errors when isolate/DB is not initialized (e.g. unit tests).
-      }
-    }
-  }
+  static String? extractDisplayName(Map<String, dynamic>? map) => _extractIcloudDisplayName(map);
 
   /// Caches and persists [details] fetched elsewhere, so the cache doesn't keep showing the previous server.
   Future<void> updateServerDetails(ServerDetails details) async {

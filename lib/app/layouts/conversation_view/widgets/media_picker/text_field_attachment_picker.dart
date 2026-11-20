@@ -813,7 +813,8 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
                     ),
                   )
                 : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 24 + MediaQuery.viewPaddingOf(context).bottom),
                     gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                       crossAxisCount: 4,
                       mainAxisSpacing: 10,
@@ -1001,8 +1002,18 @@ class GmsgAttachmentDrawer extends StatelessWidget {
           ),
           Expanded(
             child: overrideBody ??
-                GridView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                NotificationListener<OverscrollNotification>(
+                  onNotification: (notification) {
+                    if (notification.overscroll > 4 && !expanded) {
+                      onExpandedChanged(true);
+                    } else if (notification.overscroll < -4 && expanded && notification.metrics.pixels <= 0) {
+                      onExpandedChanged(false);
+                    }
+                    return false;
+                  },
+                  child: GridView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+                    padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + MediaQuery.viewPaddingOf(context).bottom),
                   gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: 4,
                     mainAxisSpacing: 12,
@@ -1050,6 +1061,7 @@ class GmsgAttachmentDrawer extends StatelessWidget {
                       ),
                     );
                   },
+                  ),
                 ),
           ),
         ],

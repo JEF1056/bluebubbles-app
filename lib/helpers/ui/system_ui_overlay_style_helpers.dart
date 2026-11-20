@@ -14,11 +14,11 @@ SystemUiOverlayStyle buildSystemUiOverlayStyle({
   final foregroundBrightness = _oppositeBrightness(brightness);
 
   return SystemUiOverlayStyle(
-    systemNavigationBarColor: immersiveMode ? Colors.transparent : systemNavigationBarColor ?? surfaceColor,
-    systemNavigationBarDividerColor: immersiveMode ? Colors.transparent : null,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
     systemNavigationBarIconBrightness: systemNavigationBarIconBrightness ?? foregroundBrightness,
-    systemNavigationBarContrastEnforced: immersiveMode ? false : null,
-    statusBarColor: statusBarColor,
+    systemNavigationBarContrastEnforced: false,
+    statusBarColor: Colors.transparent,
     statusBarBrightness: brightness,
     statusBarIconBrightness: statusBarIconBrightness ?? foregroundBrightness,
     systemStatusBarContrastEnforced: false,

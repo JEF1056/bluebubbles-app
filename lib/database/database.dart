@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';

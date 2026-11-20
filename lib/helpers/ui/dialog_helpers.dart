@@ -677,6 +677,11 @@ Future<T?> showBBBottomSheet<T>({
   Color? iconColor,
   Widget? child,
   WidgetBuilder? builder,
+  Widget Function(BuildContext context, ScrollController scrollController)? scrollableBuilder,
+  double initialChildSize = 0.6,
+  double minChildSize = 0.25,
+  double maxChildSize = 0.92,
+  List<double>? snapSizes,
   List<BBDialogAction> actions = const [],
   bool isScrollControlled = true,
   bool isDismissible = true,
@@ -686,27 +691,16 @@ Future<T?> showBBBottomSheet<T>({
   bool useSafeArea = true,
   EdgeInsetsGeometry? padding,
 }) {
-  assert(child != null || builder != null, 'Provide either child or builder');
+  assert(
+    child != null || builder != null || scrollableBuilder != null,
+    'Provide either child, builder, or scrollableBuilder',
+  );
   final disableAnimations = MediaQuery.disableAnimationsOf(context);
 
   if (_isIOSSkin()) {
     final cupertinoTheme = _iosCupertinoTheme(context);
 
-    return showModalBottomSheet<T>(
-      context: context,
-      useRootNavigator: useRootNavigator,
-      isScrollControlled: isScrollControlled,
-      isDismissible: isDismissible,
-      enableDrag: enableDrag,
-      useSafeArea: useSafeArea,
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      barrierColor: Colors.black38,
-      sheetAnimationStyle: disableAnimations
-          ? AnimationStyle.noAnimation
-          : const AnimationStyle(duration: Duration(milliseconds: 240), reverseDuration: Duration(milliseconds: 180)),
-      builder: (ctx) {
-        final contentColumn = Column(
+    Widget buildIosHeader(BuildContext ctx) => Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -750,58 +744,121 @@ Future<T?> showBBBottomSheet<T>({
               ),
               _iosHairlineDivider(ctx),
             ],
+          ],
+        );
+
+    Widget buildIosActions(BuildContext ctx) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _iosHairlineDivider(ctx),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 4,
+                children: actions
+                    .map(
+                      (a) => CupertinoButton(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        onPressed: a.onPressed,
+                        child: Text(
+                          a.text,
+                          style: TextStyle(
+                            fontWeight: a.isDefault ? FontWeight.w600 : FontWeight.w400,
+                            color: a.isDestructive ? CupertinoColors.destructiveRed : null,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ],
+        );
+
+    return showModalBottomSheet<T>(
+      context: context,
+      useRootNavigator: useRootNavigator,
+      isScrollControlled: isScrollControlled,
+      isDismissible: isDismissible,
+      enableDrag: enableDrag,
+      useSafeArea: useSafeArea,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      barrierColor: Colors.black38,
+      sheetAnimationStyle: disableAnimations
+          ? AnimationStyle.noAnimation
+          : const AnimationStyle(duration: Duration(milliseconds: 240), reverseDuration: Duration(milliseconds: 180)),
+      builder: (ctx) {
+        Widget wrapIosSurface(BuildContext sCtx, Widget body) => CupertinoTheme(
+              data: cupertinoTheme,
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                  child: Material(
+                    color: _iosFrostedColor(sCtx),
+                    child: SizedBox(width: double.infinity, child: body),
+                  ),
+                ),
+              ),
+            );
+
+        if (scrollableBuilder != null) {
+          return Padding(
+            padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+            child: DraggableScrollableSheet(
+              expand: false,
+              initialChildSize: initialChildSize,
+              minChildSize: minChildSize,
+              maxChildSize: maxChildSize,
+              snap: true,
+              snapSizes: snapSizes ?? [initialChildSize],
+              builder: (sheetCtx, scrollController) => wrapIosSurface(
+                sheetCtx,
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    buildIosHeader(sheetCtx),
+                    Expanded(
+                      child: Padding(
+                        padding: padding ?? EdgeInsets.zero,
+                        child: scrollableBuilder(sheetCtx, scrollController),
+                      ),
+                    ),
+                    if (actions.isNotEmpty)
+                      useSafeArea
+                          ? SafeArea(top: false, child: buildIosActions(sheetCtx))
+                          : buildIosActions(sheetCtx),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        final contentColumn = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            buildIosHeader(ctx),
             Flexible(
               child: Padding(
                 padding: padding ?? const EdgeInsets.fromLTRB(20, 16, 20, 16),
                 child: builder?.call(ctx) ?? child!,
               ),
             ),
-            if (actions.isNotEmpty) ...[
-              _iosHairlineDivider(ctx),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-                child: Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: actions
-                      .map(
-                        (a) => CupertinoButton(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                          onPressed: a.onPressed,
-                          child: Text(
-                            a.text,
-                            style: TextStyle(
-                              fontWeight: a.isDefault ? FontWeight.w600 : FontWeight.w400,
-                              color: a.isDestructive ? CupertinoColors.destructiveRed : null,
-                            ),
-                          ),
-                        ),
-                      )
-                      .toList(),
-                ),
-              ),
-            ],
+            if (actions.isNotEmpty) buildIosActions(ctx),
           ],
         );
 
         return Padding(
           padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-          child: CupertinoTheme(
-            data: cupertinoTheme,
-            child: ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-                child: Material(
-                  color: _iosFrostedColor(ctx),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: useSafeArea ? SafeArea(top: false, child: contentColumn) : contentColumn,
-                  ),
-                ),
-              ),
-            ),
+          child: wrapIosSurface(
+            ctx,
+            useSafeArea ? SafeArea(top: false, child: contentColumn) : contentColumn,
           ),
         );
       },
@@ -816,82 +873,130 @@ Future<T?> showBBBottomSheet<T>({
     isDismissible: isDismissible,
     enableDrag: enableDrag,
     useSafeArea: useSafeArea,
-    backgroundColor: context.colorScheme.surfaceContainerHigh,
+    backgroundColor: scrollableBuilder != null ? Colors.transparent : context.colorScheme.surfaceContainerHigh,
+    elevation: scrollableBuilder != null ? 0 : null,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
     ),
     sheetAnimationStyle: disableAnimations
         ? AnimationStyle.noAnimation
         : const AnimationStyle(duration: Duration(milliseconds: 240), reverseDuration: Duration(milliseconds: 180)),
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (showDragHandle)
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 12, bottom: 8),
-                  width: 32,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: ctx.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(2),
+    builder: (ctx) {
+      Widget buildM3Header(BuildContext sCtx) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (showDragHandle)
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.only(top: 12, bottom: 8),
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: sCtx.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
-              ),
-            if (title != null || subtitle != null || icon != null)
-              Padding(
-                padding: EdgeInsets.fromLTRB(24, showDragHandle ? 8 : 24, 24, 8),
-                child: Row(
-                  children: [
-                    if (icon != null) ...[
-                      _buildM3IconBadge(ctx, icon, color: iconColor),
-                      const SizedBox(width: 16),
-                    ],
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (title != null)
-                            Text(title, style: ctx.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
-                          if (subtitle != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Text(
-                                subtitle,
-                                style: ctx.textTheme.bodyMedium?.copyWith(color: ctx.colorScheme.onSurfaceVariant),
+              if (title != null || subtitle != null || icon != null)
+                Padding(
+                  padding: EdgeInsets.fromLTRB(24, showDragHandle ? 8 : 24, 24, 8),
+                  child: Row(
+                    children: [
+                      if (icon != null) ...[
+                        _buildM3IconBadge(sCtx, icon, color: iconColor),
+                        const SizedBox(width: 16),
+                      ],
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (title != null)
+                              Text(title, style: sCtx.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+                            if (subtitle != null)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 2),
+                                child: Text(
+                                  subtitle,
+                                  style: sCtx.textTheme.bodyMedium?.copyWith(color: sCtx.colorScheme.onSurfaceVariant),
+                                ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
+            ],
+          );
+
+      Widget buildM3Actions(BuildContext sCtx) => Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: actions.map((a) => _buildM3Action(sCtx, a)).toList(),
+            ),
+          );
+
+      if (scrollableBuilder != null) {
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: initialChildSize,
+            minChildSize: minChildSize,
+            maxChildSize: maxChildSize,
+            snap: true,
+            snapSizes: snapSizes ?? [initialChildSize],
+            builder: (sheetCtx, scrollController) => Material(
+              color: sheetCtx.colorScheme.surfaceContainerHigh,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
               ),
-            Flexible(
-              child: Padding(
-                padding: padding ?? const EdgeInsets.fromLTRB(24, 12, 24, 24),
-                child: builder?.call(ctx) ?? child!,
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  buildM3Header(sheetCtx),
+                  Expanded(
+                    child: Padding(
+                      padding: padding ?? EdgeInsets.zero,
+                      child: scrollableBuilder(sheetCtx, scrollController),
+                    ),
+                  ),
+                  if (actions.isNotEmpty)
+                    useSafeArea
+                        ? SafeArea(top: false, child: buildM3Actions(sheetCtx))
+                        : buildM3Actions(sheetCtx),
+                ],
               ),
             ),
-            if (actions.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: Wrap(
-                  alignment: WrapAlignment.end,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: actions.map((a) => _buildM3Action(ctx, a)).toList(),
-                ),
-              ),
-          ],
-        ),
-      ),
-    ),
+          ),
+        );
+      }
+
+      final sheetBody = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          buildM3Header(ctx),
+          Flexible(
+            child: Padding(
+              padding: padding ?? const EdgeInsets.fromLTRB(24, 12, 24, 24),
+              child: builder?.call(ctx) ?? child!,
+            ),
+          ),
+          if (actions.isNotEmpty) buildM3Actions(ctx),
+        ],
+      );
+
+      return Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: useSafeArea ? SafeArea(top: false, child: sheetBody) : sheetBody,
+      );
+    },
   );
 }
 

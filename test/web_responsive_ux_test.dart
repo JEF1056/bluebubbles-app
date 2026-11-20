@@ -95,7 +95,7 @@ void main() {
       expect(NavigationSvc.showInspectorDrawer.value, equals(initial));
     });
 
-    testWidgets('pushAndRemoveSettingsUntil preserves activeSettingsWidget in narrow mode until popped or closed',
+    testWidgets('settings pane and section observers sync isSettingsOpen and clear on closeSections',
         variant: TargetPlatformVariant.only(TargetPlatform.android), (tester) async {
       _registerMinimalServices();
       tester.view.physicalSize = const Size(480, 800);
@@ -107,14 +107,32 @@ void main() {
       await tester.pumpWidget(
         GetMaterialApp(
           navigatorKey: NavigationSvc.key,
+          navigatorObservers: [NavigationSvc.sectionObserver],
           home: Builder(
             builder: (context) {
               capturedContext = context;
-              return const Scaffold(body: Text('Settings Root'));
+              return const Scaffold(body: Text('Home Root'));
             },
           ),
         ),
       );
+
+      NavigationSvc.key.currentState!.push(
+        MaterialPageRoute(
+          settings: RouteSettings(name: AppSection.settings.name),
+          builder: (_) => Navigator(
+            key: Get.nestedKey(3),
+            observers: [PaneObserver(NavigationSvc.settingsPaneOpen)],
+            pages: const [MaterialPage(child: Scaffold(body: Text('Settings Root')))],
+            onDidRemovePage: (_) {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(NavigationSvc.openSection.value, AppSection.settings);
+      expect(NavigationSvc.isSettingsOpen.value, isTrue);
+      expect(NavigationSvc.settingsPaneOpen.value, isFalse);
 
       const detailPage = Scaffold(body: Text('Server Panel'));
       NavigationSvc.pushAndRemoveSettingsUntil(
@@ -125,31 +143,27 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Server Panel'), findsOneWidget);
-      expect(NavigationSvc.activeSettingsPage.value, Scaffold);
-      expect(NavigationSvc.activeSettingsWidget, detailPage);
-      expect(NavigationSvc.hasNarrowSettingsRoute, isTrue);
+      expect(NavigationSvc.settingsPaneOpen.value, isTrue);
 
-      NavigationSvc.closeSettings(capturedContext);
+      NavigationSvc.closeSections();
       await tester.pumpAndSettle();
 
-      expect(find.text('Settings Root'), findsOneWidget);
+      expect(find.text('Home Root'), findsOneWidget);
+      expect(NavigationSvc.openSection.value, isNull);
+      expect(NavigationSvc.isSettingsOpen.value, isFalse);
       expect(NavigationSvc.activeSettingsPage.value, isNull);
-      expect(NavigationSvc.activeSettingsWidget, isNull);
-      expect(NavigationSvc.hasNarrowSettingsRoute, isFalse);
     });
   });
 
   group('TabletModeWrapper zero-state-loss resize across 600px', () {
-    testWidgets('wide -> narrow -> wide preserves active state and fires transition hooks',
+    testWidgets('wide -> narrow -> wide preserves active state and switches via rightOpen',
         variant: TargetPlatformVariant.only(TargetPlatform.android), (tester) async {
       _registerMinimalServices();
       SettingsSvc.settings.tabletMode.value = true;
 
       final chat = Chat(guid: 'iMessage;-;+15551234567');
       ChatsSvc.activeChat = ChatsSvc.getOrCreateChatState(chat);
-
-      var narrowTransitions = 0;
-      var wideTransitions = 0;
+      final rightOpen = false.obs;
 
       tester.view.physicalSize = const Size(900, 700);
       tester.view.devicePixelRatio = 1.0;
@@ -165,8 +179,7 @@ void main() {
               minRatio: 0.2,
               maxRatio: 0.5,
               enableInspector: false,
-              onNarrowTransition: () => narrowTransitions++,
-              onWideTransition: () => wideTransitions++,
+              rightOpen: rightOpen,
               left: const Text('Left Pane'),
               right: const Text('Right Pane'),
             ),
@@ -177,17 +190,24 @@ void main() {
 
       expect(find.text('Left Pane'), findsOneWidget);
       expect(find.text('Right Pane'), findsOneWidget);
-      expect(narrowTransitions, 0);
-      expect(wideTransitions, 0);
 
-      // Shrink below 600px threshold: activeChat must remain intact (no destructive close).
+      // Shrink below 600px threshold: both panes stay mounted (zero state loss),
+      // activeChat remains intact, and rightOpen gates right-pane hit testing.
       tester.view.physicalSize = const Size(480, 700);
       await tester.pumpAndSettle();
 
+      IgnorePointer rightGate() => tester.widget<IgnorePointer>(
+            find.ancestor(of: find.text('Right Pane'), matching: find.byType(IgnorePointer)).first,
+          );
+
       expect(find.text('Left Pane'), findsOneWidget);
-      expect(find.text('Right Pane'), findsNothing);
-      expect(narrowTransitions, 1);
+      expect(find.text('Right Pane'), findsOneWidget);
+      expect(rightGate().ignoring, isTrue);
       expect(ChatsSvc.activeChat?.chat.guid, 'iMessage;-;+15551234567');
+
+      rightOpen.value = true;
+      await tester.pumpAndSettle();
+      expect(rightGate().ignoring, isFalse);
 
       // Expand back above 600px threshold.
       tester.view.physicalSize = const Size(900, 700);
@@ -195,7 +215,6 @@ void main() {
 
       expect(find.text('Left Pane'), findsOneWidget);
       expect(find.text('Right Pane'), findsOneWidget);
-      expect(wideTransitions, 1);
       expect(ChatsSvc.activeChat?.chat.guid, 'iMessage;-;+15551234567');
     });
   });

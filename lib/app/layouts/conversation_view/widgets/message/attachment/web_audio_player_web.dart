@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attach
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:mime_type/mime_type.dart';
 import 'package:web/web.dart' as web;
 
@@ -176,6 +177,8 @@ class WebAudioController extends ChangeNotifier {
 
 web.AudioContext? _sharedAudioCtx;
 bool _unlockListenersInstalled = false;
+final Map<String, Future<web.AudioBuffer?>> _decodedBuffers = <String, Future<web.AudioBuffer?>>{};
+final Map<String, Future<String?>> _assetBlobUrls = <String, Future<String?>>{};
 
 void _ensureAudioUnlock() {
   if (_unlockListenersInstalled) return;
@@ -198,8 +201,37 @@ void _ensureAudioUnlock() {
   web.window.addEventListener('keydown', jsUnlock);
 }
 
-Future<void> playWebChime({
-  required bool isSend,
+Future<web.AudioBuffer?> _loadDecodedBuffer(web.AudioContext ctx, String assetPath) {
+  return _decodedBuffers[assetPath] ??= () async {
+    try {
+      final data = await rootBundle.load(assetPath);
+      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      // Copy into a standalone JSArrayBuffer so decodeAudioData detaches only this buffer.
+      final copy = Uint8List.fromList(bytes);
+      return await ctx.decodeAudioData(copy.buffer.toJS).toDart;
+    } catch (_) {
+      _decodedBuffers.remove(assetPath);
+      return null;
+    }
+  }();
+}
+
+Future<String?> _loadAssetBlobUrl(String assetPath) {
+  return _assetBlobUrls[assetPath] ??= () async {
+    try {
+      final data = await rootBundle.load(assetPath);
+      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      final blob = web.Blob(<JSAny>[bytes.toJS].toJS, web.BlobPropertyBag(type: 'audio/wav'));
+      return web.URL.createObjectURL(blob);
+    } catch (_) {
+      _assetBlobUrls.remove(assetPath);
+      return null;
+    }
+  }();
+}
+
+Future<void> playWebSoundAsset(
+  String assetPath, {
   double volume = 1.0,
   String? customUrl,
 }) async {
@@ -224,27 +256,44 @@ Future<void> playWebChime({
 
   try {
     final ctx = _sharedAudioCtx ??= web.AudioContext();
-    if (ctx.state != 'running') {
-      // Never await ctx.resume() before first gesture — it hangs and stalls callers.
-      if (ctx.state == 'suspended') ctx.resume();
-      return;
+    if (ctx.state == 'suspended') {
+      ctx.resume();
     }
-    final now = ctx.currentTime;
-    final gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(clampedVol * 0.2, now + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-    gain.connect(ctx.destination);
+    if (ctx.state == 'running') {
+      final buffer = await _loadDecodedBuffer(ctx, assetPath);
+      if (buffer != null) {
+        final gain = ctx.createGain();
+        gain.gain.value = clampedVol;
+        gain.connect(ctx.destination);
 
-    final osc = ctx.createOscillator();
-    osc.type = 'sine';
-    // Subtle ascending two-tone for receive, crisp single-tone for send.
-    osc.frequency.setValueAtTime(isSend ? 660.0 : 587.33, now);
-    if (!isSend) {
-      osc.frequency.setValueAtTime(880.0, now + 0.08);
+        final source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(gain);
+        source.start();
+        return;
+      }
     }
-    osc.connect(gain);
-    osc.start(now);
-    osc.stop(now + 0.24);
   } catch (_) {}
+
+  try {
+    final blobUrl = await _loadAssetBlobUrl(assetPath);
+    if (blobUrl != null) {
+      final audio = web.HTMLAudioElement()
+        ..src = blobUrl
+        ..volume = clampedVol;
+      await audio.play().toDart;
+    }
+  } catch (_) {}
+}
+
+Future<void> playWebChime({
+  required bool isSend,
+  double volume = 1.0,
+  String? customUrl,
+}) {
+  return playWebSoundAsset(
+    isSend ? 'assets/sounds/message_sent.wav' : 'assets/sounds/message_incoming.wav',
+    volume: volume,
+    customUrl: customUrl,
+  );
 }

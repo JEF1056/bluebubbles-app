@@ -221,7 +221,7 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
                       ClipPath(
                         clipper: TailClipper(
                           isFromMe: message.isFromMe!,
-                          showTail: true,
+                          showTail: false,
                           connectUpper: false,
                           connectLower: false,
                         ),
@@ -237,7 +237,7 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
                                 child: CustomPaint(
                                   painter: TailPainter(
                                     isFromMe: message.isFromMe!,
-                                    showTail: true,
+                                    showTail: false,
                                     color: context.theme.colorScheme.errorContainer,
                                   ),
                                   child: Padding(
@@ -277,7 +277,7 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
                                         child: CustomPaint(
                                           painter: TailPainter(
                                             isFromMe: message.isFromMe!,
-                                            showTail: true,
+                                            showTail: false,
                                             color: message.isFromMe!
                                                 ? context.theme.colorScheme.primary
                                                 : getBubbleColor(),

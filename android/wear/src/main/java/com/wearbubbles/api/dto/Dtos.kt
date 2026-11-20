@@ -13,6 +13,31 @@ data class PingResponse(
     val server_version: String? = null
 )
 
+data class ICloudContactDto(
+    val account_name: String? = null,
+    val name: String? = null,
+    val display_name: String? = null,
+    val first_name: String? = null,
+    val last_name: String? = null,
+    val apple_id: String? = null,
+    val active_alias: String? = null,
+    val avatar: String? = null
+) {
+    fun resolvedName(): String =
+        display_name?.takeIf { it.isNotBlank() }
+            ?: account_name?.takeIf { it.isNotBlank() }
+            ?: name?.takeIf { it.isNotBlank() }
+            ?: listOfNotNull(
+                first_name?.takeIf { it.isNotBlank() },
+                last_name?.takeIf { it.isNotBlank() }
+            ).joinToString(" ")
+
+    fun resolvedHandle(): String =
+        active_alias?.takeIf { it.isNotBlank() }
+            ?: apple_id?.takeIf { it.isNotBlank() }
+            ?: ""
+}
+
 data class ChatQueryRequest(
     val limit: Int = 30,
     val offset: Int = 0,

@@ -16,10 +16,14 @@ class FailureToStart extends StatelessWidget {
       theme: ThemeData(fontFamily: kDefaultAppFontFamily, brightness: Brightness.dark),
       home: AnnotatedRegion<SystemUiOverlayStyle>(
         value: const SystemUiOverlayStyle(
-          systemNavigationBarColor: Colors.black,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarDividerColor: Colors.transparent,
           systemNavigationBarIconBrightness: Brightness.light,
+          systemNavigationBarContrastEnforced: false,
+          statusBarBrightness: Brightness.dark,
           statusBarIconBrightness: Brightness.light,
           statusBarColor: Colors.transparent,
+          systemStatusBarContrastEnforced: false,
         ),
         child: BBScaffold(
           backgroundColor: Colors.black,

@@ -250,11 +250,8 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                     return Semantics(
                       container: true,
                       explicitChildNodes: true,
-                      child: PopScope(
-                        canPop: false,
-                        onPopInvokedWithResult: (bool didPop, _) {
-                          if (!didPop) NavigationSvc.back();
-                        },
+                      child: NavigatorPopHandler(
+                        onPopWithResult: (_) => Get.nestedKey(3)?.currentState?.maybePop(),
                         child: Navigator(
                           key: Get.nestedKey(3),
                           observers: [_paneObserver],

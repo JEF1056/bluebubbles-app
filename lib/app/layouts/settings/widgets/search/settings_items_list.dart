@@ -62,25 +62,25 @@ List<Widget> buildSettingItemList({
       child: SettingsSection(
         backgroundColor: tileColor,
         children: [
-          SettingsTile(
-            backgroundColor: tileColor,
-            activePage: ProfilePanel,
-            title: SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
-                ? "User Name"
-                : SettingsSvc.settings.userName.value,
-            onTap: () {
-              ns.pushAndRemoveSettingsUntil(context, const ProfilePanel(), (Route route) => route.isFirst);
-            },
-            leading: const ContactAvatarWidget(
-              handle: null,
-              borderThickness: 0.1,
-              editable: false,
-              fontSize: 22,
-              size: 50,
-            ),
-            trailing: const NextButton(),
-            minVerticalPadding: 20,
-          ),
+          Obx(() => SettingsTile(
+                backgroundColor: tileColor,
+                activePage: ProfilePanel,
+                title: SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
+                    ? "User Name"
+                    : SettingsSvc.settings.userName.value,
+                onTap: () {
+                  ns.pushAndRemoveSettingsUntil(context, const ProfilePanel(), (Route route) => route.isFirst);
+                },
+                leading: const ContactAvatarWidget(
+                  handle: null,
+                  borderThickness: 0.1,
+                  editable: false,
+                  fontSize: 22,
+                  size: 50,
+                ),
+                trailing: const NextButton(),
+                minVerticalPadding: 20,
+              )),
         ],
       ),
     ),

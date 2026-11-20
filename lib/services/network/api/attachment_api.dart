@@ -22,15 +22,16 @@ class AttachmentApi {
     });
   }
 
-  static bool isWebUnsupportedImageMime(String? mimeType) {
-    if (mimeType == null) return false;
-    final lower = mimeType.toLowerCase();
-    return lower == 'image/heic' ||
-        lower == 'image/heif' ||
-        lower == 'image/tiff' ||
-        lower == 'image/heic-sequence' ||
-        lower == 'image/heif-sequence';
-  }
+  static const _webUnsupportedImageMimes = {
+    'image/heic',
+    'image/heif',
+    'image/tiff',
+    'image/heic-sequence',
+    'image/heif-sequence',
+  };
+
+  static bool isWebUnsupportedImageMime(String? mimeType) =>
+      mimeType != null && _webUnsupportedImageMimes.contains(mimeType.toLowerCase());
 
   static Map<String, dynamic> buildDownloadQueryParams({
     bool original = false,

@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/types/helpers/pin_order_helpers.dart';
 import 'package:bluebubbles/services/ui/chat/chats_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -75,20 +76,32 @@ void main() {
       expect(fromLocal.pinIndex, 1);
     });
 
-    test('Chat.sort puts pinned chats first by pinIndex regardless of older message date', () {
+    test('comparePinOrder puts indexed pins first, then unindexed pins, then unpinned by date', () {
       final oldPinnedFirst = Chat(guid: 'pin0', isPinned: true, pinnedIndex: 0)
         ..dbOnlyLatestMessageDate = DateTime.fromMillisecondsSinceEpoch(1000);
       final newerPinnedSecond = Chat(guid: 'pin1', isPinned: true, pinnedIndex: 1)
         ..dbOnlyLatestMessageDate = DateTime.fromMillisecondsSinceEpoch(5000);
+      final unindexedPin = Chat(guid: 'pinUnindexed', isPinned: true, pinnedIndex: null)
+        ..dbOnlyLatestMessageDate = DateTime.fromMillisecondsSinceEpoch(9999);
       final newestUnpinned = Chat(guid: 'recent', isPinned: false, pinnedIndex: null)
         ..dbOnlyLatestMessageDate = DateTime.fromMillisecondsSinceEpoch(9000);
       final olderUnpinned = Chat(guid: 'older', isPinned: false, pinnedIndex: null)
         ..dbOnlyLatestMessageDate = DateTime.fromMillisecondsSinceEpoch(2000);
 
-      final list = [olderUnpinned, newerPinnedSecond, newestUnpinned, oldPinnedFirst];
-      list.sort(Chat.sort);
+      final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+      final list = [olderUnpinned, unindexedPin, newerPinnedSecond, newestUnpinned, oldPinnedFirst]
+        ..sort((a, b) {
+          final byPin = comparePinOrder(
+            aPinned: a.isPinned ?? false,
+            aIndex: a.pinIndex,
+            bPinned: b.isPinned ?? false,
+            bIndex: b.pinIndex,
+          );
+          if (byPin != 0) return byPin;
+          return -(a.dbOnlyLatestMessageDate ?? epoch).compareTo(b.dbOnlyLatestMessageDate ?? epoch);
+        });
 
-      expect(list.map((c) => c.guid).toList(), ['pin0', 'pin1', 'recent', 'older']);
+      expect(list.map((c) => c.guid).toList(), ['pin0', 'pin1', 'pinUnindexed', 'recent', 'older']);
     });
   });
 }

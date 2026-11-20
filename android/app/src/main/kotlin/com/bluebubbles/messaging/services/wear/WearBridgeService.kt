@@ -6,12 +6,9 @@ import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -22,8 +19,6 @@ class WearBridgeService : WearableListenerService() {
     companion object {
         private const val TAG = "WearBridgeService"
     }
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
         if (capabilityInfo.name == WearSyncManager.WATCH_CAPABILITY) {
@@ -53,15 +48,11 @@ class WearBridgeService : WearableListenerService() {
                     "chats" -> WearSyncManager.syncChats(applicationContext, nodeId)
                     "messages" -> {
                         val chatGuid = obj.str("chatGuid") ?: return
-                        val before = if (obj.has("before") && !obj.get("before").isJsonNull) {
-                            obj.get("before").asLong
-                        } else {
-                            null
-                        }
-                        WearSyncManager.syncMessages(applicationContext, chatGuid, before, nodeId)
+                        WearSyncManager.syncMessages(applicationContext, chatGuid, obj.long("before"), nodeId)
                     }
                     "contacts" -> WearSyncManager.syncContacts(applicationContext, nodeId)
                     "credentials" -> WearSyncManager.syncCredentials(applicationContext, nodeId)
+                    "profile" -> WearSyncManager.syncProfile(applicationContext, nodeId)
                 }
             }
             WearSyncManager.PATH_SEND_MESSAGE -> {
@@ -77,11 +68,7 @@ class WearBridgeService : WearableListenerService() {
                 val chatGuid = obj.str("chatGuid") ?: return
                 val msgGuid = obj.str("selectedMessageGuid") ?: return
                 val reaction = obj.str("reaction") ?: return
-                val partIndex = if (obj.has("partIndex") && !obj.get("partIndex").isJsonNull) {
-                    obj.get("partIndex").asInt
-                } else {
-                    0
-                }
+                val partIndex = obj.int("partIndex") ?: 0
                 val requestId = obj.str("requestId") ?: msgGuid
                 val tempGuid = obj.str("tempGuid")
                 WearSyncManager.sendReaction(applicationContext, nodeId, chatGuid, msgGuid, reaction, partIndex, requestId, tempGuid)
@@ -100,9 +87,7 @@ class WearBridgeService : WearableListenerService() {
                 WearSyncManager.handleDismissFromWatch(applicationContext, chatGuid)
             }
             WearSyncManager.PATH_WATCH_ACTIVE -> {
-                val obj = parseJson(dataStr)
-                val active = obj != null && obj.has("active") && obj.get("active").asBoolean
-                WearSyncManager.setWatchActive(applicationContext, active)
+                WearSyncManager.setWatchActive(applicationContext, parseJson(dataStr)?.bool("active") == true)
             }
             WearSyncManager.PATH_ANSWER_CALL_AUDIO -> {
                 val obj = parseJson(dataStr) ?: return
@@ -167,17 +152,14 @@ class WearBridgeService : WearableListenerService() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        scope.cancel()
-    }
-
     private fun parseJson(raw: String) = try {
         JsonParser.parseString(raw).asJsonObject
     } catch (_: Exception) {
         null
     }
 
-    private fun com.google.gson.JsonObject.str(key: String): String? =
-        if (has(key) && !get(key).isJsonNull) get(key).asString else null
+    private fun JsonObject.str(key: String): String? = get(key)?.takeIf { !it.isJsonNull }?.asString
+    private fun JsonObject.long(key: String): Long? = get(key)?.takeIf { !it.isJsonNull }?.asLong
+    private fun JsonObject.int(key: String): Int? = get(key)?.takeIf { !it.isJsonNull }?.asInt
+    private fun JsonObject.bool(key: String): Boolean? = get(key)?.takeIf { !it.isJsonNull }?.asBoolean
 }

@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -26,12 +27,10 @@ class MessageSender extends StatelessWidget {
         final hasCustomBackground = chatState?.hasCustomWallpaper ?? false;
         return Text(
           state.senderDisplayName,
-          style: context.theme.textTheme.labelMedium!.copyWith(
-            color: hasCustomBackground
-                ? Colors.white.withValues(alpha: 0.88)
-                : context.theme.colorScheme.outline,
-            fontWeight: FontWeight.normal,
-            shadows: hasCustomBackground ? const [Shadow(color: Colors.black54, blurRadius: 3)] : null,
+          style: WallpaperContrast.unbubbledStyle(
+            context.theme.textTheme.labelMedium!.copyWith(fontWeight: FontWeight.normal),
+            hasWallpaper: hasCustomBackground,
+            fallbackColor: context.theme.colorScheme.outline,
           ),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,

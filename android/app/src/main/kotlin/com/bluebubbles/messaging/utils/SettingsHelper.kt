@@ -68,6 +68,12 @@ class SettingsHelper(private val context: Context) {
     // Other useful settings
     val sendEventsToTasker: Boolean
         get() = prefs.getBoolean("${PREFIX}sendEventsToTasker", false)
+
+    val userName: String
+        get() = prefs.getString("${PREFIX}userName", "") ?: ""
+
+    val userAvatarPath: String
+        get() = prefs.getString("${PREFIX}userAvatarPath", "") ?: ""
     
     /**
      * Get the origin (base URL) from the server address

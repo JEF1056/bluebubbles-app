@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/facetime.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +15,7 @@ enum _OutgoingSheetPhase {
   connecting,
   telecomSetup,
   permissionsRequired,
+  ringingJoinReady,
   ringingNoLink,
   error,
 }
@@ -29,7 +32,11 @@ class OutgoingFaceTimeSheet extends StatefulWidget {
     this.initialVideo,
     this.isAndroid = false,
     this.isIOS = false,
+    this.isTelephony = false,
     this.callController,
+    this.initialPendingTab,
+    this.onPreOpenTab,
+    this.onTryOpenJoinLink,
     required this.checkTelecomEnabled,
     required this.onOpenCallingAccounts,
     required this.requestCallPermissions,
@@ -46,7 +53,11 @@ class OutgoingFaceTimeSheet extends StatefulWidget {
   final bool? initialVideo;
   final bool isAndroid;
   final bool isIOS;
+  final bool isTelephony;
   final ActiveCallController? callController;
+  final PendingCallTab? initialPendingTab;
+  final PendingCallTab? Function()? onPreOpenTab;
+  final Future<bool> Function(String link)? onTryOpenJoinLink;
   final Future<bool> Function() checkTelecomEnabled;
   final Future<void> Function() onOpenCallingAccounts;
   final Future<bool> Function() requestCallPermissions;
@@ -67,10 +78,17 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
   bool _hangingUp = false;
   String? _errorMessage;
   FaceTimeCall? _ringingCall;
+  String? _joinLink;
+  PendingCallTab? _pendingTab;
+  ActiveCallFailure? _handledFailure;
+
+  ActiveCallController get _controller => widget.callController ?? ActiveCallController.instance;
 
   @override
   void initState() {
     super.initState();
+    _pendingTab = widget.initialPendingTab;
+    _controller.addListener(_onControllerChanged);
     if (widget.initialVideo != null) {
       _selectedVideo = widget.initialVideo!;
       _phase = _OutgoingSheetPhase.connecting;
@@ -84,6 +102,48 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
         _probeTelecom();
       }
     }
+  }
+
+  @override
+  void didUpdateWidget(covariant OutgoingFaceTimeSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldCtrl = oldWidget.callController ?? ActiveCallController.instance;
+    if (!identical(oldCtrl, _controller)) {
+      oldCtrl.removeListener(_onControllerChanged);
+      _controller.addListener(_onControllerChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onControllerChanged);
+    _cancelled = true;
+    _closePendingTab();
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (!mounted) return;
+    final failure = _controller.lastFailure;
+    if (failure == null || failure == _handledFailure) return;
+    final isWaitingPhase = _phase == _OutgoingSheetPhase.connecting ||
+        _phase == _OutgoingSheetPhase.ringingJoinReady ||
+        _phase == _OutgoingSheetPhase.ringingNoLink;
+    if (!isWaitingPhase) return;
+    if (_ringingCall != null && _ringingCall!.callUuid.isNotEmpty && failure.callUuid != _ringingCall!.callUuid) {
+      return;
+    }
+    _handledFailure = failure;
+    _closePendingTab();
+    setState(() {
+      _errorMessage = failure.message;
+      _phase = _OutgoingSheetPhase.error;
+    });
+  }
+
+  void _closePendingTab() {
+    _pendingTab?.close();
+    _pendingTab = null;
   }
 
   Future<void> _probeTelecom() async {
@@ -121,19 +181,24 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
       final placedNative = await widget.onPlaceNativeAudioCall();
       if (_cancelled || !mounted) return;
       if (!placedNative) {
+        final msg = widget.isTelephony
+            ? "Couldn't start iPhone cellular call."
+            : "Couldn't start native FaceTime Audio call.";
+        _controller.reportError(msg);
         setState(() {
-          _errorMessage = "Couldn't start native FaceTime Audio call.";
+          _errorMessage = msg;
           _phase = _OutgoingSheetPhase.error;
         });
         return;
       }
 
-      (widget.callController ?? ActiveCallController.instance).startOngoing(
+      _controller.startOngoing(
         callerName: widget.callerName,
         callerAddress: widget.callerAddress,
         avatarBytes: widget.avatarBytes,
         isVideo: false,
         isTelecomCall: true,
+        isTelephony: widget.isTelephony,
       );
       Navigator.of(context).pop();
       return;
@@ -142,8 +207,12 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
     setState(() {
       _errorMessage = null;
       _ringingCall = null;
+      _joinLink = null;
       _phase = _OutgoingSheetPhase.connecting;
     });
+
+    // Synchronously reserve a tab inside the user gesture before awaiting the server.
+    _pendingTab ??= widget.onPreOpenTab?.call();
 
     PlacedFaceTimeCall? placed;
     FaceTimeException? refusal;
@@ -155,19 +224,35 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
       refusal = const FaceTimeException("Couldn't reach the server.");
     }
 
-    if (_cancelled || !mounted) return;
+    if (_cancelled || !mounted) {
+      _closePendingTab();
+      if (placed != null && placed.call.callUuid.isNotEmpty) {
+        unawaited(widget.onHangUpRingingCall(placed.call.callUuid));
+      }
+      return;
+    }
 
     if (placed != null) {
       final link = placed.link;
       if (link == null || link.isEmpty) {
-        setState(() {
-          _errorMessage = "Couldn't get a call link from the server.";
-          _phase = _OutgoingSheetPhase.error;
-        });
+        _closePendingTab();
+        if (placed.call.callUuid.isNotEmpty) {
+          setState(() {
+            _ringingCall = placed!.call;
+            _phase = _OutgoingSheetPhase.ringingNoLink;
+          });
+        } else {
+          const msg = "Couldn't get a call link from the server.";
+          _controller.reportError(msg);
+          setState(() {
+            _errorMessage = msg;
+            _phase = _OutgoingSheetPhase.error;
+          });
+        }
         return;
       }
 
-      (widget.callController ?? ActiveCallController.instance).startOngoing(
+      _controller.startOngoing(
         callUuid: placed.call.callUuid,
         callerName: widget.callerName,
         callerAddress: widget.callerAddress,
@@ -175,10 +260,37 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
         isVideo: video,
         joinLink: link,
       );
+
+      final navigatedPendingTab = _pendingTab?.navigate(link) ?? false;
+      if (navigatedPendingTab) {
+        _controller.attachPendingCallTab(_pendingTab);
+        _pendingTab = null;
+        Navigator.of(context).pop();
+        return;
+      }
+      _closePendingTab();
+
+      if (widget.onTryOpenJoinLink != null) {
+        final launched = await widget.onTryOpenJoinLink!(link);
+        if (!mounted) return;
+        if (launched) {
+          Navigator.of(context).pop();
+          return;
+        }
+        setState(() {
+          _ringingCall = placed!.call;
+          _joinLink = link;
+          _phase = _OutgoingSheetPhase.ringingJoinReady;
+        });
+        return;
+      }
+
       Navigator.of(context).pop();
       await widget.onOpenJoinLink(link);
       return;
     }
+
+    _closePendingTab();
 
     final ringing = refusal?.call;
     if (ringing != null) {
@@ -189,14 +301,17 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
       return;
     }
 
+    final msg = refusal?.message ?? "Couldn't start FaceTime.";
+    _controller.reportError(msg);
     setState(() {
-      _errorMessage = refusal?.message ?? "Couldn't start FaceTime.";
+      _errorMessage = msg;
       _phase = _OutgoingSheetPhase.error;
     });
   }
 
   void _cancelConnecting() {
     _cancelled = true;
+    _closePendingTab();
     Navigator.of(context).pop();
   }
 
@@ -446,7 +561,9 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          _selectedVideo ? 'Preparing FaceTime Video link' : 'Starting FaceTime Audio',
+                          _selectedVideo
+                              ? 'Preparing FaceTime Video link'
+                              : (widget.isTelephony ? 'Calling via iPhone Cellular' : 'Starting FaceTime Audio'),
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
                           ),
@@ -472,6 +589,53 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
           ),
         );
 
+      case _OutgoingSheetPhase.ringingJoinReady:
+        return _InlineStatusPanel(
+          key: const ValueKey('ringing-join-ready'),
+          icon: widget.isIOS ? CupertinoIcons.videocam_fill : Icons.videocam_rounded,
+          accentColor: FaceTimePalette.green,
+          title: 'Ringing — Join FaceTime',
+          body: 'Your browser blocked opening the FaceTime tab automatically. Tap Join Call to open it.',
+          actions: [
+            OutlinedButton(
+              onPressed: _hangingUp || _ringingCall == null
+                  ? null
+                  : () async {
+                      final nav = Navigator.of(context);
+                      setState(() => _hangingUp = true);
+                      await widget.onHangUpRingingCall(_ringingCall!.callUuid);
+                      (widget.callController ?? ActiveCallController.instance).clear();
+                      if (mounted) {
+                        nav.pop();
+                      }
+                    },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: FaceTimePalette.red,
+                side: BorderSide(color: FaceTimePalette.red.withValues(alpha: 0.5)),
+                minimumSize: const Size(112, 48),
+                shape: const StadiumBorder(),
+              ),
+              child: const Text('Hang Up'),
+            ),
+            FilledButton(
+              onPressed: _joinLink == null
+                  ? null
+                  : () {
+                      final link = _joinLink!;
+                      widget.onOpenJoinLink(link);
+                      Navigator.of(context).pop();
+                    },
+              style: FilledButton.styleFrom(
+                backgroundColor: FaceTimePalette.blue,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(124, 48),
+                shape: const StadiumBorder(),
+              ),
+              child: const Text('Join Call'),
+            ),
+          ],
+        );
+
       case _OutgoingSheetPhase.ringingNoLink:
         return _InlineStatusPanel(
           key: const ValueKey('ringing-no-link'),
@@ -495,6 +659,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                       final nav = Navigator.of(context);
                       setState(() => _hangingUp = true);
                       await widget.onHangUpRingingCall(_ringingCall!.callUuid);
+                      _controller.clear();
                       if (mounted) {
                         nav.pop();
                       }

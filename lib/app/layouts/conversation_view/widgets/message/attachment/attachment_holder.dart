@@ -7,6 +7,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attach
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/not_loaded_content.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/downloading_content.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/resolved_file_content.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/state/attachment_state.dart';
@@ -344,9 +345,10 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
   @override
   Widget build(BuildContext context) {
     final bool isInReply = ReplyScope.maybeOf(context) != null;
+    final bool isGhost = isInReply || GhostBubbleScope.of(context);
     final bool isPass = attachment.isPkPass;
     final bool showTail =
-        !isInReply && !isPass && message.showTail(newerMessage) && controller.isTrailingMessagePart(part);
+        !isGhost && !isPass && message.showTail(newerMessage) && controller.isTrailingMessagePart(part);
 
     // Resolve state once for the scope.  The AttachmentState object is updated
     // in-place by the service layer; no re-lookup is needed on reactive changes.
@@ -381,8 +383,8 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
         // Message popup has no tight parent frame — skip cover-fill expand.
         final inPopup = PopupScope.maybeOf(context) != null;
         final fill = widget.fill && !inPopup;
-        // Parent ClipRRect owns collection corners; popup has no bubble tail so round all.
-        final forceAllCornersRounded = inPopup;
+        // Parent ClipRRect owns collection corners; popup/ghost bubbles have no tail so round all.
+        final forceAllCornersRounded = inPopup || isGhost;
         // Fill cards (and images / pkpasses) use transparent ink so media shows through.
         // Popup videos also need transparency — otherwise the square Ink peeks past ClipRRect.
         final transparentCard = hasPreview &&

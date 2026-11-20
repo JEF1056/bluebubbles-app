@@ -19,6 +19,22 @@ class iCloudApi {
     });
   }
 
+  /// Fetch proxy-cached device/item preview icon bytes from server
+  Future<Response> getDeviceIcon(String deviceId, {CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.get(
+        "${_svc.apiRoot}/icloud/findmy/devices/icon",
+        queryParameters: _svc.buildQueryParams({'id': deviceId}),
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: _svc.headers,
+        ),
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
   /// Refresh FindMy devices on server
   Future<Response> refreshDevices({String? deviceId, bool force = false, CancelToken? cancelToken}) async {
     return _svc.runApiGuarded(() async {
@@ -35,6 +51,41 @@ class iCloudApi {
           receiveTimeout: _svc.dio.options.receiveTimeout! * 12,
           headers: _svc.headers,
         ),
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Ring or stop ringing a FindMy / uTag / Google Find device
+  Future<Response> ringDevice(
+    String deviceId, {
+    bool stop = false,
+    String? component,
+    CancelToken? cancelToken,
+  }) async {
+    return _svc.runApiGuarded(() async {
+      final data = <String, dynamic>{
+        'deviceId': deviceId,
+        'action': stop ? 'stop' : 'start',
+        if (component != null && component.isNotEmpty) 'component': component,
+      };
+      final response = await _svc.dio.post(
+        "${_svc.apiRoot}/icloud/findmy/devices/ring",
+        data: data,
+        queryParameters: _svc.buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
+
+  /// Fetch short-lived BLE scan / direct GATT ring spec for a tracker
+  Future<Response> getDeviceBleSpec(String deviceId, {CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.get(
+        "${_svc.apiRoot}/icloud/findmy/devices/ble-spec",
+        queryParameters: _svc.buildQueryParams({'deviceId': deviceId}),
+        cancelToken: cancelToken,
       );
       return _svc.returnSuccessOrError(response);
     });

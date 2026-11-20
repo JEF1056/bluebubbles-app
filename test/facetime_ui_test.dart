@@ -7,6 +7,7 @@ import 'package:bluebubbles/app/components/facetime/incoming_facetime_screen.dar
 import 'package:bluebubbles/app/components/facetime/ongoing_call_pill.dart';
 import 'package:bluebubbles/app/components/facetime/outgoing_facetime_sheet.dart';
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
+import 'package:bluebubbles/main.dart' show AppShellFrame;
 import 'package:bluebubbles/models/facetime.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -254,7 +255,7 @@ void main() {
       isVideo: true,
       joinLink: 'https://facetime.apple.com/join#live',
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('Dana Kim'), findsOneWidget);
     expect(find.text('00:00'), findsOneWidget);
@@ -306,27 +307,36 @@ void main() {
       isVideo: false,
       isTelecomCall: true,
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('Telecom Caller'), findsOneWidget);
     expect(find.text('Mute'), findsOneWidget);
     expect(find.text('End'), findsOneWidget);
     expect(find.text('Return'), findsNothing);
   });
 
-  testWidgets('showFaceTimeOverlay, showFaceTimeConnectingOverlay, and hideFaceTimeOverlay manage overlay lifecycle',
+  testWidgets('showFaceTimeOverlay shows non-modal Continuity banner and opens IncomingFaceTimeScreen on tap',
       (tester) async {
     final controller = ActiveCallController();
     addTearDown(controller.dispose);
     late BuildContext hostContext;
+    var chatTapped = false;
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: Builder(
-            builder: (context) {
-              hostContext = context;
-              return const SizedBox.shrink();
-            },
+        home: AppShellFrame(
+          callController: controller,
+          navigator: Scaffold(
+            body: Builder(
+              builder: (context) {
+                hostContext = context;
+                return Center(
+                  child: ElevatedButton(
+                    onPressed: () => chatTapped = true,
+                    child: const Text('Chat action'),
+                  ),
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -340,8 +350,20 @@ void main() {
       context: hostContext,
       controller: controller,
     );
-    // Synchronous route registration happens immediately before frame 1.
+    await tester.pumpAndSettle();
+
+    // Non-modal Continuity banner is registered and chat underneath stays interactive.
     expect(faceTimeOverlays.containsKey('overlay-uuid-1'), isTrue);
+    expect(find.byType(IncomingFaceTimeScreen), findsNothing);
+    expect(find.text('Taylor Morgan'), findsOneWidget);
+    await tester.tap(find.text('Chat action'));
+    expect(chatTapped, isTrue);
+
+    // Tapping the banner opens IncomingFaceTimeScreen; connecting updates it in place.
+    await tester.tap(find.byKey(const Key('incoming_call_banner_tap')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    expect(find.byType(IncomingFaceTimeScreen), findsOneWidget);
 
     await showFaceTimeConnectingOverlay(
       'overlay-uuid-1',
@@ -350,17 +372,189 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-
-    expect(find.byType(IncomingFaceTimeScreen), findsOneWidget);
-    expect(find.text('Taylor Morgan'), findsOneWidget);
     expect(find.text('Generating call link…'), findsOneWidget);
 
-    // Directly dismiss using hideFaceTimeOverlay even when Get.context is unmounted.
     hideFaceTimeOverlay('overlay-uuid-1');
     controller.clear();
     await tester.pumpAndSettle();
 
     expect(find.byType(IncomingFaceTimeScreen), findsNothing);
     expect(faceTimeOverlays.containsKey('overlay-uuid-1'), isFalse);
+  });
+
+  testWidgets('OngoingCallPillOverlay renders outgoing, cross-device Handoff, and responsive AppShellFrame bars',
+      (tester) async {
+    var fakeNow = DateTime(2026, 11, 18, 12, 0, 0);
+    String? handedOffUuid;
+    String? endedUuid;
+
+    final controller = ActiveCallController(
+      now: () => fakeNow,
+      deviceId: 'android-1',
+      deviceName: 'Pixel',
+      onHandoffServerCall: (uuid, {mode}) async {
+        handedOffUuid = uuid;
+        return const PlacedFaceTimeCall(
+          link: 'https://facetime.apple.com/join#handoff',
+          call: FaceTimeCall(callUuid: 'web-call-1'),
+        );
+      },
+      onLaunchJoinLink: (_) async => true,
+      onLeaveServerCall: (uuid) async => endedUuid = uuid,
+    );
+    addTearDown(controller.dispose);
+
+    for (final width in [390.0, 768.0, 1440.0]) {
+      tester.view.physicalSize = Size(width, 844);
+      tester.view.devicePixelRatio = 1.0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AppShellFrame(
+            callController: controller,
+            navigator: Scaffold(
+              appBar: AppBar(
+                key: Key('app_bar_$width'),
+                title: const Text('Conversation'),
+              ),
+              body: const SizedBox.expand(),
+            ),
+          ),
+        ),
+      );
+
+      controller.startOutgoing(
+        callUuid: 'out-1',
+        callerName: 'Alex Rivera',
+        isVideo: true,
+        chatGuid: 'iMessage;-;+15551234567',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Alex Rivera'), findsOneWidget);
+      expect(find.text('Calling…'), findsOneWidget);
+      final barFinder = find.byKey(const ValueKey('call_bar_outgoing'));
+      final barRect = tester.getRect(barFinder);
+      final appBarRect = tester.getRect(find.byKey(Key('app_bar_$width')));
+      expect(appBarRect.top, greaterThanOrEqualTo(barRect.bottom));
+      expect(
+        find.descendant(of: find.byType(OngoingCallPillOverlay), matching: find.byType(BackdropFilter)),
+        findsOneWidget,
+      );
+      final callBarDecoration = tester.widget<Container>(barFinder).decoration as BoxDecoration;
+      expect(callBarDecoration.color!.a, inInclusiveRange(0.70, 0.80));
+      expect(callBarDecoration.border!.bottom.color.a, inInclusiveRange(0.14, 0.22));
+    }
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    // Cross-device Handoff ("On Web · 00:05" with Switch and End)
+    controller.applyServerSession({
+      'uuid': 'web-call-1',
+      'status': 'answered',
+      'display_name': 'Sam Lee',
+      'is_video': true,
+      'active_device_id': 'web-browser-1',
+      'active_device_name': 'Web',
+      'answered_at': fakeNow.subtract(const Duration(seconds: 5)).toIso8601String(),
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sam Lee'), findsOneWidget);
+    expect(find.textContaining('On Web'), findsOneWidget);
+    expect(find.text('Switch'), findsOneWidget);
+
+    await tester.tap(find.bySemanticsLabel('Switch to this device'));
+    await tester.pumpAndSettle();
+    expect(handedOffUuid, 'web-call-1');
+
+    await tester.tap(find.bySemanticsLabel('End call'));
+    await tester.pumpAndSettle();
+    expect(endedUuid, 'web-call-1');
+    expect(controller.state.phase, ActiveCallPhase.idle);
+  });
+
+  testWidgets('OutgoingFaceTimeSheet hangs up late server call after Cancel call', (tester) async {
+    final pendingCall = Completer<PlacedFaceTimeCall>();
+    String? hungUpUuid;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OutgoingFaceTimeSheet(
+            callerName: 'Late Cancel',
+            initialVideo: true,
+            checkTelecomEnabled: () async => true,
+            onOpenCallingAccounts: () async {},
+            requestCallPermissions: () async => true,
+            onPlaceNativeAudioCall: () async => false,
+            onStartServerCall: (_) => pendingCall.future,
+            onOpenJoinLink: (_) async {},
+            onHangUpRingingCall: (uuid) async => hungUpUuid = uuid,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.text('Cancel call'));
+    await tester.pumpAndSettle();
+
+    pendingCall.complete(
+      const PlacedFaceTimeCall(
+        link: 'https://facetime.apple.com/join#late',
+        call: FaceTimeCall(callUuid: 'late-cancel-uuid'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(hungUpUuid, 'late-cancel-uuid');
+  });
+
+  testWidgets('OngoingCallPillOverlay shows DTMF keypad for active audio call with callUuid', (tester) async {
+    String? sentUuid;
+    String? sentDigit;
+    final controller = ActiveCallController(
+      onSendDtmf: (uuid, digit) async {
+        sentUuid = uuid;
+        sentDigit = digit;
+      },
+    );
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Stack(
+          children: [
+            const Scaffold(body: SizedBox.expand()),
+            OngoingCallPillOverlay(controller: controller),
+          ],
+        ),
+      ),
+    );
+
+    controller.startOngoing(
+      callerName: 'Continuity Call',
+      isVideo: false,
+      isTelecomCall: true,
+      isTelephony: true,
+    );
+    controller.bindCallUuid('cell-out-1', isTelephony: true);
+    controller.markConnected('cell-out-1', isTelephony: true);
+    await tester.pumpAndSettle();
+
+    expect(controller.state.isTelephony, isTrue);
+    expect(controller.state.callUuid, 'cell-out-1');
+    expect(find.text('Keypad'), findsOneWidget);
+
+    await tester.tap(find.text('Keypad'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('5'));
+    await tester.pumpAndSettle();
+
+    expect(sentUuid, 'cell-out-1');
+    expect(sentDigit, '5');
   });
 }

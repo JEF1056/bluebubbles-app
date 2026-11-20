@@ -13,6 +13,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   file_selector_linux
   flutter_acrylic
   flutter_timezone
+  maplibre_native
   maps_launcher
   media_kit_libs_linux
   objectbox_flutter_libs

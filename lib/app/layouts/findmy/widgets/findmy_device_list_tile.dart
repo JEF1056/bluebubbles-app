@@ -1,5 +1,6 @@
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_detail_sheet.dart';
+import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_device_avatar.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_raw_data_dialog.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_shared_tile.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -41,7 +42,6 @@ class FindMyDeviceListTile extends StatelessWidget {
       final addressText = hideContactInfo
           ? 'Location'
           : (item.address?.label ?? item.address?.mapItemFullAddress ?? 'No location found');
-      final deviceIcon = iconForFindMyDevice(item);
       final isSelected = item.id != null && controller.selectedDeviceId.value == item.id;
       final isBusy = controller.refreshing.value || item.isLocatingInProgress;
       final cs = context.theme.colorScheme;
@@ -56,17 +56,15 @@ class FindMyDeviceListTile extends StatelessWidget {
       return FindMySharedTile(
         isSelected: isSelected,
         cardKey: ValueKey('findmy-inline-device-${item.id ?? displayName}'),
-        leadingExpanded: CircleAvatar(
-          radius: 22,
-          backgroundColor: cs.surfaceContainerHighest,
-          foregroundColor: cs.onSurface,
-          child: Icon(deviceIcon, size: 22),
+        leadingExpanded: FindMyDeviceAvatar(
+          device: item,
+          size: 44,
+          redacted: hideContactInfo,
         ),
-        leadingCollapsed: CircleAvatar(
-          radius: 21,
-          backgroundColor: cs.surfaceContainerHighest,
-          foregroundColor: cs.onSurface,
-          child: Icon(deviceIcon, size: 20),
+        leadingCollapsed: FindMyDeviceAvatar(
+          device: item,
+          size: 42,
+          redacted: hideContactInfo,
         ),
         displayName: displayName,
         modelSubtitle: modelSubtitle,

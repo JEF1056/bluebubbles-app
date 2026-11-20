@@ -2,6 +2,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/app/components/custom/custom_cupertino_page_transition.dart';
 import 'package:bluebubbles/app/components/custom/custom_bouncing_scroll_physics.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:get/get.dart';
@@ -17,6 +18,10 @@ class ThemeSwitcher extends StatefulWidget {
     // A page moving over another would show it through the see-through window
     if (kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled) {
       return _CoveringRoute<T>(builder: builder, settings: settings);
+    }
+    // Use MaterialPageRoute on Android so PredictiveBackPageTransitionsBuilder drives live back-swipe previews.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return MaterialPageRoute<T>(builder: builder, settings: settings);
     }
     switch (SettingsSvc.settings.skin.value) {
       case Skins.iOS:

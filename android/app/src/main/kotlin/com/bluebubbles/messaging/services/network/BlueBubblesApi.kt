@@ -51,4 +51,10 @@ interface BlueBubblesApi {
         @Path("callUuid") callUuid: String,
         @Query("guid") guid: String
     ): Call<ApiResponse>
+
+    @POST("facetime/dtmf")
+    fun sendFaceTimeDtmf(
+        @Query("guid") guid: String,
+        @Body request: FaceTimeDtmfRequest
+    ): Call<ApiResponse>
 }

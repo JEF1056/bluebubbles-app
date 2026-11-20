@@ -3,7 +3,6 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
-import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
 import 'package:bluebubbles/app/components/subscription_required.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/actions/media_actions.dart'
     as popup_media_actions;
@@ -15,6 +14,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/
     as popup_text_actions;
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/details_menu_action.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_action_context.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_material_fork.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/reaction_picker_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/emoji_tapback_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/reaction_details.dart';
@@ -90,12 +90,8 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
   final double itemHeight = kIsDesktop || kIsWeb ? 56 : 48;
 
   List<Message> reactions = [];
-  late double messageOffset = Get.height - widget.childPosition.dy - widget.size.height;
-  late double materialOffset = widget.childPosition.dy +
-      EdgeInsets.fromViewPadding(
-        View.of(context).viewInsets,
-        View.of(context).devicePixelRatio,
-      ).bottom;
+  late double messageOffset;
+  late double materialOffset;
   late int numberToShow = 5;
   late Chat? dmChat = ChatsSvc.allChats.firstWhereOrNull((chat) =>
       !chat.isGroup &&
@@ -181,9 +177,7 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
         if (mounted) setState(() {});
       });
     }
-    if (iOS) {
-      _fitMenu();
-    } else {
+    if (!iOS) {
       // Potentially make this dynamic in the future
       numberToShow = 5;
     }
@@ -254,20 +248,45 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
     super.dispose();
   }
 
+  bool _initializedLayout = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_initializedLayout) {
+      _initializedLayout = true;
+      final size = MediaQuery.sizeOf(context);
+      final viewInsets = MediaQuery.viewInsetsOf(context);
+      messageOffset = size.height - widget.childPosition.dy - widget.size.height;
+      materialOffset = widget.childPosition.dy + viewInsets.bottom;
+    }
+    if (iOS) {
+      _fitMenu();
+    }
+  }
+
   /// How many actions fit under the message on iOS without covering the reaction details; the rest go under "More...".
   void _fitMenu() {
+    final viewPadding = MediaQuery.viewPaddingOf(context);
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final topClearance = max(40.0, viewPadding.top + 8.0);
+    final bottomClearance = max(30.0, viewPadding.bottom + 12.0);
     final childHeight = _measuredChildHeight ?? widget.size.height;
     final detailsHeight = reactions.isEmpty ? 0.0 : _detailsKey.currentContext?.size?.height ?? 0;
     final remainingHeight =
-        max(Get.height - Get.statusBarHeight - 135 - childHeight - detailsHeight, itemHeight);
+        max(screenHeight - topClearance - bottomClearance - 65 - childHeight - detailsHeight, itemHeight);
     numberToShow = min(remainingHeight ~/ itemHeight, 5);
   }
 
   /// Lifts the preview above the details menu, but keeps it below the status bar.
   double _messageOffset() {
+    final viewPadding = MediaQuery.viewPaddingOf(context);
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final topClearance = max(40.0, viewPadding.top + 8.0);
+    final bottomClearance = max(30.0, viewPadding.bottom + 12.0);
     final previewHeight = _measuredChildHeight ?? widget.size.height;
-    final maxBottom = Get.height - Get.statusBarHeight - 8 - previewHeight;
-    return min(_menuHeight + 40, max(40.0, maxBottom));
+    final maxBottom = screenHeight - topClearance - 8 - previewHeight;
+    return min(_menuHeight + bottomClearance + 10, max(bottomClearance + 10, maxBottom));
   }
 
   /// The details menu as laid out: its rows aren't always [itemHeight] tall
@@ -288,10 +307,18 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
   }
 
   /// Where the tapback picker's box sits, from the bottom of the screen.
-  double _pickerBottom(BuildContext context, bool narrowScreen) => (iOS
-          ? _menuHeight + 35 + (_measuredChildHeight ?? widget.size.height)
-          : context.height - materialOffset)
-      .clamp(0, context.height - (narrowScreen ? 200 : 125));
+  double _pickerBottom(BuildContext context, bool narrowScreen) {
+    final viewPadding = MediaQuery.viewPaddingOf(context);
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final topClearance = max(40.0, viewPadding.top + 8.0);
+    final bottomClearance = max(30.0, viewPadding.bottom + 12.0);
+    final rawBottom = iOS
+        ? _menuHeight + bottomClearance + 5 + (_measuredChildHeight ?? widget.size.height)
+        : screenHeight - materialOffset;
+    final minBottom = bottomClearance + 10;
+    final maxBottom = max(minBottom, screenHeight - topClearance - (narrowScreen ? 105.0 : 60.0));
+    return rawBottom.clamp(minBottom, maxBottom).toDouble();
+  }
 
   Future<void> _pickEmojiTapback() async {
     final picked = await showEmojiTapbackPicker(context, stickers: SettingsSvc.serverDetails.supportsStickerTapbacks);
@@ -583,11 +610,13 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
             preferredLeft: clampedLayout?.clampedChildLeft ?? widget.childPosition.dx,
           );
 
+    final viewPadding = MediaQuery.viewPaddingOf(context);
     final double screenHeight = MediaQuery.sizeOf(context).height;
-    final double topSafe = MediaQuery.paddingOf(context).top + (kIsDesktop ? 40.0 : 12.0);
+    final double topSafe = viewPadding.top + (kIsDesktop ? 40.0 : 12.0);
+    final double bottomSafe = viewPadding.bottom;
     final bool showTapbacks = SettingsSvc.settings.enablePrivateAPI.value && isSent && minSierra && _supportsTapbackAndReply;
     final double tapbackReserved = showTapbacks ? (narrowScreen ? 108.0 : 64.0) : 0.0;
-    final double bottomReserved = MediaQuery.paddingOf(context).bottom + 92.0;
+    final double bottomReserved = bottomSafe + 92.0;
     final double bubbleHeight = _measuredChildHeight ?? widget.size.height;
     final double minBubbleTop = topSafe + tapbackReserved;
     final double maxBubbleTop = max(minBubbleTop, screenHeight - bottomReserved - bubbleHeight);
@@ -661,100 +690,51 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                             ),
                           ),
                   ),
-                  if (iOS)
-                    AnimatedPositioned(
-                      duration: M3EMotion.spatialFast.duration,
+                  AnimatedPositioned(
+                    duration: M3EMotion.spatialFast.duration,
+                    curve: M3EMotion.spatialOvershoot,
+                    left: previewLeft,
+                    right: previewRight,
+                    top: iOS ? null : clampedMaterialBubbleTop,
+                    bottom: iOS ? messageOffset : null,
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: iOS ? 0.8 : 0.94, end: 1.0),
                       curve: M3EMotion.spatialOvershoot,
-                      left: previewLeft,
-                      right: previewRight,
-                      bottom: messageOffset,
-                      child: TweenAnimationBuilder<double>(
-                        tween: Tween<double>(begin: 0.8, end: 1),
-                        curve: M3EMotion.spatialOvershoot,
-                        duration: M3EMotion.spatialDefault.duration,
-                        child: NotificationListener<SizeChangedLayoutNotification>(
-                          onNotification: (_) {
-                            _remeasureChild();
-                            return false;
-                          },
-                          child: SizeChangedLayoutNotifier(
-                            child: ConstrainedBox(
-                              key: _childKey,
-                              constraints: BoxConstraints(
-                                maxWidth: max(
-                                  widget.size.width,
-                                  NavigationSvc.width(widthContext) * 0.5,
-                                ),
-                              ),
-                              // Marked as a clone so anything inside that
-                              // reacts to shared state by doing work (URL
-                              // preview refreshes, say) knows not to — this
-                              // copy and the real bubble both see every signal.
-                              child: MessageCloneScope(
-                                child: MessageStateScope(
-                                  messageState: widget.controller,
-                                  child: widget.child,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        builder: (context, size, child) {
-                          return Transform.scale(
-                            scale: size.clamp(1, double.infinity),
-                            alignment: isFromMe ? Alignment.centerRight : Alignment.centerLeft,
-                            child: child,
-                          );
-                        },
+                      duration: M3EMotion.spatialDefault.duration,
+                      builder: (_, scale, child) => Transform.scale(
+                        scale: iOS ? scale.clamp(1, double.infinity) : scale,
+                        alignment: isFromMe ? Alignment.centerRight : Alignment.centerLeft,
+                        child: child,
                       ),
-                    ),
-                  if (!iOS)
-                    AnimatedPositioned(
-                      duration: M3EMotion.spatialFast.duration,
-                      curve: M3EMotion.spatialOvershoot,
-                      left: previewLeft,
-                      right: previewRight,
-                      top: clampedMaterialBubbleTop,
-                      child: TweenAnimationBuilder<double>(
-                        tween: Tween<double>(begin: 0.94, end: 1.0),
-                        curve: M3EMotion.spatialOvershoot,
-                        duration: M3EMotion.spatialDefault.duration,
-                        builder: (context, scale, child) {
-                          return Transform.scale(
-                            scale: scale,
-                            alignment: isFromMe ? Alignment.centerRight : Alignment.centerLeft,
-                            child: child,
-                          );
+                      child: NotificationListener<SizeChangedLayoutNotification>(
+                        onNotification: (_) {
+                          _remeasureChild();
+                          return false;
                         },
-                        child: NotificationListener<SizeChangedLayoutNotification>(
-                          onNotification: (_) {
-                            _remeasureChild();
-                            return false;
-                          },
-                          child: SizeChangedLayoutNotifier(
-                            child: ConstrainedBox(
-                              key: _childKey,
-                              constraints: BoxConstraints(
-                                maxWidth: maxMaterialBubbleWidth,
-                                maxHeight: maxMaterialBubbleHeight,
-                              ),
-                              child: SingleChildScrollView(
-                                physics: const ClampingScrollPhysics(),
-                                child: MessageCloneScope(
-                                  child: MessageStateScope(
-                                    messageState: widget.controller,
-                                    child: widget.child,
-                                  ),
-                                ),
-                              ),
-                            ),
+                        child: SizeChangedLayoutNotifier(
+                          child: ConstrainedBox(
+                            key: _childKey,
+                            constraints: iOS
+                                ? BoxConstraints(maxWidth: max(widget.size.width, NavigationSvc.width(widthContext) * 0.5))
+                                : BoxConstraints(maxWidth: maxMaterialBubbleWidth, maxHeight: maxMaterialBubbleHeight),
+                            // Marked as a clone so anything inside that reacts to shared state
+                            // (e.g. URL preview refreshes) knows not to duplicate work.
+                            child: () {
+                              final cloned = MessageCloneScope(
+                                child: MessageStateScope(messageState: widget.controller, child: widget.child),
+                              );
+                              return iOS
+                                  ? cloned
+                                  : SingleChildScrollView(physics: const ClampingScrollPhysics(), child: cloned);
+                            }(),
                           ),
                         ),
                       ),
                     ),
+                  ),
                   if (iOS)
                     Positioned(
-                      top: 40,
+                      top: max(40.0, viewPadding.top + 8.0),
                       left: 15,
                       right: 15,
                       child: AnimatedSize(
@@ -881,19 +861,36 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                   if (showTapbacks && !iOS)
                     Positioned(
                       bottom: (screenHeight - clampedMaterialBubbleTop + 10.0)
-                          .clamp(0.0, max(0.0, screenHeight - 64.0)),
+                          .clamp(bottomSafe + 12.0,
+                              max(bottomSafe + 12.0, screenHeight - topSafe - (narrowScreen ? 100.0 : 56.0)))
+                          .toDouble(),
                       right: isFromMe ? 15 : null,
                       left: !isFromMe ? clampedOverlayLeft : null,
                       child: ScaleTransition(
                         scale: _tapbackSpringController,
                         alignment: isFromMe ? Alignment.bottomRight : Alignment.bottomLeft,
-                        child: _buildMaterialTapbackPill(
+                        child: buildMaterialTapbackPill(
                           context,
                           narrowScreen: narrowScreen,
                           emojiTapbacks: emojiTapbacks,
                           ownEmoji: ownEmoji,
                           tapbackItems: tapbackItems,
                           emojiRowMaxWidth: emojiRowMaxWidth,
+                          currentlySelectedReaction: currentlySelectedReaction,
+                          isFromMe: message.isFromMe!,
+                          hasCustomWallpaper: _hasCustomWallpaper,
+                          emojiTapbackGlyph: _emojiTapbackGlyph,
+                          fadeScrollEdges: _fadeScrollEdges,
+                          onSendEmojiTapback: _sendEmojiTapback,
+                          onPickEmojiTapback: _pickEmojiTapback,
+                          onSelectReaction: (e) {
+                            setState(() {
+                              currentlySelectedReaction = currentlySelectedReaction == e ? null : e;
+                            });
+                            HapticFeedback.lightImpact();
+                            widget.sendTapback(selfReaction == e ? "-$e" : e, part.part);
+                            popDetails();
+                          },
                         ),
                       ),
                     ),
@@ -901,7 +898,7 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                     Positioned(
                       right: isFromMe ? 15 : null,
                       left: !isFromMe ? clampedOverlayLeft : null,
-                      bottom: 30,
+                      bottom: max(30.0, bottomSafe + 12.0),
                       child: TweenAnimationBuilder<double>(
                         tween: Tween<double>(begin: 0.8, end: 1),
                         curve: M3EMotion.spatialOvershoot,
@@ -932,7 +929,7 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                     Positioned(
                       left: 12,
                       right: 12,
-                      bottom: MediaQuery.paddingOf(context).bottom + 12,
+                      bottom: bottomSafe + 12,
                       child: Align(
                         alignment: Alignment.bottomCenter,
                         child: ConstrainedBox(
@@ -950,7 +947,11 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                                 parent: _toolbarController,
                                 curve: M3EMotion.spatialOvershoot,
                               )),
-                              child: _buildMaterialDockedToolbar(context),
+                              child: buildMaterialDockedToolbar(
+                                context,
+                                allActions: _allActions,
+                                hasCustomWallpaper: _hasCustomWallpaper,
+                              ),
                             ),
                           ),
                         ),
@@ -1180,277 +1181,6 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                 ),
               ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMaterialTapbackPill(
-    BuildContext context, {
-    required bool narrowScreen,
-    required bool emojiTapbacks,
-    required String? ownEmoji,
-    required List<String> tapbackItems,
-    required double emojiRowMaxWidth,
-  }) {
-    if (currentlySelectedReaction == "init") {
-      return const SizedBox(height: 52);
-    }
-
-    final colorScheme = context.theme.colorScheme;
-    final rows = Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: message.isFromMe! ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-      children: List.generate(narrowScreen ? 2 : 1, (index) {
-        final row = Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.start,
-          children: tapbackItems
-              .slice(narrowScreen && index == 1 ? 3 : 0, narrowScreen && index == 0 ? 3 : null)
-              .map((e) {
-            final isEmoji = !ReactionTypes.toList().contains(e);
-            final isSelected = isEmoji ? e == ownEmoji : currentlySelectedReaction == e;
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: AnimatedScale(
-                scale: isSelected ? 1.12 : 1.0,
-                duration: M3EMotion.spatialFast.duration,
-                curve: M3EMotion.spatialOvershoot,
-                child: AnimatedContainer(
-                  duration: M3EMotion.effectsFast.duration,
-                  curve: M3EMotion.effectsFast.curve,
-                  decoration: BoxDecoration(
-                    color: isSelected ? colorScheme.primaryContainer : Colors.transparent,
-                    borderRadius: BorderRadius.circular(M3EShapes.xl),
-                    border: isSelected ? Border.all(color: colorScheme.primary, width: 1.5) : null,
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(M3EShapes.xl),
-                      onTap: () async {
-                        if (isEmoji) return _sendEmojiTapback(e);
-                        setState(() {
-                          currentlySelectedReaction = currentlySelectedReaction == e ? null : e;
-                        });
-                        HapticFeedback.lightImpact();
-                        widget.sendTapback(selfReaction == e ? "-$e" : e, part.part);
-                        popDetails();
-                      },
-                      child: SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: Center(
-                          child: isEmoji
-                              ? _emojiTapbackGlyph(e)
-                              : Builder(builder: (context) {
-                                  final text = Text(
-                                    ReactionTypes.reactionToEmoji[e] ?? "X",
-                                    style: const TextStyle(
-                                      fontSize: 20,
-                                      fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  );
-                                  // rotate thumbs down to match iOS
-                                  if (e == "dislike") {
-                                    return Transform(
-                                      transform: Matrix4.identity()..rotateY(pi),
-                                      alignment: FractionalOffset.center,
-                                      child: text,
-                                    );
-                                  }
-                                  return text;
-                                }),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        );
-        if (!emojiTapbacks) return row;
-        return ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: emojiRowMaxWidth),
-          child: _fadeScrollEdges(SingleChildScrollView(scrollDirection: Axis.horizontal, child: row)),
-        );
-      }),
-    );
-
-    return Material(
-      color: _hasCustomWallpaper
-          ? colorScheme.surfaceContainerHigh.withValues(alpha: 0.94)
-          : colorScheme.surfaceContainerHigh,
-      elevation: 6,
-      shadowColor: colorScheme.shadow.withValues(alpha: 0.22),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(M3EShapes.xl),
-        side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.35)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            rows,
-            if (emojiTapbacks) ...[
-              Container(
-                width: 1,
-                height: 24,
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                color: colorScheme.outlineVariant.withValues(alpha: 0.4),
-              ),
-              Tooltip(
-                message: 'More reactions',
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(M3EShapes.xl),
-                    onTap: _pickEmojiTapback,
-                    child: SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: Icon(Icons.add_reaction_outlined, size: 22, color: colorScheme.onSurfaceVariant),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMaterialDockedToolbar(BuildContext context) {
-    final List<DetailsMenuActionWidget> allActions = _allActions;
-    if (allActions.isEmpty) return const SizedBox.shrink();
-
-    final colorScheme = context.theme.colorScheme;
-    final bool hasOverflow = allActions.length > 5;
-    final List<DetailsMenuActionWidget> visibleActions = hasOverflow ? allActions.sublist(0, 4) : allActions;
-    final List<DetailsMenuActionWidget> overflowActions =
-        hasOverflow ? allActions.sublist(4) : const <DetailsMenuActionWidget>[];
-
-    return Material(
-      color: _hasCustomWallpaper
-          ? colorScheme.surfaceContainerHigh.withValues(alpha: 0.94)
-          : colorScheme.surfaceContainerHigh,
-      elevation: 6,
-      shadowColor: colorScheme.shadow.withValues(alpha: 0.25),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(M3EShapes.xl),
-        side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.35)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.max,
-          children: [
-            ...visibleActions.map((action) {
-              final bool isDisabled = action.shouldDisableBtn ?? false;
-              final Color itemColor = isDisabled
-                  ? colorScheme.onSurfaceVariant.withValues(alpha: 0.38)
-                  : action.action == DetailsMenuAction.Delete
-                      ? colorScheme.error
-                      : colorScheme.onSurfaceVariant;
-              return Expanded(
-                child: Tooltip(
-                  message: action.title,
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(M3EShapes.lg),
-                      onTap: isDisabled ? null : action.onTap,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(action.nonIosIcon, size: 22, color: itemColor),
-                            const SizedBox(height: 4),
-                            Text(
-                              action.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: context.theme.textTheme.labelSmall?.copyWith(
-                                color: itemColor,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            }),
-            if (overflowActions.isNotEmpty)
-              Expanded(
-                child: PopupMenuButton<int>(
-                  tooltip: 'More actions',
-                  color: _hasCustomWallpaper
-                      ? colorScheme.surfaceContainerHighest.withValues(alpha: 0.94)
-                      : colorScheme.surfaceContainerHighest,
-                  shape: const RoundedRectangleBorder(borderRadius: M3EShapes.radiusLg),
-                  onSelected: (int index) {
-                    final selected = overflowActions[index];
-                    if (!(selected.shouldDisableBtn ?? false)) {
-                      selected.onTap?.call();
-                    }
-                  },
-                  itemBuilder: (context) {
-                    return overflowActions.mapIndexed((index, action) {
-                      final bool isDisabled = action.shouldDisableBtn ?? false;
-                      final Color itemColor = isDisabled
-                          ? colorScheme.onSurfaceVariant.withValues(alpha: 0.38)
-                          : action.action == DetailsMenuAction.Delete
-                              ? colorScheme.error
-                              : colorScheme.onSurfaceVariant;
-                      return PopupMenuItem<int>(
-                        value: index,
-                        enabled: !isDisabled,
-                        child: Row(
-                          children: [
-                            Icon(action.nonIosIcon, size: 20, color: itemColor),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                action.title,
-                                style: context.textTheme.bodyMedium?.copyWith(color: itemColor),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList();
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.more_horiz, size: 22, color: colorScheme.onSurfaceVariant),
-                        const SizedBox(height: 4),
-                        Text(
-                          'More',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: context.theme.textTheme.labelSmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-          ],
         ),
       ),
     );

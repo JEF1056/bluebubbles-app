@@ -183,18 +183,23 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
         safeAreaTop: false,
         safeAreaLeft: false,
         safeAreaRight: false,
+        safeAreaBottom: false,
         body: TitleBarWrapper(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final viewPadding = MediaQuery.viewPaddingOf(context);
               final availableWidth = constraints.maxWidth;
               final availableHeight = constraints.maxHeight;
+              final topInset = viewPadding.top + 8.0;
+              final bottomInset = viewPadding.bottom + 8.0;
+              final usableHeight = max(availableHeight - topInset - bottomInset, 0.0);
               final previewWidth = min(max(availableWidth - 50, 0.0), 500.0);
               final menuItemCount = 5 + (CustomGroupsSvc.groups.isNotEmpty ? 1 : 0);
               final menuHeight = itemHeight * menuItemCount + 5;
               final previewHeight = min(
-                  max(min(availableHeight / 2, availableHeight - menuHeight - 25), itemHeight * 2), availableHeight);
+                  max(min(usableHeight / 2, usableHeight - menuHeight - 25), itemHeight * 2), usableHeight);
               final maxLeft = max(availableWidth - previewWidth - 25, 0.0);
-              final maxTop = max(availableHeight - previewHeight - menuHeight - 25, 0.0);
+              final maxTop = max(availableHeight - bottomInset - previewHeight - menuHeight - 25, topInset);
 
               return Stack(
                 fit: StackFit.expand,
@@ -213,7 +218,7 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                   ),
                   Positioned(
                     left: min(widget.position.dx, maxLeft),
-                    top: min(widget.position.dy, maxTop),
+                    top: widget.position.dy.clamp(topInset, maxTop).toDouble(),
                     child: TweenAnimationBuilder<double>(
                       tween: Tween<double>(begin: 0.8, end: 1),
                       curve: Curves.easeOutBack,

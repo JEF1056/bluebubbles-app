@@ -282,7 +282,6 @@ class _FullscreenImageState extends State<FullscreenImage>
                 opacity: showOverlay ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 125),
                 child: Container(
-                  height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 100.0),
                   width: NavigationSvc.width(context),
                   color: context.theme.colorScheme.shadow.withValues(alpha: samsung ? 1 : 0.65),
                   child: SafeArea(
@@ -290,7 +289,7 @@ class _FullscreenImageState extends State<FullscreenImage>
                     right: false,
                     bottom: false,
                     child: SizedBox(
-                      height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 50.0),
+                      height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 56.0),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -351,62 +350,53 @@ class _FullscreenImageState extends State<FullscreenImage>
                                   mainAxisAlignment: MainAxisAlignment.end,
                                   children: [
                                     if (widget.onOpenCollectionGallery != null)
-                                      Padding(
-                                        padding: const EdgeInsets.only(top: 10.0),
-                                        child: iOS
-                                            ? CupertinoButton(
-                                                padding: const EdgeInsets.symmetric(horizontal: 5),
-                                                onPressed: widget.onOpenCollectionGallery,
-                                                child: Icon(
-                                                  iOS ? CupertinoIcons.square_grid_2x2 : Icons.grid_view_outlined,
-                                                  color: Colors.white,
-                                                ),
-                                              )
-                                            : IconButton(
-                                                padding: const EdgeInsets.symmetric(horizontal: 5),
-                                                onPressed: widget.onOpenCollectionGallery,
-                                                icon: const Icon(
-                                                  Icons.grid_view_outlined,
-                                                  color: Colors.white,
-                                                ),
+                                      iOS
+                                          ? CupertinoButton(
+                                              padding: const EdgeInsets.symmetric(horizontal: 5),
+                                              onPressed: widget.onOpenCollectionGallery,
+                                              child: Icon(
+                                                iOS ? CupertinoIcons.square_grid_2x2 : Icons.grid_view_outlined,
+                                                color: Colors.white,
                                               ),
-                                      ),
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 10.0),
-                                      child: iOS
-                                          ? CupertinoButton(
-                                              padding: const EdgeInsets.symmetric(horizontal: 5),
-                                              onPressed: () async {
-                                                showMetadataDialog(widget.attachment, context);
-                                              },
-                                              child: const Icon(Icons.info_outlined, color: Colors.white),
                                             )
                                           : IconButton(
                                               padding: const EdgeInsets.symmetric(horizontal: 5),
-                                              onPressed: () async {
-                                                showMetadataDialog(widget.attachment, context);
-                                              },
-                                              icon: const Icon(Icons.info_outlined, color: Colors.white),
+                                              onPressed: widget.onOpenCollectionGallery,
+                                              icon: const Icon(
+                                                Icons.grid_view_outlined,
+                                                color: Colors.white,
+                                              ),
                                             ),
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 10.0),
-                                      child: iOS
-                                          ? CupertinoButton(
-                                              padding: const EdgeInsets.symmetric(horizontal: 5),
-                                              onPressed: () async {
-                                                refreshAttachment();
-                                              },
-                                              child: const Icon(Icons.refresh, color: Colors.white),
-                                            )
-                                          : IconButton(
-                                              padding: const EdgeInsets.symmetric(horizontal: 5),
-                                              onPressed: () async {
-                                                refreshAttachment();
-                                              },
-                                              icon: const Icon(Icons.refresh, color: Colors.white),
-                                            ),
-                                    ),
+                                    iOS
+                                        ? CupertinoButton(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                                            onPressed: () async {
+                                              showMetadataDialog(widget.attachment, context);
+                                            },
+                                            child: const Icon(Icons.info_outlined, color: Colors.white),
+                                          )
+                                        : IconButton(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                                            onPressed: () async {
+                                              showMetadataDialog(widget.attachment, context);
+                                            },
+                                            icon: const Icon(Icons.info_outlined, color: Colors.white),
+                                          ),
+                                    iOS
+                                        ? CupertinoButton(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                                            onPressed: () async {
+                                              refreshAttachment();
+                                            },
+                                            child: const Icon(Icons.refresh, color: Colors.white),
+                                          )
+                                        : IconButton(
+                                            padding: const EdgeInsets.symmetric(horizontal: 5),
+                                            onPressed: () async {
+                                              refreshAttachment();
+                                            },
+                                            icon: const Icon(Icons.refresh, color: Colors.white),
+                                          ),
                                   ],
                                 ),
                         ],
@@ -424,52 +414,54 @@ class _FullscreenImageState extends State<FullscreenImage>
                 child: AnimatedOpacity(
                   opacity: showOverlay ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 200),
-                  child: SafeArea(
-                    top: false,
-                    child: Container(
-                      height: 60,
-                      decoration: BoxDecoration(
-                        color: samsung
-                            ? Colors.black
-                            : context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          IconButton(
-                            icon: Icon(
-                              CupertinoIcons.cloud_download,
-                              color: samsung ? Colors.white : context.theme.colorScheme.primary,
-                            ),
-                            onPressed: _saveImage,
-                          ),
-                          if (!kIsWeb && !kIsDesktop)
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: samsung
+                          ? Colors.black
+                          : context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
+                    ),
+                    child: SafeArea(
+                      top: false,
+                      child: SizedBox(
+                        height: 60,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
                             IconButton(
                               icon: Icon(
-                                CupertinoIcons.share,
+                                CupertinoIcons.cloud_download,
                                 color: samsung ? Colors.white : context.theme.colorScheme.primary,
                               ),
-                              onPressed: () {
-                                if (widget.file.path != null) {
-                                  Share.files([widget.file.path!]);
-                                }
-                              },
+                              onPressed: _saveImage,
                             ),
-                          IconButton(
-                            icon: Icon(
-                              CupertinoIcons.info,
-                              color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                            if (!kIsWeb && !kIsDesktop)
+                              IconButton(
+                                icon: Icon(
+                                  CupertinoIcons.share,
+                                  color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                ),
+                                onPressed: () {
+                                  if (widget.file.path != null) {
+                                    Share.files([widget.file.path!]);
+                                  }
+                                },
+                              ),
+                            IconButton(
+                              icon: Icon(
+                                CupertinoIcons.info,
+                                color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                              ),
+                              onPressed: () => showMetadataDialog(widget.attachment, context),
                             ),
-                            onPressed: () => showMetadataDialog(widget.attachment, context),
-                          ),
-                          IconButton(
-                            icon: Icon(
-                              CupertinoIcons.refresh,
-                              color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                            IconButton(
+                              icon: Icon(
+                                CupertinoIcons.refresh,
+                                color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                              ),
+                              onPressed: () => refreshAttachment(),
                             ),
-                            onPressed: () => refreshAttachment(),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -585,29 +577,32 @@ class FullscreenMediaActionPill extends StatelessWidget {
           ),
         ),
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _PillActionButton(
-              icon: Icons.file_download_outlined,
-              label: 'Save',
-              color: darkScheme.onSurface,
-              onPressed: onSave,
-            ),
-            if (onShare != null)
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
               _PillActionButton(
-                icon: Icons.share_outlined,
-                label: 'Share',
+                icon: Icons.file_download_outlined,
+                label: 'Save',
                 color: darkScheme.onSurface,
-                onPressed: onShare!,
+                onPressed: onSave,
               ),
-            _PillActionButton(
-              icon: Icons.info_outline,
-              label: 'Details',
-              color: darkScheme.onSurface,
-              onPressed: onDetails,
-            ),
-          ],
+              if (onShare != null)
+                _PillActionButton(
+                  icon: Icons.share_outlined,
+                  label: 'Share',
+                  color: darkScheme.onSurface,
+                  onPressed: onShare!,
+                ),
+              _PillActionButton(
+                icon: Icons.info_outline,
+                label: 'Details',
+                color: darkScheme.onSurface,
+                onPressed: onDetails,
+              ),
+            ],
+          ),
         ),
       ),
     );

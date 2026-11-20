@@ -68,7 +68,7 @@ class FindMyDeviceCategoryTabView extends StatelessWidget {
             ),
             _buildSectionList(withoutLocation, dividerColor: cs.outlineVariant.withValues(alpha: 0.35)),
           ],
-          const SizedBox(height: 92),
+          SizedBox(height: 112 + MediaQuery.viewPaddingOf(context).bottom),
         ]),
       );
     });

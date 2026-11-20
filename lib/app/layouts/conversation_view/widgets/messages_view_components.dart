@@ -1,4 +1,5 @@
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/typing/typing_indicator.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -61,7 +62,13 @@ class NotificationsSilencedBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chat = ChatStateScope.chatOf(context);
+    final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
     const moonIcon = CupertinoIcons.moon_fill;
+    final textStyle = WallpaperContrast.unbubbledStyle(
+      context.theme.textTheme.bodyMedium!,
+      hasWallpaper: hasBackground,
+      fallbackColor: context.theme.colorScheme.tertiary,
+    );
 
     return AnimatedSize(
       key: controller.focusInfoKey,
@@ -81,17 +88,17 @@ class NotificationsSilencedBanner extends StatelessWidget {
                           fontFamily: moonIcon.fontFamily,
                           package: moonIcon.fontPackage,
                           fontSize: context.theme.textTheme.bodyMedium!.fontSize,
-                          color: context.theme.colorScheme.tertiary,
+                          color: textStyle.color,
+                          shadows: textStyle.shadows,
                         ),
                       ),
                       Text(
                         " ${chat.getTitle()} has notifications silenced",
-                        style: context.theme.textTheme.bodyMedium!
-                            .copyWith(color: context.theme.colorScheme.tertiary),
+                        style: textStyle,
                       ),
                     ],
                   ),
-                  _NotifyAnywayButton(latestMessage: latestMessage),
+                  _NotifyAnywayButton(latestMessage: latestMessage, hasBackground: hasBackground),
                 ],
               ),
             )
@@ -102,9 +109,10 @@ class NotificationsSilencedBanner extends StatelessWidget {
 
 /// Nested widget for "Notify Anyway" button to further isolate rebuilds
 class _NotifyAnywayButton extends StatelessWidget {
-  const _NotifyAnywayButton({required this.latestMessage});
+  const _NotifyAnywayButton({required this.latestMessage, required this.hasBackground});
 
   final Message? latestMessage;
+  final bool hasBackground;
 
   @override
   Widget build(BuildContext context) {
@@ -116,7 +124,11 @@ class _NotifyAnywayButton extends StatelessWidget {
       return TextButton(
         child: Text(
           "Notify Anyway",
-          style: context.theme.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.tertiary),
+          style: WallpaperContrast.unbubbledStyle(
+            context.theme.textTheme.labelLarge!,
+            hasWallpaper: hasBackground,
+            fallbackColor: context.theme.colorScheme.tertiary,
+          ),
         ),
         onPressed: () async {
           await HttpSvc.message.notify(latestMessage!.guid!);

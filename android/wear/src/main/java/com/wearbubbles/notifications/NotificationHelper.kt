@@ -222,32 +222,14 @@ object NotificationHelper {
             important = true
         )
 
-        val mePerson = Person.Builder()
-            .setName("Me")
-            .setKey("me")
-            .build()
-
-        val history = messageHistory.getOrPut(chatGuid) { mutableListOf() }
-        val snapshot = synchronized(history) {
-            if (history.isEmpty()) {
-                recoverHistoryFromActive(manager, notificationId, history)
-            }
-            val msg = NotificationCompat.MessagingStyle.Message(
-                messageText,
-                msgTime,
-                senderPerson
-            )
+        val msg = NotificationCompat.MessagingStyle.Message(messageText, msgTime, senderPerson).apply {
             if (!attachmentPath.isNullOrBlank() && attachmentMimeType?.startsWith("image/") == true) {
                 resolveAttachmentUri(context, attachmentPath)?.let { uri ->
-                    msg.setData(attachmentMimeType, uri)
+                    setData(attachmentMimeType, uri)
                 }
             }
-            history.add(msg)
-            while (history.size > 6) {
-                history.removeAt(0)
-            }
-            history.toList()
         }
+        val snapshot = appendHistoryMessage(manager, notificationId, chatGuid, msg)
 
         postMessagingNotification(
             context = context,
@@ -255,7 +237,7 @@ object NotificationHelper {
             chatGuid = chatGuid,
             senderName = senderName,
             senderPerson = senderPerson,
-            mePerson = mePerson,
+            mePerson = mePerson(),
             snapshot = snapshot,
             isGroup = isGroup,
             groupTitle = groupTitle,
@@ -271,23 +253,13 @@ object NotificationHelper {
         val notificationId = chatGuid.hashCode()
         val meta = chatMetadata[chatGuid]
         val now = System.currentTimeMillis()
-
-        val mePerson = Person.Builder()
-            .setName("Me")
-            .setKey("me")
-            .build()
-
-        val history = messageHistory.getOrPut(chatGuid) { mutableListOf() }
-        val snapshot = synchronized(history) {
-            if (history.isEmpty()) {
-                recoverHistoryFromActive(manager, notificationId, history)
-            }
-            history.add(NotificationCompat.MessagingStyle.Message(replyText, now, mePerson))
-            while (history.size > 6) {
-                history.removeAt(0)
-            }
-            history.toList()
-        }
+        val me = mePerson()
+        val snapshot = appendHistoryMessage(
+            manager,
+            notificationId,
+            chatGuid,
+            NotificationCompat.MessagingStyle.Message(replyText, now, me)
+        )
 
         val senderName = meta?.senderName ?: "BlueBubbles"
         val senderPerson = buildPerson(
@@ -303,7 +275,7 @@ object NotificationHelper {
             chatGuid = chatGuid,
             senderName = senderName,
             senderPerson = senderPerson,
-            mePerson = mePerson,
+            mePerson = me,
             snapshot = snapshot,
             isGroup = meta?.isGroup ?: false,
             groupTitle = meta?.groupTitle,
@@ -311,6 +283,25 @@ object NotificationHelper {
             silent = true,
             onlyAlertOnce = true
         )
+    }
+
+    private fun mePerson(): Person = Person.Builder().setName("Me").setKey("me").build()
+
+    private fun appendHistoryMessage(
+        manager: NotificationManager,
+        notificationId: Int,
+        chatGuid: String,
+        msg: NotificationCompat.MessagingStyle.Message
+    ): List<NotificationCompat.MessagingStyle.Message> {
+        val history = messageHistory.getOrPut(chatGuid) { mutableListOf() }
+        return synchronized(history) {
+            if (history.isEmpty()) {
+                recoverHistoryFromActive(manager, notificationId, history)
+            }
+            history.add(msg)
+            while (history.size > 6) history.removeAt(0)
+            history.toList()
+        }
     }
 
     fun showReplyFailureNotification(

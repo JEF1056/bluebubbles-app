@@ -32,11 +32,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart' hide FormData, Response;
 import 'package:get_it/get_it.dart';
-import 'package:latlong2/latlong.dart';
+import 'package:maplibre/maplibre.dart' as maplibre;
 
 class _CapturingAdapter implements HttpClientAdapter {
   RequestOptions? lastOptions;
@@ -732,11 +731,11 @@ void main() {
       }
     });
 
-    test('orderFindMyMarkers places active-tab markers above inactive markers and selected highest', () {
-      Marker m(String key) => Marker(
-            key: ValueKey(key),
-            point: const LatLng(37.87, -122.27),
-            child: const SizedBox.shrink(),
+    test('orderFindMyMarkers orders unselected < current < selected and sorts depth by bearing', () {
+      maplibre.Marker m(String key, {double lat = 37.87, double lon = -122.27}) => maplibre.Marker(
+            point: maplibre.Geographic(lon: lon, lat: lat),
+            size: const Size(96, 76),
+            child: SizedBox.shrink(key: ValueKey(key)),
           );
       final markers = [
         m('device-mac'),
@@ -744,32 +743,32 @@ void main() {
         m('current'),
         m('friend-alice'),
       ];
-      List<String> keysOf(List<Marker> list) => [
-            for (final item in list) (item.key as ValueKey<String>).value,
+      List<String> keysOf(List<maplibre.Marker> list) => [
+            for (final item in list) (item.child.key as ValueKey<String>).value,
           ];
 
       expect(
-        keysOf(orderFindMyMarkers(markers, tabIndex: 0, accessoryIds: {'airtag'})),
+        keysOf(orderFindMyMarkers(markers)),
+        ['device-mac', 'device-airtag', 'friend-alice', 'current'],
+      );
+      expect(
+        keysOf(orderFindMyMarkers(markers, selectedFriendId: 'alice')),
         ['device-mac', 'device-airtag', 'current', 'friend-alice'],
       );
       expect(
-        keysOf(orderFindMyMarkers(markers, tabIndex: 1, accessoryIds: {'airtag'})),
+        keysOf(orderFindMyMarkers(markers, selectedDeviceId: 'mac')),
         ['device-airtag', 'friend-alice', 'current', 'device-mac'],
       );
+
+      final north = m('friend-north', lat: 37.90, lon: -122.27);
+      final south = m('friend-south', lat: 37.80, lon: -122.27);
       expect(
-        keysOf(orderFindMyMarkers(markers, tabIndex: 2, accessoryIds: {'airtag'})),
-        ['device-mac', 'friend-alice', 'current', 'device-airtag'],
+        keysOf(orderFindMyMarkers([south, north], bearingDegrees: 0.0)),
+        ['friend-north', 'friend-south'],
       );
       expect(
-        keysOf(
-          orderFindMyMarkers(
-            markers,
-            tabIndex: 0,
-            selectedKey: 'device-mac',
-            accessoryIds: {'airtag'},
-          ),
-        ),
-        ['device-airtag', 'current', 'friend-alice', 'device-mac'],
+        keysOf(orderFindMyMarkers([south, north], bearingDegrees: 180.0)),
+        ['friend-south', 'friend-north'],
       );
     });
 

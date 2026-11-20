@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:bluebubbles/database/models.dart';
@@ -137,9 +136,10 @@ class NameAndPhotoSharingService {
       final data = (await HttpSvc.icloud.getAccountContact(address: address)).data['data'];
       final name = data is Map ? data['name'] as String? : null;
       final avatar = data is Map ? data['avatar'] as String? : null;
-      final card = isNullOrEmpty(name) && isNullOrEmpty(avatar)
+      final decodedAvatar = SettingsService.decodeAvatarBase64(avatar);
+      final card = isNullOrEmpty(name) && decodedAvatar == null
           ? null
-          : (name: isNullOrEmpty(name) ? null : name, avatar: isNullOrEmpty(avatar) ? null : base64Decode(avatar!));
+          : (name: isNullOrEmpty(name) ? null : name, avatar: decodedAvatar);
       final now = DateTime.now();
       _cards.removeWhere((_, entry) => now.difference(entry.readAt) >= _cardTtl);
       _cards[key] = (readAt: now, card: card);

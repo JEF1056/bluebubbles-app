@@ -18,7 +18,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
-import 'package:sliding_up_panel2/sliding_up_panel2.dart';
 
 class FindMyPage extends StatefulWidget {
   const FindMyPage({super.key});
@@ -31,8 +30,6 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
   late final FindMyController controller;
   late final bool _ownsController;
   static const double _detailSnapPoint = 0.48;
-  bool _hasSnappedInitialPhoneSheet = false;
-  bool _pendingInitialPhoneSnap = false;
 
   @override
   void initState() {
@@ -52,27 +49,12 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
       }
       controller.consumePendingFocus();
     }
-    // Start at the mid snap point (48%) like iOS Find My so rows show above the floating tab bar.
-    _scheduleInitialPhoneSheetSnap();
-  }
-
-  void _scheduleInitialPhoneSheetSnap() {
-    if (_hasSnappedInitialPhoneSheet || _pendingInitialPhoneSnap) return;
-    _pendingInitialPhoneSnap = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _pendingInitialPhoneSnap = false;
-      if (!mounted || !context.isPhone || _hasSnappedInitialPhoneSheet) return;
-      if (controller.panelController.isAttached) {
-        _hasSnappedInitialPhoneSheet = true;
-        controller.panelController.panelPosition = _detailSnapPoint;
-      }
-    });
   }
 
   void _openDetailSheet() {
     if (!mounted || !context.isPhone) return;
-    if (controller.panelController.isAttached) {
-      controller.panelController.animatePanelToPosition(
+    if (controller.sheetController.isAttached) {
+      controller.sheetController.animateTo(
         _detailSnapPoint,
         duration: const Duration(milliseconds: 280),
         curve: Curves.easeOutCubic,
@@ -92,19 +74,17 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     if (!context.isPhone) {
       return computeFindMyFitAllPadding(
         viewportSize: mq.size,
-        viewPadding: mq.padding,
+        viewPadding: mq.viewPadding,
         isPhone: false,
       );
     }
-    final minHeight = 146.0 + mq.padding.bottom;
-    final maxHeight = mq.size.height * 0.78;
-    final effectivePos = (_hasSnappedInitialPhoneSheet && controller.panelController.isAttached)
-        ? controller.panelController.panelPosition
+    final effectivePos = controller.sheetController.isAttached
+        ? controller.sheetController.size
         : _detailSnapPoint;
-    final sheetHeight = minHeight + (maxHeight - minHeight) * effectivePos.clamp(0.0, 1.0);
+    final sheetHeight = mq.size.height * effectivePos.clamp(0.0, 1.0);
     return computeFindMyFitAllPadding(
       viewportSize: mq.size,
-      viewPadding: mq.padding,
+      viewPadding: mq.viewPadding,
       isPhone: true,
       bottomSheetHeight: sheetHeight,
     );
@@ -136,6 +116,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     controller.onRequestDetailSheetOpen = null;
     controller.detailSheetOffsetProvider = null;
     controller.fitAllPinsPaddingProvider = null;
+    controller.activeSheetScrollController = null;
     controller.tabController?.removeListener(_handleTabChange);
     if (_ownsController || !controller.isBackgroundShared) {
       Get.delete<FindMyController>(force: true);
@@ -148,38 +129,40 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     super.dispose();
   }
 
+  Widget _wrapSelectionPopScope(Widget child) {
+    return Obx(() {
+      final hasSelection =
+          controller.selectedFriendId.value != null || controller.selectedDeviceId.value != null;
+      return PopScope(
+        canPop: !hasSelection,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && hasSelection) controller.clearSelection();
+        },
+        child: child,
+      );
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (NavigationSvc.isTabletMode(context)) {
-      return Obx(() {
-        final hasSelection =
-            controller.selectedFriendId.value != null || controller.selectedDeviceId.value != null;
-        return PopScope(
-          canPop: !hasSelection,
-          onPopInvokedWithResult: (didPop, _) {
-            if (!didPop && hasSelection) {
-              controller.clearSelection();
-            }
-          },
-          child: TabletModeWrapper(
-            initialRatio: 0.35,
-            minRatio: kIsDesktop || kIsWeb ? 0.2 : 0.3,
-            maxRatio: 0.5,
-            allowResize: true,
-            enableInspector: false,
-            left: _buildScaffold(context, _buildLists(context)),
-            right: _buildScaffold(context, _buildMap(context)),
-          ),
-        );
-      });
+      return _wrapSelectionPopScope(
+        TabletModeWrapper(
+          initialRatio: 0.35,
+          minRatio: kIsDesktop || kIsWeb ? 0.2 : 0.3,
+          maxRatio: 0.5,
+          allowResize: true,
+          enableInspector: false,
+          left: _buildScaffold(context, _buildLists(context)),
+          right: _buildScaffold(context, _buildMap(context)),
+        ),
+      );
     }
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         if (context.isPhone) {
-          _scheduleInitialPhoneSheetSnap();
           return _buildNormalLayout(context);
         }
-        _hasSnappedInitialPhoneSheet = false;
         return _buildTabletLayout(context);
       },
     );
@@ -256,56 +239,39 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
   }
 
   Widget _buildTabletLayout(BuildContext context) {
-    return Obx(() {
-      final hasSelection =
-          controller.selectedFriendId.value != null || controller.selectedDeviceId.value != null;
-      return PopScope(
-        canPop: !hasSelection,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && hasSelection) {
-            controller.clearSelection();
-          }
-        },
-        child: BBScaffold(
-          backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
-          safeAreaLeft: false,
-          safeAreaRight: false,
-          body: Stack(
-            children: [
-              Row(
-                children: [
-                  ConstrainedBox(
-                    constraints:
-                        BoxConstraints(minWidth: 300, maxWidth: max(300, min(500, NavigationSvc.width(context) / 3))),
-                    child: Container(
-                      width: 500,
+    final sidebarConstraints =
+        BoxConstraints(minWidth: 300, maxWidth: max(300, min(500, NavigationSvc.width(context) / 3)));
+    return _wrapSelectionPopScope(
+      BBScaffold(
+        backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
+        safeAreaLeft: false,
+        safeAreaRight: false,
+        body: Stack(
+          children: [
+            Row(
+              children: [
+                ConstrainedBox(constraints: sidebarConstraints, child: const SizedBox(width: 500)),
+                Expanded(child: _buildMap(context)),
+              ],
+            ),
+            ConstrainedBox(
+              constraints: sidebarConstraints,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(
+                    right: BorderSide(
+                      color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                      width: 1,
                     ),
                   ),
-                  Expanded(
-                    child: _buildMap(context),
-                  ),
-                ],
-              ),
-              ConstrainedBox(
-                constraints:
-                    BoxConstraints(minWidth: 300, maxWidth: max(300, min(500, NavigationSvc.width(context) / 3))),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border(
-                      right: BorderSide(
-                        color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
-                        width: 1,
-                      ),
-                    ),
-                  ),
-                  child: _buildLists(context),
                 ),
+                child: _buildLists(context),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-      );
-    });
+      ),
+    );
   }
 
   Widget _buildTab(BuildContext context, ScrollController scrollController, String samsungTitle, Widget tabView) {
@@ -342,134 +308,109 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
 
   Widget _buildDesktopTabBar() {
     final cs = context.theme.colorScheme;
+    Tab tab(IconData icon, String label) => Tab(
+          height: 54,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 20),
+              const SizedBox(height: 3),
+              Text(label),
+            ],
+          ),
+        );
     return TabBar(
       controller: controller.tabController,
       dividerHeight: 1,
       dividerColor: cs.outlineVariant.withValues(alpha: 0.45),
       labelPadding: const EdgeInsets.symmetric(horizontal: 8),
       tabs: [
-        Tab(
-          height: 54,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(context.iOS ? CupertinoIcons.person_2 : Icons.people_outline, size: 20),
-              const SizedBox(height: 3),
-              const Text("People"),
-            ],
-          ),
-        ),
-        Tab(
-          height: 54,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(context.iOS ? CupertinoIcons.device_desktop : Icons.devices, size: 20),
-              const SizedBox(height: 3),
-              const Text("Devices"),
-            ],
-          ),
-        ),
-        Tab(
-          height: 54,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(context.iOS ? CupertinoIcons.tag : Icons.adjust_rounded, size: 20),
-              const SizedBox(height: 3),
-              const Text("Items"),
-            ],
-          ),
-        ),
+        tab(context.iOS ? CupertinoIcons.person_2 : Icons.people_outline, "People"),
+        tab(context.iOS ? CupertinoIcons.device_desktop : Icons.devices, "Devices"),
+        tab(context.iOS ? CupertinoIcons.tag : Icons.adjust_rounded, "Items"),
       ],
     );
   }
 
   Widget _buildNormalLayout(BuildContext context) {
-    final bottomInset = MediaQuery.of(context).padding.bottom;
-    return Obx(() {
-      final hasSelection =
-          controller.selectedFriendId.value != null || controller.selectedDeviceId.value != null;
-      return PopScope(
-        canPop: !hasSelection,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop && hasSelection) {
-            controller.clearSelection();
-          }
-        },
-        child: BBScaffold(
+    final mq = MediaQuery.of(context);
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    final minChildSize = ((146.0 + bottomInset) / max(1.0, mq.size.height)).clamp(0.16, 0.45);
+    return _wrapSelectionPopScope(
+      BBScaffold(
           backgroundColor: context.material ? context.tileColor : context.headerColor,
+          safeAreaTop: false,
+          safeAreaBottom: false,
           safeAreaLeft: false,
           safeAreaRight: false,
           body: Stack(
             children: [
-              SlidingUpPanel(
-                controller: controller.panelController,
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(25.0),
-                  topRight: Radius.circular(25.0),
-                ),
-                minHeight: 146 + bottomInset,
-                maxHeight: MediaQuery.of(context).size.height * 0.78,
-                snapPoint: _detailSnapPoint,
-                disableDraggableOnScrolling: true,
-                backdropEnabled: false,
-                parallaxEnabled: false,
-                panelSnapping: true,
-                header: ForceDraggableWidget(
-                  child: SizedBox(
-                    width: MediaQuery.of(context).size.width,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 10.0, bottom: 8),
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: Container(
-                          width: 44,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                        ),
+              Positioned.fill(child: FindMyMapWidget(controller: controller)),
+              Positioned.fill(
+                child: DraggableScrollableSheet(
+                  controller: controller.sheetController,
+                  initialChildSize: _detailSnapPoint,
+                  minChildSize: minChildSize,
+                  maxChildSize: 0.78,
+                  snap: true,
+                  snapSizes: const [_detailSnapPoint],
+                  builder: (sheetCtx, sheetScrollController) {
+                    controller.activeSheetScrollController = sheetScrollController;
+                    return Material(
+                      color: Theme.of(sheetCtx).colorScheme.surface,
+                      borderRadius: const BorderRadius.vertical(top: Radius.circular(25.0)),
+                      clipBehavior: Clip.antiAlias,
+                      elevation: 6,
+                      child: ScrollbarWrapper(
+                        controller: sheetScrollController,
+                        child: Obx(() {
+                          final tab = controller.tabIndex.value;
+                          final sliverTab = switch (tab) {
+                            1 => FindMyDevicesTabView(controller: controller),
+                            2 => FindMyItemsTabView(controller: controller),
+                            _ => FindMyFriendsTabView(controller: controller),
+                          };
+                          return RefreshIndicator(
+                            onRefresh: () => controller.hardRefresh(),
+                            child: CustomScrollView(
+                              key: const ValueKey('tabs-view'),
+                              controller: sheetScrollController,
+                              physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+                              slivers: [
+                                SliverToBoxAdapter(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.only(top: 10.0, bottom: 4.0),
+                                        child: Center(
+                                          child: Container(
+                                            width: 44,
+                                            height: 4,
+                                            decoration: BoxDecoration(
+                                              color: Theme.of(sheetCtx).colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      _buildSheetHeader(sheetCtx),
+                                    ],
+                                  ),
+                                ),
+                                sliverTab,
+                              ],
+                            ),
+                          );
+                        }),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
-                panelBuilder: () => Padding(
-                  padding: const EdgeInsets.only(top: 22),
-                  child: Column(
-                    children: [
-                      _buildSheetHeader(context),
-                      Expanded(
-                        child: TabBarView(
-                          key: const ValueKey('tabs-view'),
-                          physics: const NeverScrollableScrollPhysics(),
-                          controller: controller.tabController,
-                          children: <Widget>[
-                            _buildScrollNotificationWrapper(
-                              controller.friendsController,
-                              _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
-                            ),
-                            _buildScrollNotificationWrapper(
-                              controller.devicesController,
-                              _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
-                            ),
-                            _buildScrollNotificationWrapper(
-                              controller.itemsController,
-                              _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                body: FindMyMapWidget(controller: controller),
               ),
               if (!context.samsung)
                 Positioned(
-                  top: 12 + (kIsDesktop ? appWindow.titleBarHeight : MediaQuery.of(context).padding.top),
+                  top: 12 + (kIsDesktop ? appWindow.titleBarHeight : MediaQuery.viewPaddingOf(context).top),
                   left: 16,
                   child: ClipOval(
                     child: Builder(builder: (context) {
@@ -515,8 +456,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
             ],
           ),
         ),
-      );
-    });
+    );
   }
 
   String _sheetTitleForTab(int index) => switch (index) {
@@ -579,35 +519,24 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     controller.tabController?.animateTo(page);
     controller.onTabChanged(page);
 
-    if (!controller.panelController.isAttached) return;
-    final wasOpen = controller.panelController.isPanelOpen;
-    if (oldIndex == page && wasOpen) {
-      controller.panelController.close();
-    } else if (!wasOpen) {
-      controller.panelController.animatePanelToPosition(
+    if (!controller.sheetController.isAttached) return;
+    final mq = MediaQuery.of(context);
+    final minSize = ((146.0 + mq.viewPadding.bottom) / max(1.0, mq.size.height)).clamp(0.16, 0.45);
+    final currentSize = controller.sheetController.size;
+    final isExpandedEnough = currentSize > minSize + 0.05;
+    if (oldIndex == page && isExpandedEnough) {
+      controller.sheetController.animateTo(
+        minSize,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      );
+    } else if (currentSize < _detailSnapPoint - 0.05) {
+      controller.sheetController.animateTo(
         _detailSnapPoint,
         duration: const Duration(milliseconds: 240),
         curve: Curves.easeOutCubic,
       );
     }
-  }
-
-  Widget _buildScrollNotificationWrapper(ScrollController scrollController, Widget child) {
-    return NotificationListener<ScrollEndNotification>(
-      onNotification: (_) {
-        if (SettingsSvc.settings.skin.value != Skins.Samsung || kIsWeb || kIsDesktop) return false;
-        final scrollDistance = context.height / 3 - 57;
-
-        if (scrollController.hasClients && scrollController.offset > 0 && scrollController.offset < scrollDistance) {
-          final double snapOffset = scrollController.offset / scrollDistance > 0.5 ? scrollDistance : 0;
-
-          Future.microtask(() => scrollController.animateTo(snapOffset,
-              duration: const Duration(milliseconds: 200), curve: Curves.linear));
-        }
-        return false;
-      },
-      child: child,
-    );
   }
 
   Widget _buildDesktopTitleBar(BuildContext context) {

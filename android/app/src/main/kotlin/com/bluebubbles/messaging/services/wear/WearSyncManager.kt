@@ -69,6 +69,7 @@ object WearSyncManager {
     private const val SOCKET_IDLE_TIMEOUT_MS = 120_000L
 
     const val PATH_CREDENTIALS = "/bb/credentials"
+    const val PATH_PROFILE = "/bb/profile"
     const val PATH_REQUEST_CREDENTIALS = "/bb/request-credentials"
     const val PATH_REQUEST_SYNC = "/bb/request-sync"
     const val PATH_SYNC_CHATS = "/bb/sync-chats"
@@ -98,20 +99,16 @@ object WearSyncManager {
     private data class IncomingCallMeta(
         val callerName: String,
         val callerAddress: String?,
-        val isVideo: Boolean
+        val isVideo: Boolean,
+        val isTelephony: Boolean = false
     )
 
     private val incomingCalls = ConcurrentHashMap<String, IncomingCallMeta>()
+    private val watchAnsweredCalls = ConcurrentHashMap.newKeySet<String>()
 
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
-
-    @Volatile
-    private var cachedConnected: Boolean? = null
-
-    @Volatile
-    private var lastCheckedAt: Long = 0L
 
     @Volatile
     private var relaySocket: Socket? = null
@@ -122,28 +119,11 @@ object WearSyncManager {
 
     @JvmStatic
     fun updateWatchConnectedCache(context: Context, connected: Boolean) {
-        val now = System.currentTimeMillis()
-        cachedConnected = connected
-        lastCheckedAt = now
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_WATCH_CONNECTED, connected)
-            .putLong(KEY_WATCH_CHECKED_AT, now)
+            .putLong(KEY_WATCH_CHECKED_AT, System.currentTimeMillis())
             .apply()
-    }
-
-    suspend fun refreshWatchConnected(context: Context): Boolean {
-        return try {
-            val capInfo = Wearable.getCapabilityClient(context)
-                .getCapability(WATCH_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                .await()
-            val connected = capInfo.nodes.isNotEmpty()
-            updateWatchConnectedCache(context, connected)
-            connected
-        } catch (e: Exception) {
-            PersistentLog.w(context, TAG, "refreshWatchConnected failed: ${e.message}")
-            false
-        }
     }
 
     @JvmStatic
@@ -161,10 +141,11 @@ object WearSyncManager {
         callUuid: String,
         callerName: String,
         callerAddress: String?,
-        isVideo: Boolean
+        isVideo: Boolean,
+        isTelephony: Boolean = false
     ) {
         if (callUuid.isBlank()) return
-        incomingCalls[callUuid] = IncomingCallMeta(callerName, callerAddress, isVideo)
+        incomingCalls[callUuid] = IncomingCallMeta(callerName, callerAddress, isVideo, isTelephony)
         scope.launch {
             val payload = JsonObject().apply {
                 addProperty("callUuid", callUuid)
@@ -173,6 +154,7 @@ object WearSyncManager {
                     addProperty("callerAddress", callerAddress)
                 }
                 addProperty("isVideo", isVideo)
+                addProperty("isTelephony", isTelephony)
             }.toString()
             sendMessageToWatchNodes(context, PATH_INCOMING_CALL, payload.toByteArray())
         }
@@ -182,10 +164,17 @@ object WearSyncManager {
     fun notifyCallEnded(context: Context, callUuid: String) {
         if (callUuid.isBlank()) return
         incomingCalls.remove(callUuid)
+        watchAnsweredCalls.remove(callUuid)
         scope.launch {
             val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString()
             sendMessageToWatchNodes(context, PATH_CALL_ENDED, payload.toByteArray())
         }
+    }
+
+    @JvmStatic
+    fun notifyCallEndedIfNotWatchAnswered(context: Context, callUuid: String) {
+        if (callUuid.isBlank() || watchAnsweredCalls.contains(callUuid)) return
+        notifyCallEnded(context, callUuid)
     }
 
     fun handleAnswerCallAudioFromWatch(
@@ -196,17 +185,20 @@ object WearSyncManager {
     ) {
         if (callUuid.isBlank()) return
         val cached = incomingCalls.remove(callUuid)
+        watchAnsweredCalls.add(callUuid)
         val callerName = callerNameArg?.takeIf { it.isNotBlank() }
             ?: cached?.callerName
             ?: "Unknown Caller"
         val callerAddress = callerAddressArg?.takeIf { it.isNotBlank() } ?: cached?.callerAddress
+        val isTelephony = cached?.isTelephony ?: false
         cancelCallNotifications(context, callUuid)
         val routed = com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.addIncomingCall(
             context = context,
             callUuid = callUuid,
             callerName = callerName,
             address = callerAddress,
-            autoAnswer = true
+            autoAnswer = true,
+            isTelephony = isTelephony
         )
         if (!routed) {
             val launch = Intent(context, MainActivity::class.java).apply {
@@ -214,6 +206,7 @@ object WearSyncManager {
                 putExtra("callUuid", callUuid)
                 putExtra("answer", true)
                 putExtra("audioOnly", true)
+                putExtra("isTelephony", isTelephony)
                 putExtra("caller", callerName)
                 type = "AnswerFaceTime"
             }
@@ -349,8 +342,93 @@ object WearSyncManager {
                     addProperty("privateMarkChatAsRead", privateMarkChatAsRead)
                 }.toString().toByteArray()
                 sendToWatch(context, targetNodeId, PATH_CREDENTIALS, msgJson)
+                syncProfile(context, targetNodeId)
             } catch (e: Exception) {
                 PersistentLog.e(context, TAG, "syncCredentials failed: ${e.message}")
+            }
+        }
+    }
+
+    internal const val SELF_AVATAR_MAX_DIM = 128
+    internal const val SELF_AVATAR_MAX_BYTES = 32_000
+
+    internal fun decodeAvatarBase64(raw: String?): ByteArray? {
+        val cleaned = raw?.trim()?.substringAfter("base64,", raw.trim())?.takeIf { it.isNotEmpty() } ?: return null
+        return try {
+            Base64.decode(cleaned, Base64.DEFAULT).takeIf { it.isNotEmpty() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    internal fun compressSelfAvatarForWatch(rawBytes: ByteArray): ByteArray? =
+        compressAvatarForWatch(rawBytes, maxDim = SELF_AVATAR_MAX_DIM, maxBytes = SELF_AVATAR_MAX_BYTES)
+
+    fun syncProfile(context: Context, targetNodeId: String? = null) {
+        scope.launch {
+            val settings = SettingsHelper(context)
+            try {
+                var userName = settings.userName.trim().takeUnless { it.equals("You", ignoreCase = true) } ?: ""
+                var userHandle = ""
+                var rawAvatar: ByteArray? = settings.userAvatarPath
+                    .takeIf { it.isNotBlank() }
+                    ?.let { File(it).takeIf(File::exists)?.readBytes() }
+
+                if (settings.hasServerUrl() && settings.hasAuthKey()) {
+                    try {
+                        val client = buildOkHttpClient(settings)
+                        val url = "${settings.apiRoot}/icloud/contact?password=${encode(settings.guidAuthKey)}"
+                        client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+                            if (resp.isSuccessful) {
+                                val root = JsonParser.parseString(resp.body?.string() ?: "{}").asObjOrNull()
+                                val data = root?.obj("data")
+                                if (data != null) {
+                                    val serverName = data.str("display_name")?.takeIf { it.isNotBlank() }
+                                        ?: data.str("account_name")?.takeIf { it.isNotBlank() }
+                                        ?: data.str("name")?.takeIf { it.isNotBlank() }
+                                        ?: listOfNotNull(
+                                            data.str("first_name")?.takeIf { it.isNotBlank() },
+                                            data.str("last_name")?.takeIf { it.isNotBlank() }
+                                        ).joinToString(" ").trim()
+                                    if (serverName.isNotBlank()) userName = serverName
+                                    userHandle = data.str("active_alias")?.takeIf { it.isNotBlank() }
+                                        ?: data.str("apple_id")?.takeIf { it.isNotBlank() }
+                                        ?: ""
+                                    decodeAvatarBase64(data.str("avatar"))?.let { rawAvatar = it }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        PersistentLog.w(context, TAG, "syncProfile server fetch failed: ${e.message}")
+                    }
+                }
+
+                val compressedAvatar = rawAvatar?.let { compressSelfAvatarForWatch(it) }
+                if (userName.isBlank() && userHandle.isBlank() && compressedAvatar == null) return@launch
+
+                val avatarHash = compressedAvatar?.let(::sha256Hex) ?: ""
+                val putReq = PutDataMapRequest.create(PATH_PROFILE).apply {
+                    dataMap.putString("userName", userName)
+                    dataMap.putString("userHandle", userHandle)
+                    dataMap.putString("avatarHash", avatarHash)
+                    if (compressedAvatar != null) {
+                        dataMap.putAsset("avatar", Asset.createFromBytes(compressedAvatar))
+                    }
+                }.asPutDataRequest().setUrgent()
+                Wearable.getDataClient(context).putDataItem(putReq).await()
+
+                val msgJson = JsonObject().apply {
+                    addProperty("userName", userName)
+                    addProperty("userHandle", userHandle)
+                    if (compressedAvatar != null) {
+                        addProperty("avatarBase64", Base64.encodeToString(compressedAvatar, Base64.NO_WRAP))
+                    }
+                }.toString().toByteArray()
+                if (msgJson.size <= PAYLOAD_MESSAGE_MAX_BYTES) {
+                    sendToWatch(context, targetNodeId, PATH_PROFILE, msgJson)
+                }
+            } catch (e: Exception) {
+                PersistentLog.e(context, TAG, "syncProfile failed: ${e.message}")
             }
         }
     }
@@ -549,26 +627,12 @@ object WearSyncManager {
             entries.add(Entry(relayJson, resolvedPinned, resolvedPinIndex, lastMessageDate))
         }
 
-        entries.sortWith { a, b ->
-            when {
-                a.isPinned && b.isPinned -> {
-                    val ai = a.pinIndex
-                    val bi = b.pinIndex
-                    when {
-                        ai != null && bi != null -> {
-                            val cmp = ai.compareTo(bi)
-                            if (cmp != 0) cmp else b.lastMessageDate.compareTo(a.lastMessageDate)
-                        }
-                        ai != null -> -1
-                        bi != null -> 1
-                        else -> b.lastMessageDate.compareTo(a.lastMessageDate)
-                    }
-                }
-                a.isPinned -> -1
-                b.isPinned -> 1
-                else -> b.lastMessageDate.compareTo(a.lastMessageDate)
-            }
-        }
+        entries.sortWith(
+            compareByDescending<Entry> { it.isPinned }
+                .thenBy { it.pinIndex == null }
+                .thenBy { it.pinIndex }
+                .thenByDescending { it.lastMessageDate }
+        )
         return entries.map { it.relayJson }
     }
 
@@ -653,15 +717,18 @@ object WearSyncManager {
         }
     }
 
-    private fun compressAvatarForWatch(rawBytes: ByteArray): ByteArray? {
+    private fun compressAvatarForWatch(
+        rawBytes: ByteArray,
+        maxDim: Int = 160,
+        maxBytes: Int = 250_000
+    ): ByteArray? {
         if (rawBytes.isEmpty()) return null
         return try {
             val decoded = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
             if (decoded == null) {
-                rawBytes.takeIf { it.size <= 250_000 }
+                rawBytes.takeIf { it.size <= maxBytes }
             } else {
-                val maxDim = 160
-                val scaled = if (decoded.width > maxDim || decoded.height > maxDim) {
+                var current = if (decoded.width > maxDim || decoded.height > maxDim) {
                     val scale = maxDim.toFloat() / maxOf(decoded.width, decoded.height).toFloat()
                     val w = (decoded.width * scale).toInt().coerceAtLeast(1)
                     val h = (decoded.height * scale).toInt().coerceAtLeast(1)
@@ -672,12 +739,32 @@ object WearSyncManager {
                     decoded
                 }
                 val baos = ByteArrayOutputStream()
-                scaled.compress(Bitmap.CompressFormat.JPEG, 82, baos)
-                scaled.recycle()
-                baos.toByteArray().takeIf { it.isNotEmpty() && it.size <= 250_000 }
+                var out: ByteArray? = null
+                for (quality in intArrayOf(82, 68, 54, 40)) {
+                    baos.reset()
+                    current.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                    val candidate = baos.toByteArray()
+                    if (candidate.isNotEmpty() && candidate.size <= maxBytes) {
+                        out = candidate
+                        break
+                    }
+                }
+                if (out == null && (current.width > 96 || current.height > 96)) {
+                    val smaller = Bitmap.createScaledBitmap(current, 96, 96, true)
+                    if (smaller !== current) current.recycle()
+                    current = smaller
+                    baos.reset()
+                    current.compress(Bitmap.CompressFormat.JPEG, 40, baos)
+                    val candidate = baos.toByteArray()
+                    if (candidate.isNotEmpty() && candidate.size <= maxBytes) {
+                        out = candidate
+                    }
+                }
+                current.recycle()
+                out
             }
         } catch (_: Exception) {
-            rawBytes.takeIf { it.size <= 250_000 }
+            rawBytes.takeIf { it.size <= maxBytes }
         }
     }
 
@@ -720,16 +807,12 @@ object WearSyncManager {
                             ?: continue
                         val avatarB64 = c.str("avatar")
                         val addresses = mutableListOf<Pair<String, String>>()
-                        c.arr("phoneNumbers")?.forEach { p ->
-                            p.asObjOrNull()?.str("address")?.let { raw ->
-                                val norm = normalizeAddress(raw)
-                                if (norm.isNotBlank()) addresses.add(raw to norm)
-                            }
-                        }
-                        c.arr("emails")?.forEach { em ->
-                            em.asObjOrNull()?.str("address")?.let { raw ->
-                                val norm = normalizeAddress(raw)
-                                if (norm.isNotBlank()) addresses.add(raw to norm)
+                        for (field in listOf("phoneNumbers", "emails")) {
+                            c.arr(field)?.forEach { item ->
+                                item.asObjOrNull()?.str("address")?.let { raw ->
+                                    val norm = normalizeAddress(raw)
+                                    if (norm.isNotBlank()) addresses.add(raw to norm)
+                                }
                             }
                         }
                         if (addresses.isEmpty()) continue
@@ -859,12 +942,7 @@ object WearSyncManager {
                             return@launch
                         }
                     }
-                    val msgObj = try {
-                        JsonParser.parseString(bodyStr ?: "{}").asObjOrNull()?.obj("data")
-                            ?.let { mapMessageToRelayJson(it, chatGuid) }
-                    } catch (_: Exception) {
-                        null
-                    }
+                    val msgObj = parseDataMessage(bodyStr, chatGuid)
                     sendResult(
                         context,
                         nodeId,
@@ -908,13 +986,7 @@ object WearSyncManager {
                 val url = "${settings.apiRoot}/message/react?password=${encode(settings.guidAuthKey)}"
                 client.newCall(Request.Builder().url(url).post(body).build()).execute().use { resp ->
                     val ok = resp.isSuccessful
-                    val bodyStr = resp.body?.string()
-                    val msgObj = try {
-                        JsonParser.parseString(bodyStr ?: "{}").asObjOrNull()?.obj("data")
-                            ?.let { mapMessageToRelayJson(it, chatGuid) }
-                    } catch (_: Exception) {
-                        null
-                    }
+                    val msgObj = parseDataMessage(resp.body?.string(), chatGuid)
                     sendResult(
                         context,
                         nodeId,
@@ -967,12 +1039,7 @@ object WearSyncManager {
                 val url = "${settings.apiRoot}/message/attachment?password=${encode(settings.guidAuthKey)}"
                 client.newCall(Request.Builder().url(url).post(multipart).build()).execute().use { resp ->
                     val ok = resp.isSuccessful
-                    val msgObj = try {
-                        JsonParser.parseString(resp.body?.string() ?: "{}").asObjOrNull()?.obj("data")
-                            ?.let { mapMessageToRelayJson(it, chatGuid) }
-                    } catch (_: Exception) {
-                        null
-                    }
+                    val msgObj = parseDataMessage(resp.body?.string(), chatGuid)
                     sendResult(context, nodeId, tempGuid, tempGuid, ok, if (ok) null else "HTTP ${resp.code}", msgObj)
                 }
             } catch (e: Exception) {
@@ -984,24 +1051,14 @@ object WearSyncManager {
     }
 
     suspend fun notifyAttachmentFailed(context: Context, nodeId: String, attachmentGuid: String) {
-        val payload = JsonObject().apply {
-            addProperty("guid", attachmentGuid)
-        }.toString().toByteArray()
-        try {
-            Wearable.getMessageClient(context).sendMessage(nodeId, PATH_ATTACHMENT_FAILED, payload).await()
-        } catch (_: Exception) {
-        }
+        sendNodeJson(context, nodeId, PATH_ATTACHMENT_FAILED, JsonObject().apply { addProperty("guid", attachmentGuid) })
     }
 
     suspend fun notifyAudioReceiveFailed(context: Context, nodeId: String, tempGuid: String, reason: String) {
-        val payload = JsonObject().apply {
+        sendNodeJson(context, nodeId, PATH_AUDIO_FAILED, JsonObject().apply {
             addProperty("tempGuid", tempGuid)
             addProperty("reason", reason)
-        }.toString().toByteArray()
-        try {
-            Wearable.getMessageClient(context).sendMessage(nodeId, PATH_AUDIO_FAILED, payload).await()
-        } catch (_: Exception) {
-        }
+        })
     }
 
     fun streamAttachmentToWatch(context: Context, nodeId: String, attachmentGuid: String) {
@@ -1265,6 +1322,12 @@ object WearSyncManager {
         prefs.edit().putString(prefKey, hash).apply()
     }
 
+    private suspend fun sendNodeJson(context: Context, nodeId: String, path: String, payload: JsonObject) {
+        try {
+            Wearable.getMessageClient(context).sendMessage(nodeId, path, payload.toString().toByteArray()).await()
+        } catch (_: Exception) {}
+    }
+
     private suspend fun sendResult(
         context: Context,
         nodeId: String,
@@ -1274,19 +1337,13 @@ object WearSyncManager {
         error: String?,
         message: JsonObject? = null
     ) {
-        val obj = JsonObject().apply {
+        sendNodeJson(context, nodeId, PATH_SEND_RESULT, JsonObject().apply {
             addProperty("requestId", requestId)
             addProperty("tempGuid", tempGuid)
             addProperty("success", success)
             if (error != null) addProperty("error", error)
             if (message != null) add("message", message)
-        }
-        try {
-            Wearable.getMessageClient(context)
-                .sendMessage(nodeId, PATH_SEND_RESULT, obj.toString().toByteArray())
-                .await()
-        } catch (_: Exception) {
-        }
+        })
     }
 
     internal fun shouldUseDataAsset(payloadBytes: ByteArray): Boolean =
@@ -1375,6 +1432,12 @@ object WearSyncManager {
         }
     }
 
+    private fun parseDataMessage(bodyStr: String?, chatGuid: String): JsonObject? = try {
+        JsonParser.parseString(bodyStr ?: "{}").asObjOrNull()?.obj("data")?.let { mapMessageToRelayJson(it, chatGuid) }
+    } catch (_: Exception) {
+        null
+    }
+
     private fun normalizeAddress(address: String): String {
         val trimmed = address.trim()
         if (trimmed.contains("@")) return trimmed.lowercase()
@@ -1384,36 +1447,11 @@ object WearSyncManager {
 
     private fun encode(v: String): String = URLEncoder.encode(v, "UTF-8")
 
-    private fun JsonElement?.asObjOrNull(): JsonObject? =
-        if (this != null && this.isJsonObject) this.asJsonObject else null
-
-    private fun JsonObject.obj(key: String): JsonObject? {
-        val el = get(key)
-        return if (el != null && el.isJsonObject) el.asJsonObject else null
-    }
-
-    private fun JsonObject.arr(key: String): JsonArray? {
-        val el = get(key)
-        return if (el != null && el.isJsonArray) el.asJsonArray else null
-    }
-
-    private fun JsonObject.str(key: String): String? {
-        val el = get(key)
-        return if (el != null && el.isJsonPrimitive) el.asString else null
-    }
-
-    private fun JsonObject.long(key: String): Long? {
-        val el = get(key)
-        return if (el != null && el.isJsonPrimitive) el.asLong else null
-    }
-
-    private fun JsonObject.int(key: String): Int? {
-        val el = get(key)
-        return if (el != null && el.isJsonPrimitive) el.asInt else null
-    }
-
-    private fun JsonObject.bool(key: String): Boolean? {
-        val el = get(key)
-        return if (el != null && el.isJsonPrimitive) el.asBoolean else null
-    }
+    private fun JsonElement?.asObjOrNull(): JsonObject? = this?.takeIf { it.isJsonObject }?.asJsonObject
+    private fun JsonObject.obj(key: String): JsonObject? = get(key)?.takeIf { it.isJsonObject }?.asJsonObject
+    private fun JsonObject.arr(key: String): JsonArray? = get(key)?.takeIf { it.isJsonArray }?.asJsonArray
+    private fun JsonObject.str(key: String): String? = get(key)?.takeIf { it.isJsonPrimitive }?.asString
+    private fun JsonObject.long(key: String): Long? = get(key)?.takeIf { it.isJsonPrimitive }?.asLong
+    private fun JsonObject.int(key: String): Int? = get(key)?.takeIf { it.isJsonPrimitive }?.asInt
+    private fun JsonObject.bool(key: String): Boolean? = get(key)?.takeIf { it.isJsonPrimitive }?.asBoolean
 }

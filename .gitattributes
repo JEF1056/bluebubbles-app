@@ -1,0 +1,7 @@
+pubspec.lock linguist-generated=true
+lib/generated/** linguist-generated=true
+linux/flutter/generated_* linguist-generated=true
+macos/Flutter/GeneratedPluginRegistrant.swift linguist-generated=true
+windows/flutter/generated_* linguist-generated=true
+*.dart diff=dart
+*.kt diff=kotlin

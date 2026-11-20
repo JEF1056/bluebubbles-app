@@ -37,6 +37,7 @@ import com.wearbubbles.ui.theme.SurfaceContainerHigh
 import com.wearbubbles.ui.theme.avatarMonogram
 import com.wearbubbles.ui.theme.avatarSwatchFor
 import com.wearbubbles.ui.theme.centeredTextStyle
+import com.wearbubbles.ui.theme.submitDirectKeyboardText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -283,5 +284,13 @@ class WearUiDesignTest {
         assertEquals(setOf("mom"), duplicateDisplayNames(contacts))
         assertEquals(2, filterContacts(contacts, "mom").size)
         assertEquals(1, filterContacts(contacts, "5550003333").size)
+    }
+
+    @Test
+    fun `submitDirectKeyboardText rejects blank input and trims non-empty replies`() {
+        assertNull(submitDirectKeyboardText(""))
+        assertNull(submitDirectKeyboardText("   \n\t  "))
+        assertEquals("On my way!", submitDirectKeyboardText("  On my way!  "))
+        assertEquals("👍", submitDirectKeyboardText(" 👍 "))
     }
 }

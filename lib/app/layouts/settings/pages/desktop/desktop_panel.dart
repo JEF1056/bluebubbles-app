@@ -8,7 +8,8 @@ import 'package:bluebubbles/app/components/animated_dropdown_menu.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/widgets/emoji_tapback_picker.dart';
 import 'package:bluebubbles/services/backend/notifications/toast_button_images.dart';
-import 'package:bluebubbles/services/backend/notifications/windows_toast_theme.dart';
+import 'package:bluebubbles/services/backend/notifications/windows_toast_theme.dart'
+    if (dart.library.js_interop) 'package:bluebubbles/services/backend/notifications/windows_toast_theme_web.dart';
 import 'package:bluebubbles/database/models.dart' hide PlatformFile;
 import 'package:bluebubbles/services/services.dart';
 import 'package:file_picker/file_picker.dart';

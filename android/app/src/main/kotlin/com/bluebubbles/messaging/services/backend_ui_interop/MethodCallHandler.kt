@@ -33,16 +33,20 @@ import com.bluebubbles.messaging.services.system.OpenConversationNotificationSet
 import com.bluebubbles.messaging.services.system.OpenExistingContactRequestHandler
 import com.bluebubbles.messaging.services.system.PushShareTargetsHandler
 import com.bluebubbles.messaging.services.system.SaveFileToDownloadsHandler
+import com.bluebubbles.messaging.services.system.SpeechRecognitionHandler
 import com.bluebubbles.messaging.services.system.StartGoogleDuoRequestHandler
 import com.bluebubbles.messaging.services.system.MemoryStatsHandler
 import com.bluebubbles.messaging.services.system.TrimMemoryHandler
 import com.bluebubbles.messaging.services.foreground.StartForegroundServiceHandler
 import com.bluebubbles.messaging.services.foreground.StopForegroundServiceHandler
+import com.bluebubbles.messaging.services.telecom.AnswerFaceTimeAudioHandler
 import com.bluebubbles.messaging.services.telecom.EndFaceTimeCallHandler
 import com.bluebubbles.messaging.services.telecom.IsTelecomEnabledHandler
+import com.bluebubbles.messaging.services.telecom.MarkFaceTimeCallActiveHandler
 import com.bluebubbles.messaging.services.telecom.OpenCallingAccountsHandler
 import com.bluebubbles.messaging.services.telecom.PlaceFaceTimeCallHandler
 import com.bluebubbles.messaging.services.telecom.RegisterPhoneAccountHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeMutedHandler
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -146,6 +150,7 @@ class MethodCallHandler {
             SaveFileToDownloadsHandler.tag -> SaveFileToDownloadsHandler().handleMethodCall(call, result, context)
             CheckChromeOsHandler.tag -> CheckChromeOsHandler().handleMethodCall(call, result, context)
             AndroidIdHandler.tag -> AndroidIdHandler().handleMethodCall(call, result, context)
+            SpeechRecognitionHandler.tag -> SpeechRecognitionHandler().handleMethodCall(call, result, context)
             FlushPreferencesHandler.tag -> FlushPreferencesHandler().handleMethodCall(call, result, context)
             NotificationListenerPermissionRequestHandler.tag -> NotificationListenerPermissionRequestHandler().handleMethodCall(call, result, context)
             StartNotificationListenerHandler.tag -> StartNotificationListenerHandler().handleMethodCall(call, result, context)
@@ -160,9 +165,12 @@ class MethodCallHandler {
             MemoryStatsHandler.tag -> MemoryStatsHandler().handleMethodCall(call, result, context)
             PlaceFaceTimeCallHandler.tag -> PlaceFaceTimeCallHandler().handleMethodCall(call, result, context)
             EndFaceTimeCallHandler.tag -> EndFaceTimeCallHandler().handleMethodCall(call, result, context)
+            AnswerFaceTimeAudioHandler.tag -> AnswerFaceTimeAudioHandler().handleMethodCall(call, result, context)
             IsTelecomEnabledHandler.tag -> IsTelecomEnabledHandler().handleMethodCall(call, result, context)
             OpenCallingAccountsHandler.tag -> OpenCallingAccountsHandler().handleMethodCall(call, result, context)
             RegisterPhoneAccountHandler.tag -> RegisterPhoneAccountHandler().handleMethodCall(call, result, context)
+            MarkFaceTimeCallActiveHandler.tag -> MarkFaceTimeCallActiveHandler().handleMethodCall(call, result, context)
+            SetFaceTimeMutedHandler.tag -> SetFaceTimeMutedHandler().handleMethodCall(call, result, context)
             "set-locus-context" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && context is Activity) {
                     val chatGuid = call.argument<String>("chat_guid")

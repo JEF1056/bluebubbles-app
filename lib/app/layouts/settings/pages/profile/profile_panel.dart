@@ -126,8 +126,11 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                           size: 100,
                         ),
                       ),
-                      Obx(() => SettingsSvc.settings.userAvatarPath.value != null
-                          ? Positioned(
+                      Obx(() {
+                        final hasPath = !isNullOrEmpty(SettingsSvc.settings.userAvatarPath.value);
+                        final hasBytes = SettingsSvc.userAvatarBytes.value != null;
+                        return (hasPath || hasBytes)
+                            ? Positioned(
                               right: -5,
                               top: -5,
                               child: InkWell(
@@ -150,7 +153,8 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                                 ),
                               ),
                             )
-                          : const SizedBox.shrink()),
+                            : const SizedBox.shrink();
+                      }),
                     ],
                   ),
                 ),
@@ -158,47 +162,49 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                 Padding(
                   padding: const EdgeInsets.only(top: 12.0),
                   child: Center(
-                    child: RichText(
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      text: TextSpan(
-                        style: context.theme.textTheme.headlineMedium!.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: context.theme.colorScheme.onSurface,
-                        ),
-                        children: MessageHelper.buildEmojiText(
-                          SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
-                              ? "User Name"
-                              : SettingsSvc.settings.userName.value,
-                          context.theme.textTheme.headlineMedium!.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: context.theme.colorScheme.onSurface,
+                    child: Obx(() => RichText(
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          text: TextSpan(
+                            style: context.theme.textTheme.headlineMedium!.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: context.theme.colorScheme.onSurface,
+                            ),
+                            children: MessageHelper.buildEmojiText(
+                              SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
+                                  ? "User Name"
+                                  : SettingsSvc.settings.userName.value,
+                              context.theme.textTheme.headlineMedium!.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: context.theme.colorScheme.onSurface,
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                    ),
+                        )),
                   ),
                 ),
               if (iOS)
                 Padding(
                   padding: const EdgeInsets.only(top: 2.0),
                   child: Center(
-                    child: RichText(
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      text: TextSpan(
-                        style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.onSurfaceVariant),
-                        children: MessageHelper.buildEmojiText(
-                            SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
-                                ? "User iCloud"
-                                : SettingsSvc.settings.iCloudAccount.isEmpty
-                                    ? "Unknown iCloud account"
-                                    : SettingsSvc.settings.iCloudAccount.value,
-                            context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.onSurfaceVariant)),
-                      ),
-                    ),
+                    child: Obx(() => RichText(
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          text: TextSpan(
+                            style:
+                                context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.onSurfaceVariant),
+                            children: MessageHelper.buildEmojiText(
+                                SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
+                                    ? "User iCloud"
+                                    : SettingsSvc.settings.iCloudAccount.isEmpty
+                                        ? "Unknown iCloud account"
+                                        : SettingsSvc.settings.iCloudAccount.value,
+                                context.theme.textTheme.bodyMedium!
+                                    .apply(color: context.theme.colorScheme.onSurfaceVariant)),
+                          ),
+                        )),
                   ),
                 ),
               if (iOS)
@@ -237,24 +243,24 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                       onTap: () async {
                         updateName();
                       },
-                      title: RichText(
-                        text: TextSpan(
-                          style: context.theme.textTheme.bodyLarge,
-                          children: MessageHelper.buildEmojiText(
-                            SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
-                                ? "User Name"
-                                : SettingsSvc.settings.userName.value,
-                            context.theme.textTheme.bodyLarge!,
-                          ),
-                        ),
-                      ),
-                      subtitle: Text(
+                      title: Obx(() => RichText(
+                            text: TextSpan(
+                              style: context.theme.textTheme.bodyLarge,
+                              children: MessageHelper.buildEmojiText(
+                                SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
+                                    ? "User Name"
+                                    : SettingsSvc.settings.userName.value,
+                                context.theme.textTheme.bodyLarge!,
+                              ),
+                            ),
+                          )),
+                      subtitle: Obx(() => Text(
                           SettingsSvc.settings.redactedMode.value && SettingsSvc.settings.hideContactInfo.value
                               ? "User iCloud"
                               : SettingsSvc.settings.iCloudAccount.isEmpty
                                   ? "Unknown iCloud account"
                                   : SettingsSvc.settings.iCloudAccount.value,
-                          style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.outline)),
+                          style: context.theme.textTheme.bodyMedium!.apply(color: context.theme.colorScheme.outline))),
                       trailing: Icon(Icons.edit_outlined, color: context.theme.colorScheme.onSurface),
                     ),
                   ),
@@ -275,24 +281,28 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                   ),
                 ),
               if (!iOS)
-                Obx(() => SettingsSvc.settings.userAvatarPath.value != null
-                    ? Padding(
-                        padding: const EdgeInsets.only(bottom: 5.0),
-                        child: Material(
-                          color: Colors.transparent,
-                          child: ListTile(
-                            mouseCursor: MouseCursor.defer,
-                            onTap: () async {
-                              removePhoto();
-                            },
-                            title: Text("Remove your photo",
-                                style: context.theme.textTheme.bodyLarge!
-                                    .copyWith(color: context.theme.colorScheme.error)),
-                            trailing: Icon(Icons.close, color: context.theme.colorScheme.error),
+                Obx(() {
+                  final hasPath = !isNullOrEmpty(SettingsSvc.settings.userAvatarPath.value);
+                  final hasBytes = SettingsSvc.userAvatarBytes.value != null;
+                  return (hasPath || hasBytes)
+                      ? Padding(
+                          padding: const EdgeInsets.only(bottom: 5.0),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: ListTile(
+                              mouseCursor: MouseCursor.defer,
+                              onTap: () async {
+                                removePhoto();
+                              },
+                              title: Text("Remove your photo",
+                                  style: context.theme.textTheme.bodyLarge!
+                                      .copyWith(color: context.theme.colorScheme.error)),
+                              trailing: Icon(Icons.close, color: context.theme.colorScheme.error),
+                            ),
                           ),
-                        ),
-                      )
-                    : const SizedBox.shrink()),
+                        )
+                      : const SizedBox.shrink();
+                }),
               SettingsHeader(iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "iCloud Account Info"),
               Skeletonizer(
                   enabled: accountInfo.isEmpty,
@@ -396,10 +406,10 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                         ),
                     ],
                   )),
-              if (!isNullOrEmpty(accountContact['name']))
+              if (!isNullOrEmpty(SettingsService.extractDisplayName(accountContact) ?? accountContact['name']))
                 SettingsHeader(
                     iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "iMessage Contact Card"),
-              if (!isNullOrEmpty(accountContact['name']))
+              if (!isNullOrEmpty(SettingsService.extractDisplayName(accountContact) ?? accountContact['name']))
                 SettingsSection(
                   backgroundColor: tileColor,
                   children: [
@@ -410,13 +420,20 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                           leading: () {
                             final avatarBytes = SettingsService.decodeAvatarBase64(accountContact['avatar']?.toString());
                             return avatarBytes != null
-                                ? CircleAvatar(
-                                    backgroundImage: MemoryImage(avatarBytes),
-                                    radius: 20,
+                                ? SizedBox(
+                                    width: 40,
+                                    height: 40,
+                                    child: ClipOval(
+                                      child: Image.memory(
+                                        avatarBytes,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, _, _) => const CircleAvatar(),
+                                      ),
+                                    ),
                                   )
                                 : const CircleAvatar();
                           }(),
-                          title: accountContact['name'],
+                          title: SettingsService.extractDisplayName(accountContact) ?? accountContact['name'],
                           subtitle: "Your sharable iMessage contact card",
                         ),
                         const SettingsSubtitle(subtitle: "Visit iMessage settings on your Mac to update."),

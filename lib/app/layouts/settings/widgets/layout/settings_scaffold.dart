@@ -246,8 +246,8 @@ class SettingsScaffold extends StatelessWidget {
                             ),
                           ),
                         SliverToBoxAdapter(
-                          child: Container(
-                            height: 30,
+                          child: SizedBox(
+                            height: 30 + MediaQuery.paddingOf(context).bottom,
                           ),
                         ),
                       ],

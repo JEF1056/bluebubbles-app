@@ -21,3 +21,17 @@ bool get isWebDocumentFocused => true;
 String get webNotificationPermission => 'denied';
 
 Future<String> requestWebNotificationPermission() async => 'denied';
+
+bool get isAndroidWeb => false;
+
+class PendingCallTab {
+  bool get isOpen => false;
+
+  bool navigate(String url) => false;
+
+  void close() {}
+}
+
+PendingCallTab? openPendingCallTab() => null;
+
+Future<bool> ensureCloudflareAccessSession(String serverOrigin) async => false;

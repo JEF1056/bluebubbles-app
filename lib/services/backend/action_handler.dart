@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -45,23 +46,54 @@ class ActionHandler extends GetxService {
   }
 
   Future<void> handleFaceTimeStatusChange(Map<String, dynamic> data) async {
-    if (data["status_id"] == null) return;
-    final int statusId = data["status_id"] as int;
-    if (statusId == 4) {
-      await handleIncomingFaceTimeCall(data);
-    } else if (statusId == 6 && data["uuid"] != null) {
-      hideFaceTimeOverlay(data["uuid"]!);
+    final rawStatusId = data["status_id"];
+    final int? statusId = rawStatusId is num
+        ? rawStatusId.toInt()
+        : (rawStatusId is String
+            ? int.tryParse(rawStatusId)
+            : switch (data["status"]?.toString().toLowerCase()) {
+                "incoming" => 4,
+                "outgoing" => 3,
+                "connecting" => 2,
+                "answered" => 1,
+                "disconnected" => 6,
+                _ => null,
+              });
+    if (statusId == null) return;
+
+    final enriched = Map<String, dynamic>.from(data);
+    final String? address = (enriched["handle"] is Map ? enriched["handle"]["address"] : null)?.toString() ??
+        enriched["address"]?.toString();
+    if ((enriched["display_name"] == null || enriched["display_name"].toString().trim().isEmpty) &&
+        address != null &&
+        address.isNotEmpty &&
+        GetIt.I.isRegistered<ContactServiceV2>()) {
+      final cachedContact = ContactsSvcV2.findContactForAddressSync(address);
+      if (cachedContact != null && cachedContact.displayName.isNotEmpty) {
+        enriched["display_name"] = cachedContact.displayName;
+      }
     }
+
+    if (statusId == 4) {
+      ActiveCallController.instance.applyServerSession(enriched);
+      await handleIncomingFaceTimeCall(enriched);
+      ActiveCallController.instance.applyServerSession(enriched);
+      return;
+    }
+
+    ActiveCallController.instance.applyServerSession(enriched);
   }
 
   Future<void> handleIncomingFaceTimeCall(Map<String, dynamic> data) async {
     Logger.info("Handling incoming FaceTime call");
     final callUuid = data["uuid"];
+    final bool isTelephony = data["is_telephony"] == true;
     String? address = data["handle"]?["address"];
-    String caller = data["address"] ?? "Unknown Number";
-    final bool isAudio = data["is_video"] != null
-        ? !(data["is_video"] as bool)
-        : (data["is_audio"] as bool? ?? false);
+    String caller = data["address"] ?? (isTelephony ? "iPhone call" : "Unknown Number");
+    final bool isAudio = isTelephony ||
+        (data["is_video"] != null
+            ? !(data["is_video"] as bool)
+            : (data["is_audio"] as bool? ?? false));
     Uint8List? chatIcon;
 
     if (address != null) {
@@ -79,17 +111,32 @@ class ActionHandler extends GetxService {
         chatIcon,
         isAudio,
         callerAddress: address,
+        isTelephony: isTelephony,
       );
       if (handledByTelecom) return;
       if (LifecycleSvc.isAlive) {
-        await showFaceTimeOverlay(callUuid, caller, chatIcon, isAudio);
+        await showFaceTimeOverlay(
+          callUuid,
+          caller,
+          chatIcon,
+          isAudio,
+          callerAddress: address,
+          isTelephony: isTelephony,
+        );
       }
       return;
     }
 
     if (!LifecycleSvc.isAlive) {
       if (kIsDesktop) {
-        await showFaceTimeOverlay(callUuid, caller, chatIcon, isAudio);
+        await showFaceTimeOverlay(
+          callUuid,
+          caller,
+          chatIcon,
+          isAudio,
+          callerAddress: address,
+          isTelephony: isTelephony,
+        );
       }
       await NotificationsSvc.createIncomingFaceTimeNotification(
         callUuid,
@@ -97,9 +144,17 @@ class ActionHandler extends GetxService {
         chatIcon,
         isAudio,
         callerAddress: address,
+        isTelephony: isTelephony,
       );
     } else {
-      await showFaceTimeOverlay(callUuid, caller, chatIcon, isAudio);
+      await showFaceTimeOverlay(
+        callUuid,
+        caller,
+        chatIcon,
+        isAudio,
+        callerAddress: address,
+        isTelephony: isTelephony,
+      );
     }
   }
 

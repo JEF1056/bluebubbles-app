@@ -118,6 +118,10 @@ class _SamsungTrailingState extends CustomState<SamsungTrailing, void, Conversat
       final unread = chatState.hasUnreadMessage.value;
       final muteType = chatState.muteType.value;
       final isPinned = chatState.isPinned.value;
+      syncRelativeTimestamp(
+        hasError ? null : message?.dateCreated,
+        isRelative: SettingsSvc.settings.skin.value != Skins.iOS,
+      );
       return Padding(
         padding: const EdgeInsets.only(right: 3),
         child: Row(

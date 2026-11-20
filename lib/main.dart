@@ -5,8 +5,11 @@ import 'dart:ui';
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:async_task/async_task_extension.dart';
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
+import 'package:bluebubbles/app/components/app_notice_bar.dart';
 import 'package:bluebubbles/app/components/custom/custom_error_box.dart';
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/ongoing_call_pill.dart';
+import 'package:bluebubbles/app/components/sync_indicator.dart';
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -29,6 +32,7 @@ import 'package:bluebubbles/app/layouts/startup/failure_to_start.dart';
 import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/layouts/startup/splash_screen.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
+import 'package:bluebubbles/app/wrappers/web_shortcuts_and_routing.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/notifications/web_notifications_interop_stub.dart'
     if (dart.library.js_interop) 'package:bluebubbles/services/backend/notifications/web_notifications_interop_web.dart';
@@ -346,6 +350,11 @@ class Main extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const appPageTransitionsTheme = PageTransitionsTheme(
+      builders: <TargetPlatform, PageTransitionsBuilder>{
+        TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+      },
+    );
     return AdaptiveTheme(
       light: lightTheme.copyWith(
           textSelectionTheme: TextSelectionThemeData(selectionColor: lightTheme.colorScheme.primary)),
@@ -357,16 +366,36 @@ class Main extends StatelessWidget {
         title: 'BlueBubbles',
         theme: theme.withEmojiFallback.copyWith(
           appBarTheme: theme.appBarTheme.copyWith(elevation: 0.0),
+          pageTransitionsTheme: appPageTransitionsTheme,
           dialogTheme: DialogThemeData(
             barrierColor: theme.colorScheme.shadow.withValues(alpha: 0.6),
             backgroundColor: theme.colorScheme.surfaceContainerHighest,
           ),
+          bottomSheetTheme: BottomSheetThemeData(
+            backgroundColor: theme.colorScheme.surfaceContainerHigh,
+            modalBackgroundColor: theme.colorScheme.surfaceContainerHigh,
+            modalBarrierColor: theme.colorScheme.shadow.withValues(alpha: 0.45),
+            surfaceTintColor: Colors.transparent,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+            ),
+          ),
         ),
         darkTheme: darkTheme.withEmojiFallback.copyWith(
           appBarTheme: darkTheme.appBarTheme.copyWith(elevation: 0.0),
+          pageTransitionsTheme: appPageTransitionsTheme,
           dialogTheme: DialogThemeData(
             barrierColor: darkTheme.colorScheme.shadow.withValues(alpha: 0.6),
             backgroundColor: darkTheme.colorScheme.surfaceContainerHighest,
+          ),
+          bottomSheetTheme: BottomSheetThemeData(
+            backgroundColor: darkTheme.colorScheme.surfaceContainerHigh,
+            modalBackgroundColor: darkTheme.colorScheme.surfaceContainerHigh,
+            modalBarrierColor: darkTheme.colorScheme.shadow.withValues(alpha: 0.45),
+            surfaceTintColor: Colors.transparent,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+            ),
           ),
         ),
         navigatorKey: NavigationSvc.key,
@@ -406,21 +435,13 @@ class Main extends StatelessWidget {
           if (kIsDesktop || kIsWeb)
             LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.tab):
                 const OpenPreviousChatIntent(),
-          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.slash): const _ShowKeyboardShortcutsIntent(),
-          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.slash): const _ShowKeyboardShortcutsIntent(),
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.slash): const ShowKeyboardShortcutsIntent(),
+          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.slash): const ShowKeyboardShortcutsIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyI): const ToggleInspectorIntent(),
           LogicalKeySet(LogicalKeyboardKey.escape): const GoBackIntent(),
         },
-        // A route only reports its own pop state, so a pushed page could tell Android nothing handles back and the
-        // gesture left the app. Back always goes through Flutter instead, which still exits when nothing can pop.
         // Above the navigator so back reaches pages pushed over Home; GetMaterialApp ignores its actions parameter
-        builder: (context, navigator) => NotificationListener<NavigationNotification>(
-          onNotification: (notification) {
-            if (notification.canHandlePop) return false;
-            const NavigationNotification(canHandlePop: true).dispatch(context);
-            return true;
-          },
-          child: SafeArea(
+        builder: (context, navigator) => SafeArea(
           top: false,
           bottom: false,
           // secure_application has no Linux implementation; mounting it (and the
@@ -429,12 +450,8 @@ class Main extends StatelessWidget {
           // Bypass the secure wrapper entirely on Linux.
           child: (kIsWeb || Platform.isLinux)
               ? TitleBarWrapper(
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _withBackAction(context, navigator),
-                      const OngoingCallPillOverlay(),
-                    ],
+                  child: AppShellFrame(
+                    navigator: _withBackAction(context, navigator),
                   ),
                 )
               : SecureApplication(
@@ -522,12 +539,8 @@ class Main extends StatelessWidget {
                               ),
                             );
                           },
-                          child: Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              _withBackAction(context, navigator),
-                              const OngoingCallPillOverlay(),
-                            ],
+                          child: AppShellFrame(
+                            navigator: _withBackAction(context, navigator),
                           ),
                         ),
                       );
@@ -535,19 +548,10 @@ class Main extends StatelessWidget {
                   ),
                 ),
           ),
-        ),
         defaultTransition: Transition.cupertino,
       ),
     );
   }
-}
-
-class ToggleInspectorIntent extends Intent {
-  const ToggleInspectorIntent();
-}
-
-class _ShowKeyboardShortcutsIntent extends Intent {
-  const _ShowKeyboardShortcutsIntent();
 }
 
 class Home extends StatefulWidget {
@@ -567,16 +571,11 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   bool _handledShareTarget = false;
   String? _lastPushedHashPath;
 
-  void _pushWebHashRoute({bool replace = false}) {
-    if (!kIsWeb || _syncingFromUrl || !SettingsSvc.settings.finishedSetup.value) return;
-    final uri = buildWebHashRouteUri(
-      settingsOpen: NavigationSvc.isSettingsOpen.value,
-      activeChatGuid: ChatsSvc.activeChatGuid.value,
-    );
-    if (_lastPushedHashPath == uri.path) return;
-    _lastPushedHashPath = uri.path;
-    SystemNavigator.routeInformationUpdated(uri: uri, replace: replace);
-  }
+  void _pushWebHashRoute({bool replace = false}) => _lastPushedHashPath = pushWebHashRoute(
+        syncingFromUrl: _syncingFromUrl,
+        lastPushedHashPath: _lastPushedHashPath,
+        replace: replace,
+      );
 
   Future<void> _applyWebHashRoute(String rawLocation) async {
     if (!kIsWeb || !mounted || !SettingsSvc.settings.finishedSetup.value) return;
@@ -803,93 +802,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
-  void _showKeyboardShortcutsDialog(BuildContext context) {
-    final navContext = NavigationSvc.key.currentContext ?? context;
-    if (!navContext.mounted) return;
-    showDialog<void>(
-      context: navContext,
-      builder: (dlgContext) {
-        final cs = Theme.of(dlgContext).colorScheme;
-        final tt = Theme.of(dlgContext).textTheme;
-        Widget row(String keys, String label) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              child: Row(
-                children: [
-                  Expanded(child: Text(label, style: tt.bodyMedium)),
-                  const SizedBox(width: 12),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: cs.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      keys,
-                      style: tt.labelSmall?.copyWith(fontWeight: FontWeight.w600, color: cs.onSurface),
-                    ),
-                  ),
-                ],
-              ),
-            );
-        return AlertDialog(
-          title: const Text('Keyboard shortcuts'),
-          content: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
-            child: SingleChildScrollView(
-              child: LayoutBuilder(
-                builder: (_, constraints) {
-                  final twoCol = constraints.maxWidth >= 460;
-                  final navCol = Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Navigation', style: tt.titleSmall?.copyWith(color: cs.primary)),
-                      const SizedBox(height: 8),
-                      row('Ctrl/Cmd + K', 'New conversation'),
-                      row('Ctrl + . / Ctrl + Tab', 'Next conversation'),
-                      row(
-                        kIsWeb ? 'Ctrl + , / Ctrl + Shift + Tab' : 'Ctrl + Shift + Tab',
-                        'Previous conversation',
-                      ),
-                      row('Ctrl/Cmd + F', 'Search messages'),
-                    ],
-                  );
-                  final actCol = Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Messaging & Actions', style: tt.titleSmall?.copyWith(color: cs.primary)),
-                      const SizedBox(height: 8),
-                      row('Alt + R', 'Reply to recent message'),
-                      row('Alt + I', 'Toggle chat details'),
-                      row('Alt + ,', 'Open settings'),
-                      row('Ctrl/Cmd + /', 'Show keyboard shortcuts'),
-                      row('Esc', 'Close / Go back'),
-                    ],
-                  );
-                  if (!twoCol) {
-                    return Column(mainAxisSize: MainAxisSize.min, children: [navCol, const SizedBox(height: 16), actCol]);
-                  }
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: navCol),
-                      const SizedBox(width: 24),
-                      Expanded(child: actCol),
-                    ],
-                  );
-                },
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(dlgContext).pop(), child: const Text('Close')),
-          ],
-        );
-      },
-    );
-  }
-
   /// Render
   @override
   Widget build(BuildContext context) {
@@ -911,9 +823,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             return null;
           },
         ),
-        _ShowKeyboardShortcutsIntent: CallbackAction<_ShowKeyboardShortcutsIntent>(
+        ShowKeyboardShortcutsIntent: CallbackAction<ShowKeyboardShortcutsIntent>(
           onInvoke: (_) {
-            _showKeyboardShortcutsDialog(context);
+            showKeyboardShortcutsDialog(context);
             return null;
           },
         ),
@@ -1013,4 +925,146 @@ void initSystemTray() {
 void updateSystemTrayToggle({required bool windowHidden}) {
   _trayWindowHidden = windowHidden;
   _trayToggleItem?.label = windowHidden ? 'Show App' : 'Hide App';
+}
+
+/// Layout-integrated app-shell frame that places active call bars, sync error
+/// strips, and top notices in a `Column` above [navigator] (absorbing status-bar
+/// `SafeArea` padding and removing it from [navigator] so app bars below never
+/// double-pad or get overlapped), while keeping the 2px syncing hairline and
+/// wide-desktop bottom-left info/success toast non-blocking.
+class AppShellFrame extends StatelessWidget {
+  final Widget navigator;
+  final ActiveCallController? callController;
+  final SyncStatusSnapshot? syncStatusOverride;
+  final bool? showSyncIndicatorOverride;
+
+  const AppShellFrame({
+    super.key,
+    required this.navigator,
+    this.callController,
+    this.syncStatusOverride,
+    this.showSyncIndicatorOverride,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final activeCall = callController ?? ActiveCallController.instance;
+
+    Widget buildWithSync(SyncStatusSnapshot syncSnapshot, bool allowSyncIndicator) {
+      return ListenableBuilder(
+        listenable: activeCall,
+        builder: (context, _) {
+          return ValueListenableBuilder<AppNoticeData?>(
+            valueListenable: AppNoticeController.instance.current,
+            builder: (context, notice, _) {
+              final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+              final viewportWidth = MediaQuery.sizeOf(context).width;
+              final hasCallBanner = activeCall.state.phase != ActiveCallPhase.idle;
+              final hasSyncFailedBanner = GlobalSyncStatusOverlay.hasBannerFor(syncSnapshot);
+              final hasTopNoticeBanner = appNoticeUsesTopSlot(notice, viewportWidth);
+              final hasCornerToast = notice != null && !hasTopNoticeBanner;
+              final hasTopBanner = hasCallBanner || hasSyncFailedBanner || hasTopNoticeBanner;
+              final showSyncingHairline = !hasSyncFailedBanner && syncSnapshot.showSyncing && allowSyncIndicator;
+              final hasWindowEffect = GetIt.I.isRegistered<SettingsService>() &&
+                  SettingsSvc.settings.windowEffect.value != WindowEffect.disabled;
+
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (hasTopBanner && !hasWindowEffect)
+                    Positioned.fill(
+                      child: ColoredBox(color: Theme.of(context).colorScheme.surface),
+                    ),
+                  Column(
+                    children: [
+                      AnimatedSize(
+                        duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 180),
+                        curve: Curves.easeOutCubic,
+                        alignment: Alignment.topCenter,
+                        child: hasTopBanner
+                            ? Material(
+                                type: MaterialType.transparency,
+                                child: SafeArea(
+                                  bottom: false,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      if (hasCallBanner) OngoingCallPillOverlay(controller: activeCall),
+                                      if (hasSyncFailedBanner)
+                                        GlobalSyncStatusOverlay(
+                                          statusOverride: syncStatusOverride,
+                                          showSyncIndicatorOverride: showSyncIndicatorOverride,
+                                        ),
+                                      if (hasTopNoticeBanner && notice != null)
+                                        AppNoticeTopBar(
+                                          notice: notice,
+                                          onDismiss: () => AppNoticeController.instance.dismiss(explicit: true),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : const SizedBox(width: double.infinity, height: 0),
+                      ),
+                      Expanded(
+                        child: MediaQuery.removePadding(
+                          context: context,
+                          removeTop: hasTopBanner,
+                          child: navigator,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (showSyncingHairline)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: SafeArea(
+                        bottom: false,
+                        child: GlobalSyncStatusOverlay(
+                          statusOverride: syncStatusOverride,
+                          showSyncIndicatorOverride: showSyncIndicatorOverride,
+                        ),
+                      ),
+                    ),
+                  if (hasCornerToast)
+                    Positioned(
+                      left: 16,
+                      bottom: 16,
+                      child: SafeArea(
+                        top: false,
+                        right: false,
+                        child: AppNoticeCornerToast(
+                          notice: notice,
+                          onDismiss: () => AppNoticeController.instance.dismiss(explicit: true),
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    }
+
+    Widget content;
+    if (syncStatusOverride != null) {
+      content = buildWithSync(syncStatusOverride!, showSyncIndicatorOverride ?? true);
+    } else if (GetIt.I.isRegistered<SyncService>()) {
+      content = Obx(() {
+        final finishedSetup =
+            !GetIt.I.isRegistered<SettingsService>() || SettingsSvc.settings.finishedSetup.value;
+        final snapshot = finishedSetup ? SyncSvc.status.value : SyncStatusSnapshot.idle;
+        final allowSync = showSyncIndicatorOverride ??
+            (!GetIt.I.isRegistered<SettingsService>() || SettingsSvc.settings.showSyncIndicator.value);
+        return buildWithSync(snapshot, allowSync);
+      });
+    } else {
+      content = buildWithSync(SyncStatusSnapshot.idle, showSyncIndicatorOverride ?? true);
+    }
+
+    return AppNoticeHost(child: content);
+  }
 }

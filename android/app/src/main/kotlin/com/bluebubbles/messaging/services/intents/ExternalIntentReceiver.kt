@@ -21,15 +21,20 @@ class ExternalIntentReceiver: BroadcastReceiver() {
                 val prefs = context.getSharedPreferences("FlutterSharedPreferences", 0)
                 val storedPassword = prefs.getString("guidAuthKey", "")
 
-                if (password == storedPassword) {
+                if (!storedPassword.isNullOrEmpty() && !password.isNullOrEmpty() &&
+                    java.security.MessageDigest.isEqual(
+                        password.toByteArray(Charsets.UTF_8),
+                        storedPassword.toByteArray(Charsets.UTF_8)
+                    )
+                ) {
                     Utils.getServerUrl(context, object : MethodChannel.Result {
                         override fun success(result: Any?) {
-                            PersistentLog.d(context, Constants.logTag, "Got URL: $result - sending to Tasker...")
-                            val intent = Intent()
-                            intent.setAction("net.dinglisch.android.taskerm.BB_SERVER_URL")
-                            intent.putExtra("url", result.toString())
-                            intent.putExtra("id", identifier)
-                            context.sendBroadcast(intent)
+                            PersistentLog.d(context, Constants.logTag, "Sending server URL to Tasker")
+                            val outIntent = Intent("net.dinglisch.android.taskerm.BB_SERVER_URL")
+                                .setPackage("net.dinglisch.android.taskerm")
+                                .putExtra("url", result.toString())
+                                .putExtra("id", identifier)
+                            context.sendBroadcast(outIntent)
                         }
 
                         override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {}

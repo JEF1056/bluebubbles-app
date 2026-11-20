@@ -1,8 +1,6 @@
 import 'dart:io';
 
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/findmy_location_card.dart';
-import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
-import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/message_holder_reactions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart';
@@ -214,90 +212,6 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 4));
       Get.delete<ConversationViewController>(tag: 'spy-composer', force: true);
-    });
-  });
-
-  group('2. Server connection & background sync UI', () {
-    testWidgets('SyncIndicator reserves fixed layout box and SyncHairlineIndicator fades cleanly', (tester) async {
-      final sync = GetIt.I<SyncService>();
-      sync.isIncrementalSyncing.value = false;
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: _testTheme(),
-          home: const Scaffold(
-            body: Column(
-              children: [
-                SyncIndicator(size: 16),
-                SyncHairlineIndicator(),
-              ],
-            ),
-          ),
-        ),
-      );
-
-      final box = tester.getSize(find.byType(SyncIndicator));
-      expect(box, const Size(16, 16));
-
-      final idleOpacity = tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity).first);
-      expect(idleOpacity.opacity, 0.0);
-
-      sync.isIncrementalSyncing.value = true;
-      await tester.pump();
-      expect(tester.getSize(find.byType(SyncIndicator)), const Size(16, 16));
-      final activeOpacity = tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity).first);
-      expect(activeOpacity.opacity, greaterThan(0.0));
-      sync.isIncrementalSyncing.value = false;
-    });
-
-    testWidgets('WebConnectivityBanner is silent when online and renders compact tonal pill when degraded',
-        (tester) async {
-      var retried = false;
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: _testTheme(),
-          home: Scaffold(
-            body: WebConnectivityBanner(
-              onlineOverride: true,
-              reconnectingOverride: false,
-              onRetry: () => retried = true,
-            ),
-          ),
-        ),
-      );
-      expect(find.text('Offline · Retry'), findsNothing);
-      expect(find.text('Reconnecting…'), findsNothing);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: _testTheme(),
-          home: Scaffold(
-            body: WebConnectivityBanner(
-              onlineOverride: false,
-              reconnectingOverride: false,
-              onRetry: () => retried = true,
-            ),
-          ),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 250));
-      expect(find.text('Offline · Retry'), findsOneWidget);
-      await tester.tap(find.text('Offline · Retry'));
-      expect(retried, isTrue);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: _testTheme(),
-          home: const Scaffold(
-            body: WebConnectivityBanner(
-              onlineOverride: true,
-              reconnectingOverride: true,
-            ),
-          ),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 250));
-      expect(find.text('Reconnecting…'), findsOneWidget);
     });
   });
 

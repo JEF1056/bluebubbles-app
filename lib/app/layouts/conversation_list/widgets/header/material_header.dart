@@ -74,48 +74,49 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
                           color: context.theme.colorScheme.surfaceContainerHigh,
                           borderRadius: M3EShapes.radiusXl,
                           clipBehavior: Clip.antiAlias,
-                          child: SizedBox(
-                            height: 48,
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Tooltip(
-                                    message: 'Search',
-                                    child: InkWell(
-                                      onTap: () => NavigationSvc.pushLeft(context, const SearchView()),
-                                      borderRadius: M3EShapes.radiusXl,
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(left: 16, right: 8),
-                                        child: Row(
-                                          children: [
-                                            Icon(
-                                              Icons.search_rounded,
-                                              size: 20,
-                                              color: context.theme.colorScheme.onSurfaceVariant,
-                                            ),
-                                            const SizedBox(width: 10),
-                                            Flexible(
-                                              child: Text(
-                                                "Search BlueBubbles",
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: context.theme.textTheme.bodyLarge?.copyWith(
-                                                  color: context.theme.colorScheme.onSurfaceVariant,
-                                                  fontWeight: FontWeight.w500,
+                          child: InkWell(
+                            onTap: () => NavigationSvc.pushLeft(context, const SearchView()),
+                            borderRadius: M3EShapes.radiusXl,
+                            mouseCursor: SystemMouseCursors.click,
+                            child: SizedBox(
+                              height: 48,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Tooltip(
+                                      message: 'Search',
+                                      child: SizedBox.expand(
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(left: 16, right: 8),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.search_rounded,
+                                                size: 20,
+                                                color: context.theme.colorScheme.onSurfaceVariant,
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Flexible(
+                                                child: Text(
+                                                  "Search BlueBubbles",
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: context.theme.textTheme.bodyLarge?.copyWith(
+                                                    color: context.theme.colorScheme.onSurfaceVariant,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
                                                 ),
                                               ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            const SyncIndicator(size: 12),
-                                          ],
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                const ChatListFilterButton(),
-                                OverflowMenu(controller: controller),
-                              ],
+                                  const ChatListFilterButton(),
+                                  OverflowMenu(controller: controller),
+                                ],
+                              ),
                             ),
                           ),
                         ),

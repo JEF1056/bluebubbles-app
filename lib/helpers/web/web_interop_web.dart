@@ -4,6 +4,42 @@ import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
+bool _cfAccessCheckInFlight = false;
+
+/// Detects an expired/missing Cloudflare Access cookie on `bb.jessfan.com` and
+/// performs a single SSO bounce (60s cooldown prevents loops if server is down).
+Future<bool> ensureCloudflareAccessSession(String serverOrigin) async {
+  if (_cfAccessCheckInFlight) return false;
+  try {
+    if (web.window.location.origin != 'https://chat.jessfan.com') return false;
+    final parsed = Uri.tryParse(serverOrigin);
+    if (parsed == null || parsed.scheme != 'https' || !parsed.host.endsWith('.jessfan.com')) {
+      return false;
+    }
+    const key = 'bb_cf_bounce_ts';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = int.tryParse(web.window.sessionStorage.getItem(key) ?? '') ?? 0;
+    if (now - last < 60000) return false;
+    _cfAccessCheckInFlight = true;
+    final res = await web.window
+        .fetch(
+          '${parsed.origin}/api/v1/access-check'.toJS,
+          web.RequestInit(credentials: 'include', redirect: 'manual'),
+        )
+        .toDart;
+    if (res.type == 'opaqueredirect') {
+      web.window.sessionStorage.setItem(key, now.toString());
+      web.window.location.replace('${parsed.origin}/api/v1/access-bounce');
+      return true;
+    }
+  } catch (_) {
+    // Network offline or tunnel unreachable; stay on cached UI.
+  } finally {
+    _cfAccessCheckInFlight = false;
+  }
+  return false;
+}
+
 void downloadBytes(
   Uint8List bytes,
   String filename, {
@@ -75,5 +111,69 @@ Future<String> requestWebNotificationPermission() async {
     return result.toDart;
   } catch (_) {
     return 'unsupported';
+  }
+}
+
+bool get isAndroidWeb {
+  try {
+    return web.window.navigator.userAgent.toLowerCase().contains('android');
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Handle to a browser tab synchronously pre-opened on user gesture so a post-await
+/// FaceTime join link can navigate it without triggering popup blockers.
+class PendingCallTab {
+  PendingCallTab(this._window);
+
+  web.Window? _window;
+
+  bool get isOpen {
+    final win = _window;
+    if (win == null) return false;
+    try {
+      return !win.closed;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool navigate(String url) {
+    final win = _window;
+    if (win == null) return false;
+    try {
+      if (win.closed) {
+        _window = null;
+        return false;
+      }
+      win.location.replace(url);
+      win.focus();
+      return true;
+    } catch (_) {
+      _window = null;
+      return false;
+    }
+  }
+
+  void close() {
+    final win = _window;
+    _window = null;
+    if (win == null) return;
+    try {
+      if (!win.closed) {
+        win.close();
+      }
+    } catch (_) {}
+  }
+}
+
+PendingCallTab? openPendingCallTab() {
+  try {
+    final win = web.window.open('about:blank', 'bluebubbles_facetime_call');
+    if (win == null) return null;
+    return PendingCallTab(win);
+  } catch (_) {
+    return null;
   }
 }

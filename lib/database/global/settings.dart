@@ -519,8 +519,9 @@ class Settings {
     SettingsSvc.settings.serverAddress.value = map['serverAddress'] ?? SettingsSvc.settings.serverAddress.value;
     SettingsSvc.settings.guidAuthKey.value = map['guidAuthKey'] ?? SettingsSvc.settings.guidAuthKey.value;
     if (map.containsKey('customHeaders')) {
-      debugPrint('Updating custom headers from map: ${map['customHeaders']}');
-      SettingsSvc.settings.customHeaders.value = _processCustomHeaders(map['customHeaders']);
+      final parsed = _processCustomHeaders(map['customHeaders']);
+      debugPrint('Updating custom header keys: ${parsed.keys.join(', ')}');
+      SettingsSvc.settings.customHeaders.value = parsed;
     }
     SettingsSvc.settings.finishedSetup.value = map['finishedSetup'] ?? SettingsSvc.settings.finishedSetup.value;
     SettingsSvc.settings.reachedConversationList.value =
@@ -795,8 +796,10 @@ class Settings {
     s.iCloudAccount.value = map['iCloudAccount'] ?? "";
     s.guidAuthKey.value = map['guidAuthKey'] ?? "";
     s.serverAddress.value = map['serverAddress'] ?? "";
-    debugPrint('Loading Custom Headers from map: ${map['customHeaders']}');
     s.customHeaders.value = _processCustomHeaders(map['customHeaders']);
+    if (s.customHeaders.value.isNotEmpty) {
+      debugPrint('Loaded custom header keys: ${s.customHeaders.value.keys.join(', ')}');
+    }
     s.finishedSetup.value = map['finishedSetup'] ?? false;
     s.reachedConversationList.value = map['reachedConversationList'] ?? false;
     s.autoDownload.value = map['autoDownload'] ?? true;

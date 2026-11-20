@@ -583,9 +583,7 @@ void main() {
 
       // #1: Store static/factory stubs compile & behave sensibly
       expect(Store.isOpen(null), isTrue);
-      expect(() => Store.fromReference(null, null), throwsUnsupportedError);
       expect(() => Store.attach(null, null), throwsUnsupportedError);
-      expect(() => store.reference, throwsUnsupportedError);
     });
 
     test('empty-string secondary index query and message persist before afterPut', () async {

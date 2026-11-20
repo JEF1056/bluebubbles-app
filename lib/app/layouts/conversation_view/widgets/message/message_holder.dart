@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_drop_target.dart';
@@ -23,6 +24,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/t
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/vertical_reply_line.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/text/text_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/message_timestamp.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/timestamp_separator.dart';
@@ -67,9 +69,11 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
 
   Message get message => controller.message;
 
-  Message? get olderMessage => controller.oldMessage;
+  Message? get olderMessage => widget.isReplyThread ? widget.oldMessage : controller.oldMessage;
 
-  Message? get newerMessage => controller.newMessage;
+  Message? get newerMessage => widget.isReplyThread ? widget.newMessage : controller.newMessage;
+
+  bool get _isThreadOriginator => widget.isReplyThread && widget.oldMessage == null;
 
   // Computed reactive replyTo getter (resolves root originator across reply chains/off-screen origins)
   Message? get replyTo {
@@ -356,7 +360,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                           ? EdgeInsets.only(left: avatarIndent)
                                           : EdgeInsets.zero,
                                       child: iOS && !widget.isReplyThread && message.threadOriginatorGuid != null
-                                          ? _buildVerticalReplyLine(
+                                          ? VerticalReplyLine(
                                               color: context.theme.colorScheme.surfaceContainerHighest,
                                               isFromMe: message.isFromMe!,
                                               onTap: () {
@@ -381,7 +385,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                   !(message.isGroupEvent || e.isUnsent)
                                               ? EdgeInsets.only(left: 35.0 * avatarScale)
                                               : EdgeInsets.zero,
-                                          child: _buildVerticalReplyLine(
+                                          child: VerticalReplyLine(
                                             color: context.theme.colorScheme.surfaceContainerHighest,
                                             isFromMe: message.isFromMe!,
                                             onTap: () {
@@ -461,11 +465,11 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                             builder: (context, constraints) {
                                               final hasBackground =
                                                   ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
-                                              final lineColor = hasBackground
-                                                  ? Colors.white.withValues(alpha: 0.42)
-                                                  : (iOS
-                                                      ? context.theme.colorScheme.surfaceContainerHighest
-                                                      : context.theme.colorScheme.outlineVariant);
+                                              final lineColor = WallpaperContrast.replyLineColor(
+                                                context,
+                                                hasWallpaper: hasBackground,
+                                                isIOS: iOS,
+                                              );
                                               final iosEnabled = iOS &&
                                                   !widget.isReplyThread &&
                                                   ((index == 0 &&
@@ -554,9 +558,15 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                   // The collection grid tightens its top corners
                                                                   // against this subject (hasSubjectAbove), so
                                                                   // the subject tightens its bottom to match.
-                                                                  connectLower: BubbleConnect.lower(controller, e) ||
-                                                                      (!iOS && e.isMediaCollection),
-                                                                  connectUpper: BubbleConnect.upper(controller, e),
+                                                                  connectLower: _isThreadOriginator
+                                                                      ? false
+                                                                      : (BubbleConnect.lower(controller, e,
+                                                                              newerMessage: newerMessage) ||
+                                                                          (!iOS && e.isMediaCollection)),
+                                                                  connectUpper: _isThreadOriginator
+                                                                      ? false
+                                                                      : BubbleConnect.upper(controller, e,
+                                                                          olderMessage: olderMessage),
                                                                 ),
                                                                 child: TextBubble(
                                                                   subjectOnly: true,
@@ -589,7 +599,8 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                     BubbleEffects(
                                                                       part: e.part,
                                                                       globalKey: keys.length > index ? keys[index] : null,
-                                                                      showTail: message.showTail(newerMessage) &&
+                                                                      showTail: !_isThreadOriginator &&
+                                                                          message.showTail(newerMessage) &&
                                                                           controller.isTrailingMessagePart(e),
                                                                       messageState: controller,
                                                                       child: MessagePopupHolder(
@@ -609,14 +620,19 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                           child: Builder(
                                                                             builder: (_) {
                                                                               final isCollection = e.isMediaCollection;
+                                                                              final partContent = MessagePartContent(
+                                                                                messagePart: e,
+                                                                                cvController: widget.cvController,
+                                                                                canSwipeToReply: canSwipeToReply,
+                                                                              );
                                                                               final inner = Stack(
                                                                                 alignment: Alignment.centerRight,
                                                                                 children: [
-                                                                                  MessagePartContent(
-                                                                                    messagePart: e,
-                                                                                    cvController: widget.cvController,
-                                                                                    canSwipeToReply: canSwipeToReply,
-                                                                                  ),
+                                                                                  _isThreadOriginator
+                                                                                      ? GhostBubbleScope(
+                                                                                          child: partContent,
+                                                                                        )
+                                                                                      : partContent,
                                                                                   if (message.isFromMe!)
                                                                                     Obx(() {
                                                                                       final editStuff = widget
@@ -647,13 +663,18 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                               return ClipPath(
                                                                                 clipper: TailClipper(
                                                                                   isFromMe: message.isFromMe!,
-                                                                                  showTail: !e.isPkPass &&
+                                                                                  showTail: !_isThreadOriginator &&
+                                                                                      !e.isPkPass &&
                                                                                       message.showTail(newerMessage) &&
                                                                                       controller.isTrailingMessagePart(e),
-                                                                                  connectLower:
-                                                                                      BubbleConnect.lower(controller, e),
-                                                                                  connectUpper:
-                                                                                      BubbleConnect.upper(controller, e),
+                                                                                  connectLower: _isThreadOriginator
+                                                                                      ? false
+                                                                                      : BubbleConnect.lower(controller, e,
+                                                                                          newerMessage: newerMessage),
+                                                                                  connectUpper: _isThreadOriginator
+                                                                                      ? false
+                                                                                      : BubbleConnect.upper(controller, e,
+                                                                                          olderMessage: olderMessage),
                                                                                 ),
                                                                                 child: inner,
                                                                               );
@@ -785,190 +806,96 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
 
     if (threadReplies.isNotEmpty && (!hasNonReplyProperties || !propsShowsReplies)) {
       final label = formatReplyCountLabel(threadReplies.length);
-      final theme = context.theme;
+      final cs = context.theme.colorScheme;
+      final baseLabelStyle = context.theme.textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600);
+      const evenHeight = TextHeightBehavior(
+        applyHeightToFirstAscent: true,
+        applyHeightToLastDescent: true,
+        leadingDistribution: TextLeadingDistribution.even,
+      );
       void openThread() => showReplyThread(context, message, e, service, widget.cvController);
-      final pill = iOS
+      final hasWallpaper = !iOS && (ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false);
+
+      final Widget pill = iOS
           ? SelectionSafeTap(
               behavior: HitTestBehavior.opaque,
               onTap: openThread,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHigh.withValues(alpha: 0.72),
+                  color: cs.surfaceContainerHigh.withValues(alpha: 0.72),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
-                      label,
-                      textHeightBehavior: const TextHeightBehavior(
-                        applyHeightToFirstAscent: true,
-                        applyHeightToLastDescent: true,
-                        leadingDistribution: TextLeadingDistribution.even,
-                      ),
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: theme.colorScheme.primary,
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
-                      ),
-                    ),
+                    Text(label, textHeightBehavior: evenHeight, style: baseLabelStyle?.copyWith(color: cs.primary, height: 1.2)),
                     const SizedBox(width: 2),
-                    Icon(
-                      CupertinoIcons.chevron_right,
-                      size: 12,
-                      color: theme.colorScheme.primary,
-                    ),
+                    Icon(CupertinoIcons.chevron_right, size: 12, color: cs.primary),
                   ],
                 ),
               ),
             )
-          : (ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false)
-              ? SelectionSafeTap.builder(
-                  onTap: openThread,
-                  builder: (_, handleTap) => InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: handleTap,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            label,
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: Colors.white.withValues(alpha: 0.88),
-                              fontWeight: FontWeight.w600,
-                              shadows: const [Shadow(color: Colors.black54, blurRadius: 3)],
-                            ),
-                          ),
-                          const SizedBox(width: 2),
-                          Icon(
-                            Icons.chevron_right_rounded,
-                            size: 15,
-                            color: Colors.white.withValues(alpha: 0.88),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                )
-              : SelectionSafeTap.builder(
-                  onTap: openThread,
-                  builder: (_, handleTap) => Material(
-                    color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.8),
-                    borderRadius: BorderRadius.circular(16),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(16),
-                      onTap: handleTap,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.reply_rounded,
-                              size: 13,
-                              color: theme.colorScheme.onSecondaryContainer,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              label,
-                              textHeightBehavior: const TextHeightBehavior(
-                                applyHeightToFirstAscent: true,
-                                applyHeightToLastDescent: true,
-                                leadingDistribution: TextLeadingDistribution.even,
+          : SelectionSafeTap.builder(
+              onTap: openThread,
+              builder: (_, handleTap) {
+                final ink = InkWell(
+                  borderRadius: BorderRadius.circular(hasWallpaper ? 12 : 16),
+                  onTap: handleTap,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: hasWallpaper ? 4 : 10, vertical: hasWallpaper ? 3 : 4),
+                    child: hasWallpaper
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                label,
+                                style: WallpaperContrast.unbubbledStyle(
+                                  baseLabelStyle ?? const TextStyle(),
+                                  hasWallpaper: true,
+                                ),
                               ),
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: theme.colorScheme.onSecondaryContainer,
-                                fontWeight: FontWeight.w600,
-                                height: 1.2,
+                              const SizedBox(width: 2),
+                              Icon(
+                                Icons.chevron_right_rounded,
+                                size: 15,
+                                color: WallpaperContrast.unbubbledTextColor,
+                                shadows: WallpaperContrast.unbubbledTextShadows,
                               ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                            ],
+                          )
+                        : Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.reply_rounded, size: 13, color: cs.onSecondaryContainer),
+                              const SizedBox(width: 4),
+                              Text(
+                                label,
+                                textHeightBehavior: evenHeight,
+                                style: baseLabelStyle?.copyWith(color: cs.onSecondaryContainer, height: 1.2),
+                              ),
+                            ],
+                          ),
                   ),
                 );
+                return hasWallpaper
+                    ? ink
+                    : Material(
+                        color: cs.secondaryContainer.withValues(alpha: 0.8),
+                        borderRadius: BorderRadius.circular(16),
+                        clipBehavior: Clip.antiAlias,
+                        child: ink,
+                      );
+              },
+            );
 
       widgets.add(
         Padding(
-          padding: iOS
-              ? avatarPad.add(const EdgeInsets.symmetric(horizontal: 15).add(const EdgeInsets.only(top: 4)))
-              : avatarPad.add(const EdgeInsets.only(top: 4)),
+          padding: avatarPad.add(EdgeInsets.only(top: 4, left: iOS ? 15 : 0, right: iOS ? 15 : 0)),
           child: pill,
         ),
       );
     }
     return widgets;
   }
-  Widget _buildVerticalReplyLine({
-    required Color color,
-    required bool isFromMe,
-    required VoidCallback onTap,
-    required Widget child,
-  }) {
-    return SizedBox(
-      width: double.infinity,
-      child: Stack(
-        clipBehavior: Clip.none,
-        fit: StackFit.passthrough,
-        children: [
-          Positioned.fill(
-            child: ReplyLineHitRegion(
-              containsPoint: (pos, size) {
-                final x = isFromMe ? 35.0 : size.width - 35.0;
-                return (pos.dx - x).abs() <= ReplyLinePainter.connectorHitPadding;
-              },
-              onTap: onTap,
-            ),
-          ),
-          CustomPaint(
-            painter: _ReplyLinePainter(
-              color: color,
-              isFromMe: isFromMe,
-            ),
-            child: child,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Custom painter to draw a simple vertical line for the reply thread
-/// connecting through the message sender
-class _ReplyLinePainter extends CustomPainter {
-  final Color color;
-  final bool isFromMe;
-
-  _ReplyLinePainter({required this.color, required this.isFromMe});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..strokeWidth = 3
-      ..style = PaintingStyle.stroke;
-
-    // Draw vertical line at the same position as the reply line
-    // Position depends on message direction: left side if from me, right side if not
-    final x = isFromMe ? 35.0 : size.width - 35;
-    canvas.drawLine(
-      Offset(x, -5),
-      Offset(x, size.height - (!isFromMe ? 0 : 5)),
-      paint,
-    );
-  }
-
-  @override
-  bool? hitTest(Offset position) => false;
-
-  @override
-  bool shouldRepaint(_ReplyLinePainter oldDelegate) => oldDelegate.color != color || oldDelegate.isFromMe != isFromMe;
 }

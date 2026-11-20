@@ -107,6 +107,33 @@ class FindMyFriendListTile extends StatelessWidget {
           icon: const Icon(Icons.person_outline, size: 18),
           label: const Text('Contact'),
         ),
+        extraActions: [
+          OutlinedButton.icon(
+            key: const ValueKey('findmy-inline-refresh'),
+            style: OutlinedButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              shape: const StadiumBorder(),
+            ),
+            onPressed: isLocating ? null : () => controller.refreshSelected(),
+            icon: const Icon(Icons.refresh_rounded, size: 16),
+            label: Text(isLocating ? 'Locating...' : 'Refresh'),
+          ),
+          if (!hideContactInfo && contactAddress.isNotEmpty)
+            OutlinedButton.icon(
+              key: const ValueKey('findmy-inline-chat'),
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                shape: const StadiumBorder(),
+              ),
+              onPressed: () => FindMyDetailSheet.openChat(
+                context,
+                displayName: displayName,
+                address: contactAddress,
+              ),
+              icon: const Icon(Icons.chat_bubble_outline, size: 16),
+              label: const Text('Chat'),
+            ),
+        ],
         rowSubtitle: rowSubtitle,
         isLocatingRow: isLocating,
         proximity: proximity,

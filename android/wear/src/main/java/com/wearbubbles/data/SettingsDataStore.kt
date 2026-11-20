@@ -27,6 +27,9 @@ class SettingsDataStore(private val context: Context) {
         private val HAPTIC_ENABLED = booleanPreferencesKey("haptic_enabled")
         private val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
         private val DISMISSED_UPDATE_VERSION = stringPreferencesKey("dismissed_update_version")
+        private val USER_NAME = stringPreferencesKey("user_name")
+        private val USER_HANDLE = stringPreferencesKey("user_handle")
+        private val USER_AVATAR_PATH = stringPreferencesKey("user_avatar_path")
         private val gson = Gson()
         private val mapType = object : TypeToken<Map<String, String>>() {}.type
     }
@@ -53,6 +56,18 @@ class SettingsDataStore(private val context: Context) {
 
     val hapticEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[HAPTIC_ENABLED] ?: true
+    }
+
+    val userName: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_NAME] ?: ""
+    }
+
+    val userHandle: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[USER_HANDLE] ?: ""
+    }
+
+    val userAvatarPath: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[USER_AVATAR_PATH]?.takeIf { it.isNotBlank() }
     }
 
     val isConfigured: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -127,6 +142,18 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun setDismissedUpdateVersion(version: String) {
         context.dataStore.edit { it[DISMISSED_UPDATE_VERSION] = version }
+    }
+
+    suspend fun saveUserProfile(name: String, handle: String, avatarPath: String?) {
+        context.dataStore.edit { prefs ->
+            prefs[USER_NAME] = name.trim()
+            prefs[USER_HANDLE] = handle.trim()
+            if (!avatarPath.isNullOrBlank()) {
+                prefs[USER_AVATAR_PATH] = avatarPath
+            } else {
+                prefs.remove(USER_AVATAR_PATH)
+            }
+        }
     }
 
     suspend fun clearAll() {

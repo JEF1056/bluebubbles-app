@@ -15,6 +15,7 @@ import android.telecom.DisconnectCause
 import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import android.telecom.VideoProfile
 import androidx.core.content.ContextCompat
 import com.bluebubbles.messaging.services.network.HttpService
 import com.bluebubbles.messaging.services.wear.WearSyncManager
@@ -34,13 +35,48 @@ class FaceTimeConnectionService : ConnectionService() {
         const val EXTRA_IS_TELEPHONY = "isTelephony"
 
         private val activeConnections = ConcurrentHashMap<String, FaceTimeConnection>()
+        private val pendingAnsweredUuids = ConcurrentHashMap.newKeySet<String>()
+        private val pendingEndedUuids = ConcurrentHashMap.newKeySet<String>()
 
         internal fun registerActiveConnection(callUuid: String, connection: FaceTimeConnection) {
             activeConnections[callUuid] = connection
+            if (pendingEndedUuids.remove(callUuid)) {
+                pendingAnsweredUuids.remove(callUuid)
+                if (activeConnections.remove(callUuid, connection)) {
+                    connection.onRemoteDisconnect()
+                }
+                return
+            }
+            if (pendingAnsweredUuids.remove(callUuid)) {
+                connection.onRemoteAnswered()
+            }
         }
 
         internal fun unregisterActiveConnection(callUuid: String, connection: FaceTimeConnection) {
             activeConnections.remove(callUuid, connection)
+        }
+
+        fun markCallActive(callUuid: String, recordIfPending: Boolean = false): Boolean {
+            if (callUuid.isBlank()) return false
+            val conn = activeConnections[callUuid]
+            if (conn != null) {
+                if (conn.state == Connection.STATE_DIALING) {
+                    conn.onRemoteAnswered()
+                    return true
+                }
+                return false
+            }
+            if (recordIfPending && !pendingEndedUuids.contains(callUuid)) {
+                if (pendingAnsweredUuids.size > 32) pendingAnsweredUuids.clear()
+                pendingAnsweredUuids.add(callUuid)
+            }
+            return false
+        }
+
+        fun setCallMuted(callUuid: String, muted: Boolean): Boolean {
+            val conn = activeConnections[callUuid] ?: return false
+            conn.setMutedFromUi(muted)
+            return true
         }
 
         internal fun handleOutgoingCallSuccess(
@@ -70,18 +106,39 @@ class FaceTimeConnectionService : ConnectionService() {
             activateAndStart()
         }
 
-        fun endCall(callUuid: String): Boolean {
-            val conn = activeConnections.remove(callUuid) ?: return false
+        internal fun shouldEndCallForState(state: Int, onlyIfRinging: Boolean): Boolean =
+            !onlyIfRinging || state == Connection.STATE_RINGING
+
+        fun endCall(callUuid: String, onlyIfRinging: Boolean = false, recordIfPending: Boolean = false): Boolean {
+            pendingAnsweredUuids.remove(callUuid)
+            val conn = activeConnections[callUuid]
+            if (conn == null) {
+                if (recordIfPending && !onlyIfRinging && callUuid.isNotBlank()) {
+                    if (pendingEndedUuids.size > 32) pendingEndedUuids.clear()
+                    pendingEndedUuids.add(callUuid)
+                }
+                return false
+            }
+            if (!shouldEndCallForState(conn.state, onlyIfRinging)) return false
+            if (!activeConnections.remove(callUuid, conn)) return false
             conn.onRemoteDisconnect()
             return true
         }
 
-        fun resolveHandleScheme(address: String): String =
-            if (address.contains("@")) SCHEME_MAILTO else PhoneAccount.SCHEME_TEL
+        fun resolveHandleScheme(address: String, isTelephony: Boolean = false): String =
+            if (isTelephony || !address.contains("@")) PhoneAccount.SCHEME_TEL else SCHEME_MAILTO
 
-        fun buildHandleUri(address: String?, fallbackName: String? = null): Uri {
-            val raw = address?.takeIf { it.isNotBlank() } ?: fallbackName?.takeIf { it.isNotBlank() } ?: "FaceTime"
-            return Uri.fromParts(resolveHandleScheme(raw), raw, null)
+        fun buildHandleUri(
+            address: String?,
+            fallbackName: String? = null,
+            isTelephony: Boolean = false
+        ): Uri {
+            val raw = address?.takeIf { it.isNotBlank() }
+                ?: fallbackName?.takeIf { it.isNotBlank() }
+                ?: if (isTelephony) "iPhone" else "FaceTime"
+            val scheme = resolveHandleScheme(raw, isTelephony = isTelephony)
+            val part = if (scheme == PhoneAccount.SCHEME_TEL) raw.removePrefix("tel:") else raw.removePrefix("mailto:")
+            return Uri.fromParts(scheme, part, null)
         }
 
         fun phoneAccountHandle(context: Context): PhoneAccountHandle {
@@ -135,13 +192,20 @@ class FaceTimeConnectionService : ConnectionService() {
             isTelephony: Boolean = false
         ): Boolean {
             if (callUuid.isBlank()) return false
+            val existing = activeConnections[callUuid]
+            if (existing != null && existing.state != Connection.STATE_DISCONNECTED) {
+                if (autoAnswer) {
+                    existing.answerFromHandoff()
+                }
+                return true
+            }
             return try {
                 val handle = registerPhoneAccount(context)
                 if (!isPhoneAccountEnabled(context)) {
                     PersistentLog.d(context, TAG, "PhoneAccount not enabled; falling back to notification for $callUuid")
                     return false
                 }
-                val uri = buildHandleUri(address, callerName)
+                val uri = buildHandleUri(address, callerName, isTelephony = isTelephony)
                 val extras = Bundle().apply {
                     putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, uri)
                     putString(EXTRA_CALL_UUID, callUuid)
@@ -181,7 +245,7 @@ class FaceTimeConnectionService : ConnectionService() {
                     PersistentLog.d(context, TAG, "PhoneAccount not enabled for outgoing call")
                     return false
                 }
-                val uri = buildHandleUri(address, callerName)
+                val uri = buildHandleUri(address, callerName, isTelephony = isTelephony)
                 val outgoingExtras = Bundle().apply {
                     putString(EXTRA_CALLER_NAME, callerName ?: address)
                     putString(EXTRA_CALLER_ADDRESS, address)
@@ -210,7 +274,12 @@ class FaceTimeConnectionService : ConnectionService() {
         val callerName = extras.getString(EXTRA_CALLER_NAME) ?: "Unknown Caller"
         val callerAddress = extras.getString(EXTRA_CALLER_ADDRESS)
         val autoAnswer = extras.getBoolean(EXTRA_AUTO_ANSWER, false)
-        val addressUri = request?.address ?: buildHandleUri(callerAddress, callerName)
+        val isTelephony = extras.getBoolean(EXTRA_IS_TELEPHONY, false)
+        val addressUri = if (isTelephony) {
+            buildHandleUri(callerAddress, callerName, isTelephony = true)
+        } else {
+            request?.address ?: buildHandleUri(callerAddress, callerName)
+        }
 
         if (callUuid.isNullOrBlank()) {
             return Connection.createFailedConnection(DisconnectCause(DisconnectCause.ERROR, "Missing callUuid"))
@@ -218,10 +287,13 @@ class FaceTimeConnectionService : ConnectionService() {
 
         val connection = FaceTimeConnection(
             context = applicationContext,
-            callUuid = callUuid
+            callUuid = callUuid,
+            isTelephony = isTelephony
         ).apply {
             setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED)
             setCallerDisplayName(callerName, TelecomManager.PRESENTATION_ALLOWED)
+            setVideoState(VideoProfile.STATE_AUDIO_ONLY)
+            putExtras(Bundle().apply { putBoolean(EXTRA_IS_TELEPHONY, isTelephony) })
             connectionCapabilities = Connection.CAPABILITY_MUTE or
                 Connection.CAPABILITY_HOLD or
                 Connection.CAPABILITY_SUPPORT_HOLD
@@ -254,7 +326,8 @@ class FaceTimeConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ): Connection {
-        val extras = request?.extras ?: Bundle()
+        val rawExtras = request?.extras ?: Bundle()
+        val extras = rawExtras.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS) ?: rawExtras
         val address = extras.getString(EXTRA_CALLER_ADDRESS)
             ?: request?.address?.schemeSpecificPart
             ?: ""
@@ -265,13 +338,20 @@ class FaceTimeConnectionService : ConnectionService() {
             return Connection.createFailedConnection(DisconnectCause(DisconnectCause.ERROR, "Missing address"))
         }
 
-        val addressUri = request?.address ?: buildHandleUri(address, callerName)
+        val addressUri = if (isTelephony) {
+            buildHandleUri(address, callerName, isTelephony = true)
+        } else {
+            request?.address ?: buildHandleUri(address, callerName)
+        }
         val connection = FaceTimeConnection(
             context = applicationContext,
-            callUuid = null
+            callUuid = null,
+            isTelephony = isTelephony
         ).apply {
             setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED)
             setCallerDisplayName(callerName, TelecomManager.PRESENTATION_ALLOWED)
+            setVideoState(VideoProfile.STATE_AUDIO_ONLY)
+            putExtras(Bundle().apply { putBoolean(EXTRA_IS_TELEPHONY, isTelephony) })
             connectionCapabilities = Connection.CAPABILITY_MUTE or
                 Connection.CAPABILITY_HOLD or
                 Connection.CAPABILITY_SUPPORT_HOLD
@@ -292,8 +372,7 @@ class FaceTimeConnectionService : ConnectionService() {
                     unregisterActive = { unregisterActiveConnection(it, connection) },
                     leaveCall = { HttpService(applicationContext).leaveFaceTimeCall(it) },
                     activateAndStart = {
-                        // shortcut: marks call active when Mac dials; upgrade to await status_id == 1 for real remote-answer timing
-                        connection.setActive()
+                        // Stay in STATE_DIALING while warming WebRTC; status_id == 1 calls markCallActive -> setActive().
                         connection.startAudioBridge(answerCall = false)
                     }
                 )

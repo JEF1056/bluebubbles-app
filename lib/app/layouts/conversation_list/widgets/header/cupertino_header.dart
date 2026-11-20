@@ -58,8 +58,6 @@ class CupertinoHeader extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      const SyncIndicator(size: 16),
-                      const SizedBox(width: 10.0),
                       ClipOval(
                         child: Material(
                           color: context.theme.colorScheme.surfaceContainerHighest,

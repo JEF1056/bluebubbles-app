@@ -169,12 +169,7 @@ class _ThemingPanelState extends CustomState<ThemingPanel, void, ThemingPanelCon
                                 onChanged: (bool val) async {
                                   SettingsSvc.settings.immersiveMode.value = val;
                                   await SettingsSvc.settings.saveOneAsync('immersiveMode');
-                                  if (val) {
-                                    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-                                  } else {
-                                    SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-                                        overlays: [SystemUiOverlay.bottom, SystemUiOverlay.top]);
-                                  }
+                                  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
                                   EventDispatcherSvc.emit('theme-update', null);
                                 },
                                 initialVal: SettingsSvc.settings.immersiveMode.value,

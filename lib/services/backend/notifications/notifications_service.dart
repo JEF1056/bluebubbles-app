@@ -24,6 +24,8 @@ import 'package:timezone/timezone.dart';
 import 'package:universal_io/io.dart';
 import 'package:get_it/get_it.dart';
 
+part 'notifications_service_fork.dart';
+
 // ignore: non_constant_identifier_names
 NotificationsService get NotificationsSvc => GetIt.I<NotificationsService>();
 
@@ -162,13 +164,6 @@ class NotificationsService {
     } else if (kIsWeb && !headless) {
       bindWebUnreadBadge();
     }
-  }
-
-  void bindWebUnreadBadge() {
-    if (!kIsWeb || headless || !GetIt.I.isRegistered<ChatsService>()) return;
-    updateWebTitleAndBadge(ChatsSvc.unreadCount.value);
-    _webUnreadWorker?.dispose();
-    _webUnreadWorker = ever<int>(ChatsSvc.unreadCount, updateWebTitleAndBadge);
   }
 
   void close() {
@@ -426,10 +421,13 @@ class NotificationsService {
   }
 
   Future<bool> createIncomingFaceTimeNotification(
-      String? callUuid, String caller, Uint8List? chatIcon, bool isAudio, {String? callerAddress}) async {
+      String? callUuid, String caller, Uint8List? chatIcon, bool isAudio,
+      {String? callerAddress, bool isTelephony = false}) async {
     // Set some notification defaults
     String title = caller;
-    String text = "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
+    String text = isTelephony
+        ? "Incoming iPhone Call"
+        : "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
 
     if (kIsWeb) {
       if (webNotificationPermission != "granted") return false;
@@ -440,7 +438,7 @@ class NotificationsService {
         tag: callUuid,
         onClick: callUuid != null
             ? () async {
-                await IntentsSvc.answerFaceTime(callUuid);
+                await IntentsSvc.answerFaceTime(callUuid, isTelephony: isTelephony);
               }
             : null,
       );
@@ -463,28 +461,23 @@ class NotificationsService {
         callUuid: callUuid,
         isVideo: !isAudio,
         callerAddress: callerAddress,
+        isTelephony: isTelephony,
       );
     }
   }
 
   @visibleForTesting
-  static int faceTimeNotificationId(String? callUuid) {
-    final numeric = callUuid?.numericOnly();
-    if (numeric != null && numeric.isNotEmpty) {
-      return int.tryParse(numeric.substring(0, min(8, numeric.length))) ?? (callUuid!.hashCode & 0x7fffffff);
-    }
-    if (callUuid != null) {
-      return callUuid.hashCode & 0x7fffffff;
-    }
-    return Random().nextInt(9998) + 1;
-  }
+  static int faceTimeNotificationId(String? callUuid) => _faceTimeNotificationId(callUuid);
 
-  Future<void> clearFaceTimeNotification(String callUuid) async {
+  Future<void> clearFaceTimeNotification(String callUuid, {bool onlyIfRinging = false}) async {
     if (kIsDesktop) {
       await clearDesktopFaceTimeNotif(callUuid);
     } else if (!kIsWeb) {
       if (Platform.isAndroid) {
-        await MethodChannelSvc.actions.endFaceTimeCall(callUuid: callUuid);
+        await MethodChannelSvc.actions.endFaceTimeCall(
+          callUuid: callUuid,
+          onlyIfRinging: onlyIfRinging,
+        );
       }
       await MethodChannelSvc.actions.deleteNotification(
         notificationId: faceTimeNotificationId(callUuid),

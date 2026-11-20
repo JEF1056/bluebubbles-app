@@ -25,13 +25,7 @@ class ExpressiveChatHeader extends StatelessWidget {
 
   const ExpressiveChatHeader({super.key, required this.chat});
 
-  bool get _canCall =>
-      !kIsDesktop &&
-      !kIsWeb &&
-      !(chat.chatIdentifier?.startsWith("urn:biz") ?? false) &&
-      (chat.handles.isNotEmpty &&
-          ((chat.handles.first.contactsV2.firstOrNull?.phoneNumbers.isNotEmpty ?? false) ||
-              !chat.handles.first.address.contains("@")));
+  bool get _canCall => !kIsDesktop && !kIsWeb && canAudioCall(chat);
 
   bool get _canAddPeople =>
       SettingsSvc.settings.enablePrivateAPI.value && chat.isIMessage && chat.isGroup;
@@ -244,20 +238,15 @@ class ExpressiveChatHeader extends StatelessWidget {
         M3EButtonGroupItem(
           icon: Icons.call_outlined,
           label: "Call",
-          onPressed: () => showAddressPicker(contact, chat.handles.first, context),
+          onPressed: () => startAudioCall(context, chat),
           onLongPress: () => showAddressPicker(contact, chat.handles.first, context, isLongPressed: true),
         ),
-      if (!kIsWeb && !kIsDesktop)
-        M3EButtonGroupItem(
-          icon: Icons.video_call_outlined,
-          label: "Video",
-          onPressed: () => showAddressPicker(contact, chat.handles.first, context, video: true),
-        ),
-      if (canFaceTime(chat))
+      if (canVideoCall(chat))
         M3EButtonGroupItem(
           icon: Icons.videocam_outlined,
-          label: "FaceTime",
-          onPressed: () => startFaceTimeCall(context, chat),
+          label: "Video",
+          onPressed: () => startVideoCall(context, chat),
+          onLongPress: () => startVideoCall(context, chat, isLongPressed: true),
         ),
       if (chat.handles.isNotEmpty &&
           ((contact?.emailAddresses.isNotEmpty ?? false) || chat.handles.first.address.contains("@")))

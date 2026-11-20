@@ -53,35 +53,21 @@ abstract class Condition<T> {
 
   void _collectParams<D>(QueryProperty<T, D> prop, String? alias, List<void Function(D)> setters, List<void Function(List<D>)> listSetters) {}
 
-  Condition<T> and(Condition<T> other) => _AndCondition<T>(this, other);
-  Condition<T> or(Condition<T> other) => _OrCondition<T>(this, other);
+  Condition<T> and(Condition<T> other) => _BinaryCondition<T>(this, other, true);
+  Condition<T> or(Condition<T> other) => _BinaryCondition<T>(this, other, false);
 
   Condition<T> operator &(Condition<T> other) => and(other);
   Condition<T> operator |(Condition<T> other) => or(other);
 }
 
-class _AndCondition<T> extends Condition<T> {
+class _BinaryCondition<T> extends Condition<T> {
   final Condition<T> left;
   final Condition<T> right;
-  const _AndCondition(this.left, this.right);
+  final bool isAnd;
+  const _BinaryCondition(this.left, this.right, this.isAnd);
 
   @override
-  bool matches(T entity) => left.matches(entity) && right.matches(entity);
-
-  @override
-  void _collectParams<D>(QueryProperty<T, D> prop, String? alias, List<void Function(D)> setters, List<void Function(List<D>)> listSetters) {
-    left._collectParams<D>(prop, alias, setters, listSetters);
-    right._collectParams<D>(prop, alias, setters, listSetters);
-  }
-}
-
-class _OrCondition<T> extends Condition<T> {
-  final Condition<T> left;
-  final Condition<T> right;
-  const _OrCondition(this.left, this.right);
-
-  @override
-  bool matches(T entity) => left.matches(entity) || right.matches(entity);
+  bool matches(T entity) => isAnd ? (left.matches(entity) && right.matches(entity)) : (left.matches(entity) || right.matches(entity));
 
   @override
   void _collectParams<D>(QueryProperty<T, D> prop, String? alias, List<void Function(D)> setters, List<void Function(List<D>)> listSetters) {
@@ -127,32 +113,21 @@ class QueryProperty<EntityT, DartT> {
 class QueryIntegerProperty<EntityT> extends QueryProperty<EntityT, int> {
   const QueryIntegerProperty(super.name, super.getter);
 
-  Condition<EntityT> equals(int p, {String? alias}) =>
-      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && a == t, value: p, alias: alias, isEquality: true);
+  Condition<EntityT> _cmp(int p, bool Function(int a, int t) fn, {String? alias, bool isEquality = false}) =>
+      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && t != null && fn(a, t),
+          value: p, alias: alias, isEquality: isEquality);
 
-  Condition<EntityT> notEquals(int p, {String? alias}) =>
-      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && a != t, value: p, alias: alias);
-
-  Condition<EntityT> greaterThan(int p, {String? alias}) =>
-      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && t != null && a > t, value: p, alias: alias);
-
-  Condition<EntityT> greaterOrEqual(int p, {String? alias}) =>
-      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && t != null && a >= t, value: p, alias: alias);
-
-  Condition<EntityT> lessThan(int p, {String? alias}) =>
-      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && t != null && a < t, value: p, alias: alias);
-
-  Condition<EntityT> lessOrEqual(int p, {String? alias}) =>
-      _PredicateCondition<EntityT, int>(this, (a, t, _) => a != null && t != null && a <= t, value: p, alias: alias);
+  Condition<EntityT> equals(int p, {String? alias}) => _cmp(p, (a, t) => a == t, alias: alias, isEquality: true);
+  Condition<EntityT> notEquals(int p, {String? alias}) => _cmp(p, (a, t) => a != t, alias: alias);
+  Condition<EntityT> greaterThan(int p, {String? alias}) => _cmp(p, (a, t) => a > t, alias: alias);
+  Condition<EntityT> greaterOrEqual(int p, {String? alias}) => _cmp(p, (a, t) => a >= t, alias: alias);
+  Condition<EntityT> lessThan(int p, {String? alias}) => _cmp(p, (a, t) => a < t, alias: alias);
+  Condition<EntityT> lessOrEqual(int p, {String? alias}) => _cmp(p, (a, t) => a <= t, alias: alias);
 
   Condition<EntityT> between(int p1, int p2, {String? alias}) {
     final lo = p1 <= p2 ? p1 : p2;
     final hi = p1 <= p2 ? p2 : p1;
-    return _PredicateCondition<EntityT, int>(
-      this,
-      (a, _, __) => a != null && a >= lo && a <= hi,
-      alias: alias,
-    );
+    return _PredicateCondition<EntityT, int>(this, (a, _, __) => a != null && a >= lo && a <= hi, alias: alias);
   }
 
   Condition<EntityT> oneOf(List<int> list, {String? alias}) => _PredicateCondition<EntityT, int>(
@@ -179,55 +154,44 @@ class QueryStringProperty<EntityT> extends QueryProperty<EntityT, String> {
 
   static String _norm(String s, bool cs) => cs ? s : s.toLowerCase();
 
+  Condition<EntityT> _cmp(
+    String p,
+    bool Function(String a, String t) fn, {
+    bool caseSensitive = true,
+    String? alias,
+    bool isEquality = false,
+  }) =>
+      _PredicateCondition<EntityT, String>(
+        this,
+        (a, t, _) => a != null && t != null && fn(_norm(a, caseSensitive), _norm(t, caseSensitive)),
+        value: p,
+        alias: alias,
+        isEquality: isEquality,
+      );
+
   Condition<EntityT> equals(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive) == _norm(t, caseSensitive),
-        value: p,
-        alias: alias,
-        isEquality: caseSensitive,
-      );
-
+      _cmp(p, (a, t) => a == t, caseSensitive: caseSensitive, alias: alias, isEquality: caseSensitive);
   Condition<EntityT> notEquals(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive) != _norm(t, caseSensitive),
-        value: p,
-        alias: alias,
-      );
-
+      _cmp(p, (a, t) => a != t, caseSensitive: caseSensitive, alias: alias);
   Condition<EntityT> contains(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).contains(_norm(t, caseSensitive)),
-        value: p,
-        alias: alias,
-      );
-
+      _cmp(p, (a, t) => a.contains(t), caseSensitive: caseSensitive, alias: alias);
   Condition<EntityT> startsWith(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).startsWith(_norm(t, caseSensitive)),
-        value: p,
-        alias: alias,
-      );
-
+      _cmp(p, (a, t) => a.startsWith(t), caseSensitive: caseSensitive, alias: alias);
   Condition<EntityT> endsWith(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).endsWith(_norm(t, caseSensitive)),
-        value: p,
-        alias: alias,
-      );
+      _cmp(p, (a, t) => a.endsWith(t), caseSensitive: caseSensitive, alias: alias);
+  Condition<EntityT> greaterThan(String p, {bool caseSensitive = true, String? alias}) =>
+      _cmp(p, (a, t) => a.compareTo(t) > 0, caseSensitive: caseSensitive, alias: alias);
+  Condition<EntityT> greaterOrEqual(String p, {bool caseSensitive = true, String? alias}) =>
+      _cmp(p, (a, t) => a.compareTo(t) >= 0, caseSensitive: caseSensitive, alias: alias);
+  Condition<EntityT> lessThan(String p, {bool caseSensitive = true, String? alias}) =>
+      _cmp(p, (a, t) => a.compareTo(t) < 0, caseSensitive: caseSensitive, alias: alias);
+  Condition<EntityT> lessOrEqual(String p, {bool caseSensitive = true, String? alias}) =>
+      _cmp(p, (a, t) => a.compareTo(t) <= 0, caseSensitive: caseSensitive, alias: alias);
 
   Condition<EntityT> oneOf(List<String> list, {bool caseSensitive = true, String? alias}) =>
       _PredicateCondition<EntityT, String>(
         this,
-        (a, _, l) {
-          if (a == null || l == null) return false;
-          final na = _norm(a, caseSensitive);
-          return l.any((item) => _norm(item, caseSensitive) == na);
-        },
+        (a, _, l) => a != null && l != null && l.any((item) => _norm(item, caseSensitive) == _norm(a, caseSensitive)),
         values: List<String>.from(list),
         alias: alias,
       );
@@ -235,45 +199,8 @@ class QueryStringProperty<EntityT> extends QueryProperty<EntityT, String> {
   Condition<EntityT> notOneOf(List<String> list, {bool caseSensitive = true, String? alias}) =>
       _PredicateCondition<EntityT, String>(
         this,
-        (a, _, l) {
-          if (a == null) return false;
-          if (l == null) return true;
-          final na = _norm(a, caseSensitive);
-          return !l.any((item) => _norm(item, caseSensitive) == na);
-        },
+        (a, _, l) => a != null && (l == null || !l.any((item) => _norm(item, caseSensitive) == _norm(a, caseSensitive))),
         values: List<String>.from(list),
-        alias: alias,
-      );
-
-  Condition<EntityT> greaterThan(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).compareTo(_norm(t, caseSensitive)) > 0,
-        value: p,
-        alias: alias,
-      );
-
-  Condition<EntityT> greaterOrEqual(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).compareTo(_norm(t, caseSensitive)) >= 0,
-        value: p,
-        alias: alias,
-      );
-
-  Condition<EntityT> lessThan(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).compareTo(_norm(t, caseSensitive)) < 0,
-        value: p,
-        alias: alias,
-      );
-
-  Condition<EntityT> lessOrEqual(String p, {bool caseSensitive = true, String? alias}) =>
-      _PredicateCondition<EntityT, String>(
-        this,
-        (a, t, _) => a != null && t != null && _norm(a, caseSensitive).compareTo(_norm(t, caseSensitive)) <= 0,
-        value: p,
         alias: alias,
       );
 }
@@ -295,8 +222,11 @@ class QueryStringVectorProperty<EntityT> extends QueryProperty<EntityT, List<Str
 class QueryRelationToOne<EntityT, TargetT> extends QueryIntegerProperty<EntityT> {
   final ToOne<TargetT> Function(EntityT entity) relationGetter;
 
-  const QueryRelationToOne(String name, this.relationGetter, int? Function(EntityT entity) idGetter)
-      : super(name, idGetter);
+  QueryRelationToOne(String name, this.relationGetter)
+      : super(name, (e) {
+          final id = relationGetter(e).targetId;
+          return id > 0 ? id : null;
+        });
 }
 
 class QueryRelationToMany<EntityT, TargetT> {
@@ -566,7 +496,7 @@ class Query<T> {
               identical(cond.prop, Chat_.id) &&
               cond.value != null) {
             final msgBox = _box as Box<Message>;
-            final ids = msgBox._messagesByChatId[cond.value!];
+            final ids = msgBox._reverseIndex[cond.value!];
             if (ids == null) return const [];
             return ids.map((id) => msgBox._items[id]).whereType<Message>().cast<T>();
           }
@@ -1082,9 +1012,7 @@ class Box<T> {
   final T Function(Map<String, dynamic>) _decode;
   final void Function(T, Store)? _onAttach;
   final void Function(T, Store)? _afterPut;
-  final void Function(T)? _onIndexAdd;
-  final void Function(T)? _onIndexRemove;
-  final void Function()? _onIndexClear;
+  final int? Function(T)? _reverseIndexKey;
 
   final Map<int, T> _items = LinkedHashMap<int, T>();
   final Map<int, Map<String, dynamic>> _committedEncoded = {};
@@ -1092,16 +1020,8 @@ class Box<T> {
   final Map<int, String> _secondaryKeyById = {};
   final Map<String, int> _uniqueIndex = {};
   final Map<int, String> _uniqueKeyById = {};
-
-  // Reverse indexes for O(1) backlinks & filtered queries (keyed by entity id for safe updates)
-  final Map<int, Set<int>> _messagesByChatId = {};
-  final Map<int, int> _messageChatById = {};
-  final Map<int, Set<int>> _attachmentsByMessageId = {};
-  final Map<int, int> _attachmentMessageById = {};
-  final Map<int, Set<int>> _entriesByThemeObjectId = {};
-  final Map<int, int> _entryThemeObjectById = {};
-  final Map<String, Set<int>> _handlesByAddress = {};
-  final Map<int, String> _handleAddressById = {};
+  final Map<int, Set<int>> _reverseIndex = {};
+  final Map<int, int> _reverseKeyById = {};
 
   int _nextId = 1;
 
@@ -1118,9 +1038,7 @@ class Box<T> {
     String? Function(T)? uniqueKey,
     void Function(T, Store)? onAttach,
     void Function(T, Store)? afterPut,
-    void Function(T)? onIndexAdd,
-    void Function(T)? onIndexRemove,
-    void Function()? onIndexClear,
+    int? Function(T)? reverseIndexKey,
   })  : _store = store,
         _storeName = storeName,
         _idProp = idProp,
@@ -1133,11 +1051,16 @@ class Box<T> {
         _decode = decode,
         _onAttach = onAttach,
         _afterPut = afterPut,
-        _onIndexAdd = onIndexAdd,
-        _onIndexRemove = onIndexRemove,
-        _onIndexClear = onIndexClear;
+        _reverseIndexKey = reverseIndexKey;
 
   int? _idOf(T entity) => _getId(entity);
+
+  List<T> _byReverseKey(int? key) {
+    if (key == null || key <= 0) return const [];
+    final ids = _reverseIndex[key];
+    if (ids == null || ids.isEmpty) return const [];
+    return ids.map(get).whereType<T>().toList();
+  }
 
   void _hydrateFromRecords(List<Map<String, dynamic>> records) {
     int maxId = 0;
@@ -1161,15 +1084,8 @@ class Box<T> {
     _secondaryKeyById.clear();
     _uniqueIndex.clear();
     _uniqueKeyById.clear();
-    _messagesByChatId.clear();
-    _messageChatById.clear();
-    _attachmentsByMessageId.clear();
-    _attachmentMessageById.clear();
-    _entriesByThemeObjectId.clear();
-    _entryThemeObjectById.clear();
-    _handlesByAddress.clear();
-    _handleAddressById.clear();
-    _onIndexClear?.call();
+    _reverseIndex.clear();
+    _reverseKeyById.clear();
     _nextId = 1;
   }
 
@@ -1184,7 +1100,11 @@ class Box<T> {
       _uniqueIndex[uniq] = id;
       _uniqueKeyById[id] = uniq;
     }
-    _onIndexAdd?.call(entity);
+    final rev = _reverseIndexKey?.call(entity);
+    if (rev != null && rev > 0) {
+      (_reverseIndex[rev] ??= <int>{}).add(id);
+      _reverseKeyById[id] = rev;
+    }
   }
 
   void _indexRemove(int id, T entity) {
@@ -1196,7 +1116,10 @@ class Box<T> {
     if (uniq != null && _uniqueIndex[uniq] == id) {
       _uniqueIndex.remove(uniq);
     }
-    _onIndexRemove?.call(entity);
+    final rev = _reverseKeyById.remove(id) ?? _reverseIndexKey?.call(entity);
+    if (rev != null && rev > 0) {
+      _reverseIndex[rev]?.remove(id);
+    }
   }
 
   void _rebuildAllIndexes() {
@@ -1204,7 +1127,8 @@ class Box<T> {
     _secondaryKeyById.clear();
     _uniqueIndex.clear();
     _uniqueKeyById.clear();
-    _onIndexClear?.call();
+    _reverseIndex.clear();
+    _reverseKeyById.clear();
     for (final entry in _items.entries) {
       _indexInsert(entry.key, entry.value);
     }
@@ -1345,7 +1269,8 @@ class Box<T> {
     _secondaryKeyById.clear();
     _uniqueIndex.clear();
     _uniqueKeyById.clear();
-    _onIndexClear?.call();
+    _reverseIndex.clear();
+    _reverseKeyById.clear();
     _store._schedulePersist(() {
       _committedEncoded.clear();
       _store._persistence?.enqueueClear(_storeName);
@@ -1412,6 +1337,62 @@ class Store {
     late final Box<ThemeEntry> themeEntryBox;
     late final Box<ThemeObject> themeObjectBox;
 
+    void initToOneBacklink<ParentT, ChildT>(
+      Store s,
+      ParentT parent,
+      int? parentId,
+      ToMany<ChildT> backlink,
+      Box<ChildT> childBox,
+      ToOne<ParentT> Function(ChildT) toOneOf, {
+      bool stampUniqueId = false,
+    }) {
+      backlink._initBacklink(
+        s,
+        () => childBox._byReverseKey(parentId),
+        (added, removed) {
+          for (final child in added) {
+            if (stampUniqueId) childBox._stampExistingUniqueId(child);
+            toOneOf(child).target = parent;
+            childBox.put(child);
+          }
+          for (final child in removed) {
+            if (toOneOf(child).targetId == parentId) {
+              toOneOf(child).target = null;
+              childBox.put(child);
+            }
+          }
+        },
+      );
+    }
+
+    void initToManyBacklink<TargetT, SourceT>(
+      Store s,
+      TargetT target,
+      int? targetId,
+      ToMany<SourceT> backlink,
+      Box<SourceT> sourceBox,
+      ToMany<TargetT> Function(SourceT) toManyOf,
+      int? Function(TargetT) idOf,
+    ) {
+      backlink._initBacklink(
+        s,
+        () => sourceBox._items.values.where((src) => toManyOf(src)._effectiveTargetIds().contains(targetId)).toList(),
+        (added, removed) {
+          for (final src in added) {
+            if (!toManyOf(src).any((x) => idOf(x) == targetId)) {
+              toManyOf(src).add(target);
+              sourceBox.put(src);
+            }
+          }
+          for (final src in removed) {
+            if (toManyOf(src).remove(target)) {
+              sourceBox.put(src);
+            }
+          }
+        },
+      );
+    }
+
     attachmentBox = Box<Attachment>._(
       store: this,
       storeName: IdbPersistence.storeAttachments,
@@ -1423,29 +1404,8 @@ class Store {
       uniqueKey: (a) => a.guid,
       encode: _Codec.encodeAttachment,
       decode: _Codec.decodeAttachment,
-      onAttach: (a, s) {
-        a.message._syncBeforeOwnerPut(s);
-      },
-      onIndexAdd: (a) {
-        final aid = a.id;
-        final mid = a.message.targetId;
-        if (aid != null && mid > 0) {
-          (attachmentBox._attachmentsByMessageId[mid] ??= <int>{}).add(aid);
-          attachmentBox._attachmentMessageById[aid] = mid;
-        }
-      },
-      onIndexRemove: (a) {
-        final aid = a.id;
-        if (aid == null) return;
-        final mid = attachmentBox._attachmentMessageById.remove(aid) ?? a.message.targetId;
-        if (mid > 0) {
-          attachmentBox._attachmentsByMessageId[mid]?.remove(aid);
-        }
-      },
-      onIndexClear: () {
-        attachmentBox._attachmentsByMessageId.clear();
-        attachmentBox._attachmentMessageById.clear();
-      },
+      onAttach: (a, s) => a.message._syncBeforeOwnerPut(s),
+      reverseIndexKey: (a) => a.message.targetId,
     );
 
     handleBox = Box<Handle>._(
@@ -1459,43 +1419,8 @@ class Store {
       uniqueKey: (h) => h.uniqueAddressAndService,
       encode: _Codec.encodeHandle,
       decode: _Codec.decodeHandle,
-      onAttach: (h, s) {
-        h.contactsV2._initBacklink(
-          s,
-          () => contactBox._items.values.where((c) => c.handles._effectiveTargetIds().contains(h.id)).toList(),
-          (added, removed) {
-            for (final c in added) {
-              if (!c.handles.any((x) => x.id == h.id)) {
-                c.handles.add(h);
-                contactBox.put(c);
-              }
-            }
-            for (final c in removed) {
-              if (c.handles.remove(h)) {
-                contactBox.put(c);
-              }
-            }
-          },
-        );
-      },
+      onAttach: (h, s) => initToManyBacklink(s, h, h.id, h.contactsV2, contactBox, (c) => c.handles, (x) => x.id),
       afterPut: (h, _) => h.contactsV2._flushBacklinkPending(),
-      onIndexAdd: (h) {
-        final hid = h.id;
-        if (hid != null) {
-          (handleBox._handlesByAddress[h.address] ??= <int>{}).add(hid);
-          handleBox._handleAddressById[hid] = h.address;
-        }
-      },
-      onIndexRemove: (h) {
-        final hid = h.id;
-        if (hid == null) return;
-        final addr = handleBox._handleAddressById.remove(hid) ?? h.address;
-        handleBox._handlesByAddress[addr]?.remove(hid);
-      },
-      onIndexClear: () {
-        handleBox._handlesByAddress.clear();
-        handleBox._handleAddressById.clear();
-      },
     );
 
     messageBox = Box<Message>._(
@@ -1512,51 +1437,10 @@ class Store {
       onAttach: (m, s) {
         m.chat._syncBeforeOwnerPut(s);
         m.handleRelation._syncBeforeOwnerPut(s);
-        m.dbAttachments._initBacklink(
-          s,
-          () {
-            final mid = m.id;
-            if (mid == null || mid <= 0) return const [];
-            final ids = attachmentBox._attachmentsByMessageId[mid];
-            if (ids == null || ids.isEmpty) return const [];
-            return ids.map((id) => attachmentBox.get(id)).whereType<Attachment>().toList();
-          },
-          (added, removed) {
-            for (final att in added) {
-              attachmentBox._stampExistingUniqueId(att);
-              att.message.target = m;
-              attachmentBox.put(att);
-            }
-            for (final att in removed) {
-              if (att.message.targetId == m.id) {
-                att.message.target = null;
-                attachmentBox.put(att);
-              }
-            }
-          },
-        );
+        initToOneBacklink(s, m, m.id, m.dbAttachments, attachmentBox, (a) => a.message, stampUniqueId: true);
       },
       afterPut: (m, _) => m.dbAttachments._flushBacklinkPending(),
-      onIndexAdd: (m) {
-        final mid = m.id;
-        final cid = m.chat.targetId;
-        if (mid != null && cid > 0) {
-          (messageBox._messagesByChatId[cid] ??= <int>{}).add(mid);
-          messageBox._messageChatById[mid] = cid;
-        }
-      },
-      onIndexRemove: (m) {
-        final mid = m.id;
-        if (mid == null) return;
-        final cid = messageBox._messageChatById.remove(mid) ?? m.chat.targetId;
-        if (cid > 0) {
-          messageBox._messagesByChatId[cid]?.remove(mid);
-        }
-      },
-      onIndexClear: () {
-        messageBox._messagesByChatId.clear();
-        messageBox._messageChatById.clear();
-      },
+      reverseIndexKey: (m) => m.chat.targetId,
     );
 
     chatBox = Box<Chat>._(
@@ -1573,46 +1457,8 @@ class Store {
       onAttach: (c, s) {
         c.dbLatestMessage._syncBeforeOwnerPut(s);
         c.handles._initStandalone(s, c.handles._effectiveTargetIds(), () => chatBox.put(c));
-        c.messages._initBacklink(
-          s,
-          () {
-            final cid = c.id;
-            if (cid == null || cid <= 0) return const [];
-            final ids = messageBox._messagesByChatId[cid];
-            if (ids == null || ids.isEmpty) return const [];
-            return ids.map((id) => messageBox.get(id)).whereType<Message>().toList();
-          },
-          (added, removed) {
-            for (final m in added) {
-              messageBox._stampExistingUniqueId(m);
-              m.chat.target = c;
-              messageBox.put(m);
-            }
-            for (final m in removed) {
-              if (m.chat.targetId == c.id) {
-                m.chat.target = null;
-                messageBox.put(m);
-              }
-            }
-          },
-        );
-        c.customGroups._initBacklink(
-          s,
-          () => customGroupBox._items.values.where((g) => g.chats._effectiveTargetIds().contains(c.id)).toList(),
-          (added, removed) {
-            for (final g in added) {
-              if (!g.chats.any((x) => x.id == c.id)) {
-                g.chats.add(c);
-                customGroupBox.put(g);
-              }
-            }
-            for (final g in removed) {
-              if (g.chats.remove(c)) {
-                customGroupBox.put(g);
-              }
-            }
-          },
-        );
+        initToOneBacklink(s, c, c.id, c.messages, messageBox, (m) => m.chat, stampUniqueId: true);
+        initToManyBacklink(s, c, c.id, c.customGroups, customGroupBox, (g) => g.chats, (x) => x.id);
       },
       afterPut: (c, s) {
         c.handles._syncStandaloneIdsFromItems(autoPut: true);
@@ -1693,29 +1539,8 @@ class Store {
       setId: (e, id) => e.id = id,
       encode: _Codec.encodeThemeEntry,
       decode: _Codec.decodeThemeEntry,
-      onAttach: (e, s) {
-        e.themeObject._syncBeforeOwnerPut(s);
-      },
-      onIndexAdd: (e) {
-        final eid = e.id;
-        final oid = e.themeObject.targetId;
-        if (eid != null && oid > 0) {
-          (themeEntryBox._entriesByThemeObjectId[oid] ??= <int>{}).add(eid);
-          themeEntryBox._entryThemeObjectById[eid] = oid;
-        }
-      },
-      onIndexRemove: (e) {
-        final eid = e.id;
-        if (eid == null) return;
-        final oid = themeEntryBox._entryThemeObjectById.remove(eid) ?? e.themeObject.targetId;
-        if (oid > 0) {
-          themeEntryBox._entriesByThemeObjectId[oid]?.remove(eid);
-        }
-      },
-      onIndexClear: () {
-        themeEntryBox._entriesByThemeObjectId.clear();
-        themeEntryBox._entryThemeObjectById.clear();
-      },
+      onAttach: (e, s) => e.themeObject._syncBeforeOwnerPut(s),
+      reverseIndexKey: (e) => e.themeObject.targetId,
     );
 
     themeObjectBox = Box<ThemeObject>._(
@@ -1729,30 +1554,7 @@ class Store {
       uniqueKey: (o) => o.name,
       encode: _Codec.encodeThemeObject,
       decode: _Codec.decodeThemeObject,
-      onAttach: (o, s) {
-        o.themeEntries._initBacklink(
-          s,
-          () {
-            final oid = o.id;
-            if (oid == null || oid <= 0) return const [];
-            final ids = themeEntryBox._entriesByThemeObjectId[oid];
-            if (ids == null || ids.isEmpty) return const [];
-            return ids.map((id) => themeEntryBox.get(id)).whereType<ThemeEntry>().toList();
-          },
-          (added, removed) {
-            for (final e in added) {
-              e.themeObject.target = o;
-              themeEntryBox.put(e);
-            }
-            for (final e in removed) {
-              if (e.themeObject.targetId == o.id) {
-                e.themeObject.target = null;
-                themeEntryBox.put(e);
-              }
-            }
-          },
-        );
-      },
+      onAttach: (o, s) => initToOneBacklink(s, o, o.id, o.themeEntries, themeEntryBox, (e) => e.themeObject),
       afterPut: (o, _) => o.themeEntries._flushBacklinkPending(),
     );
 
@@ -1943,11 +1745,7 @@ class Attachment_ {
   static final height = QueryIntegerProperty<Attachment>('height', (e) => e.height);
   static final width = QueryIntegerProperty<Attachment>('width', (e) => e.width);
   static final webUrl = QueryStringProperty<Attachment>('webUrl', (e) => e.webUrl);
-  static final message = QueryRelationToOne<Attachment, Message>(
-    'message',
-    (e) => e.message,
-    (e) => e.message.targetId > 0 ? e.message.targetId : null,
-  );
+  static final message = QueryRelationToOne<Attachment, Message>('message', (e) => e.message);
   static final dbMetadata = QueryStringProperty<Attachment>('dbMetadata', (e) => e.dbMetadata);
   static final hasLivePhoto = QueryBooleanProperty<Attachment>('hasLivePhoto', (e) => e.hasLivePhoto);
   static final isDownloaded = QueryBooleanProperty<Attachment>('isDownloaded', (e) => e.isDownloaded);
@@ -1979,11 +1777,7 @@ class Chat_ {
   static final lockChatIcon = QueryBooleanProperty<Chat>('lockChatIcon', (e) => e.lockChatIcon);
   static final lastReadMessageGuid = QueryStringProperty<Chat>('lastReadMessageGuid', (e) => e.lastReadMessageGuid);
   static final customBackgroundPath = QueryStringProperty<Chat>('customBackgroundPath', (e) => e.customBackgroundPath);
-  static final dbLatestMessage = QueryRelationToOne<Chat, Message>(
-    'dbLatestMessage',
-    (e) => e.dbLatestMessage,
-    (e) => e.dbLatestMessage.targetId > 0 ? e.dbLatestMessage.targetId : null,
-  );
+  static final dbLatestMessage = QueryRelationToOne<Chat, Message>('dbLatestMessage', (e) => e.dbLatestMessage);
   static final customThemeLight = QueryStringProperty<Chat>('customThemeLight', (e) => e.customThemeLight);
   static final customThemeDark = QueryStringProperty<Chat>('customThemeDark', (e) => e.customThemeDark);
   static final wallpaperType = QueryStringProperty<Chat>('wallpaperType', (e) => e.wallpaperType);
@@ -2029,11 +1823,7 @@ class ThemeEntry_ {
   static final fontSize = QueryIntegerProperty<ThemeEntry>('fontSize', (e) => e.fontSize);
   static final dbColor = QueryStringProperty<ThemeEntry>('dbColor', (e) => e.dbColor);
   static final fontWeight = QueryIntegerProperty<ThemeEntry>('fontWeight', (e) => e.fontWeight);
-  static final themeObject = QueryRelationToOne<ThemeEntry, ThemeObject>(
-    'themeObject',
-    (e) => e.themeObject,
-    (e) => e.themeObject.targetId > 0 ? e.themeObject.targetId : null,
-  );
+  static final themeObject = QueryRelationToOne<ThemeEntry, ThemeObject>('themeObject', (e) => e.themeObject);
 }
 
 class Message_ {
@@ -2071,11 +1861,7 @@ class Message_ {
       QueryStringProperty<Message>('threadOriginatorPart', (e) => e.threadOriginatorPart);
   static final bigEmoji = QueryBooleanProperty<Message>('bigEmoji', (e) => e.bigEmoji);
   static final error = QueryIntegerProperty<Message>('error', (e) => e.error);
-  static final chat = QueryRelationToOne<Message, Chat>(
-    'chat',
-    (e) => e.chat,
-    (e) => e.chat.targetId > 0 ? e.chat.targetId : null,
-  );
+  static final chat = QueryRelationToOne<Message, Chat>('chat', (e) => e.chat);
   static final dbAttributedBody = QueryStringProperty<Message>('dbAttributedBody', (e) => e.dbAttributedBody);
   static final associatedMessagePart =
       QueryIntegerProperty<Message>('associatedMessagePart', (e) => e.associatedMessagePart);
@@ -2091,11 +1877,7 @@ class Message_ {
   static final didNotifyRecipient = QueryBooleanProperty<Message>('didNotifyRecipient', (e) => e.didNotifyRecipient);
   static final isBookmarked = QueryBooleanProperty<Message>('isBookmarked', (e) => e.isBookmarked);
   static final isDelivered = QueryBooleanProperty<Message>('isDelivered', (e) => e.isDelivered);
-  static final handleRelation = QueryRelationToOne<Message, Handle>(
-    'handleRelation',
-    (e) => e.handleRelation,
-    (e) => e.handleRelation.targetId > 0 ? e.handleRelation.targetId : null,
-  );
+  static final handleRelation = QueryRelationToOne<Message, Handle>('handleRelation', (e) => e.handleRelation);
   static final errorMessage = QueryStringProperty<Message>('errorMessage', (e) => e.errorMessage);
   static final hasEffectPlayed = QueryBooleanProperty<Message>('hasEffectPlayed', (e) => e.hasEffectPlayed);
   static final associatedMessageEmoji =

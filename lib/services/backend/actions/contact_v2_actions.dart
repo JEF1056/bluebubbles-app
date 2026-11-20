@@ -14,6 +14,8 @@ import 'package:bluebubbles/platform/shims/native_misc.dart' as fc;
 import 'package:get_it/get_it.dart';
 import 'package:path/path.dart' as p;
 
+part 'contact_v2_fork_helpers.dart';
+
 /// ContactV2Actions - Isolate-side logic for the new contact service
 /// All operations here run in the GlobalIsolate to prevent UI jank
 /// This follows the architecture outlined in FR-1.md
@@ -32,139 +34,12 @@ class ContactV2Actions {
   /// - Contact has "1234567890" but Handle has "+11234567890"
   /// - Contact has "+11234567890" but Handle has "1234567890"
   /// - Works with any country code, not just +1
-  static Set<String> phoneNumberVariants(String phone) {
-    final variants = <String>{};
-    final normalized = ContactV2.normalizePhoneNumber(phone);
+  static Set<String> phoneNumberVariants(String phone) => _phoneNumberVariants(phone);
 
-    if (normalized.isEmpty) return variants;
+  static ContactV2? matchContactForAddress(Iterable<ContactV2> contacts, String address) =>
+      _matchContactForAddress(contacts, address);
 
-    // Always include the base normalized version
-    variants.add(normalized);
-
-    // If it starts with +, add variant without the +
-    if (normalized.startsWith('+')) {
-      variants.add(normalized.substring(1));
-
-      // Also try removing common country codes (1-3 digits after +)
-      // Country codes can be 1-3 digits (e.g., +1, +44, +852, +1246)
-      for (int i = 1; i <= 3 && i < normalized.length; i++) {
-        final withoutCountryCode = normalized.substring(i + 1);
-        if (withoutCountryCode.isNotEmpty) {
-          variants.add(withoutCountryCode);
-        }
-      }
-    } else {
-      // If no +, try adding + and common country code lengths
-      // This handles cases where the stored number doesn't have + but the contact does
-      variants.add('+$normalized');
-
-      // Try removing 1-3 digit prefixes as potential country codes
-      for (int i = 1; i <= 3 && i < normalized.length; i++) {
-        final withoutPrefix = normalized.substring(i);
-        if (withoutPrefix.isNotEmpty) {
-          variants.add(withoutPrefix);
-          variants.add('+$withoutPrefix');
-        }
-      }
-    }
-
-    return variants;
-  }
-
-  /// Find the best matching [ContactV2] for [address] across [contacts].
-  /// Symmetrically compares phone variants on both sides and prefers a match
-  /// that already has an avatar path when multiple contacts match.
-  static ContactV2? matchContactForAddress(Iterable<ContactV2> contacts, String address) {
-    final trimmed = address.trim();
-    if (trimmed.isEmpty) return null;
-
-    final isEmail = trimmed.contains('@');
-    final normalizedEmail = isEmail ? ContactV2.normalizeEmail(trimmed) : null;
-    final queryVariants = isEmail ? const <String>{} : phoneNumberVariants(trimmed);
-    if (!isEmail && queryVariants.isEmpty) return null;
-
-    ContactV2? firstMatch;
-    for (final contact in contacts) {
-      bool matched = false;
-      if (isEmail) {
-        matched = contact.addresses.contains(normalizedEmail);
-      } else {
-        for (final contactAddr in contact.addresses) {
-          if (contactAddr.contains('@')) continue;
-          if (queryVariants.contains(contactAddr) || phoneNumberVariants(contactAddr).any(queryVariants.contains)) {
-            matched = true;
-            break;
-          }
-        }
-      }
-      if (!matched) continue;
-      if (!isNullOrEmpty(contact.avatarPath)) return contact;
-      firstMatch ??= contact;
-    }
-    return firstMatch;
-  }
-
-  /// Link [handles] to matching existing [ContactV2] records inside an active
-  /// write transaction. Returns the IDs of handles that were newly linked.
-  static List<int> linkHandlesToContactsInTx(List<Handle> handles) {
-    if (handles.isEmpty) return const [];
-
-    final allContacts = Database.contactsV2.getAll();
-    if (allContacts.isEmpty) return const [];
-
-    final emailContactMap = <String, List<ContactV2>>{};
-    final phoneContactMap = <String, List<ContactV2>>{};
-
-    for (final contact in allContacts) {
-      for (final addr in contact.addresses) {
-        if (addr.contains('@')) {
-          emailContactMap.putIfAbsent(addr, () => []).add(contact);
-        } else {
-          for (final variant in phoneNumberVariants(addr)) {
-            phoneContactMap.putIfAbsent(variant, () => []).add(contact);
-          }
-        }
-      }
-    }
-
-    final updatedContacts = <ContactV2>{};
-    final affectedHandleIds = <int>{};
-
-    for (final handle in handles) {
-      final handleId = handle.id;
-      if (handleId == null || handleId == 0) continue;
-
-      final matchedContacts = <ContactV2>{};
-      if (handle.address.contains('@')) {
-        matchedContacts.addAll(emailContactMap[ContactV2.normalizeEmail(handle.address)] ?? const []);
-        if (handle.formattedAddress != null) {
-          matchedContacts.addAll(emailContactMap[ContactV2.normalizeEmail(handle.formattedAddress!)] ?? const []);
-        }
-      } else {
-        for (final variant in phoneNumberVariants(handle.address)) {
-          matchedContacts.addAll(phoneContactMap[variant] ?? const []);
-        }
-        if (handle.formattedAddress != null) {
-          for (final variant in phoneNumberVariants(handle.formattedAddress!)) {
-            matchedContacts.addAll(phoneContactMap[variant] ?? const []);
-          }
-        }
-      }
-
-      for (final contact in matchedContacts) {
-        if (!contact.handles.any((existing) => existing.id == handleId)) {
-          contact.handles.add(handle);
-          updatedContacts.add(contact);
-          affectedHandleIds.add(handleId);
-        }
-      }
-    }
-
-    if (updatedContacts.isNotEmpty) {
-      Database.contactsV2.putMany(updatedContacts.toList());
-    }
-    return affectedHandleIds.toList();
-  }
+  static List<int> linkHandlesToContactsInTx(List<Handle> handles) => _linkHandlesToContactsInTx(handles);
 
   /// Fetch all contacts from device and match them to existing handles
   /// This is the main operation described in Section II.A of FR-1.md
@@ -731,16 +606,15 @@ class ContactV2Actions {
     required bool isServerContact,
     required bool serverFetchAttempted,
     required bool serverFetchSucceeded,
-  }) {
-    if (!hasPrefetchedEntry) return existingAvatarPath;
-    if (prefetchedAvatarPath != null) return prefetchedAvatarPath;
-    // Prefetched entry is null: preserve previously server-enriched device avatars
-    // when a server fetch was attempted but failed (offline / non-200 / invalid payload).
-    if (isServerContact || !serverFetchAttempted || serverFetchSucceeded) {
-      return null;
-    }
-    return existingAvatarPath;
-  }
+  }) =>
+      _resolveUpdatedAvatarPath(
+        existingAvatarPath: existingAvatarPath,
+        hasPrefetchedEntry: hasPrefetchedEntry,
+        prefetchedAvatarPath: prefetchedAvatarPath,
+        isServerContact: isServerContact,
+        serverFetchAttempted: serverFetchAttempted,
+        serverFetchSucceeded: serverFetchSucceeded,
+      );
 
   @visibleForTesting
   static Future<List<ContactV2>> mergeServerContactMapsForTest({
@@ -760,10 +634,6 @@ class ContactV2Actions {
         prefixServerIds: prefixServerIds,
       );
 
-  /// Merges server contacts against [deviceContacts]. Any server contact sharing an email
-  /// or phone variant with a device contact enriches [avatarPaths] on that device ID when
-  /// missing rather than producing a duplicate [ContactV2]; unmatched server contacts are
-  /// returned for persistence with `isNative == false`.
   static Future<List<ContactV2>> _mergeServerContactMaps({
     required List<Map<String, dynamic>> serverMaps,
     required List<fc.Contact> deviceContacts,
@@ -771,122 +641,19 @@ class ContactV2Actions {
     Set<String> failedDeviceAvatarIds = const {},
     Set<String>? dedupedServerIdsOut,
     bool prefixServerIds = true,
-  }) async {
-    final networkContacts = <ContactV2>[];
-    final deviceEmailToId = <String, String>{};
-    final devicePhoneVariantToId = <String, String>{};
-
-    for (final dc in deviceContacts) {
-      final id = dc.id;
-      if (id == null) continue;
-      for (final email in dc.emails) {
-        final norm = ContactV2.normalizeEmail(email.address);
-        if (norm.isNotEmpty) deviceEmailToId.putIfAbsent(norm, () => id);
-      }
-      for (final phone in dc.phones) {
-        for (final variant in phoneNumberVariants(phone.number)) {
-          devicePhoneVariantToId.putIfAbsent(variant, () => id);
-        }
-      }
-    }
-
-    for (final map in serverMaps) {
-      final displayName = getDisplayName(map['displayName'], map['firstName'], map['lastName']);
-      final emails = (map['emails'] is List ? map['emails'] as List<dynamic> : const <dynamic>[])
-          .whereType<Map>()
-          .map((e) {
-            final addr = e['address']?.toString().trim() ?? '';
-            return addr.isEmpty ? null : ContactEmail(address: addr, label: e['label']?.toString() ?? '');
-          })
-          .whereType<ContactEmail>()
-          .toList();
-      final phones = (map['phoneNumbers'] is List ? map['phoneNumbers'] as List<dynamic> : const <dynamic>[])
-          .whereType<Map>()
-          .map((e) {
-            final num = e['address']?.toString().trim() ?? '';
-            return num.isEmpty ? null : ContactPhone(number: num, label: e['label']?.toString() ?? '');
-          })
-          .whereType<ContactPhone>()
-          .toList();
-
-      String? matchedDeviceId;
-      for (final email in emails) {
-        final norm = ContactV2.normalizeEmail(email.address);
-        if (norm.isNotEmpty && deviceEmailToId.containsKey(norm)) {
-          matchedDeviceId = deviceEmailToId[norm];
-          break;
-        }
-      }
-      if (matchedDeviceId == null) {
-        for (final phone in phones) {
-          for (final variant in phoneNumberVariants(phone.number)) {
-            if (devicePhoneVariantToId.containsKey(variant)) {
-              matchedDeviceId = devicePhoneVariantToId[variant];
-              break;
-            }
-          }
-          if (matchedDeviceId != null) break;
-        }
-      }
-
-      final rawId = (map['id'] ?? displayName).toString();
-      final contactId = prefixServerIds ? 'server:$rawId' : rawId;
-
-      if (matchedDeviceId != null) {
-        dedupedServerIdsOut?.add(contactId);
-        if (!failedDeviceAvatarIds.contains(matchedDeviceId) &&
-            avatarPaths[matchedDeviceId] == null &&
-            !isNullOrEmpty(map['avatar'])) {
-          try {
-            final savedPath = await _saveContactAvatar(matchedDeviceId, base64Decode(map['avatar'].toString()));
-            if (savedPath != null) avatarPaths[matchedDeviceId] = savedPath;
-          } catch (_) {}
-        }
-        continue;
-      }
-
-      if (!isNullOrEmpty(map['avatar'])) {
-        try {
-          final savedPath = await _saveContactAvatar(contactId, base64Decode(map['avatar'].toString()));
-          if (savedPath != null) avatarPaths[contactId] = savedPath;
-        } catch (_) {}
-      } else {
-        avatarPaths.putIfAbsent(contactId, () => null);
-      }
-
-      final normalizedAddresses = <String>{
-        for (final p in phones)
-          if (ContactV2.normalizePhoneNumber(p.number).isNotEmpty) ContactV2.normalizePhoneNumber(p.number),
-        for (final e in emails)
-          if (ContactV2.normalizeEmail(e.address).isNotEmpty) ContactV2.normalizeEmail(e.address),
-      };
-
-      final nc = ContactV2(
-        nativeContactId: contactId,
-        displayName: displayName,
-        avatarPath: avatarPaths[contactId],
-        addresses: normalizedAddresses.toList(),
-        firstName: map['firstName']?.toString(),
-        lastName: map['lastName']?.toString(),
+  }) =>
+      _mergeServerContactMapsHelper(
+        serverMaps: serverMaps,
+        deviceContacts: deviceContacts,
+        avatarPaths: avatarPaths,
+        failedDeviceAvatarIds: failedDeviceAvatarIds,
+        dedupedServerIdsOut: dedupedServerIdsOut,
+        prefixServerIds: prefixServerIds,
       );
-      nc.phoneNumbers = phones;
-      nc.emailAddresses = emails;
-      nc.isNative = false;
-      networkContacts.add(nc);
-    }
-
-    return networkContacts;
-  }
 
   @visibleForTesting
-  static bool hasNativeContactChanges(Iterable<String?> currentDeviceIds, Iterable<ContactV2> storedContacts) {
-    final currentIds = currentDeviceIds.whereType<String>().toSet();
-    // Exclude server-fetched contacts (isNative == false) so they don't trigger infinite sync loops.
-    final storedIds = storedContacts.where((c) => c.isNative).map((c) => c.nativeContactId).toSet();
-    return currentIds.length != storedIds.length ||
-        !currentIds.containsAll(storedIds) ||
-        !storedIds.containsAll(currentIds);
-  }
+  static bool hasNativeContactChanges(Iterable<String?> currentDeviceIds, Iterable<ContactV2> storedContacts) =>
+      _hasNativeContactChanges(currentDeviceIds, storedContacts);
 
   /// Check for contact database changes by comparing native contact IDs
   /// This is used by the periodic background task (Section II.B of FR-1.md)
@@ -975,7 +742,7 @@ class ContactV2Actions {
   static Future<String?> saveContactAvatarForTest(String contactId, Uint8List avatarData) =>
       _saveContactAvatar(contactId, avatarData);
 
-  static String _webAvatarCacheKey(String contactId) => 'contact_avatar:${sanitizeFileName(contactId)}';
+  static String _webAvatarCacheKey(String contactId) => _webAvatarCacheKeyHelper(contactId);
 
   /// Save a contact avatar to disk under a content-hashed filename and return the path.
   /// Content-hashing ensures changed photos get a new path (busting Flutter's

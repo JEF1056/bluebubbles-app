@@ -21,24 +21,28 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
         internal fun resolveDismissedChatGuid(
             notificationChatGuid: String?,
             fallbackChatGuid: String?
-        ): String? = notificationChatGuid?.takeIf { it.isNotEmpty() }
-            ?: fallbackChatGuid?.takeIf { it.isNotEmpty() }
+        ): String? = com.bluebubbles.messaging.services.notifications.resolveDismissedChatGuid(
+            notificationChatGuid,
+            fallbackChatGuid
+        )
 
         internal fun computeInboxSummary(
             childLines: List<String>,
             maxLines: Int = 5
-        ): Pair<Int, List<String>> {
-            val nonBlank = childLines.filter { it.isNotBlank() }
-            val visible = if (nonBlank.size <= maxLines) nonBlank else nonBlank.takeLast(maxLines)
-            return childLines.size to visible
-        }
+        ): Pair<Int, List<String>> =
+            com.bluebubbles.messaging.services.notifications.computeInboxSummary(childLines, maxLines)
 
         internal fun matchesNotification(
             sbnTag: String?,
             sbnId: Int,
             targetId: Int,
             targetTag: String?
-        ): Boolean = sbnId == targetId && (targetTag == null || sbnTag == targetTag)
+        ): Boolean = com.bluebubbles.messaging.services.notifications.matchesNotification(
+            sbnTag,
+            sbnId,
+            targetId,
+            targetTag
+        )
 
         // Set on a bubble's notification that was hidden because its chat was read. Its messages are all read, so the
         // next incoming message starts a new style instead of extending this one.

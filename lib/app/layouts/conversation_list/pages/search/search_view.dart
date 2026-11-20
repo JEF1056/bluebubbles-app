@@ -144,17 +144,18 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
 
       bool showSenderFilter = !isNotFromMe.value && !isFromMe.value && (selectedChat.value?.isGroup ?? true);
 
-      return PopScope(
-          canPop: false,
-          onPopInvokedWithResult: <T>(bool didPop, T? result) {
-            if (didPop) return;
-            if (panelController.status != SlidingUpPanelStatus.collapsed) {
-              panelController.collapse();
-            } else {
-              final NavigatorState navigator = Navigator.of(context);
-              navigator.pop();
-            }
-          },
+      return ListenableBuilder(
+          listenable: panelController,
+          builder: (context, child) => PopScope(
+            canPop: panelController.status == SlidingUpPanelStatus.collapsed,
+            onPopInvokedWithResult: <T>(bool didPop, T? result) {
+              if (didPop) return;
+              if (panelController.status != SlidingUpPanelStatus.collapsed) {
+                panelController.collapse();
+              }
+            },
+            child: child!,
+          ),
           child: Stack(children: [
             SettingsScaffold(
               title: "Search",
@@ -439,8 +440,8 @@ class SearchViewState extends State<SearchView> with ThemeHelpers {
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                     color: tileColor,
                   ),
-                  height: 255,
-                  padding: const EdgeInsets.only(left: 10, right: 10, bottom: 20, top: 20),
+                  height: 255 + MediaQuery.viewPaddingOf(context).bottom,
+                  padding: EdgeInsets.fromLTRB(10, 20, 10, 24 + MediaQuery.viewPaddingOf(context).bottom),
                   child: Column(children: [
                     Center(
                         child: Text(

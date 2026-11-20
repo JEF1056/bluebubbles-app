@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -54,6 +56,8 @@ class MessageTimestamp extends StatelessWidget {
             ? "   ${buildTime(dateCreated)}"
             : "   ${buildDate(dateCreated)}\n   ${buildTime(dateCreated).toLowerCase()}";
       }
+      final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+      final fallbackColor = isMaterial ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
       return AnimatedContainer(
         duration: Duration(milliseconds: cvController.timestampOffset.value == 0 ? 150 : 0),
         width: skin == Skins.Samsung
@@ -63,9 +67,10 @@ class MessageTimestamp extends StatelessWidget {
           offstage: skin != Skins.Samsung && cvController.timestampOffset.value == 0,
           child: Text(
             time,
-            style: context.theme.textTheme.labelSmall!.copyWith(
-              color: isMaterial ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline,
-              fontWeight: FontWeight.normal,
+            style: WallpaperContrast.unbubbledStyle(
+              context.theme.textTheme.labelSmall!.copyWith(fontWeight: FontWeight.normal),
+              hasWallpaper: hasBackground,
+              fallbackColor: fallbackColor,
             ),
             overflow: TextOverflow.visible,
             softWrap: false,

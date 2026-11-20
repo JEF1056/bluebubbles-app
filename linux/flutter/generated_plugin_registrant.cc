@@ -16,6 +16,7 @@
 #include <file_selector_linux/file_selector_plugin.h>
 #include <flutter_acrylic/flutter_acrylic_plugin.h>
 #include <flutter_timezone/flutter_timezone_plugin.h>
+#include <maplibre_native/maplibre_native_plugin.h>
 #include <maps_launcher/maps_launcher_plugin.h>
 #include <media_kit_libs_linux/media_kit_libs_linux_plugin.h>
 #include <objectbox_flutter_libs/objectbox_flutter_libs_plugin.h>
@@ -59,6 +60,9 @@ void fl_register_plugins(FlPluginRegistry* registry) {
   g_autoptr(FlPluginRegistrar) flutter_timezone_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "FlutterTimezonePlugin");
   flutter_timezone_plugin_register_with_registrar(flutter_timezone_registrar);
+  g_autoptr(FlPluginRegistrar) maplibre_native_registrar =
+      fl_plugin_registry_get_registrar_for_plugin(registry, "MaplibreNativePlugin");
+  maplibre_native_plugin_register_with_registrar(maplibre_native_registrar);
   g_autoptr(FlPluginRegistrar) maps_launcher_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "MapsLauncherPlugin");
   maps_launcher_plugin_register_with_registrar(maps_launcher_registrar);

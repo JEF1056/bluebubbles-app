@@ -5,7 +5,6 @@ import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/conversation_list_fab.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/footer/samsung_footer.dart';
-import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/material_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/samsung_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/initial_widget_right.dart';
@@ -30,9 +29,7 @@ import 'package:bluebubbles/app/layouts/conversation_list/pages/cupertino_conver
 import 'package:bluebubbles/app/layouts/conversation_list/pages/material_conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/samsung_conversation_list.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
-import 'package:flutter/services.dart';
 import 'package:get/get.dart';
-import 'package:get_it/get_it.dart';
 
 class ConversationListController extends StatefulController {
   final bool showArchivedChats;
@@ -288,22 +285,6 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
       children: [
         child,
         const Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: SyncHairlineIndicator(),
-        ),
-        if (kIsWeb)
-          const Positioned(
-            top: 10,
-            left: 16,
-            right: 16,
-            child: SafeArea(
-              bottom: false,
-              child: Align(alignment: Alignment.topCenter, child: WebConnectivityBanner()),
-            ),
-          ),
-        const Positioned(
           top: 16,
           left: 16,
           right: 16,
@@ -330,15 +311,13 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
         rightOpen: NavigationSvc.chatPaneOpen,
         left: LayoutBuilder(builder: (context, constraints) {
           NavigationSvc.maxWidthLeft = constraints.maxWidth;
-          return PopScope(
-            canPop: false,
-            onPopInvokedWithResult: <T>(bool _, T? _) {
-              if (!NavigationSvc.back()) SystemNavigator.pop();
-            },
+          return NavigatorPopHandler(
+            onPopWithResult: (_) => Get.nestedKey(1)?.currentState?.maybePop(),
             child: SafeArea(
               top: false,
               left: false,
               right: false,
+              bottom: false,
               child: Navigator(
                 key: Get.nestedKey(1),
                 requestFocus: false,
@@ -358,126 +337,25 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
         right: LayoutBuilder(
           builder: (context, constraints) {
             NavigationSvc.maxWidthRight = constraints.maxWidth;
-            // Back is handled by the left pane's PopScope, which pops this navigator first
-            return Navigator(
-              key: Get.nestedKey(2),
-              observers: [NavigationSvc.chatPaneObserver, NavigationSvc.paneRouteObserver],
-              onPopPage: (route, _) {
-                return false;
-              },
-              pages: [
-                const MaterialPage(
-                  name: "initial",
-                  child: InitialWidgetRight(),
-                ),
-              ],
+            return NavigatorPopHandler(
+              onPopWithResult: (_) => Get.nestedKey(2)?.currentState?.maybePop(),
+              child: Navigator(
+                key: Get.nestedKey(2),
+                observers: [NavigationSvc.chatPaneObserver, NavigationSvc.paneRouteObserver],
+                onPopPage: (route, _) {
+                  return false;
+                },
+                pages: [
+                  const MaterialPage(
+                    name: "initial",
+                    child: InitialWidgetRight(),
+                  ),
+                ],
+              ),
             );
           },
         ),
       ),
     );
-  }
-}
-
-class WebConnectivityBanner extends StatelessWidget {
-  final bool? onlineOverride;
-  final bool? reconnectingOverride;
-  final VoidCallback? onRetry;
-
-  const WebConnectivityBanner({
-    super.key,
-    this.onlineOverride,
-    this.reconnectingOverride,
-    this.onRetry,
-  });
-
-  void _triggerReconnect() {
-    if (onRetry != null) {
-      onRetry!();
-      return;
-    }
-    if (GetIt.I.isRegistered<SocketService>()) {
-      SocketSvc.restartSocket();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    Widget buildBanner(bool online, bool reconnecting) {
-      final theme = Theme.of(context);
-      final isOffline = !online;
-      final isDegraded = isOffline || reconnecting;
-      final Widget pill;
-      if (!isDegraded) {
-        pill = const SizedBox.shrink(key: ValueKey('connected'));
-      } else {
-        final bg = isOffline ? theme.colorScheme.errorContainer : theme.colorScheme.secondaryContainer;
-        final fg = isOffline ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSecondaryContainer;
-        final border = (isOffline ? theme.colorScheme.error : theme.colorScheme.outlineVariant)
-            .withValues(alpha: isOffline ? 0.28 : 0.45);
-        pill = Semantics(
-          key: ValueKey(isOffline ? 'offline' : 'reconnecting'),
-          liveRegion: true,
-          button: true,
-          container: true,
-          label: isOffline ? 'Offline, tap to retry connection' : 'Reconnecting to server',
-          child: Material(
-            color: bg,
-            elevation: 1,
-            shadowColor: theme.colorScheme.shadow.withValues(alpha: 0.14),
-            shape: StadiumBorder(side: BorderSide(color: border)),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: _triggerReconnect,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isOffline)
-                      Icon(Icons.cloud_off_rounded, size: 14, color: fg)
-                    else
-                      SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(strokeWidth: 1.8, color: fg),
-                      ),
-                    const SizedBox(width: 7),
-                    Flexible(
-                      child: Text(
-                        isOffline ? 'Offline · Retry' : 'Reconnecting…',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: fg,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.1,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      }
-
-      return AnimatedSwitcher(
-        duration: const Duration(milliseconds: 200),
-        switchInCurve: Curves.easeOut,
-        switchOutCurve: Curves.easeIn,
-        transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
-        child: pill,
-      );
-    }
-
-    if (onlineOverride != null || reconnectingOverride != null) {
-      return buildBanner(onlineOverride ?? true, reconnectingOverride ?? false);
-    }
-    if (!GetIt.I.isRegistered<LifecycleService>()) {
-      return const SizedBox.shrink();
-    }
-    return Obx(() => buildBanner(LifecycleSvc.isOnline.value, LifecycleSvc.isReconnecting.value));
   }
 }

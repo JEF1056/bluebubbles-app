@@ -613,10 +613,11 @@ class Chat {
     }
   }
 
-  Future<Chat> togglePinAsync(bool isPinned) async {
+  Future<Chat> togglePinAsync(bool isPinned, {int? pinIndex}) async {
     if (id == null) return this;
+    assert(!isPinned || pinIndex != null);
     this.isPinned = isPinned;
-    _pinIndex.value = null;
+    _pinIndex.value = isPinned ? pinIndex : null;
     await saveAsync(updateIsPinned: true, updatePinIndex: true);
     return this;
   }
@@ -632,8 +633,9 @@ class Chat {
   Future<Chat> toggleArchivedAsync(bool isArchived) async {
     if (id == null) return this;
     isPinned = false;
+    _pinIndex.value = null;
     this.isArchived = isArchived;
-    await saveAsync(updateIsPinned: true, updateIsArchived: true);
+    await saveAsync(updateIsPinned: true, updatePinIndex: true, updateIsArchived: true);
     return this;
   }
 

@@ -1,7 +1,6 @@
 import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/platform/shims/desktop_window.dart';
-import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/gestures.dart';
@@ -18,12 +17,7 @@ class TitleBarWrapper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!kIsDesktop || Platform.environment.containsKey('FLUTTER_TEST')) {
-      return Stack(
-        children: <Widget>[
-          child,
-          const ConnectionIndicator(),
-        ],
-      );
+      return child;
     }
 
     return Obx(
@@ -35,15 +29,9 @@ class TitleBarWrapper extends StatelessWidget {
               child: Stack(children: <Widget>[
                 child,
                 const TitleBar(),
-                const ConnectionIndicator(),
               ]),
             )
-          : Stack(
-              children: <Widget>[
-                child,
-                const ConnectionIndicator(),
-              ],
-            ),
+          : child,
     );
   }
 }

@@ -324,7 +324,9 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                           controller: videoController!,
                           controls: (state) => Padding(
                                 padding: EdgeInsets.all(!kIsWeb && !kIsDesktop ? 0 : 20).copyWith(
-                                    bottom: !kIsWeb && !kIsDesktop ? (widget.showInteractions ? 96 : 10) : 0),
+                                    bottom: !kIsWeb && !kIsDesktop
+                                        ? MediaQuery.viewPaddingOf(context).bottom + (widget.showInteractions ? 96 : 10)
+                                        : 0),
                                 child: kIsDesktop
                                     ? media_kit_video_controls.MaterialDesktopVideoControls(state)
                                     : media_kit_video_controls.MaterialVideoControls(state),
@@ -422,7 +424,6 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                           opacity: visible ? 1.0 : 0.0,
                           duration: const Duration(milliseconds: 125),
                           child: Container(
-                            height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 100.0),
                             width: NavigationSvc.width(context),
                             color: context.theme.colorScheme.shadow.withValues(alpha: samsung ? 1 : 0.65),
                             child: SafeArea(
@@ -430,7 +431,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                               right: false,
                               bottom: false,
                               child: SizedBox(
-                                height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 50.0),
+                                height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 56.0),
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
@@ -531,54 +532,56 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                     child: AnimatedOpacity(
                       opacity: showPlayPauseOverlay.value ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 200),
-                      child: SafeArea(
-                        top: false,
-                        child: Container(
-                          height: 60,
-                          decoration: BoxDecoration(
-                            color: samsung
-                                ? Colors.black
-                                : context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  CupertinoIcons.cloud_download,
-                                  color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: samsung
+                              ? Colors.black
+                              : context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9),
+                        ),
+                        child: SafeArea(
+                          top: false,
+                          child: SizedBox(
+                            height: 60,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                IconButton(
+                                  icon: Icon(
+                                    CupertinoIcons.cloud_download,
+                                    color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                  ),
+                                  onPressed: _saveVideo,
                                 ),
-                                onPressed: _saveVideo,
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  CupertinoIcons.info,
-                                  color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                IconButton(
+                                  icon: Icon(
+                                    CupertinoIcons.info,
+                                    color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                  ),
+                                  onPressed: () => showMetadataDialog(widget.attachment, context),
                                 ),
-                                onPressed: () => showMetadataDialog(widget.attachment, context),
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  CupertinoIcons.refresh,
-                                  color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                IconButton(
+                                  icon: Icon(
+                                    CupertinoIcons.refresh,
+                                    color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                  ),
+                                  onPressed: () => refreshAttachment(),
                                 ),
-                                onPressed: () => refreshAttachment(),
-                              ),
-                              IconButton(
-                                icon: Icon(
-                                  muted.value ? CupertinoIcons.volume_mute : CupertinoIcons.volume_up,
-                                  color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                IconButton(
+                                  icon: Icon(
+                                    muted.value ? CupertinoIcons.volume_mute : CupertinoIcons.volume_up,
+                                    color: samsung ? Colors.white : context.theme.colorScheme.primary,
+                                  ),
+                                  onPressed: () async {
+                                    muted.toggle();
+                                    if (kIsWeb) {
+                                      await webVideoController?.setMuted(muted.value);
+                                    } else {
+                                      await videoController?.player.setVolume(muted.value ? 0.0 : 100.0);
+                                    }
+                                  },
                                 ),
-                                onPressed: () async {
-                                  muted.toggle();
-                                  if (kIsWeb) {
-                                    await webVideoController?.setMuted(muted.value);
-                                  } else {
-                                    await videoController?.player.setVolume(muted.value ? 0.0 : 100.0);
-                                  }
-                                },
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ),

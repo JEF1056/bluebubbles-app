@@ -446,7 +446,8 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
               padding: EdgeInsets.only(
                 left: 5.0,
                 top: 10.0,
-                bottom: 5.0 + MediaQuery.of(context).viewPadding.bottom,
+                bottom: 5.0 +
+                    (MediaQuery.viewInsetsOf(context).bottom > 0 ? 0.0 : MediaQuery.viewPaddingOf(context).bottom),
               ),
               child: Obx(
                 () => Theme(

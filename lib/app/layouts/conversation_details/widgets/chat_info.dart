@@ -29,11 +29,7 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
   Widget build(BuildContext context) {
     final chatState = ChatsSvc.getChatState(chat.guid);
 
-    bool canCall = !kIsDesktop &&
-        !(chat.chatIdentifier?.startsWith("urn:biz") ?? false) &&
-        (chat.handles.isNotEmpty &&
-            ((chat.handles.first.contactsV2.firstOrNull?.phoneNumbers.isNotEmpty ?? false) ||
-                !chat.handles.first.address.contains("@")));
+    bool canCall = !kIsDesktop && !kIsWeb && canAudioCall(chat);
 
     return DeferredPointerHandler(
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -167,8 +163,7 @@ class _ChatInfoState extends State<ChatInfo> with ThemeHelpers {
               mainAxisAlignment: kIsWeb || kIsDesktop ? MainAxisAlignment.center : MainAxisAlignment.spaceBetween,
               children: intersperse(const SizedBox(width: 5), [
                 if (canCall) CallButton(tileColor: tileColor, chat: chat, iOS: iOS),
-                VideoCallButton(tileColor: tileColor, chat: chat, iOS: iOS),
-                if (canFaceTime(chat)) FaceTimeButton(tileColor: tileColor, chat: chat, iOS: iOS),
+                if (canVideoCall(chat)) VideoCallButton(tileColor: tileColor, chat: chat, iOS: iOS),
                 if (chat.handles.isNotEmpty &&
                     ((chat.handles.first.contactsV2.firstOrNull?.emailAddresses.isNotEmpty ?? false) ||
                         chat.handles.first.address.contains("@")))
@@ -322,14 +317,8 @@ class VideoCallButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(15),
         color: tileColor,
         child: InkWell(
-          onTap: () {
-            final contact = chat.handles.first.contactsV2.firstOrNull;
-            showAddressPicker(contact, chat.handles.first, context, video: true);
-          },
-          onLongPress: () {
-            final contact = chat.handles.first.contactsV2.firstOrNull;
-            showAddressPicker(contact, chat.handles.first, context, isLongPressed: true, video: true);
-          },
+          onTap: () => startVideoCall(context, chat),
+          onLongPress: () => startVideoCall(context, chat, isLongPressed: true),
           borderRadius: BorderRadius.circular(15),
           child: SizedBox(
             height: 60,
@@ -337,51 +326,10 @@ class VideoCallButton extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(iOS ? CupertinoIcons.video_camera : Icons.video_call_outlined,
+                Icon(iOS ? CupertinoIcons.video_camera : Icons.videocam_outlined,
                     color: context.theme.colorScheme.onSurface, size: 25),
                 const SizedBox(height: 2.5),
-                Text("Video Call",
-                    style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class FaceTimeButton extends StatelessWidget {
-  const FaceTimeButton({
-    super.key,
-    required this.tileColor,
-    required this.chat,
-    required this.iOS,
-  });
-
-  final Color tileColor;
-  final Chat chat;
-  final bool iOS;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Material(
-        borderRadius: BorderRadius.circular(15),
-        color: tileColor,
-        child: InkWell(
-          onTap: () => startFaceTimeCall(context, chat),
-          borderRadius: BorderRadius.circular(15),
-          child: SizedBox(
-            height: 60,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(iOS ? CupertinoIcons.videocam_fill : Icons.videocam,
-                    color: context.theme.colorScheme.onSurface, size: 25),
-                const SizedBox(height: 2.5),
-                Text("FaceTime",
+                Text("Video",
                     style: context.theme.textTheme.bodySmall!.copyWith(color: context.theme.colorScheme.onSurface)),
               ],
             ),
@@ -411,10 +359,7 @@ class CallButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(15),
         color: tileColor,
         child: InkWell(
-          onTap: () {
-            final contact = chat.handles.first.contactsV2.firstOrNull;
-            showAddressPicker(contact, chat.handles.first, context);
-          },
+          onTap: () => startAudioCall(context, chat),
           onLongPress: () {
             final contact = chat.handles.first.contactsV2.firstOrNull;
             showAddressPicker(contact, chat.handles.first, context, isLongPressed: true);

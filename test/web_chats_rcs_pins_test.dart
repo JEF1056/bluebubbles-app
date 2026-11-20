@@ -1,7 +1,5 @@
-import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/material_conversation_tile.dart';
 import 'package:bluebubbles/database/models.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -48,51 +46,6 @@ void main() {
         fetchMessages: (c, {int limit = 25}) => throw StateError('db unavailable'),
       );
       expect(count, 1);
-    });
-  });
-
-  group('WebConnectivityBanner', () {
-    testWidgets('hides when online and not reconnecting', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: WebConnectivityBanner(onlineOverride: true, reconnectingOverride: false),
-          ),
-        ),
-      );
-      expect(find.text('Offline · Retry'), findsNothing);
-      expect(find.text('Reconnecting…'), findsNothing);
-    });
-
-    testWidgets('shows offline tonal pill when offline and invokes retry on tap', (tester) async {
-      var retried = false;
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: WebConnectivityBanner(
-              onlineOverride: false,
-              reconnectingOverride: false,
-              onRetry: () => retried = true,
-            ),
-          ),
-        ),
-      );
-      expect(find.text('Offline · Retry'), findsOneWidget);
-      expect(find.byIcon(Icons.cloud_off_rounded), findsOneWidget);
-      await tester.tap(find.text('Offline · Retry'));
-      expect(retried, isTrue);
-    });
-
-    testWidgets('shows reconnecting pill when online and reconnecting', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: WebConnectivityBanner(onlineOverride: true, reconnectingOverride: true),
-          ),
-        ),
-      );
-      expect(find.text('Reconnecting…'), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
     });
   });
 }

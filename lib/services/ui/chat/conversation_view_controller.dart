@@ -162,6 +162,8 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   late final textController = MentionTextEditingController(focusNode: focusNode);
   late final subjectTextController = SpellCheckTextEditingController(focusNode: subjectFocusNode);
   final RxBool showRecording = false.obs;
+  final RxBool isDictating = false.obs;
+  Future<void> Function()? stopDictation;
   final RxList<Emoji> emojiMatches = <Emoji>[].obs;
   final RxInt emojiSelectedIndex = 0.obs;
   final RxList<Mentionable> mentionMatches = <Mentionable>[].obs;

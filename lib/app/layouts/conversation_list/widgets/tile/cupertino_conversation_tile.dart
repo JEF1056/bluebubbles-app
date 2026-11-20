@@ -151,6 +151,10 @@ class _CupertinoTrailingState extends CustomState<CupertinoTrailing, void, Conve
         final message = chatState.latestMessage.value;
         final indicator = computeIndicatorText(chatState.latestMessageStatus.value, controller.chat.isGroup);
         final hasError = (message?.error ?? 0) > 0;
+        syncRelativeTimestamp(
+          hasError ? null : message?.dateCreated,
+          isRelative: SettingsSvc.settings.skin.value != Skins.iOS,
+        );
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.end,

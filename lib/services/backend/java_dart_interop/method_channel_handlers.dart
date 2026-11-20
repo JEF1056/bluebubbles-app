@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/backend/settings_helpers.dart';
@@ -43,6 +44,7 @@ class MethodChannelHandlers {
       MethodChannelInboundMethods.incomingFacetime: _handleIncomingFacetime,
       MethodChannelInboundMethods.ftCallStatusChanged: _handleFtCallStatusChanged,
       MethodChannelInboundMethods.answerFacetime: _handleAnswerFacetime,
+      MethodChannelInboundMethods.facetimeCallState: _handleFacetimeCallState,
       MethodChannelInboundMethods.iMessageAliasesRemoved: _handleAliasesRemoved,
       MethodChannelInboundMethods.socketEvent: _handleSocketEvent,
       MethodChannelInboundMethods.unifiedpushSettings: _handleUnifiedPushSettings,
@@ -417,7 +419,37 @@ class MethodChannelHandlers {
     Logger.info('Answering FaceTime call');
     if (arguments == null) return _ok();
 
-    await IntentsSvc.answerFaceTime(arguments['callUuid']);
+    await IntentsSvc.answerFaceTime(
+      arguments['callUuid'],
+      audioOnly: arguments['audioOnly'] == true,
+      isTelephony: arguments['isTelephony'] == true,
+    );
+    return _ok();
+  }
+
+  Future<bool> _handleFacetimeCallState(MethodCall _, Map<String, dynamic>? arguments) async {
+    if (arguments == null) return _ok();
+    final phase = arguments['phase']?.toString();
+    final uuid = arguments['call_uuid']?.toString();
+    if (phase == null || uuid == null || uuid.isEmpty) return _ok();
+    final isTelephony = arguments['is_telephony'] == true;
+    final ctrl = ActiveCallController.instance;
+    switch (phase) {
+      case 'dialing':
+        ctrl.bindCallUuid(uuid, isTelephony: isTelephony);
+        break;
+      case 'active':
+        ctrl.notifyTelecomActive(uuid, isTelephony: isTelephony);
+        break;
+      case 'mute':
+        ctrl.syncMutedFromNative(uuid, arguments['muted'] == true);
+        break;
+      case 'ended':
+        if (ctrl.state.callUuid == uuid && !ctrl.state.isOnOtherDevice) {
+          ctrl.clear();
+        }
+        break;
+    }
     return _ok();
   }
 

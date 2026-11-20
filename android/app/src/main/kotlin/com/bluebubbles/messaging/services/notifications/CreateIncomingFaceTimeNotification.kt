@@ -55,6 +55,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
         val title: String = call.argument("title")!!
         val body: String = call.argument("body")!!
         val isVideo: Boolean = call.argument("is_video") ?: true
+        val isTelephony: Boolean = call.argument("is_telephony") ?: false
         val isOngoing: Boolean = call.argument("is_ongoing") ?: false
         val callerAddress: String? = call.argument("caller_address")
         // contact details
@@ -67,27 +68,34 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 callUuid = callUuid,
                 callerName = callerName,
                 callerAddress = callerAddress,
-                isVideo = isVideo
+                isVideo = isVideo,
+                isTelephony = isTelephony
             )
         }
 
-        if (!isOngoing) {
-            val route = FaceTimeRoutingPolicy.resolveIncomingRoute(
+        val phoneAccountEnabled = if (!isOngoing) FaceTimeConnectionService.isPhoneAccountEnabled(context) else false
+        val route = if (!isOngoing) {
+            FaceTimeRoutingPolicy.resolveIncomingRoute(
                 isVideo = isVideo,
                 callUuid = callUuid,
-                phoneAccountEnabled = FaceTimeConnectionService.isPhoneAccountEnabled(context)
+                phoneAccountEnabled = phoneAccountEnabled,
+                isTelephony = isTelephony
             )
-            if (route == IncomingFaceTimeRoute.TELECOM_DIRECT && callUuid != null) {
-                val added = FaceTimeConnectionService.addIncomingCall(
-                    context = context,
-                    callUuid = callUuid,
-                    callerName = callerName,
-                    address = callerAddress
-                )
-                if (added) {
-                    result.success(true)
-                    return
-                }
+        } else {
+            IncomingFaceTimeRoute.NOTIFICATION
+        }
+
+        if (!isOngoing && route == IncomingFaceTimeRoute.TELECOM_DIRECT && callUuid != null) {
+            val added = FaceTimeConnectionService.addIncomingCall(
+                context = context,
+                callUuid = callUuid,
+                callerName = callerName,
+                address = callerAddress,
+                isTelephony = isTelephony
+            )
+            if (added) {
+                result.success(true)
+                return
             }
         }
 
@@ -125,24 +133,43 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             Intent(context, MainActivity::class.java)
                 .putExtras(extras)
                 .putExtra("answer", false)
+                .putExtra("audioOnly", !isVideo)
+                .putExtra("isTelephony", isTelephony)
                 .putExtra("caller", callerName)
                 .setType("OpenSummary"),
             piFlags
         )
 
-        // Create intent for answering video and opening the facetime link
+        // Create intent for answering via FaceTime link (video, or audio fallback when PhoneAccount is disabled)
         val answerIntent = PendingIntent.getActivity(
             context,
             notificationId + Constants.pendingIntentAnswerFaceTimeOffset,
             Intent(context, MainActivity::class.java)
                 .putExtras(extras)
                 .putExtra("answer", true)
+                .putExtra("audioOnly", !isVideo)
+                .putExtra("isTelephony", isTelephony)
                 .putExtra("caller", callerName)
                 .setType("AnswerFaceTime"),
             piFlags
         )
-        val answerAction = NotificationCompat.Action.Builder(0, "Answer Video", answerIntent)
+        val answerAction = NotificationCompat.Action.Builder(0, if (isVideo) "Answer Video" else "Answer", answerIntent)
             .setShowsUserInterface(false)
+            .build()
+
+        // Create intent to open Calling Accounts settings when Telecom PhoneAccount is disabled
+        val enableCallingIntent = PendingIntent.getBroadcast(
+            context,
+            notificationId + Constants.pendingIntentOpenCallingAccountsOffset,
+            Intent(context, InternalIntentReceiver::class.java)
+                .putExtra("notificationId", notificationId)
+                .putExtra("tag", Constants.newFaceTimeNotificationTag)
+                .putExtra("callUuid", callUuid)
+                .setType("OpenCallingAccounts"),
+            piFlags
+        )
+        val enableCallingAction = NotificationCompat.Action.Builder(0, "Enable calling", enableCallingIntent)
+            .setShowsUserInterface(true)
             .build()
 
         // Create intent for handing off video call to Telecom audio-only (autoAnswer=true)
@@ -156,6 +183,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                     .putExtra("callUuid", callUuid)
                     .putExtra("callerName", callerName)
                     .putExtra("callerAddress", callerAddress)
+                    .putExtra("isTelephony", isTelephony)
                     .setType("AnswerFaceTimeAudio"),
                 piFlags
             )
@@ -205,7 +233,11 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             notificationManager.canUseFullScreenIntent()
         // CallStyle on Android 14+ requires an FGS, user-initiated job, or fullScreenIntent;
         // ongoing updates from Dart/MethodChannel use notify() without an FGS, so fall back to standard actions.
-        val useCallStyle = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !isOngoing && canUseFsi
+        // Telephony without PhoneAccount cannot use a FaceTime link, so skip CallStyle's answer pill and offer Enable calling + Decline.
+        val useCallStyle = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            !isOngoing &&
+            canUseFsi &&
+            route != IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT
         if (useCallStyle) {
             val callStyle = NotificationCompat.CallStyle.forIncomingCall(caller, declineIntent, answerIntent)
                 .setIsVideo(isVideo)
@@ -214,23 +246,40 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 .setFullScreenIntent(openSummaryIntent, true)
             if (isVideo && audioAnswerAction != null) {
                 notificationBuilder.addAction(audioAnswerAction)
+            } else if (!isVideo && !isTelephony && !phoneAccountEnabled) {
+                notificationBuilder.addAction(enableCallingAction)
             }
         } else {
             if (callerName.isNotBlank()) {
                 notificationBuilder.setContentTitle(callerName)
             }
+            if (!isOngoing && route == IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT && canUseFsi) {
+                notificationBuilder.setFullScreenIntent(openSummaryIntent, true)
+            }
             if (!isOngoing) {
-                notificationBuilder.addAction(answerAction)
-                if (isVideo && audioAnswerAction != null) {
-                    notificationBuilder.addAction(audioAnswerAction)
+                if (route == IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT) {
+                    notificationBuilder.addAction(enableCallingAction)
+                } else {
+                    if (!isVideo && !phoneAccountEnabled) {
+                        notificationBuilder.addAction(enableCallingAction)
+                    }
+                    notificationBuilder.addAction(answerAction)
+                    if (isVideo && audioAnswerAction != null) {
+                        notificationBuilder.addAction(audioAnswerAction)
+                    }
                 }
             }
             notificationBuilder
                 .addAction(declineAction)
                 .extend(NotificationCompat.WearableExtender().apply {
                     if (!isOngoing) {
-                        addAction(answerAction)
-                        if (isVideo && audioAnswerAction != null) addAction(audioAnswerAction)
+                        if (route == IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT) {
+                            addAction(enableCallingAction)
+                        } else {
+                            if (!isVideo && !phoneAccountEnabled) addAction(enableCallingAction)
+                            addAction(answerAction)
+                            if (isVideo && audioAnswerAction != null) addAction(audioAnswerAction)
+                        }
                     }
                     addAction(declineAction)
                 })

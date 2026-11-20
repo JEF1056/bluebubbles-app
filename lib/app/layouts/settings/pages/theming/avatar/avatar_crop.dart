@@ -77,6 +77,7 @@ class _AvatarCropState extends State<AvatarCrop> with ThemeHelpers {
     }
 
     if (widget.index == null && widget.chat == null) {
+      SettingsSvc.userAvatarBytes.value = croppedData;
       if (kIsWeb) {
         SettingsSvc.settings.userAvatarPath.value = await FilesystemSvc.saveWebAvatar('you', croppedData);
         await SettingsSvc.settings.saveOneAsync("userAvatarPath");
@@ -85,8 +86,10 @@ class _AvatarCropState extends State<AvatarCrop> with ThemeHelpers {
         if (!(await file.exists())) {
           await file.create(recursive: true);
         }
-        if (SettingsSvc.settings.userAvatarPath.value != null) {
-          await File(SettingsSvc.settings.userAvatarPath.value!).delete();
+        final oldPath = SettingsSvc.settings.userAvatarPath.value;
+        if (oldPath != null && oldPath != file.path) {
+          final oldFile = File(oldPath);
+          if (await oldFile.exists()) await oldFile.delete();
         }
         await file.writeAsBytes(croppedData);
         SettingsSvc.settings.userAvatarPath.value = file.path;

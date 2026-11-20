@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
@@ -81,9 +82,11 @@ class ReplyBubbleSection extends StatelessWidget {
       final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
       final quotedFromMe = replyTo.isFromMe ?? false;
       final replyFromMe = message.isFromMe ?? false;
-      final hookColor = hasBackground
-          ? Colors.white.withValues(alpha: 0.42)
-          : context.theme.colorScheme.outlineVariant;
+      final hookColor = WallpaperContrast.replyLineColor(
+        context,
+        hasWallpaper: hasBackground,
+        isIOS: false,
+      );
       final bubbleAlpha = hasBackground ? 0.58 : 0.72;
       final bubbleColor = quotedFromMe
           ? context.theme.colorScheme.primaryContainer.withValues(alpha: bubbleAlpha)
@@ -103,12 +106,7 @@ class ReplyBubbleSection extends StatelessWidget {
         );
       }
 
-      const quoteRadius = BorderRadius.only(
-        topLeft: Radius.circular(20),
-        topRight: Radius.circular(20),
-        bottomLeft: Radius.circular(4),
-        bottomRight: Radius.circular(4),
-      );
+      const quoteRadius = BorderRadius.all(Radius.circular(20));
 
       return Padding(
         padding: EdgeInsets.only(left: leftPad, bottom: 2),
@@ -325,24 +323,19 @@ class _RenderReplyQuoteHookBox extends RenderProxyBox {
     final quotedSize = _measureQuotedBubbleSize();
     _quotedSizeSlot?.size = quotedSize;
     if (size.width > 0 && size.height > 0) {
-      final paint = Paint()
-        ..color = _color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
-      final path = ReplyQuoteHookPainter.buildHookPath(
+      final canvas = context.canvas;
+      canvas.save();
+      canvas.translate(offset.dx, offset.dy);
+      ReplyQuoteHookPainter.paintHook(
+        canvas,
         size,
         quotedFromMe: _quotedFromMe,
         replyFromMe: _replyFromMe,
+        color: _color,
         quotedBubbleWidth: quotedSize?.width,
         quotedBubbleHeight: quotedSize?.height,
         bottomGap: _bottomGap,
       );
-      final canvas = context.canvas;
-      canvas.save();
-      canvas.translate(offset.dx, offset.dy);
-      canvas.drawPath(path, paint);
       canvas.restore();
     }
     super.paint(context, offset);
@@ -442,6 +435,8 @@ class ReplyQuoteHookPainter extends CustomPainter {
   // Vertical stem sits on the reply side (replyFromMe) and extends +4px past size.height
   // so there is zero gap to the reply bubble below; cross-side hooks rise to the quoted
   // bubble's vertical center and reach quotedBubbleEdge ± 4px without reversing past the arc.
+  // When [shortenArm] is true (for painting), the horizontal arm is shortened while hit-testing
+  // keeps the full span.
   static Path buildHookPath(
     Size size, {
     required bool quotedFromMe,
@@ -449,6 +444,7 @@ class ReplyQuoteHookPainter extends CustomPainter {
     double? quotedBubbleWidth,
     double? quotedBubbleHeight,
     double bottomGap = 8.0,
+    bool shortenArm = false,
   }) {
     final path = Path();
     const double maxRadius = 12.0;
@@ -470,48 +466,87 @@ class ReplyQuoteHookPainter extends CustomPainter {
     }
 
     final double r = min(maxRadius, max(0.0, size.height - g.midY));
+    final double endX = shortenArm
+        ? ReplyLinePainter.visualArmEndX(g.x, g.endX, minArmAfterCurve: r + 8.0)
+        : g.endX;
 
     if (!replyFromMe) {
-      final double effectiveR = min(r, max(0.0, g.endX - g.x));
+      final double effectiveR = min(r, max(0.0, endX - g.x));
       path.moveTo(g.x, stemBottom);
       path.lineTo(g.x, g.midY + effectiveR);
       if (effectiveR > 0) {
         path.arcToPoint(Offset(g.x + effectiveR, g.midY), clockwise: true, radius: Radius.circular(effectiveR));
       }
-      if (g.endX > g.x + effectiveR) {
-        path.lineTo(g.endX, g.midY);
+      if (endX > g.x + effectiveR) {
+        path.lineTo(endX, g.midY);
       }
     } else {
-      final double effectiveR = min(r, max(0.0, g.x - g.endX));
+      final double effectiveR = min(r, max(0.0, g.x - endX));
       path.moveTo(g.x, stemBottom);
       path.lineTo(g.x, g.midY + effectiveR);
       if (effectiveR > 0) {
         path.arcToPoint(Offset(g.x - effectiveR, g.midY), clockwise: false, radius: Radius.circular(effectiveR));
       }
-      if (g.endX < g.x - effectiveR) {
-        path.lineTo(g.endX, g.midY);
+      if (endX < g.x - effectiveR) {
+        path.lineTo(endX, g.midY);
       }
     }
     return path;
   }
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+  static void paintHook(
+    Canvas canvas,
+    Size size, {
+    required bool quotedFromMe,
+    required bool replyFromMe,
+    required Color color,
+    double? quotedBubbleWidth,
+    double? quotedBubbleHeight,
+    double bottomGap = 8.0,
+  }) {
+    final g = _computeGeometry(
+      size,
+      quotedFromMe: quotedFromMe,
+      replyFromMe: replyFromMe,
+      quotedBubbleWidth: quotedBubbleWidth,
+      quotedBubbleHeight: quotedBubbleHeight,
+      bottomGap: bottomGap,
+    );
+    final double r = min(12.0, max(0.0, size.height - g.midY));
+    final double visualEndX = quotedFromMe == replyFromMe
+        ? g.x
+        : ReplyLinePainter.visualArmEndX(g.x, g.endX, minArmAfterCurve: r + 8.0);
+    final paint = ReplyLinePainter.createHorizontalFadePaint(
+      color: color,
+      strokeWidth: 2.0,
+      startX: g.x,
+      endX: visualEndX,
+      y: g.midY,
+    );
     canvas.drawPath(
       buildHookPath(
         size,
         quotedFromMe: quotedFromMe,
         replyFromMe: replyFromMe,
-        quotedBubbleWidth: maxBubbleWidth,
+        quotedBubbleWidth: quotedBubbleWidth,
+        quotedBubbleHeight: quotedBubbleHeight,
         bottomGap: bottomGap,
+        shortenArm: true,
       ),
       paint,
+    );
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    paintHook(
+      canvas,
+      size,
+      quotedFromMe: quotedFromMe,
+      replyFromMe: replyFromMe,
+      color: color,
+      quotedBubbleWidth: maxBubbleWidth,
+      bottomGap: bottomGap,
     );
   }
 

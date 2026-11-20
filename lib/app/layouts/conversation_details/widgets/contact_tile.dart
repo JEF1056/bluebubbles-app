@@ -1,6 +1,7 @@
 import 'package:bluebubbles/app/components/animated_dropdown_menu.dart';
 import 'package:bluebubbles/app/components/copy_address_button.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/address_picker.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -20,10 +21,6 @@ class ContactTile extends StatelessWidget {
   final Handle handle;
   final Chat chat;
   final bool canBeRemoved;
-
-  bool _hasPhones(ContactV2? contact) {
-    return contact?.addresses.any((addr) => !addr.contains('@')) ?? false;
-  }
 
   bool _hasEmails(ContactV2? contact) {
     return contact?.addresses.any((addr) => addr.contains('@')) ?? false;
@@ -193,16 +190,11 @@ class ContactTile extends StatelessWidget {
   }
 
   Widget _buildTrailing(BuildContext context, {required ContactV2? contact, required bool isEmail}) {
-    final bool hasPhones = _hasPhones(contact);
     final bool hasEmails = _hasEmails(contact);
 
-    if (kIsWeb || (kIsDesktop && !isEmail) || (!isEmail && !hasPhones)) {
-      return Container(width: 2);
-    }
-
-    final bool showEmail = (contact == null && isEmail) || hasEmails;
-    final bool showPhone = ((contact == null && !isEmail) || hasPhones) && !kIsWeb && !kIsDesktop;
-    final bool showVideo = showPhone;
+    final bool showEmail = !kIsWeb && ((contact == null && isEmail) || hasEmails);
+    final bool showPhone = !kIsWeb && !kIsDesktop && canAudioCallHandle(chat, handle, contact: contact);
+    final bool showVideo = canVideoCallHandle(chat, handle, contact: contact);
 
     if (!showEmail && !showPhone && !showVideo) {
       return Container(width: 2);
@@ -259,14 +251,14 @@ class ContactTile extends StatelessWidget {
             itemTheme: itemTheme,
             title: 'Call',
             icon: CupertinoIcons.phone,
-            onTap: () => showAddressPicker(contact, handle, context),
+            onTap: () => startAudioCallForHandle(context, chat, handle, contact: contact),
           ),
         if (showVideo)
           PullDownMenuItem(
             itemTheme: itemTheme,
-            title: 'FaceTime',
+            title: 'Video',
             icon: CupertinoIcons.video_camera,
-            onTap: () => showAddressPicker(contact, handle, context, video: true),
+            onTap: () => startVideoCallForHandle(context, chat, handle, contact: contact),
           ),
       ],
       buttonBuilder: (context, showMenu) => ClipOval(
@@ -328,13 +320,13 @@ class ContactTile extends StatelessWidget {
             MenuItemRow(
               icon: Icons.call_outlined,
               label: 'Call',
-              onTap: () => hideMenu().then((_) => showAddressPicker(contact, handle, overlayContext)),
+              onTap: () => hideMenu().then((_) => startAudioCallForHandle(overlayContext, chat, handle, contact: contact)),
             ),
           if (showVideo)
             MenuItemRow(
-              icon: Icons.video_call_outlined,
+              icon: Icons.videocam_outlined,
               label: 'Video',
-              onTap: () => hideMenu().then((_) => showAddressPicker(contact, handle, overlayContext, video: true)),
+              onTap: () => hideMenu().then((_) => startVideoCallForHandle(overlayContext, chat, handle, contact: contact)),
             ),
           const SizedBox(height: 4),
         ],

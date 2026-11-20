@@ -1,7 +1,9 @@
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/conversation_tile.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/relative_timestamp_ticker.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 
 /// Shared initialization and helper logic for all three conversation-list
@@ -15,6 +17,8 @@ import 'package:get/get.dart';
 /// ```
 mixin TrailingStateMixin<W extends CustomStateful<ConversationTileController>>
     on CustomState<W, void, ConversationTileController> {
+  late final RelativeTimestampTicker _timestampTicker;
+
   @override
   void initState() {
     super.initState();
@@ -22,6 +26,25 @@ mixin TrailingStateMixin<W extends CustomStateful<ConversationTileController>>
     // keep controller in memory since the widget is part of a list
     // (it will be disposed when scrolled out of view)
     forceDelete = false;
+    _timestampTicker = RelativeTimestampTicker(onTick: () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _timestampTicker.setVisible(TickerMode.valuesOf(context).enabled);
+  }
+
+  @override
+  void dispose() {
+    _timestampTicker.dispose();
+    super.dispose();
+  }
+
+  void syncRelativeTimestamp(DateTime? target, {required bool isRelative}) {
+    _timestampTicker.sync(target, isRelative: isRelative);
   }
 
   /// Compute the status indicator text for a given [status] enum value.

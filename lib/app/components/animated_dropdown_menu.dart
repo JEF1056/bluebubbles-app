@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:bluebubbles/platform/shims/window_effect.dart';
@@ -82,6 +84,8 @@ class _AnimatedDropdownMenuState extends State<AnimatedDropdownMenu> with Single
   }
 
   /// Picks which corner of the trigger the menu grows from, based on the
+  double _maxMenuHeight = double.infinity;
+
   /// space actually available around the trigger on-screen.
   void _computeAnchors() {
     final renderBox = context.findRenderObject() as RenderBox?;
@@ -93,16 +97,18 @@ class _AnimatedDropdownMenuState extends State<AnimatedDropdownMenu> with Single
     final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox?;
     final triggerTopLeft = renderBox.localToGlobal(Offset.zero, ancestor: overlayBox);
     final screenSize = overlayBox?.size ?? MediaQuery.sizeOf(context);
+    final viewPadding = MediaQuery.viewPaddingOf(context);
 
     // Growing left from the trigger's right edge is the default look — flip
     // to growing right from the trigger's left edge if that would clip.
-    final spaceToGrowLeft = triggerTopLeft.dx + triggerSize.width;
+    final spaceToGrowLeft = triggerTopLeft.dx + triggerSize.width - viewPadding.left;
     final growLeft = spaceToGrowLeft >= widget.menuWidth;
 
     // Prefer opening below; flip above when there's more room there.
-    final spaceBelow = screenSize.height - (triggerTopLeft.dy + triggerSize.height);
-    final spaceAbove = triggerTopLeft.dy;
+    final spaceBelow = (screenSize.height - viewPadding.bottom) - (triggerTopLeft.dy + triggerSize.height);
+    final spaceAbove = triggerTopLeft.dy - viewPadding.top;
     final openBelow = spaceBelow >= spaceAbove;
+    _maxMenuHeight = math.max(120.0, (openBelow ? spaceBelow : spaceAbove) - widget.gap - 8.0);
 
     _targetAnchor = Alignment(growLeft ? 1.0 : -1.0, openBelow ? 1.0 : -1.0);
     _followerAnchor = Alignment(growLeft ? 1.0 : -1.0, openBelow ? -1.0 : 1.0);
@@ -150,7 +156,13 @@ class _AnimatedDropdownMenuState extends State<AnimatedDropdownMenu> with Single
                 child: FadeTransition(
                   opacity: _fadeAnimation,
                   // Pass the anchor's context so async actions run after hideMenu() keep a mounted context.
-                  child: widget.menuBuilder(context, _hideMenu),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: _maxMenuHeight),
+                    child: SingleChildScrollView(
+                      primary: false,
+                      child: widget.menuBuilder(context, _hideMenu),
+                    ),
+                  ),
                 ),
               ),
             ),

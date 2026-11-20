@@ -64,6 +64,14 @@ data class FaceTimeCallRequest(
     val isTelephony: Boolean = false
 )
 
+data class FaceTimeDtmfRequest(
+    @SerializedName("callUuid")
+    val callUuid: String,
+
+    @SerializedName("digit")
+    val digit: String
+)
+
 // Generic API Response
 data class ApiResponse(
     @SerializedName("status")

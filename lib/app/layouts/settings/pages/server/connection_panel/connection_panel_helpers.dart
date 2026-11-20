@@ -326,11 +326,7 @@ mixin ConnectionPanelHelpersMixin {
     IncrementalSyncManager? Function() getManager,
     void Function(IncrementalSyncManager?) setManager,
   ) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SettingsHeader(iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "Connection & Sync"),
-        Obx(() => SettingsSection(
+    Widget buildSection() => SettingsSection(
           backgroundColor: tileColor,
           children: [
             SettingsTile(
@@ -603,7 +599,15 @@ mixin ConnectionPanelHelpersMixin {
                 ),
               ),
           ],
-        )),
+        );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SettingsHeader(iosSubtitle: iosSubtitle, materialSubtitle: materialSubtitle, text: "Connection & Sync"),
+        // On web all !kIsWeb rows (including the localhostPort.value guard) are omitted,
+        // so wrapping SettingsSection in Obx on kIsWeb leaves zero reactive reads and throws in GetX.
+        if (kIsWeb) buildSection() else Obx(buildSection),
       ],
     );
   }
@@ -795,8 +799,10 @@ mixin ConnectionPanelHelpersMixin {
                             databaseUrl: SettingsSvc.fcmData.firebaseURL!,
                             timestampMs: DateTime.now().toUtc().millisecondsSinceEpoch,
                           );
-                        } else {
+                        } else if (!isNullOrEmpty(SettingsSvc.fcmData.projectID)) {
                           await HttpSvc.firebase.setRestartDateCF(SettingsSvc.fcmData.projectID!);
+                        } else {
+                          showSnackbar("Error", "Firebase is not configured!", type: SnackbarType.error);
                         }
                       }
                     } finally {

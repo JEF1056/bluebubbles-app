@@ -209,8 +209,9 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
           ),
           Builder(
             builder: (context) {
-              // padding.bottom reads 0 while the keyboard covers the nav bar
-              final bottomInset = MediaQuery.paddingOf(context).bottom + MediaQuery.viewInsetsOf(context).bottom;
+              final viewInsetsBottom = MediaQuery.viewInsetsOf(context).bottom;
+              final bottomInset =
+                  viewInsetsBottom > 0 ? viewInsetsBottom : MediaQuery.viewPaddingOf(context).bottom;
               return Padding(
                 padding: EdgeInsets.only(bottom: bottomInset),
                 child: bodyChild,
@@ -324,59 +325,67 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
               onPrimary: onBubbleColor,
             ),
           ),
-          child: PopScope(
-            canPop: false,
-            onPopInvokedWithResult: <T>(bool didPop, T? result) async {
-              if (didPop) return;
-              if (controller.inSelectMode.value) {
-                controller.inSelectMode.value = false;
-                controller.selected.clear();
-                return;
-              }
-              // Back from the picker's Genmoji or sticker library goes to its photos first.
-              if (controller.showAttachmentPicker.value &&
-                  (controller.showGenmojiLibrary.value || controller.showStickerLibrary.value)) {
-                controller.showGenmojiLibrary.value = false;
-                controller.showStickerLibrary.value = false;
-                return;
-              }
-              if (controller.showAttachmentPicker.value) {
-                controller.showAttachmentPicker.value = false;
-                controller.updateWidgets<ConversationTextField>(null);
-                return;
-              }
-              if (controller.showGamePicker.value) {
-                controller.showGamePicker.value = false;
-                return;
-              }
-              if (controller.showTextFormattingPanel.value) {
-                // Unfocused first, or the field taking input again brings the keyboard up in the panel's place
-                controller.focusNode.unfocus();
-                controller.showTextFormattingPanel.value = false;
-                return;
-              }
-              if (LifecycleSvc.isBubble) {
-                SystemNavigator.pop();
-              }
-              controller.close();
-              if (LifecycleSvc.isBubble) return;
-              return Navigator.of(context).pop();
-            },
-            child: BBScaffold(
-              backgroundColor: windowEffect != WindowEffect.disabled
-                  ? Colors.transparent
-                  : colorScheme.surface,
-              extendBodyBehindAppBar: true,
-              resizeToAvoidBottomInset: false,
-              appBar: _appBar,
-              body: RepaintBoundary(
-                child: Actions(
-                  actions: _actionsMap,
-                  child: _bodyContent,
+          child: Obx(() {
+            final canPop = !LifecycleSvc.isBubble &&
+                !controller.inSelectMode.value &&
+                !controller.showAttachmentPicker.value &&
+                !controller.showGamePicker.value &&
+                !controller.showTextFormattingPanel.value;
+            return PopScope(
+              canPop: canPop,
+              onPopInvokedWithResult: <T>(bool didPop, T? result) async {
+                if (didPop) {
+                  controller.close();
+                  return;
+                }
+                if (controller.inSelectMode.value) {
+                  controller.inSelectMode.value = false;
+                  controller.selected.clear();
+                  return;
+                }
+                // Back from the picker's Genmoji or sticker library goes to its photos first.
+                if (controller.showAttachmentPicker.value &&
+                    (controller.showGenmojiLibrary.value || controller.showStickerLibrary.value)) {
+                  controller.showGenmojiLibrary.value = false;
+                  controller.showStickerLibrary.value = false;
+                  return;
+                }
+                if (controller.showAttachmentPicker.value) {
+                  controller.showAttachmentPicker.value = false;
+                  controller.updateWidgets<ConversationTextField>(null);
+                  return;
+                }
+                if (controller.showGamePicker.value) {
+                  controller.showGamePicker.value = false;
+                  return;
+                }
+                if (controller.showTextFormattingPanel.value) {
+                  // Unfocused first, or the field taking input again brings the keyboard up in the panel's place
+                  controller.focusNode.unfocus();
+                  controller.showTextFormattingPanel.value = false;
+                  return;
+                }
+                if (LifecycleSvc.isBubble) {
+                  SystemNavigator.pop();
+                  controller.close();
+                }
+              },
+              child: BBScaffold(
+                backgroundColor: windowEffect != WindowEffect.disabled
+                    ? Colors.transparent
+                    : colorScheme.surface,
+                extendBodyBehindAppBar: true,
+                resizeToAvoidBottomInset: false,
+                appBar: _appBar,
+                body: RepaintBoundary(
+                  child: Actions(
+                    actions: _actionsMap,
+                    child: _bodyContent,
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          }),
         );
       }),
     );

@@ -16,6 +16,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_timezone
   geolocator_windows
   local_auth_windows
+  maplibre_native
   maps_launcher
   media_kit_libs_windows_video
   objectbox_flutter_libs

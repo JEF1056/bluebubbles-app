@@ -1,3 +1,5 @@
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/shared/message_error_helper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/delivered_indicator.dart';
@@ -51,6 +53,8 @@ class ErrorIndicatorObserver extends StatelessWidget {
         final errorCode = message.error;
         final errorText = ErrorHelper.getErrorText(message);
         final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
+        final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+        final errorColor = WallpaperContrast.errorColor(context, hasWallpaper: hasBackground);
 
         void openErrorDialog() {
           showMessageErrorDialog(
@@ -95,7 +99,8 @@ class ErrorIndicatorObserver extends StatelessWidget {
                             ? CupertinoIcons.exclamationmark_circle
                             : Icons.error_outline,
                         size: 16,
-                        color: context.theme.colorScheme.error,
+                        color: errorColor,
+                        shadows: hasBackground ? WallpaperContrast.unbubbledTextShadows : null,
                       ),
                     ),
                   ),
@@ -114,8 +119,9 @@ class ErrorIndicatorObserver extends StatelessWidget {
                     child: Text(
                       "Not sent · Retry",
                       style: context.theme.textTheme.labelSmall?.copyWith(
-                        color: context.theme.colorScheme.error,
+                        color: errorColor,
                         fontWeight: FontWeight.w500,
+                        shadows: hasBackground ? WallpaperContrast.unbubbledTextShadows : null,
                       ),
                     ),
                   ),
@@ -128,7 +134,8 @@ class ErrorIndicatorObserver extends StatelessWidget {
         return IconButton(
           icon: Icon(
             SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.exclamationmark_circle : Icons.error_outline,
-            color: context.theme.colorScheme.error,
+            color: errorColor,
+            shadows: hasBackground ? WallpaperContrast.unbubbledTextShadows : null,
           ),
           onPressed: openErrorDialog,
         );

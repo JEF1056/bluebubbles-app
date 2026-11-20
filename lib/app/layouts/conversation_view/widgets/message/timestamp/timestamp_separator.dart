@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -72,12 +73,13 @@ class TimestampSeparator extends StatelessWidget {
 
     if (timestamp == null) return const SizedBox.shrink();
 
-    final textColor = hasBackground
-        ? Colors.white.withValues(alpha: 0.88)
-        : (isMaterial ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline);
-    final shadows = hasBackground ? const [Shadow(color: Colors.black54, blurRadius: 3)] : null;
-    final baseStyle = (isMaterial ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!)
-        .copyWith(color: textColor, fontWeight: FontWeight.normal, shadows: shadows);
+    final fallbackColor = isMaterial ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final baseStyle = WallpaperContrast.unbubbledStyle(
+      (isMaterial ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!)
+          .copyWith(fontWeight: FontWeight.normal),
+      hasWallpaper: hasBackground,
+      fallbackColor: fallbackColor,
+    );
 
     final richText = RichText(
       text: TextSpan(

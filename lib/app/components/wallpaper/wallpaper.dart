@@ -8,4 +8,5 @@ export 'particles_wallpaper.dart';
 export 'static_wallpaper_image.dart';
 export 'theme_wallpaper_palette.dart';
 export 'wallpaper_config_codec.dart';
+export 'wallpaper_contrast.dart';
 export 'wave_wallpaper.dart';

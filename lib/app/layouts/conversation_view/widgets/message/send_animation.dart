@@ -3,9 +3,7 @@ import 'dart:math';
 import 'dart:ui';
 
 import 'package:async_task/async_task_extension.dart';
-import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
-import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_audio_player.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -13,7 +11,6 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:mime_type/mime_type.dart';
@@ -195,27 +192,12 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
       await controller.scrollToBottom();
     }
     final hasSendContent = !(isNullOrEmptyString(text) && isNullOrEmptyString(data.subject) && controller.pickedAttachments.isEmpty);
-    if (kIsWeb && hasSendContent && SettingsSvc.settings.soundVolume.value > 0) {
-      unawaited(playWebChime(
-        isSend: true,
+    if (hasSendContent && SettingsSvc.settings.soundVolume.value > 0) {
+      unawaited(playAppSound(
+        AppSounds.messageSent,
+        customPath: SettingsSvc.settings.sendSoundPath.value,
         volume: SettingsSvc.settings.soundVolume.value / 100.0,
-        customUrl: SettingsSvc.settings.sendSoundPath.value,
       ));
-    } else if (!kIsWeb && SettingsSvc.settings.sendSoundPath.value != null && hasSendContent) {
-      if (kIsDesktop) {
-        Player player = Player();
-        await player.setVolume(SettingsSvc.settings.soundVolume.value.toDouble());
-        await player.open(Media(SettingsSvc.settings.sendSoundPath.value!));
-        player.stream.completed
-            .firstWhere((completed) => completed)
-            .then((_) async => Future.delayed(const Duration(milliseconds: 450), () async => await player.dispose()));
-      } else {
-        PlayerController controller = PlayerController();
-        controller
-            .preparePlayer(
-                path: SettingsSvc.settings.sendSoundPath.value!, volume: SettingsSvc.settings.soundVolume.value / 100)
-            .then((_) => controller.startPlayer());
-      }
     }
 
     // Several files go as one message, as in Messages, when the server can

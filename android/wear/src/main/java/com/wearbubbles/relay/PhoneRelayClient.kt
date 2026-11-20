@@ -1,6 +1,9 @@
 package com.wearbubbles.relay
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
 import android.util.Log
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.CapabilityClient
@@ -42,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.URLEncoder
 import java.util.UUID
@@ -217,7 +221,68 @@ class PhoneRelayClient(private val context: Context) {
         )
 
         const val PATH_CREDENTIALS = "/bb/credentials"
+        const val PATH_PROFILE = "/bb/profile"
         const val PATH_REQUEST_CREDENTIALS = "/bb/request-credentials"
+        private const val SELF_AVATAR_FILE = "self_avatar.img"
+        internal const val SELF_AVATAR_MAX_DIM = 128
+        internal const val SELF_AVATAR_MAX_BYTES = 32_000
+
+        internal fun decodeAvatarBase64(raw: String?): ByteArray? {
+            val cleaned = raw?.trim()?.substringAfter("base64,", raw.trim())?.takeIf { it.isNotEmpty() } ?: return null
+            return try {
+                Base64.decode(cleaned, Base64.DEFAULT).takeIf { it.isNotEmpty() }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        internal fun compressSelfAvatar(
+            rawBytes: ByteArray,
+            maxDim: Int = SELF_AVATAR_MAX_DIM,
+            maxBytes: Int = SELF_AVATAR_MAX_BYTES
+        ): ByteArray? {
+            if (rawBytes.isEmpty()) return null
+            return try {
+                val decoded = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+                    ?: return rawBytes.takeIf { it.size <= maxBytes }
+                var current = if (decoded.width > maxDim || decoded.height > maxDim) {
+                    val scale = maxDim.toFloat() / maxOf(decoded.width, decoded.height).toFloat()
+                    val w = (decoded.width * scale).toInt().coerceAtLeast(1)
+                    val h = (decoded.height * scale).toInt().coerceAtLeast(1)
+                    Bitmap.createScaledBitmap(decoded, w, h, true).also {
+                        if (it !== decoded) decoded.recycle()
+                    }
+                } else {
+                    decoded
+                }
+                val baos = ByteArrayOutputStream()
+                var out: ByteArray? = null
+                for (quality in intArrayOf(82, 68, 54, 40)) {
+                    baos.reset()
+                    current.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                    val candidate = baos.toByteArray()
+                    if (candidate.isNotEmpty() && candidate.size <= maxBytes) {
+                        out = candidate
+                        break
+                    }
+                }
+                if (out == null && (current.width > 96 || current.height > 96)) {
+                    val smaller = Bitmap.createScaledBitmap(current, 96, 96, true)
+                    if (smaller !== current) current.recycle()
+                    current = smaller
+                    baos.reset()
+                    current.compress(Bitmap.CompressFormat.JPEG, 40, baos)
+                    val candidate = baos.toByteArray()
+                    if (candidate.isNotEmpty() && candidate.size <= maxBytes) {
+                        out = candidate
+                    }
+                }
+                current.recycle()
+                out
+            } catch (_: Exception) {
+                rawBytes.takeIf { it.size <= maxBytes }
+            }
+        }
         const val PATH_REQUEST_SYNC = "/bb/request-sync"
         const val PATH_SYNC_CHATS = "/bb/sync-chats"
         const val PATH_SYNC_MESSAGES = "/bb/sync-messages"
@@ -323,24 +388,8 @@ class PhoneRelayClient(private val context: Context) {
         nodeCache.invalidate()
     }
 
-    suspend fun refreshPhoneConnected(force: Boolean = false): Boolean {
-        return try {
-            val connected = nodeCache.getOrRefreshConnected(force = force) {
-                val info = Wearable.getCapabilityClient(context)
-                    .getCapability(PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                    .await()
-                val hasCreds = cachedIsConfigured ?: settings.isConfigured.first()
-                selectRelayNode(info.nodes, hasCreds)?.id
-            }
-            _isPhoneConnected.value = connected
-            connected
-        } catch (e: Exception) {
-            Log.w(TAG, "refreshPhoneConnected failed: ${e.message}")
-            invalidateNodeCache()
-            _isPhoneConnected.value = false
-            false
-        }
-    }
+    suspend fun refreshPhoneConnected(force: Boolean = false): Boolean =
+        getPhoneNodeId(force = force) != null
 
     fun updatePhoneConnected(connected: Boolean) {
         if (!connected || nodeCache.nodeId == null) {
@@ -349,20 +398,21 @@ class PhoneRelayClient(private val context: Context) {
         _isPhoneConnected.value = connected
     }
 
-    suspend fun getPhoneNodeId(): String? {
-        if (nodeCache.isValid()) {
-            return nodeCache.nodeId
-        }
+    suspend fun getPhoneNodeId(force: Boolean = false): String? {
+        if (!force && nodeCache.isValid()) return nodeCache.nodeId
         return try {
-            val info = Wearable.getCapabilityClient(context)
-                .getCapability(PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                .await()
-            val hasCreds = cachedIsConfigured ?: settings.isConfigured.first()
-            val selected = selectRelayNode(info.nodes, hasCreds)
-            nodeCache.record(selected?.id)
-            _isPhoneConnected.value = selected != null
-            selected?.id
-        } catch (_: Exception) {
+            nodeCache.getOrRefreshConnected(force = force) {
+                val info = Wearable.getCapabilityClient(context)
+                    .getCapability(PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
+                    .await()
+                val hasCreds = cachedIsConfigured ?: settings.isConfigured.first()
+                selectRelayNode(info.nodes, hasCreds)?.id
+            }
+            val id = nodeCache.nodeId
+            _isPhoneConnected.value = id != null
+            id
+        } catch (e: Exception) {
+            Log.w(TAG, "getPhoneNodeId failed: ${e.message}")
             invalidateNodeCache()
             _isPhoneConnected.value = false
             null
@@ -379,17 +429,38 @@ class PhoneRelayClient(private val context: Context) {
             var found = false
             try {
                 for (item in items) {
-                    if (item.uri.path == PATH_CREDENTIALS) {
-                        val map = DataMapItem.fromDataItem(item).dataMap
-                        val url = map.getString("serverUrl") ?: ""
-                        val pass = map.getString("password") ?: ""
-                        val headers = map.getString("customHeadersJson") ?: "{}"
-                        val privateApi = map.getBoolean("privateApiSend", false)
-                        val privateMarkChatAsRead = map.getBoolean("privateMarkChatAsRead", false)
-                        if (url.isNotBlank() && pass.isNotBlank()) {
-                            settings.saveCredentials(url, pass, headers, privateApi, privateMarkChatAsRead)
-                            ApiClient.configureHeaders(url, settings.parseHeaders(headers))
-                            found = true
+                    when (item.uri.path) {
+                        PATH_CREDENTIALS -> {
+                            val map = DataMapItem.fromDataItem(item).dataMap
+                            val url = map.getString("serverUrl") ?: ""
+                            val pass = map.getString("password") ?: ""
+                            val headers = map.getString("customHeadersJson") ?: "{}"
+                            val privateApi = map.getBoolean("privateApiSend", false)
+                            val privateMarkChatAsRead = map.getBoolean("privateMarkChatAsRead", false)
+                            if (url.isNotBlank() && pass.isNotBlank()) {
+                                settings.saveCredentials(url, pass, headers, privateApi, privateMarkChatAsRead)
+                                ApiClient.configureHeaders(url, settings.parseHeaders(headers))
+                                found = true
+                            }
+                        }
+                        PATH_PROFILE -> {
+                            val map = DataMapItem.fromDataItem(item).dataMap
+                            val userName = map.getString("userName") ?: ""
+                            val userHandle = map.getString("userHandle") ?: ""
+                            val asset = map.getAsset("avatar")
+                            val avatarBytes = if (asset != null) {
+                                try {
+                                    val fd = Wearable.getDataClient(context).getFdForAsset(asset).await()
+                                    try {
+                                        fd.inputStream.use { it.readBytes() }
+                                    } finally {
+                                        fd.release()
+                                    }
+                                } catch (_: Exception) {
+                                    null
+                                }
+                            } else null
+                            handleProfileSync(userName, userHandle, avatarBytes)
                         }
                     }
                 }
@@ -405,6 +476,44 @@ class PhoneRelayClient(private val context: Context) {
     suspend fun requestChatsSync(): Boolean {
         val payload = JsonObject().apply { addProperty("type", "chats") }.toString().toByteArray()
         return sendToPhone(PATH_REQUEST_SYNC, payload)
+    }
+
+    suspend fun requestProfileSync(): Boolean {
+        val payload = JsonObject().apply { addProperty("type", "profile") }.toString().toByteArray()
+        return sendToPhone(PATH_REQUEST_SYNC, payload)
+    }
+
+    fun getSelfAvatarFile(): File = File(context.filesDir, SELF_AVATAR_FILE)
+
+    suspend fun handleProfileSync(userName: String, userHandle: String, avatarBytes: ByteArray?) =
+        withContext(ingestionDispatcher) {
+            try {
+                val outFile = getSelfAvatarFile()
+                val avatarPath = if (avatarBytes != null && avatarBytes.isNotEmpty()) {
+                    val toWrite = if (avatarBytes.size <= SELF_AVATAR_MAX_BYTES) avatarBytes else (compressSelfAvatar(avatarBytes) ?: avatarBytes)
+                    outFile.writeBytes(toWrite)
+                    "${outFile.absolutePath}?v=${outFile.lastModified()}"
+                } else {
+                    outFile.takeIf { it.exists() }?.let { "${it.absolutePath}?v=${it.lastModified()}" }
+                }
+                if (userName.isNotBlank() || userHandle.isNotBlank() || avatarPath != null) {
+                    settings.saveUserProfile(userName, userHandle, avatarPath)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "handleProfileSync failed: ${e.message}")
+            }
+        }
+
+    suspend fun handleProfileJson(json: String) {
+        try {
+            val obj = JsonParser.parseString(json).asJsonObject
+            val userName = obj.str("userName") ?: ""
+            val userHandle = obj.str("userHandle") ?: ""
+            val avatarBytes = decodeAvatarBase64(obj.str("avatarBase64"))
+            handleProfileSync(userName, userHandle, avatarBytes)
+        } catch (e: Exception) {
+            Log.e(TAG, "handleProfileJson error: ${e.message}")
+        }
     }
 
     suspend fun requestChatsSyncAwait(): Boolean =
@@ -608,20 +717,17 @@ class PhoneRelayClient(private val context: Context) {
         return if (file.exists() && file.length() > 0) file else null
     }
 
-    suspend fun sendMarkReadAwait(chatGuid: String): Boolean {
-        val payload = JsonObject().apply { addProperty("chatGuid", chatGuid) }.toString().toByteArray()
-        return sendToPhone(PATH_MARK_READ, payload)
-    }
+    private suspend fun sendJsonField(path: String, key: String, value: String): Boolean =
+        sendToPhone(path, JsonObject().apply { addProperty(key, value) }.toString().toByteArray())
 
-    suspend fun sendDismissNotificationAwait(chatGuid: String): Boolean {
-        val payload = JsonObject().apply { addProperty("chatGuid", chatGuid) }.toString().toByteArray()
-        return sendToPhone(PATH_DISMISS_NOTIFICATION, payload)
-    }
+    suspend fun sendMarkReadAwait(chatGuid: String): Boolean =
+        sendJsonField(PATH_MARK_READ, "chatGuid", chatGuid)
 
-    suspend fun sendOpenChatAwait(chatGuid: String): Boolean {
-        val payload = JsonObject().apply { addProperty("chatGuid", chatGuid) }.toString().toByteArray()
-        return sendToPhone(PATH_OPEN_CHAT, payload)
-    }
+    suspend fun sendDismissNotificationAwait(chatGuid: String): Boolean =
+        sendJsonField(PATH_DISMISS_NOTIFICATION, "chatGuid", chatGuid)
+
+    suspend fun sendOpenChatAwait(chatGuid: String): Boolean =
+        sendJsonField(PATH_OPEN_CHAT, "chatGuid", chatGuid)
 
     suspend fun sendAnswerCallAudioAwait(
         callUuid: String,
@@ -636,10 +742,8 @@ class PhoneRelayClient(private val context: Context) {
         return sendToPhone(PATH_ANSWER_CALL_AUDIO, payload)
     }
 
-    suspend fun sendDeclineCallAwait(callUuid: String): Boolean {
-        val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString().toByteArray()
-        return sendToPhone(PATH_DECLINE_CALL, payload)
-    }
+    suspend fun sendDeclineCallAwait(callUuid: String): Boolean =
+        sendJsonField(PATH_DECLINE_CALL, "callUuid", callUuid)
 
     fun notifyWatchActive(active: Boolean) {
         scope.launch {

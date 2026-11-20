@@ -16,6 +16,7 @@ abstract class MethodChannelInboundMethods {
   static const String incomingFacetime = 'incoming-facetime';
   static const String ftCallStatusChanged = 'ft-call-status-changed';
   static const String answerFacetime = 'answer-facetime';
+  static const String facetimeCallState = 'facetime-call-state';
   static const String iMessageAliasesRemoved = 'imessage-aliases-removed';
   static const String socketEvent = 'socket-event';
   static const String unifiedpushSettings = 'unifiedpush-settings';

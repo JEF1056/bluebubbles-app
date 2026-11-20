@@ -1,4 +1,3 @@
-import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/conversation_list_fab.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/filters/custom_group_filter_chip_row.dart';
@@ -7,11 +6,8 @@ import 'package:bluebubbles/app/layouts/conversation_list/widgets/pinned_chats_g
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/pin_drag_source.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/unpin_drop_target.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/list_item.dart';
-import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
-import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/scrollbar_wrapper.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
-import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
@@ -54,22 +50,16 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: <T>(bool didPop, T? other) {
-        if (didPop) return;
-        if (controller.selectedChats.isNotEmpty) {
-          controller.clearSelectedChats();
-          return;
-        } else if (controller.showArchivedChats || controller.showUnknownSenders) {
-          // Pop the current page
-          Navigator.of(context).pop();
-        } else {
-          // Pop the app to exit the app
-          SystemNavigator.pop();
-        }
-      },
-      child: Container(
+    return Obx(
+      () => PopScope(
+        canPop: controller.selectedChats.isEmpty,
+        onPopInvokedWithResult: <T>(bool didPop, T? other) {
+          if (didPop) return;
+          if (controller.selectedChats.isNotEmpty) {
+            controller.clearSelectedChats();
+          }
+        },
+        child: Container(
         color: backdropColor,
         padding: EdgeInsets.only(top: kIsDesktop ? 30 : 0),
         child: Scaffold(
@@ -168,7 +158,7 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                               )
                             else ...[
                               SliverPadding(
-                                padding: const EdgeInsets.only(top: 8, bottom: 88),
+                                padding: EdgeInsets.only(top: 8, bottom: 88 + MediaQuery.paddingOf(bodyContext).bottom),
                                 // Only the rows watch the drag, for the room a pin dragged over them makes, so a drag
                                 // doesn't refilter the chats.
                                 sliver: Obx(() {
@@ -215,171 +205,7 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _MaterialPinnedSection extends StatelessWidget {
-  const _MaterialPinnedSection({
-    required this.pinnedChats,
-    required this.controller,
-    required this.onSelectionChanged,
-  });
-
-  final List<Chat> pinnedChats;
-  final ConversationListController controller;
-  final VoidCallback onSelectionChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final rows = <List<Chat>>[];
-    for (int i = 0; i < pinnedChats.length; i += 3) {
-      rows.add(pinnedChats.sublist(i, (i + 3).clamp(0, pinnedChats.length)));
-    }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (int r = 0; r < rows.length; r++) ...[
-            if (r > 0) const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (int c = 0; c < rows[r].length; c++) ...[
-                  if (c > 0) const SizedBox(width: 20),
-                  _MaterialPinnedItem(
-                    chat: rows[r][c],
-                    controller: controller,
-                    onSelectionChanged: onSelectionChanged,
-                  ),
-                ],
-              ],
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _MaterialPinnedItem extends StatelessWidget {
-  const _MaterialPinnedItem({
-    required this.chat,
-    required this.controller,
-    required this.onSelectionChanged,
-  });
-
-  final Chat chat;
-  final ConversationListController controller;
-  final VoidCallback onSelectionChanged;
-
-  void _toggleSelect() {
-    HapticFeedback.lightImpact();
-    final idx = controller.selectedChats.indexWhere((c) => c.guid == chat.guid);
-    if (idx >= 0) {
-      controller.selectedChats.removeAt(idx);
-    } else {
-      controller.selectedChats.add(chat);
-    }
-    controller.updateSelectedChats();
-    onSelectionChanged();
-  }
-
-  void _openOrSelect(BuildContext context) {
-    if (controller.selectedChats.isNotEmpty) {
-      _toggleSelect();
-      return;
-    }
-    NavigationSvc.pushAndRemoveUntil(
-      context,
-      ConversationView(chat: chat),
-      (route) => route.isFirst,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final chatState = ChatsSvc.getOrCreateChatState(chat);
-    return ChatStateScope(
-      chatState: chatState,
-      child: SizedBox(
-        width: 96,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: () => _openOrSelect(context),
-          onLongPress: _toggleSelect,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-            child: Obx(() {
-              final _ = controller.selectionVersion.value;
-              final isSelected = controller.selectedChats.any((c) => c.guid == chat.guid);
-              final rawTitle = chatState.title.value;
-              final title = (rawTitle != null && rawTitle.isNotEmpty) ? rawTitle : chat.getTitle();
-              final unread = chatState.hasUnreadMessage.value && chatState.muteType.value != "mute";
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      ContactAvatarGroupWidget(
-                        chat: chat,
-                        size: 84,
-                        editable: false,
-                      ),
-                      if (isSelected)
-                        Positioned.fill(
-                          child: Container(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: context.theme.colorScheme.primary.withValues(alpha: 0.72),
-                            ),
-                            child: Icon(
-                              Icons.check,
-                              color: context.theme.colorScheme.onPrimary,
-                              size: 32,
-                            ),
-                          ),
-                        )
-                      else if (unread)
-                        Positioned(
-                          right: 2,
-                          top: 2,
-                          child: Container(
-                            width: 14,
-                            height: 14,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: context.theme.colorScheme.primary,
-                              border: Border.all(
-                                color: context.theme.colorScheme.surfaceContainer,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: context.theme.textTheme.bodyMedium?.copyWith(
-                      color: context.theme.colorScheme.onSurface,
-                      fontWeight: unread ? FontWeight.w600 : FontWeight.w400,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                ],
-              );
-            }),
-          ),
-        ),
-      ),
+    ),
     );
   }
 }

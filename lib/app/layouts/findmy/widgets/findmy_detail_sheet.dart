@@ -2,6 +2,8 @@ import 'package:bluebubbles/app/layouts/chat_creator/chat_creator.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
+import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_device_avatar.dart';
+import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_nearby_sheet.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_raw_data_dialog.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -73,13 +75,16 @@ class FindMyDetailSheet extends StatelessWidget {
     showBBBottomSheet<void>(
       context: context,
       padding: EdgeInsets.zero,
-      builder: (sheetCtx) => SingleChildScrollView(
-        child: Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(sheetCtx).padding.bottom + 12),
-          child: FindMyDetailSheet(
-            controller: controller,
-            onClose: () => Navigator.of(sheetCtx).pop(),
-          ),
+      initialChildSize: 0.55,
+      minChildSize: 0.25,
+      maxChildSize: 0.92,
+      scrollableBuilder: (sheetCtx, scrollController) => SingleChildScrollView(
+        controller: scrollController,
+        physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+        padding: EdgeInsets.only(bottom: 24 + MediaQuery.viewPaddingOf(sheetCtx).bottom),
+        child: FindMyDetailSheet(
+          controller: controller,
+          onClose: () => Navigator.of(sheetCtx).pop(),
         ),
       ),
     );
@@ -221,12 +226,17 @@ class FindMyDetailSheet extends StatelessWidget {
           _ActionTile(
             icon: Icons.chat_bubble_outline,
             label: 'Message',
-            onTap: () => _openChat(context, displayName: title, address: addressHandle),
+            onTap: () => FindMyDetailSheet.openChat(context, displayName: title, address: addressHandle),
           ),
           _ActionTile(
             icon: Icons.person_outline,
             label: 'Contact',
-            onTap: () => _openContact(context, displayName: title, address: addressHandle, handle: friend.handle),
+            onTap: () => FindMyDetailSheet.openContact(
+              context,
+              displayName: title,
+              address: addressHandle,
+              handle: friend.handle,
+            ),
           ),
         ],
         if (!redacted)
@@ -273,27 +283,10 @@ class FindMyDetailSheet extends StatelessWidget {
             size: 64,
             color: isLive ? const Color(0xFF22C55E) : cs.primary,
           ),
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: cs.surfaceContainerHigh,
-              shape: BoxShape.circle,
-              border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.6)),
-            ),
-            child: Center(
-              child: (device.role?['emoji'] != null && !redacted)
-                  ? Text(
-                      device.role!['emoji'].toString(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 24),
-                    )
-                  : Icon(
-                      iconForFindMyDevice(device),
-                      color: cs.onSurface,
-                      size: 24,
-                    ),
-            ),
+          FindMyDeviceAvatar(
+            device: device,
+            size: 50,
+            redacted: redacted,
           ),
         ],
       ),
@@ -334,6 +327,21 @@ class FindMyDetailSheet extends StatelessWidget {
         ),
         _RefreshActionTile(controller: controller),
         _LiveToggleTile(controller: controller),
+        if (device.canFindNearby && controller.bleService.isSupported)
+          _ActionTile(
+            icon: Icons.radar_rounded,
+            label: 'Find Nearby',
+            onTap: () => showFindMyNearbySheet(context, device, controller),
+          ),
+        if (device.canRing)
+          _ActionTile(
+            icon: controller.ringingDeviceId.value == device.id
+                ? Icons.stop_rounded
+                : Icons.volume_up_rounded,
+            label: controller.ringingDeviceId.value == device.id ? 'Stop Sound' : 'Play Sound',
+            enabled: !controller.ringBusy.value,
+            onTap: () => controller.toggleRingDevice(device),
+          ),
         if (!redacted)
           _ActionTile(
             icon: Icons.info_outline,
@@ -370,7 +378,7 @@ class FindMyDetailSheet extends StatelessWidget {
     return context.theme.colorScheme.onSurfaceVariant;
   }
 
-  Future<void> _openChat(BuildContext context, {required String displayName, required String address}) async {
+  static Future<void> openChat(BuildContext context, {required String displayName, required String address}) async {
     Chat? existingChat;
     try {
       if (kIsWeb) {
@@ -397,19 +405,6 @@ class FindMyDetailSheet extends StatelessWidget {
       );
     }
   }
-
-  Future<void> _openContact(
-    BuildContext context, {
-    required String displayName,
-    required String address,
-    Handle? handle,
-  }) =>
-      FindMyDetailSheet.openContact(
-        context,
-        displayName: displayName,
-        address: address,
-        handle: handle,
-      );
 }
 
 class _DetailSheetFrame extends StatelessWidget {

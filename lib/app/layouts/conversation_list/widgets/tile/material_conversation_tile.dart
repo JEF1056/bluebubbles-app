@@ -215,6 +215,7 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
             message.attributedBody.any((b) => b.runs.any((r) => r.hasMention));
         final showHoverMenu = (kIsDesktop || kIsWeb) && widget.isHovered && !controller.isSelected;
         final unreadCount = unread ? MaterialTrailing.computeUnreadCount(controller.chat, chatState.lastReadMessageGuid.value) : 0;
+        syncRelativeTimestamp(hasError ? null : message?.dateCreated, isRelative: true);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisAlignment: MainAxisAlignment.center,

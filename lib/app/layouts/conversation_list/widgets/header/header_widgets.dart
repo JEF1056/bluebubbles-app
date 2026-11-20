@@ -44,65 +44,6 @@ class HeaderText extends StatelessWidget {
   }
 }
 
-class SyncIndicator extends StatelessWidget {
-  final double size;
-
-  const SyncIndicator({super.key, this.size = 12});
-
-  @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final isSyncing = SettingsSvc.settings.showSyncIndicator.value && SyncSvc.isIncrementalSyncing.value;
-      // Fixed-size slot prevents header icons from shifting when background sync starts/stops.
-      return SizedBox(
-        width: size,
-        height: size,
-        child: AnimatedOpacity(
-          opacity: isSyncing ? 0.72 : 0.0,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          child: isSyncing
-              ? CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    context.theme.colorScheme.primary.withValues(alpha: 0.8),
-                  ),
-                )
-              : const SizedBox.shrink(),
-        ),
-      );
-    });
-  }
-}
-
-/// Whisper-quiet 1.5px hairline bar overlaid at the top of the chat list during background sync.
-class SyncHairlineIndicator extends StatelessWidget {
-  const SyncHairlineIndicator({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final isSyncing = SettingsSvc.settings.showSyncIndicator.value && SyncSvc.isIncrementalSyncing.value;
-      return IgnorePointer(
-        child: AnimatedOpacity(
-          opacity: isSyncing ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-          child: isSyncing
-              ? LinearProgressIndicator(
-                  minHeight: 1.5,
-                  backgroundColor: Colors.transparent,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    context.theme.colorScheme.primary.withValues(alpha: 0.55),
-                  ),
-                )
-              : const SizedBox(height: 1.5),
-        ),
-      );
-    });
-  }
-}
-
 /// Header "Filter Chats" shortcut button — Material/Samsung style, matching
 /// the existing search/camera [IconButton]s in those headers. Highlighted in
 /// [ColorScheme.primary] whenever a chat list filter is active; hidden
@@ -229,8 +170,6 @@ class MaterialAvatarMenu extends StatelessWidget {
         final moveChatCreatorToHeader = SettingsSvc.settings.moveChatCreatorToHeader.value;
         final filterUnknownSenders = SettingsSvc.settings.filterUnknownSenders.value;
         final hasActiveChatFilter = ChatsSvc.chatListFilters.value.hasActiveFilter;
-        final userName = SettingsSvc.effectiveUserName;
-        final iCloudAccount = SettingsSvc.settings.iCloudAccount.value;
 
         return DropdownMenuCard(
           children: [
@@ -254,30 +193,34 @@ class MaterialAvatarMenu extends StatelessWidget {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            userName.isNotEmpty ? userName : 'My Account',
-                            style: overlayContext.theme.textTheme.titleSmall?.copyWith(
-                              color: overlayContext.theme.colorScheme.onSurfaceVariant,
-                              fontWeight: FontWeight.w600,
+                      child: Obx(() {
+                        final userName = SettingsSvc.effectiveUserName;
+                        final iCloudAccount = SettingsSvc.settings.iCloudAccount.value;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              userName.isNotEmpty ? userName : 'My Account',
+                              style: overlayContext.theme.textTheme.titleSmall?.copyWith(
+                                color: overlayContext.theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            iCloudAccount.isNotEmpty ? iCloudAccount : 'Tap to open profile',
-                            style: overlayContext.theme.textTheme.bodySmall?.copyWith(
-                              color: overlayContext.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                            const SizedBox(height: 2),
+                            Text(
+                              iCloudAccount.isNotEmpty ? iCloudAccount : 'Tap to open profile',
+                              style: overlayContext.theme.textTheme.bodySmall?.copyWith(
+                                color: overlayContext.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
+                          ],
+                        );
+                      }),
                     ),
                     const SizedBox(width: 8),
                     Icon(

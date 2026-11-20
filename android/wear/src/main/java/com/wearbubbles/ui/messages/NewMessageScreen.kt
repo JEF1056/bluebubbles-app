@@ -1,13 +1,7 @@
 package com.wearbubbles.ui.messages
 
-import android.app.Activity
-import android.app.RemoteInput
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.os.Bundle
-import android.speech.RecognizerIntent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -37,6 +31,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -57,7 +52,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
-import androidx.wear.input.RemoteInputIntentHelper
 import coil.compose.AsyncImage
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
@@ -70,10 +64,12 @@ import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.LocalWearPalette
+import com.wearbubbles.ui.theme.WearDirectKeyboardInput
 import com.wearbubbles.ui.theme.WearPillButton
 import com.wearbubbles.ui.theme.avatarMonogram
 import com.wearbubbles.ui.theme.avatarSwatchFor
 import com.wearbubbles.ui.theme.centeredTextStyle
+import com.wearbubbles.ui.theme.rememberSpeechInputLauncher
 import java.io.File
 import java.util.Locale
 
@@ -316,48 +312,26 @@ fun NewMessageScreen(
         }
     }
 
-    val recipientInputLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val results: Bundle = RemoteInput.getResultsFromIntent(result.data) ?: return@rememberLauncherForActivityResult
-            val entered = results.getCharSequence("recipient_input")?.toString().orEmpty()
-            handleTextInput(entered)
-        }
-    }
-
-    val speechLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val spoken = result.data
-                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-                ?.firstOrNull()
-                .orEmpty()
-            handleTextInput(spoken)
-        }
-    }
+    var keyboardRequestToken by remember { mutableIntStateOf(0) }
 
     fun launchKeyboardInput() {
-        val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
-        val remoteInput = RemoteInput.Builder("recipient_input")
-            .setLabel("Name, phone, or email")
-            .build()
-        RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(remoteInput))
-        recipientInputLauncher.launch(intent)
+        keyboardRequestToken = if (keyboardRequestToken <= 0) 1 else keyboardRequestToken + 1
     }
 
-    fun launchMicInput() {
-        val speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, "Name or phone number")
-        }
-        try {
-            speechLauncher.launch(speechIntent)
-        } catch (_: ActivityNotFoundException) {
-            launchKeyboardInput()
-        }
-    }
+    val launchMicInput = rememberSpeechInputLauncher(
+        prompt = "Name or phone number",
+        onResult = ::handleTextInput,
+        onUnavailable = ::launchKeyboardInput
+    )
+
+    WearDirectKeyboardInput(
+        requestToken = keyboardRequestToken,
+        hint = "Name, phone, or email",
+        imeAction = EditorInfo.IME_ACTION_SEARCH,
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
+        onSubmit = ::handleTextInput,
+        onDismiss = { keyboardRequestToken = 0 }
+    )
 
     val columnState = rememberResponsiveColumnState(
         contentPadding = ScalingLazyColumnDefaults.padding(

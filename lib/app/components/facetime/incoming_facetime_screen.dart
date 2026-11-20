@@ -14,6 +14,7 @@ class IncomingFaceTimeScreen extends StatefulWidget {
     required this.callerName,
     this.avatarBytes,
     this.isAudio = false,
+    this.isTelephony = false,
     this.isConnecting = false,
     this.controller,
     this.onAnswerVideo,
@@ -26,6 +27,7 @@ class IncomingFaceTimeScreen extends StatefulWidget {
   final String callerName;
   final Uint8List? avatarBytes;
   final bool isAudio;
+  final bool isTelephony;
   final bool isConnecting;
   final ActiveCallController? controller;
   final VoidCallback? onAnswerVideo;
@@ -124,21 +126,32 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
     final reducedMotion = facetimeReducedMotionOf(context);
     final ctrl = widget.controller;
     final matchesCtrl = ctrl != null && ctrl.state.callUuid == widget.callUuid;
-    final isAudio = _localAudioOverride || (matchesCtrl ? !ctrl.state.isVideo : widget.isAudio);
+    final isTelephony = (matchesCtrl ? ctrl.state.isTelephony : false) || widget.isTelephony;
+    final isAudio = isTelephony || _localAudioOverride || (matchesCtrl ? !ctrl.state.isVideo : widget.isAudio);
     final hasPhoto = widget.avatarBytes != null && widget.avatarBytes!.isNotEmpty;
     final statusBadge = connecting
         ? 'Connecting…'
-        : isAudio
-            ? 'FaceTime Audio'
-            : 'FaceTime Video';
+        : isTelephony
+            ? 'iPhone Call'
+            : isAudio
+                ? 'FaceTime Audio'
+                : 'FaceTime Video';
     final statusSubtitle = connecting
-        ? 'Generating call link…'
-        : isAudio
-            ? 'Incoming FaceTime Audio'
-            : 'Incoming FaceTime Video';
+        ? (isTelephony ? 'Connecting audio…' : 'Generating call link…')
+        : isTelephony
+            ? 'Incoming iPhone Call'
+            : isAudio
+                ? 'Incoming FaceTime Audio'
+                : 'Incoming FaceTime Video';
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Colors.transparent,
+        systemNavigationBarDividerColor: Colors.transparent,
+        systemNavigationBarContrastEnforced: false,
+        systemStatusBarContrastEnforced: false,
+      ),
       child: PopScope(
         canPop: false,
         child: Material(

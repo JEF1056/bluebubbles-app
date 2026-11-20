@@ -2,6 +2,7 @@ package com.wearbubbles
 
 import android.net.Uri
 import android.util.Log
+import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.DataEvent
@@ -131,8 +132,30 @@ class DataLayerListenerService : WearableListenerService() {
                     val asset = map.getAsset("avatar") ?: continue
                     scope.launch { relay.handleAvatarAsset(key, asset) }
                 }
+
+                path == PhoneRelayClient.PATH_PROFILE -> {
+                    val map = DataMapItem.fromDataItem(item).dataMap
+                    val userName = map.getString("userName") ?: ""
+                    val userHandle = map.getString("userHandle") ?: ""
+                    val asset = map.getAsset("avatar")
+                    scope.launch {
+                        val bytes = asset?.let { readAssetBytes(it) }
+                        relay.handleProfileSync(userName, userHandle, bytes)
+                    }
+                }
             }
         }
+    }
+
+    private suspend fun readAssetBytes(asset: Asset): ByteArray? = try {
+        val fd = Wearable.getDataClient(applicationContext).getFdForAsset(asset).await()
+        try {
+            fd.inputStream.use { it.readBytes() }
+        } finally {
+            fd.release()
+        }
+    } catch (_: Exception) {
+        null
     }
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
@@ -143,6 +166,9 @@ class DataLayerListenerService : WearableListenerService() {
         when (messageEvent.path) {
             PhoneRelayClient.PATH_CREDENTIALS -> {
                 scope.launch { relay.handleCredentialsJson(dataStr) }
+            }
+            PhoneRelayClient.PATH_PROFILE -> {
+                scope.launch { relay.handleProfileJson(dataStr) }
             }
             PhoneRelayClient.PATH_SYNC_CHATS -> {
                 scope.launch { relay.handleChatsSyncJson(dataStr) }
@@ -166,76 +192,41 @@ class DataLayerListenerService : WearableListenerService() {
                 relay.handleSendResultJson(dataStr)
             }
             PhoneRelayClient.PATH_ATTACHMENT_FAILED -> {
-                val guid = try {
-                    val obj = JsonParser.parseString(dataStr).asJsonObject
-                    obj.get("guid")?.takeIf { !it.isJsonNull }?.asString
-                        ?: obj.get("attachmentGuid")?.takeIf { !it.isJsonNull }?.asString
-                } catch (_: Exception) {
-                    null
-                }
-                if (!guid.isNullOrBlank()) {
-                    relay.failAttachmentRequest(guid)
-                }
+                val obj = parseJsonObject(dataStr)
+                val guid = obj?.stringOrNull("guid") ?: obj?.stringOrNull("attachmentGuid")
+                if (!guid.isNullOrBlank()) relay.failAttachmentRequest(guid)
             }
             PhoneRelayClient.PATH_AUDIO_FAILED -> {
-                try {
-                    val obj = JsonParser.parseString(dataStr).asJsonObject
-                    val tempGuid = obj.get("tempGuid")?.takeIf { !it.isJsonNull }?.asString
-                    val reason = obj.get("reason")?.takeIf { !it.isJsonNull }?.asString
-                    if (!tempGuid.isNullOrBlank()) {
-                        relay.failAudioRequest(tempGuid, reason)
-                    }
-                } catch (_: Exception) {
-                }
+                val obj = parseJsonObject(dataStr)
+                val tempGuid = obj?.stringOrNull("tempGuid")
+                if (!tempGuid.isNullOrBlank()) relay.failAudioRequest(tempGuid, obj.stringOrNull("reason"))
             }
             PhoneRelayClient.PATH_DISMISS_NOTIFICATION -> {
-                val chatGuid = try {
-                    JsonParser.parseString(dataStr).asJsonObject.get("chatGuid")?.asString
-                } catch (_: Exception) {
-                    null
-                }
-                if (!chatGuid.isNullOrBlank()) {
-                    NotificationHelper.cancelNotification(applicationContext, chatGuid)
+                parseJsonObject(dataStr)?.stringOrNull("chatGuid")?.takeIf { it.isNotBlank() }?.let {
+                    NotificationHelper.cancelNotification(applicationContext, it)
                 }
             }
             PhoneRelayClient.PATH_MARK_READ -> {
-                val chatGuid = try {
-                    JsonParser.parseString(dataStr).asJsonObject.get("chatGuid")?.asString
-                } catch (_: Exception) {
-                    null
-                }
-                if (!chatGuid.isNullOrBlank()) {
+                parseJsonObject(dataStr)?.stringOrNull("chatGuid")?.takeIf { it.isNotBlank() }?.let { chatGuid ->
                     NotificationHelper.cancelNotification(applicationContext, chatGuid)
                     scope.launch { AppDatabase.getInstance(applicationContext).chatDao().markRead(chatGuid) }
                 }
             }
             PhoneRelayClient.PATH_INCOMING_CALL -> {
-                try {
-                    val obj = JsonParser.parseString(dataStr).asJsonObject
-                    val callUuid = obj.get("callUuid")?.asString ?: return
-                    val callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString ?: "FaceTime"
-                    val callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull }?.asString ?: ""
-                    val isVideo = obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
-                    CallNotificationHelper.showIncomingCall(
-                        context = applicationContext,
-                        callUuid = callUuid,
-                        callerName = callerName,
-                        callerAddress = callerAddress,
-                        isVideo = isVideo,
-                        fromPhoneRelay = true
-                    )
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse incoming call: ${e.message}")
-                }
+                val obj = parseJsonObject(dataStr) ?: return
+                val callUuid = obj.stringOrNull("callUuid") ?: return
+                CallNotificationHelper.showIncomingCall(
+                    context = applicationContext,
+                    callUuid = callUuid,
+                    callerName = obj.stringOrNull("callerName") ?: "FaceTime",
+                    callerAddress = obj.stringOrNull("callerAddress") ?: "",
+                    isVideo = obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+                    fromPhoneRelay = true
+                )
             }
             PhoneRelayClient.PATH_CALL_ENDED -> {
-                val callUuid = try {
-                    JsonParser.parseString(dataStr).asJsonObject.get("callUuid")?.asString
-                } catch (_: Exception) {
-                    null
-                }
-                if (!callUuid.isNullOrBlank()) {
-                    CallNotificationHelper.endCall(applicationContext, callUuid)
+                parseJsonObject(dataStr)?.stringOrNull("callUuid")?.takeIf { it.isNotBlank() }?.let {
+                    CallNotificationHelper.endCall(applicationContext, it)
                 }
             }
 
@@ -348,6 +339,15 @@ class DataLayerListenerService : WearableListenerService() {
             null
         }
     }
+
+    private fun parseJsonObject(json: String) = try {
+        JsonParser.parseString(json).asJsonObject
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun com.google.gson.JsonObject.stringOrNull(key: String): String? =
+        get(key)?.takeIf { !it.isJsonNull }?.asString
 
     override fun onDestroy() {
         super.onDestroy()

@@ -17,23 +17,24 @@ Future<void> showWebNotificationEx({
   if (icon != null) options.icon = icon;
   if (tag != null) options.tag = tag;
 
-  // Prefer window.Notification when an onClick callback is provided so click
-  // handlers can focus the tab and open the chat (default flutter_service_worker.js
-  // has no notificationclick listener). Fall back to ServiceWorkerRegistration.showNotification
-  // when new Notification(...) throws (e.g. Android Chrome PWA).
-  if (onClick != null) {
-    try {
-      final notif = web.Notification(title, options);
+  void showWindowNotification() {
+    final notif = web.Notification(title, options);
+    if (onClick != null) {
       notif.onclick = ((web.Event _) {
         try {
           web.window.focus();
         } catch (_) {}
         onClick();
       }).toJS;
-      return;
-    } catch (_) {
-      // Fall through to ServiceWorkerRegistration.showNotification
     }
+  }
+
+  // Prefer window.Notification when onClick is provided (default SW has no notificationclick listener).
+  if (onClick != null) {
+    try {
+      showWindowNotification();
+      return;
+    } catch (_) {}
   }
 
   try {
@@ -48,19 +49,9 @@ Future<void> showWebNotificationEx({
         return;
       }
     }
-  } catch (_) {
-    // Fall through to window.Notification
-  }
+  } catch (_) {}
 
-  final notif = web.Notification(title, options);
-  if (onClick != null) {
-    notif.onclick = ((web.Event _) {
-      try {
-        web.window.focus();
-      } catch (_) {}
-      onClick();
-    }).toJS;
-  }
+  showWindowNotification();
 }
 
 void _ignorePromise(JSAny? value) {
@@ -121,19 +112,18 @@ Future<web.HTMLImageElement?> _loadFaviconImage(String sourceHref) {
 
 web.HTMLLinkElement _ensureFaviconLink() {
   final existing = web.document.querySelector('link[rel~="icon"]');
+  final web.HTMLLinkElement link;
   if (existing != null && existing.isA<web.HTMLLinkElement>()) {
-    final link = existing as web.HTMLLinkElement;
-    _originalFaviconHref ??= link.href;
-    _originalFaviconType ??= link.type;
-    return link;
+    link = existing as web.HTMLLinkElement;
+  } else {
+    link = web.HTMLLinkElement()
+      ..rel = 'icon'
+      ..type = 'image/x-icon'
+      ..href = 'icons/favicon.ico?v=5';
+    web.document.head?.appendChild(link);
   }
-  final link = web.HTMLLinkElement()
-    ..rel = 'icon'
-    ..type = 'image/x-icon'
-    ..href = 'icons/favicon.ico?v=5';
   _originalFaviconHref ??= link.href;
   _originalFaviconType ??= link.type;
-  web.document.head?.appendChild(link);
   return link;
 }
 
@@ -189,21 +179,22 @@ void _updateFaviconBadge(int unreadCount) {
       ctx.drawImage(baseImage, 0, 0, size, size);
     }
     _drawFaviconBadge(ctx, size, unreadCount);
-    try {
-      final dataUrl = canvas.toDataURL('image/png');
-      link.type = 'image/png';
-      link.href = dataUrl;
-    } catch (_) {
-      // Cross-origin canvas tainting blocks toDataURL; draw badge-only fallback instead.
-      if (baseImage != null) {
-        ctx.clearRect(0, 0, size, size);
-        _drawFaviconBadge(ctx, size, unreadCount);
-        try {
-          final dataUrl = canvas.toDataURL('image/png');
-          link.type = 'image/png';
-          link.href = dataUrl;
-        } catch (_) {}
+    bool applyCanvas() {
+      try {
+        final dataUrl = canvas.toDataURL('image/png');
+        link.type = 'image/png';
+        link.href = dataUrl;
+        return true;
+      } catch (_) {
+        return false;
       }
+    }
+
+    if (!applyCanvas() && baseImage != null) {
+      // Cross-origin canvas tainting blocks toDataURL; draw badge-only fallback instead.
+      ctx.clearRect(0, 0, size, size);
+      _drawFaviconBadge(ctx, size, unreadCount);
+      applyCanvas();
     }
   }
 
@@ -212,9 +203,7 @@ void _updateFaviconBadge(int unreadCount) {
     return;
   }
 
-  unawaited(_loadFaviconImage(sourceHref).then((img) {
-    render(baseImage: img);
-  }));
+  unawaited(_loadFaviconImage(sourceHref).then((img) => render(baseImage: img)));
 }
 
 void updateWebTitleAndBadge(int unreadCount) {

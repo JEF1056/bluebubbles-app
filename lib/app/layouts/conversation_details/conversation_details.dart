@@ -126,7 +126,7 @@ class _ConversationDetailsState extends State<ConversationDetails> with WidgetsB
             LinksSection(chat: chat),
             LocationsSection(chat: chat, locations: locations, isLoading: isLoadingAttachments),
             DocumentsSection(chat: chat, docs: docs, isLoading: isLoadingAttachments),
-            const SliverPadding(padding: EdgeInsets.only(top: 50)),
+            SliverPadding(padding: EdgeInsets.only(top: 50 + MediaQuery.paddingOf(context).bottom)),
           ],
         );
 

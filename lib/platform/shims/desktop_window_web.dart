@@ -28,7 +28,7 @@ class WindowManager {
 
 final WindowManager windowManager = WindowManager();
 
-abstract class WindowListener {
+mixin class WindowListener {
   void onWindowClose() {}
   void onWindowFocus() {}
   void onWindowBlur() {}
@@ -44,6 +44,8 @@ class AppWindow {
   double get titleBarHeight => 0;
   Size get titleBarButtonSize => Size.zero;
   bool get isVisible => true;
+  void maximizeOrRestore() {}
+  void startDragging() {}
 }
 
 final AppWindow appWindow = AppWindow();

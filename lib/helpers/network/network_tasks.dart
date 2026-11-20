@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
@@ -51,6 +52,7 @@ class NetworkTasks {
     }
 
     unawaited(SettingsSvc.refreshIcloudProfile());
+    unawaited(ActiveCallController.instance.syncFromServer());
 
     // When we re-connect, try an incremental sync. The sync's cooldown keeps it from running several times in quick
     // succession. Without pushes this one is a catch-up: a sync that started before the socket connected (the one on
@@ -79,6 +81,11 @@ class NetworkTasks {
       _detectLocalhostFuture = null;
       // Not in setOriginOverride(): the probe clears the override midway.
       if (GetIt.I.isRegistered<SocketService>()) SocketSvc.followOrigin();
+      if (HttpSvc.originOverride != null &&
+          GetIt.I.isRegistered<SettingsService>() &&
+          SettingsSvc.userAvatarBytes.value == null) {
+        unawaited(SettingsSvc.refreshIcloudProfile());
+      }
     });
     return _detectLocalhostFuture!;
   }

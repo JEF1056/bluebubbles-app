@@ -22,6 +22,8 @@ import 'package:get_it/get_it.dart';
 LifecycleService get LifecycleSvc => GetIt.I<LifecycleService>();
 
 class LifecycleService with WidgetsBindingObserver {
+  static const Duration _webOfflineDebounce = Duration(milliseconds: 2500);
+
   bool isBubble = false;
   bool headless = false;
   bool windowFocused = true;
@@ -29,6 +31,7 @@ class LifecycleService with WidgetsBindingObserver {
   final RxBool isOnline = true.obs;
   final RxBool isReconnecting = false.obs;
   VoidCallback? _webLifecycleDispose;
+  Timer? _webOfflineDebounceTimer;
   bool _webWakeInFlight = false;
   bool _webFocused = true;
 
@@ -94,6 +97,9 @@ class LifecycleService with WidgetsBindingObserver {
 
     if (kIsWeb && !headless) {
       isOnline.value = isWebNavigatorOnline;
+      if (GetIt.I.isRegistered<SyncService>()) {
+        SyncSvc.onNetworkOnlineChanged(isOnline.value);
+      }
       _webFocused = isWebDocumentFocused;
       _webLifecycleDispose?.call();
       _webLifecycleDispose = listenWebLifecycle(
@@ -123,10 +129,31 @@ class LifecycleService with WidgetsBindingObserver {
           }
         },
         onOnlineChange: (online) {
-          isOnline.value = online;
           if (online) {
+            _webOfflineDebounceTimer?.cancel();
+            _webOfflineDebounceTimer = null;
+            isOnline.value = true;
+            if (GetIt.I.isRegistered<SyncService>()) {
+              SyncSvc.onNetworkOnlineChanged(true);
+            }
             unawaited(_onWebWake());
+            return;
           }
+          if (GetIt.I.isRegistered<SocketService>() && SocketSvc.state.value == SocketState.connected) {
+            return;
+          }
+          if (_webOfflineDebounceTimer?.isActive ?? false) return;
+          _webOfflineDebounceTimer = Timer(_webOfflineDebounce, () {
+            _webOfflineDebounceTimer = null;
+            if (isWebNavigatorOnline) return;
+            if (GetIt.I.isRegistered<SocketService>() && SocketSvc.state.value == SocketState.connected) {
+              return;
+            }
+            isOnline.value = false;
+            if (GetIt.I.isRegistered<SyncService>()) {
+              SyncSvc.onNetworkOnlineChanged(false);
+            }
+          });
         },
       );
     }
@@ -141,6 +168,9 @@ class LifecycleService with WidgetsBindingObserver {
     isReconnecting.value = true;
     try {
       await Database.waitForInit();
+      if (GetIt.I.isRegistered<SyncService>()) {
+        SyncSvc.onResumeReconnectGrace();
+      }
       if (GetIt.I.isRegistered<SocketService>()) {
         SocketSvc.resumeConnection();
         if (SocketSvc.state.value != SocketState.connected) {
@@ -162,6 +192,8 @@ class LifecycleService with WidgetsBindingObserver {
   }
 
   void dispose() {
+    _webOfflineDebounceTimer?.cancel();
+    _webOfflineDebounceTimer = null;
     _webLifecycleDispose?.call();
     _webLifecycleDispose = null;
   }
@@ -201,6 +233,9 @@ class LifecycleService with WidgetsBindingObserver {
 
       await Database.waitForInit();
 
+      if (GetIt.I.isRegistered<SyncService>()) {
+        SyncSvc.onResumeReconnectGrace();
+      }
       if (GetIt.I.isRegistered<SocketService>()) {
         // Undo the background disconnect before StartupTasks.onAppResume() tries to
         // start the socket — startSocket() refuses to run while the connection is

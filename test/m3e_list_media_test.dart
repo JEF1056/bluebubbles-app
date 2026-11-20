@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/material_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/conversation_tile.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/material_conversation_tile.dart';
@@ -10,10 +12,22 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
+
+class _RecordingNavigatorObserver extends NavigatorObserver {
+  _RecordingNavigatorObserver(this.pushedRoutes);
+
+  final List<Route<dynamic>> pushedRoutes;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushedRoutes.add(route);
+  }
+}
 
 class _FakeSettingsService extends SettingsService {
   final Rx<ServerDetails> fakeDetails = const ServerDetails(
@@ -102,6 +116,84 @@ void main() {
 
     expect(find.text('Search BlueBubbles'), findsNothing);
     expect(find.text('1'), findsOneWidget);
+
+    controller.materialScrollController.dispose();
+    controller.iosScrollController.dispose();
+    controller.samsungScrollController.dispose();
+  });
+
+  testWidgets('MaterialHeader search bar InkWell spans full pill for hover/tap while avatar taps independently',
+      (tester) async {
+    final controller = ConversationListController(showArchivedChats: false, showUnknownSenders: false);
+    final pushedRoutes = <Route<dynamic>>[];
+    final observer = _RecordingNavigatorObserver(pushedRoutes);
+
+    final theme = ThemeData(useMaterial3: true);
+    await tester.pumpWidget(
+      GetMaterialApp(
+        theme: theme,
+        navigatorObservers: [observer],
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: const TextScaler.linear(0.5)),
+          child: child!,
+        ),
+        home: Scaffold(
+          appBar: PreferredSize(
+            preferredSize: const Size.fromHeight(60),
+            child: MaterialHeader(parentController: controller),
+          ),
+          body: const SizedBox.expand(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final searchTextFinder = find.text('Search BlueBubbles');
+    final pillInkWellFinder = find.ancestor(of: searchTextFinder, matching: find.byType(InkWell)).first;
+    final pillMaterialFinder = find.ancestor(of: pillInkWellFinder, matching: find.byType(Material)).first;
+
+    final pillMaterial = tester.widget<Material>(pillMaterialFinder);
+    final pillInkWell = tester.widget<InkWell>(pillInkWellFinder);
+    expect(pillMaterial.borderRadius, M3EShapes.radiusXl);
+    expect(pillMaterial.clipBehavior, Clip.antiAlias);
+    expect(pillInkWell.borderRadius, M3EShapes.radiusXl);
+    expect(pillInkWell.mouseCursor, SystemMouseCursors.click);
+
+    final materialRect = tester.getRect(pillMaterialFinder);
+    final inkWellRect = tester.getRect(pillInkWellFinder);
+    expect(inkWellRect, materialRect);
+    expect(inkWellRect.height, 48);
+
+    // Hovering left, center, and right of the search bar covers the full pill InkWell;
+    // tapping the avatar opens the menu without opening SearchView.
+    final avatarFinder = find.byType(MaterialAvatarMenu);
+    final avatarRect = tester.getRect(avatarFinder);
+    final pillPoints = [
+      Offset(inkWellRect.left + 8, inkWellRect.top + 4),
+      inkWellRect.center,
+      Offset(avatarRect.left - 12, inkWellRect.bottom - 4),
+    ];
+
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+    for (final point in pillPoints) {
+      await gesture.moveTo(point);
+      await tester.pumpAndSettle();
+    }
+
+    await tester.tap(avatarFinder);
+    await tester.pumpAndSettle();
+    expect(find.text('Settings'), findsOneWidget);
+    expect(pushedRoutes.whereType<PageRoute>().any((r) => r.settings.name?.contains('SearchView') ?? false), isFalse);
+
+    // Dismiss the menu, then tap the right edge of the search bar (outside avatar) to open SearchView.
+    await tester.tapAt(const Offset(10, 300));
+    await tester.pumpAndSettle();
+    pushedRoutes.clear();
+    await tester.tapAt(pillPoints.last);
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchView), findsOneWidget);
 
     controller.materialScrollController.dispose();
     controller.iosScrollController.dispose();

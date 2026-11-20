@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/delivered_indicator.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/relative_timestamp_ticker.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -9,6 +10,7 @@ import 'package:bluebubbles/models/models.dart';
 import 'package:bluebubbles/services/backend_ui_interop/event_dispatcher.dart' as bb_events;
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -452,5 +454,208 @@ void main() {
         expect(find.textContaining('Received · $expectedTime', findRichText: true), findsOneWidget);
       });
     }
+  });
+
+  group('Realtime relative-timestamp ticker (Google Messages parity)', () {
+    Widget wrapIndicator(
+      MessageState state, {
+      bool forceShow = false,
+      bool tickerEnabled = true,
+    }) {
+      return GetMaterialApp(
+        theme: ThemeData(useMaterial3: true),
+        home: TickerMode(
+          enabled: tickerEnabled,
+          child: MessageStateScope(
+            messageState: state,
+            child: Scaffold(
+              body: DeliveredIndicator(
+                key: ValueKey('${state.message.guid}_$forceShow'),
+                forceShow: forceShow,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    testWidgets('Delivered Quietly · 47 min ticks to 48 min on exact minute boundary', (tester) async {
+      settingsService.settings.skin.value = Skins.Material;
+      settingsService.settings.showDeliveryTimestamps.value = false;
+
+      final tDelivered = clock.now().subtract(const Duration(minutes: 47, seconds: 15));
+      final state = MessageState(Message(
+        guid: 'quiet-47',
+        text: 'Quiet',
+        isFromMe: true,
+        dateCreated: tDelivered,
+        dateDelivered: tDelivered,
+        wasDeliveredQuietly: true,
+      ))
+        ..showDeliveredIndicator.value = true;
+
+      await tester.pumpWidget(wrapIndicator(state));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Delivered Quietly · 47 min', findRichText: true), findsOneWidget);
+
+      // 44s later -> 47m59s elapsed, still 47 min.
+      await tester.pump(const Duration(seconds: 44));
+      expect(find.textContaining('Delivered Quietly · 47 min', findRichText: true), findsOneWidget);
+
+      // +1s -> 48m00s elapsed, ticks on exact minute boundary.
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.textContaining('Delivered Quietly · 48 min', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('transitions Now -> 1 min -> ... -> 59 min -> absolute time and cancels timer', (tester) async {
+      settingsService.settings.skin.value = Skins.Material;
+      settingsService.settings.showDeliveryTimestamps.value = false;
+
+      final tRead = clock.now();
+      final state = MessageState(Message(
+        guid: 'read-full-cycle',
+        text: 'Read now',
+        isFromMe: true,
+        dateCreated: tRead,
+        dateDelivered: tRead,
+        dateRead: tRead,
+      ))
+        ..showReadIndicator.value = true;
+
+      await tester.pumpWidget(wrapIndicator(state));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Read · Now', findRichText: true), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 59));
+      expect(find.textContaining('Read · Now', findRichText: true), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.textContaining('Read · 1 min', findRichText: true), findsOneWidget);
+
+      for (int m = 2; m < 60; m++) {
+        await tester.pump(const Duration(minutes: 1));
+        await tester.pump();
+        expect(find.textContaining('Read · $m min', findRichText: true), findsOneWidget);
+      }
+
+      // Crossing 60 min switches to absolute time and stops scheduling timers.
+      await tester.pump(const Duration(minutes: 1));
+      await tester.pump();
+      final absoluteLabel = buildDate(tRead, now: tRead.add(const Duration(minutes: 60)));
+      expect(absoluteLabel, isNot('60 min'));
+      expect(find.textContaining('Read · $absoluteLabel', findRichText: true), findsOneWidget);
+      expect(
+        nextRelativeTimestampTickDelay(tRead, now: clock.now(), skin: Skins.Material),
+        isNull,
+      );
+
+      // Verify RelativeTimestampTicker stops scheduling once absolute (>= 60 min).
+      int ticks = 0;
+      final ticker = RelativeTimestampTicker(onTick: () => ticks++);
+      addTearDown(ticker.dispose);
+      ticker.sync(tRead.add(const Duration(minutes: 1)), isRelative: true);
+      expect(ticker.isTimerActive, isTrue); // 59 min -> 1 min left
+      await tester.pump(const Duration(minutes: 1));
+      expect(ticks, 1);
+      expect(ticker.isTimerActive, isFalse); // now 60 min -> timer cancelled
+      await tester.pump(const Duration(minutes: 10));
+      expect(ticks, 1);
+    });
+
+    testWidgets('pauses in background and hidden TickerMode, then refreshes immediately on resume', (tester) async {
+      settingsService.settings.skin.value = Skins.Material;
+      settingsService.settings.showDeliveryTimestamps.value = false;
+
+      final tDelivered = clock.now().subtract(const Duration(minutes: 47));
+      final state = MessageState(Message(
+        guid: 'bg-pause',
+        text: 'Delivered',
+        isFromMe: true,
+        dateCreated: tDelivered,
+        dateDelivered: tDelivered,
+      ))
+        ..showDeliveredIndicator.value = true;
+
+      int tickerTicks = 0;
+      final ticker = RelativeTimestampTicker(onTick: () => tickerTicks++);
+      addTearDown(ticker.dispose);
+      ticker.sync(tDelivered, isRelative: true);
+      expect(ticker.isTimerActive, isTrue);
+
+      await tester.pumpWidget(wrapIndicator(state));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Delivered · 47 min', findRichText: true), findsOneWidget);
+
+      // Background app -> timer is cancelled and stays at 47 min across 5 minutes.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      expect(ticker.isTimerActive, isFalse);
+
+      await tester.pump(const Duration(minutes: 5));
+      expect(tickerTicks, 0);
+      expect(find.textContaining('Delivered · 47 min', findRichText: true), findsOneWidget);
+
+      // Foreground resume -> immediate refresh to 52 min and resumes minute ticking.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(tickerTicks, 1);
+      expect(ticker.isTimerActive, isTrue);
+      expect(find.textContaining('Delivered · 52 min', findRichText: true), findsOneWidget);
+
+      await tester.pump(const Duration(minutes: 1));
+      await tester.pump();
+      expect(tickerTicks, 2);
+      expect(find.textContaining('Delivered · 53 min', findRichText: true), findsOneWidget);
+
+      // Hidden tab (TickerMode disabled) pauses timer; re-enabling refreshes immediately.
+      await tester.pumpWidget(wrapIndicator(state, tickerEnabled: false));
+      await tester.pump();
+      await tester.pump(const Duration(minutes: 3));
+      expect(find.textContaining('Delivered · 53 min', findRichText: true), findsOneWidget);
+
+      await tester.pumpWidget(wrapIndicator(state, tickerEnabled: true));
+      await tester.pump();
+      expect(find.textContaining('Delivered · 56 min', findRichText: true), findsOneWidget);
+
+      await tester.pump(const Duration(minutes: 1));
+      await tester.pump();
+      expect(find.textContaining('Delivered · 57 min', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('future/clock-skew timestamp (+5 min) shows Now and schedules tick at target + 1 min', (tester) async {
+      settingsService.settings.skin.value = Skins.Material;
+      settingsService.settings.showDeliveryTimestamps.value = false;
+
+      final now = clock.now();
+      final futureTarget = now.add(const Duration(minutes: 5));
+      expect(buildDate(futureTarget, now: now), 'Now');
+      expect(buildChatListDateMaterial(futureTarget, now: now), 'Now');
+      expect(
+        nextRelativeTimestampTickDelay(futureTarget, now: now, skin: Skins.Material),
+        const Duration(minutes: 6),
+      );
+
+      final state = MessageState(Message(
+        guid: 'future-skew',
+        text: 'Ahead clock',
+        isFromMe: true,
+        dateCreated: futureTarget,
+        dateDelivered: futureTarget,
+      ))
+        ..showDeliveredIndicator.value = true;
+
+      await tester.pumpWidget(wrapIndicator(state));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Delivered · Now', findRichText: true), findsOneWidget);
+
+      await tester.pump(const Duration(minutes: 5, seconds: 59));
+      expect(find.textContaining('Delivered · Now', findRichText: true), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(find.textContaining('Delivered · 1 min', findRichText: true), findsOneWidget);
+    });
   });
 }

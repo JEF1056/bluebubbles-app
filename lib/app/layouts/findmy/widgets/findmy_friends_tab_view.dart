@@ -1,6 +1,7 @@
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friend_list_tile.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
@@ -17,44 +18,67 @@ class FindMyFriendsTabView extends StatelessWidget {
     return Obx(() {
       controller.pinVersion.value;
       final selectedId = controller.selectedFriendId.value;
+      final activeSelectedId = (selectedId != null && selectedId.isNotEmpty) ? selectedId : null;
       final allWithLocation = [...controller.friendsWithLocation];
-      final pinnedWithLocation = <dynamic>[];
-      final unpinnedWithLocation = <dynamic>[];
+      final allWithoutLocation = [...controller.friendsWithoutLocation];
+
+      FindMyFriend? focusedFriend;
+      var focusedWithLocation = true;
+      if (activeSelectedId != null) {
+        focusedFriend = allWithLocation.firstWhereOrNull((f) => f.stableId == activeSelectedId);
+        if (focusedFriend == null) {
+          focusedFriend = allWithoutLocation.firstWhereOrNull((f) => f.stableId == activeSelectedId);
+          focusedWithLocation = false;
+        }
+      }
+
+      bool isFocused(FindMyFriend f) =>
+          focusedFriend != null &&
+          (identical(f, focusedFriend) ||
+              (focusedFriend.stableId != null && f.stableId == focusedFriend.stableId));
+
+      final seenKeys = <String>{};
+      final pinnedWithLocation = <FindMyFriend>[];
+      final unpinnedWithLocation = <FindMyFriend>[];
       for (final f in allWithLocation) {
+        if (isFocused(f)) continue;
+        final key = f.stableId ?? controller.pinKeyForFriend(f);
+        if (key.isNotEmpty && !seenKeys.add(key)) continue;
         if (controller.isFriendPinned(f)) {
           pinnedWithLocation.add(f);
         } else {
           unpinnedWithLocation.add(f);
         }
       }
-      void bubbleSelected(List<dynamic> list) {
-        if (selectedId == null) return;
-        final idx = list.indexWhere((f) => f.stableId == selectedId);
-        if (idx > 0) {
-          final picked = list.removeAt(idx);
-          list.insert(0, picked);
-        }
+
+      final remainingWithoutLocation = <FindMyFriend>[];
+      for (final f in allWithoutLocation) {
+        if (isFocused(f)) continue;
+        final key = f.stableId ?? controller.pinKeyForFriend(f);
+        if (key.isNotEmpty && !seenKeys.add(key)) continue;
+        remainingWithoutLocation.add(f);
       }
-      bubbleSelected(pinnedWithLocation);
-      bubbleSelected(unpinnedWithLocation);
+
       final hasPinnedSection = pinnedWithLocation.isNotEmpty;
 
       return SliverList(
         delegate: SliverChildListDelegate([
-          if (controller.friends.isEmpty &&
-              (controller.fetching2.value == null ||
-                  controller.fetching2.value == true ||
-                  controller.fetching2.value == false))
-            _buildEmptyState(context),
+          if (controller.friends.isEmpty) _buildEmptyState(context),
+          if (focusedFriend != null)
+            FindMyFriendListTile(
+              item: focusedFriend,
+              controller: controller,
+              withLocation: focusedWithLocation,
+            ),
           if (hasPinnedSection) ...[
             _buildSectionHeader(context, 'Pinned', topPadding: 8),
-            _buildFriendsSection(context, pinnedWithLocation.cast(), selectedId),
+            _buildFriendsSection(context, pinnedWithLocation, selectedId),
           ],
           if (unpinnedWithLocation.isNotEmpty) ...[
             if (hasPinnedSection) _buildSectionHeader(context, 'People', topPadding: 14),
-            _buildFriendsSection(context, unpinnedWithLocation.cast(), selectedId),
+            _buildFriendsSection(context, unpinnedWithLocation, selectedId),
           ],
-          if (controller.friendsWithoutLocation.isNotEmpty)
+          if (remainingWithoutLocation.isNotEmpty)
             SettingsSection(
               backgroundColor: context.tileColor,
               children: [
@@ -65,7 +89,7 @@ class FindMyFriendsTabView extends StatelessWidget {
                     shape: const RoundedRectangleBorder(side: BorderSide(color: Colors.transparent)),
                     title: const Text("Friends without locations"),
                     initiallyExpanded: true,
-                    children: controller.friendsWithoutLocation
+                    children: remainingWithoutLocation
                         .map((item) => FindMyFriendListTile(
                               item: item,
                               controller: controller,
@@ -76,7 +100,7 @@ class FindMyFriendsTabView extends StatelessWidget {
                 ),
               ],
             ),
-          const SizedBox(height: 92),
+          SizedBox(height: 112 + MediaQuery.viewPaddingOf(context).bottom),
         ]),
       );
     });

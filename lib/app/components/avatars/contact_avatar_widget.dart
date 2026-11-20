@@ -296,18 +296,68 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
               // Reactive values already computed above in Obx scope.
               final contactV2Avatar = cachedAvatarPath;
 
+              String? selfInitials;
+              if (widget.handle == null && widget.contact == null && SettingsSvc.effectiveUserName != 'You') {
+                final parts = SettingsSvc.effectiveUserName.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+                if (parts.length >= 2) {
+                  selfInitials = '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+                } else if (parts.isNotEmpty) {
+                  selfInitials = parts.first[0].toUpperCase();
+                }
+              }
+              final String? selfDisplayInitials = selfInitials?.substring(0, iOS ? null : 1);
+
               final userAvatarBytes = SettingsSvc.userAvatarBytes.value;
-              if (!hideContactInfo && widget.handle == null && widget.contact == null && (userAvatarPath != null || userAvatarBytes != null)) {
-                final ImageProvider? selfImage = userAvatarBytes != null
-                    ? MemoryImage(userAvatarBytes)
-                    : (userAvatarPath != null ? ContactAvatarWidget.avatarImage(userAvatarPath) : null);
+              final hasUserAvatarPath = !isNullOrEmpty(userAvatarPath);
+              if (!hideContactInfo &&
+                  widget.handle == null &&
+                  widget.contact == null &&
+                  (hasUserAvatarPath || userAvatarBytes != null)) {
+                ImageProvider? selfImage;
+                Object? selfKey;
+                if (userAvatarBytes != null) {
+                  selfImage = ResizeImage(
+                    MemoryImage(userAvatarBytes),
+                    width: ContactAvatarWidget.avatarDecodeSize,
+                    height: ContactAvatarWidget.avatarDecodeSize,
+                    policy: ResizeImagePolicy.fit,
+                  );
+                  selfKey = 'self-bytes-${userAvatarBytes.length}-${identityHashCode(userAvatarBytes)}';
+                } else if (hasUserAvatarPath) {
+                  if (kIsWeb && userAvatarPath!.startsWith('web-avatar://')) {
+                    final cached = GetIt.I.isRegistered<FilesystemService>()
+                        ? FilesystemSvc.getCachedWebAvatarByPath(userAvatarPath)
+                        : null;
+                    if (cached != null) {
+                      selfImage = ResizeImage(
+                        MemoryImage(cached),
+                        width: ContactAvatarWidget.avatarDecodeSize,
+                        height: ContactAvatarWidget.avatarDecodeSize,
+                        policy: ResizeImagePolicy.fit,
+                      );
+                      selfKey = userAvatarPath;
+                    }
+                  } else if (!kIsWeb) {
+                    selfImage = ContactAvatarWidget.avatarImage(userAvatarPath!);
+                    selfKey = userAvatarPath;
+                  }
+                }
                 if (selfImage != null) {
-                  return CircleAvatar(
-                    key: ValueKey(userAvatarPath ?? userAvatarBytes.hashCode),
-                    radius: size / 2,
-                    backgroundImage: selfImage,
-                    onBackgroundImageError: (_, _) {},
-                    backgroundColor: Colors.transparent,
+                  return SizedBox.expand(
+                    child: Image(
+                      key: ValueKey(selfKey),
+                      image: selfImage,
+                      filterQuality: FilterQuality.low,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                        if (wasSynchronouslyLoaded || frame != null) return child;
+                        return Center(child: _buildInitialsOrIcon(size, iOS, selfDisplayInitials));
+                      },
+                      errorBuilder: (context, error, stackTrace) {
+                        return Center(child: _buildInitialsOrIcon(size, iOS, selfDisplayInitials));
+                      },
+                    ),
                   );
                 }
               }
@@ -337,15 +387,6 @@ class _ContactAvatarWidgetState extends State<ContactAvatarWidget> with ThemeHel
                 );
               } else if (isNullOrEmpty(contactV2Avatar) || hideContactInfo || genAvatars) {
                 // Use reactive initials from HandleState, or self userName initials when handle == null
-                String? selfInitials;
-                if (widget.handle == null && widget.contact == null && SettingsSvc.effectiveUserName != 'You') {
-                  final parts = SettingsSvc.effectiveUserName.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
-                  if (parts.length >= 2) {
-                    selfInitials = '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-                  } else if (parts.isNotEmpty) {
-                    selfInitials = parts.first[0].toUpperCase();
-                  }
-                }
                 String? initials = (cachedInitials ?? selfInitials)?.substring(0, iOS ? null : 1);
                 if (!isNullOrEmpty(initials) && !hideContactInfo && !genAvatars) {
                   return _buildInitialsOrIcon(size, iOS, initials);

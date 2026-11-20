@@ -82,7 +82,7 @@ class ChatEvent extends StatelessWidget {
                     : "$senderName unsent a message")
                 : message.buildGroupEventText(senderName);
             final textColor =
-                hasBackground ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+                hasBackground ? context.theme.colorScheme.onSurface : context.theme.colorScheme.outline;
             final textWidget = Text(
               text,
               style: context.theme.textTheme.bodySmall!.copyWith(color: textColor),
@@ -95,7 +95,7 @@ class ChatEvent extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 10),
                 decoration: BoxDecoration(
-                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.75),
+                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.86),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: textWidget,

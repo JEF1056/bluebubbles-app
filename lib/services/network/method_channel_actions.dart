@@ -196,6 +196,7 @@ class MethodChannelActions {
     String? callUuid,
     bool isVideo = true,
     String? callerAddress,
+    bool isTelephony = false,
   }) async {
     final res = await service.invokeMethod('create-incoming-facetime-notification', {
       'channel_id': channelId,
@@ -207,6 +208,7 @@ class MethodChannelActions {
       'call_uuid': callUuid,
       'is_video': isVideo,
       'caller_address': callerAddress,
+      'is_telephony': isTelephony,
     });
     return res == true;
   }
@@ -224,9 +226,28 @@ class MethodChannelActions {
     return res == true;
   }
 
-  Future<bool> endFaceTimeCall({required String callUuid}) async {
+  Future<bool> endFaceTimeCall({
+    required String callUuid,
+    bool onlyIfRinging = false,
+  }) async {
     final res = await service.invokeMethod('end-facetime-call', {
       'call_uuid': callUuid,
+      'only_if_ringing': onlyIfRinging,
+    });
+    return res == true;
+  }
+
+  Future<bool> answerFaceTimeAudio({
+    required String callUuid,
+    String? callerName,
+    String? callerAddress,
+    bool isTelephony = false,
+  }) async {
+    final res = await service.invokeMethod('answer-facetime-audio', {
+      'call_uuid': callUuid,
+      'caller_name': callerName,
+      'caller_address': callerAddress,
+      'is_telephony': isTelephony,
     });
     return res == true;
   }
@@ -244,8 +265,9 @@ class MethodChannelActions {
     return (await service.invokeMethod('get-content-uri-path', {'uri': uri})).toString();
   }
 
-  Future<void> googleDuo({required String number}) async {
-    await service.invokeMethod('google-duo', {'number': number});
+  Future<bool> googleDuo({required String number}) async {
+    final res = await service.invokeMethod('google-duo', {'number': number});
+    return res == true;
   }
 
   Future<void> updateUnifiedPushRegistration({required bool enabled}) async {
@@ -264,5 +286,27 @@ class MethodChannelActions {
       'fileName': fileName,
       'mimeType': mimeType,
     });
+  }
+
+  Future<bool> markFaceTimeCallActive({
+    required String callUuid,
+    bool isOutgoing = false,
+  }) async {
+    final res = await service.invokeMethod('mark-facetime-call-active', {
+      'call_uuid': callUuid,
+      'is_outgoing': isOutgoing,
+    });
+    return res == true;
+  }
+
+  Future<bool> setFaceTimeMuted({
+    required String callUuid,
+    required bool muted,
+  }) async {
+    final res = await service.invokeMethod('set-facetime-muted', {
+      'call_uuid': callUuid,
+      'muted': muted,
+    });
+    return res == true;
   }
 }

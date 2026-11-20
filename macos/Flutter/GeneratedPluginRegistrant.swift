@@ -27,6 +27,7 @@ import google_sign_in_ios
 import in_app_review
 import local_auth_darwin
 import macos_window_utils
+import maplibre_native
 import maps_launcher
 import media_kit_libs_macos_video
 import mobile_scanner
@@ -71,6 +72,7 @@ func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
   InAppReviewPlugin.register(with: registry.registrar(forPlugin: "InAppReviewPlugin"))
   LocalAuthPlugin.register(with: registry.registrar(forPlugin: "LocalAuthPlugin"))
   MacOSWindowUtilsPlugin.register(with: registry.registrar(forPlugin: "MacOSWindowUtilsPlugin"))
+  MaplibreNativePlugin.register(with: registry.registrar(forPlugin: "MaplibreNativePlugin"))
   MapsLauncherPlugin.register(with: registry.registrar(forPlugin: "MapsLauncherPlugin"))
   MediaKitLibsMacosVideoPlugin.register(with: registry.registrar(forPlugin: "MediaKitLibsMacosVideoPlugin"))
   MobileScannerPlugin.register(with: registry.registrar(forPlugin: "MobileScannerPlugin"))

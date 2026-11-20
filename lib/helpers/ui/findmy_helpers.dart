@@ -1,43 +1,222 @@
+import 'dart:math' as math;
+
 import 'package:bluebubbles/database/global/findmy_device.dart';
 import 'package:bluebubbles/services/backend/settings/settings_service.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:get_it/get_it.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre/maplibre.dart' as maplibre;
+
+const String findMyOpenFreeMapAttributionText = 'OpenFreeMap · OpenMapTiles · OpenStreetMap';
+const String findMyOpenFreeMapAttributionUrl = 'https://openfreemap.org';
+const String findMy3DBuildingsLayerId = 'findmy-buildings-3d';
 
 enum FindMyMapStyle {
   standard(
     label: 'Standard',
-    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attributionText: 'OpenStreetMap contributors',
-    attributionUrl: 'https://openstreetmap.org/copyright',
+    styleUrl: 'https://tiles.openfreemap.org/styles/liberty',
   ),
-  satellite(
-    label: 'Satellite',
-    urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    attributionText: 'Esri World Imagery',
-    attributionUrl: 'https://www.esri.com',
+  bright(
+    label: 'Bright',
+    styleUrl: 'https://tiles.openfreemap.org/styles/bright',
+  ),
+  positron(
+    label: 'Positron',
+    styleUrl: 'https://tiles.openfreemap.org/styles/positron',
   ),
   dark(
     label: 'Dark',
-    // Keyless OSM tiles + findMyDarkNavyColorFilter (CartoDB now requires an API key).
-    urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    attributionText: 'OpenStreetMap contributors',
-    attributionUrl: 'https://openstreetmap.org/copyright',
+    styleUrl: 'https://tiles.openfreemap.org/styles/dark',
+  ),
+  fiord(
+    label: 'Fiord',
+    styleUrl: 'https://tiles.openfreemap.org/styles/fiord',
   );
 
   final String label;
-  final String urlTemplate;
-  final String attributionText;
-  final String attributionUrl;
+  final String styleUrl;
+
+  String get attributionText => findMyOpenFreeMapAttributionText;
+  String get attribution => findMyOpenFreeMapAttributionText;
+  String get attributionUrl => findMyOpenFreeMapAttributionUrl;
 
   const FindMyMapStyle({
     required this.label,
-    required this.urlTemplate,
-    required this.attributionText,
-    required this.attributionUrl,
+    required this.styleUrl,
   });
+}
+
+/// Parses a persisted style name, falling back safely to [FindMyMapStyle.standard]
+/// for unknown or legacy values (such as removed `'satellite'`).
+FindMyMapStyle parseFindMyMapStyle(String? raw) {
+  if (raw == null || raw.isEmpty) return FindMyMapStyle.standard;
+  final normalized = raw.trim().toLowerCase();
+  for (final style in FindMyMapStyle.values) {
+    if (style.name == normalized) return style;
+  }
+  return FindMyMapStyle.standard;
+}
+
+/// Whether [style] and [brightness] resolve to a dark-themed map canvas.
+bool isDarkFindMyMapStyle(FindMyMapStyle style, Brightness brightness) {
+  return style == FindMyMapStyle.dark ||
+      style == FindMyMapStyle.fiord ||
+      (style == FindMyMapStyle.standard && brightness == Brightness.dark);
+}
+
+/// Resolves the live OpenFreeMap vector style JSON URL for [style] and [brightness].
+String resolveFindMyStyleUrl(FindMyMapStyle style, Brightness brightness) {
+  if (style == FindMyMapStyle.standard && brightness == Brightness.dark) {
+    return FindMyMapStyle.dark.styleUrl;
+  }
+  return style.styleUrl;
+}
+
+/// Map canvas background color matching the active OpenFreeMap style (prevents flash).
+Color resolveFindMyMapBackgroundColor(FindMyMapStyle style, Brightness brightness) {
+  if (style == FindMyMapStyle.fiord) return const Color(0xFF45516E);
+  if (style == FindMyMapStyle.dark || (style == FindMyMapStyle.standard && brightness == Brightness.dark)) {
+    return const Color(0xFF0C0C0C);
+  }
+  if (style == FindMyMapStyle.positron) return const Color(0xFFF2F3F0);
+  return const Color(0xFFF8F4F0);
+}
+
+/// Subtle 3D extruded building base tint matching the active OpenFreeMap style.
+Color resolveFindMyBuildingExtrusionColor(FindMyMapStyle style, Brightness brightness) {
+  if (style == FindMyMapStyle.fiord) return const Color(0xFF4F5D7D);
+  if (style == FindMyMapStyle.dark || (style == FindMyMapStyle.standard && brightness == Brightness.dark)) {
+    return const Color(0xFF222428);
+  }
+  if (style == FindMyMapStyle.positron) return const Color(0xFFE3E5E1);
+  return const Color(0xFFE5DFD5);
+}
+
+/// Taller-structure 3D extruded building tint for subtle height-step shading.
+Color resolveFindMyBuildingExtrusionTallColor(FindMyMapStyle style, Brightness brightness) {
+  if (style == FindMyMapStyle.fiord) return const Color(0xFF5D6D91);
+  if (style == FindMyMapStyle.dark || (style == FindMyMapStyle.standard && brightness == Brightness.dark)) {
+    return const Color(0xFF2E3138);
+  }
+  if (style == FindMyMapStyle.positron) return const Color(0xFFD6D9D4);
+  return const Color(0xFFD8D1C6);
+}
+
+double resolveFindMyBuildingExtrusionOpacity(FindMyMapStyle style, Brightness brightness) {
+  if (style == FindMyMapStyle.fiord) return 0.84;
+  if (style == FindMyMapStyle.dark || (style == FindMyMapStyle.standard && brightness == Brightness.dark)) {
+    return 0.88;
+  }
+  if (style == FindMyMapStyle.positron) return 0.78;
+  return 0.80;
+}
+
+String _toHexRgb(Color color) {
+  final r = (color.r * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+  final g = (color.g * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+  final b = (color.b * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0');
+  return '#$r$g$b';
+}
+
+/// Height-interpolated fill-extrusion color expression for [style] and [brightness].
+maplibre.Expression<Color> buildFindMy3DExtrusionColorExpression(
+  FindMyMapStyle style,
+  Brightness brightness,
+) {
+  final baseHex = _toHexRgb(resolveFindMyBuildingExtrusionColor(style, brightness));
+  final tallHex = _toHexRgb(resolveFindMyBuildingExtrusionTallColor(style, brightness));
+  return maplibre.Expression<Color>.raw([
+    'interpolate',
+    ['linear'],
+    ['coalesce', ['get', 'render_height'], 0],
+    0,
+    baseHex,
+    45,
+    tallHex,
+  ]);
+}
+
+bool isFindMyBuildingFillLayer({required String id, required String type, String? sourceLayer}) {
+  if (type != 'fill') return false;
+  if (sourceLayer == 'building') return true;
+  final lower = id.toLowerCase();
+  return lower == 'building' || lower == 'building-top' || lower.startsWith('building-');
+}
+
+bool _isFindMyInfraLayer({required String id, required String type, String? sourceLayer}) {
+  if (type == 'symbol' || type == 'background') return false;
+  if (sourceLayer == 'building' || sourceLayer == 'transportation' || sourceLayer == 'aeroway') {
+    return true;
+  }
+  final lower = id.toLowerCase();
+  return lower.contains('building') ||
+      lower.contains('road') ||
+      lower.contains('highway') ||
+      lower.contains('bridge') ||
+      lower.contains('tunnel') ||
+      lower.contains('rail') ||
+      lower.contains('aeroway') ||
+      lower.contains('cablecar') ||
+      lower.contains('ferry') ||
+      lower.contains('pier') ||
+      lower.contains('runway') ||
+      lower.contains('taxiway') ||
+      lower.contains('apron');
+}
+
+/// Picks the first symbol layer ID after all building and road/rail/aeroway layers
+/// so 3D buildings render above flat footprints/roads and below map labels.
+String? resolveFindMy3DAnchorLayerId(
+  List<({String id, String type, String? sourceLayer})> layers,
+) {
+  int lastInfraIdx = -1;
+  for (int i = 0; i < layers.length; i++) {
+    final l = layers[i];
+    if (_isFindMyInfraLayer(id: l.id, type: l.type, sourceLayer: l.sourceLayer)) {
+      lastInfraIdx = i;
+    }
+  }
+  for (int i = lastInfraIdx + 1; i < layers.length; i++) {
+    if (layers[i].type == 'symbol') return layers[i].id;
+  }
+  return null;
+}
+
+maplibre.Geographic toGeographic(LatLng point) =>
+    maplibre.Geographic(lon: point.longitude, lat: point.latitude);
+
+LatLng fromGeographic(maplibre.Geographic point) => LatLng(point.lat, point.lon);
+
+/// Lightweight geographic bounding box independent of raster map plugins.
+class FindMyBounds {
+  final LatLng southWest;
+  final LatLng northEast;
+
+  const FindMyBounds(this.southWest, this.northEast);
+
+  double get south => southWest.latitude;
+  double get west => southWest.longitude;
+  double get north => northEast.latitude;
+  double get east => northEast.longitude;
+
+  LatLng get center => LatLng((south + north) / 2.0, (west + east) / 2.0);
+
+  bool contains(LatLng point) =>
+      point.latitude >= south &&
+      point.latitude <= north &&
+      point.longitude >= west &&
+      point.longitude <= east;
+
+  maplibre.GeoBox toGeoBox() => maplibre.GeoBox(west: west, south: south, east: east, north: north);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FindMyBounds && other.southWest == southWest && other.northEast == northEast;
+
+  @override
+  int get hashCode => Object.hash(southWest, northEast);
 }
 
 /// Preset decoy centers spread across continents for redacted mode
@@ -125,47 +304,175 @@ String? formatFindMyBattery(double? level, {String? status}) {
 }
 
 /// Computes bounding box covering all non-empty points, or null if empty.
-LatLngBounds? computeFindMyBounds(Iterable<LatLng> points) {
-  final valid = points.where((p) => p.latitude.isFinite && p.longitude.isFinite && !(p.latitude == 0 && p.longitude == 0)).toList();
+FindMyBounds? computeFindMyBounds(Iterable<LatLng> points) {
+  final valid = points
+      .where((p) => p.latitude.isFinite && p.longitude.isFinite && !(p.latitude == 0 && p.longitude == 0))
+      .toList();
   if (valid.isEmpty) return null;
-  final bounds = LatLngBounds.fromPoints(valid);
-  if ((bounds.north - bounds.south).abs() < 1e-6 && (bounds.east - bounds.west).abs() < 1e-6) {
+  var south = valid.first.latitude;
+  var north = valid.first.latitude;
+  var west = valid.first.longitude;
+  var east = valid.first.longitude;
+  for (final p in valid.skip(1)) {
+    if (p.latitude < south) south = p.latitude;
+    if (p.latitude > north) north = p.latitude;
+    if (p.longitude < west) west = p.longitude;
+    if (p.longitude > east) east = p.longitude;
+  }
+  if ((north - south).abs() < 1e-6 && (east - west).abs() < 1e-6) {
     const pad = 0.004;
-    return LatLngBounds(
-      LatLng((bounds.south - pad).clamp(-85.0, 85.0), (bounds.west - pad).clamp(-180.0, 180.0)),
-      LatLng((bounds.north + pad).clamp(-85.0, 85.0), (bounds.east + pad).clamp(-180.0, 180.0)),
+    return FindMyBounds(
+      LatLng((south - pad).clamp(-85.0, 85.0), (west - pad).clamp(-180.0, 180.0)),
+      LatLng((north + pad).clamp(-85.0, 85.0), (east + pad).clamp(-180.0, 180.0)),
     );
   }
-  return bounds;
+  return FindMyBounds(LatLng(south, west), LatLng(north, east));
 }
 
-/// Hue-preserving luminance inversion + navy tint turning keyless OSM tiles into dark Apple Find My palette.
-const ColorFilter findMyDarkNavyColorFilter = ColorFilter.matrix(<double>[
-  0.471, -1.173, -0.118, 0.0, 219.0,
-  -0.349, -0.353, -0.118, 0.0, 225.0,
-  -0.349, -1.173, 0.702, 0.0, 241.0,
-  0.000, 0.000, 0.000, 1.0, 0.0,
-]);
+/// Generates a closed spherical geodesic circle ring around [center] with [radiusMeters].
+List<LatLng> buildGeodesicCircleRing(
+  LatLng center,
+  double radiusMeters, {
+  int segments = 48,
+}) {
+  final safeSegments = segments.clamp(12, 128);
+  final safeRadius = radiusMeters.clamp(1.0, 500000.0);
+  const earthRadiusMeters = 6371000.0;
+  final angularDist = safeRadius / earthRadiusMeters;
+  final lat1 = center.latitude * math.pi / 180.0;
+  final lon1 = center.longitude * math.pi / 180.0;
+  final sinLat1 = math.sin(lat1);
+  final cosLat1 = math.cos(lat1);
+  final sinAng = math.sin(angularDist);
+  final cosAng = math.cos(angularDist);
 
-/// Whether dark navy/slate tile styling should be used for [style] and [brightness].
-bool shouldApplyDarkMapFilter(FindMyMapStyle style, Brightness brightness) {
-  return style == FindMyMapStyle.dark ||
-      (style == FindMyMapStyle.standard && brightness == Brightness.dark);
-}
-
-/// Resolves tile URL for [style] and current theme [brightness].
-String resolveFindMyTileUrl(FindMyMapStyle style, Brightness brightness) {
-  if (shouldApplyDarkMapFilter(style, brightness)) {
-    return FindMyMapStyle.dark.urlTemplate;
+  final ring = <LatLng>[];
+  for (var i = 0; i < safeSegments; i++) {
+    final bearing = (2.0 * math.pi * i) / safeSegments;
+    final sinLat2 = sinLat1 * cosAng + cosLat1 * sinAng * math.cos(bearing);
+    final lat2 = math.asin(sinLat2.clamp(-1.0, 1.0));
+    final lon2 = lon1 +
+        math.atan2(
+          math.sin(bearing) * sinAng * cosLat1,
+          cosAng - sinLat1 * sinLat2,
+        );
+    final latDeg = (lat2 * 180.0 / math.pi).clamp(-85.05112878, 85.05112878);
+    var lonDeg = lon2 * 180.0 / math.pi;
+    while (lonDeg > 180.0) {
+      lonDeg -= 360.0;
+    }
+    while (lonDeg < -180.0) {
+      lonDeg += 360.0;
+    }
+    ring.add(LatLng(latDeg, lonDeg));
   }
-  return style.urlTemplate;
+  ring.add(ring.first);
+  return ring;
 }
 
-/// Map canvas background color matching the active tile theme (prevents white flash).
-Color resolveFindMyMapBackgroundColor(FindMyMapStyle style, Brightness brightness) {
-  if (style == FindMyMapStyle.satellite) return const Color(0xFF0E141B);
-  if (shouldApplyDarkMapFilter(style, brightness)) return const Color(0xFF141E2B);
-  return const Color(0xFFE8ECEF);
+/// Builds a ground-plane GeoJSON polygon feature for MapLibre [PolygonLayer].
+maplibre.Feature<maplibre.Polygon> buildFindMyAccuracyFeature(
+  LatLng center,
+  double radiusMeters, {
+  bool selected = false,
+  int segments = 48,
+}) {
+  final ring = buildGeodesicCircleRing(center, radiusMeters, segments: segments);
+  return maplibre.Feature<maplibre.Polygon>(
+    geometry: maplibre.Polygon([
+      maplibre.PositionSeries.from([
+        for (final p in ring) maplibre.Geographic(lon: p.longitude, lat: p.latitude),
+      ]),
+    ]),
+    properties: <String, Object?>{
+      'selected': selected,
+    },
+  );
+}
+
+double _mercatorX(double lonDeg) => (lonDeg + 180.0) / 360.0;
+
+double _mercatorY(double latDeg) {
+  final clamped = latDeg.clamp(-85.05112878, 85.05112878);
+  final sinLat = math.sin(clamped * math.pi / 180.0);
+  return 0.5 - math.log((1.0 + sinLat) / (1.0 - sinLat)) / (4.0 * math.pi);
+}
+
+double _inverseMercatorX(double x) => x * 360.0 - 180.0;
+
+double _inverseMercatorY(double y) {
+  final n = math.pi - 2.0 * math.pi * y;
+  return (180.0 / math.pi) * math.atan(0.5 * (math.exp(n) - math.exp(-n)));
+}
+
+/// Computes Web Mercator fit camera center & zoom accounting for overlay [padding].
+({LatLng center, double zoom}) computeFindMyFitCamera(
+  FindMyBounds bounds,
+  Size viewportSize,
+  EdgeInsets padding, {
+  double maxZoom = 15.0,
+  double minZoom = 1.0,
+}) {
+  const tileSize = 512.0;
+  final usableW = math.max(16.0, viewportSize.width - padding.left - padding.right);
+  final usableH = math.max(16.0, viewportSize.height - padding.top - padding.bottom);
+
+  final x0 = _mercatorX(bounds.west);
+  final x1 = _mercatorX(bounds.east);
+  final y0 = _mercatorY(bounds.north);
+  final y1 = _mercatorY(bounds.south);
+
+  final dx = math.max(1e-7, (x1 - x0).abs());
+  final dy = math.max(1e-7, (y1 - y0).abs());
+
+  final zoomX = math.log(usableW / (tileSize * dx)) / math.ln2;
+  final zoomY = math.log(usableH / (tileSize * dy)) / math.ln2;
+  final zoom = math.min(zoomX, zoomY).clamp(minZoom, maxZoom);
+
+  final scale = tileSize * math.pow(2.0, zoom);
+  final midX = (x0 + x1) * 0.5;
+  final midY = (y0 + y1) * 0.5;
+
+  // MapLibre camera center is at the center of the padded box; shift raw world
+  // midpoint opposite the asymmetric padding offset so the unpadded center lands
+  // in the center of the visible area.
+  final shiftPxX = (padding.left - padding.right) * 0.5;
+  final shiftPxY = (padding.top - padding.bottom) * 0.5;
+  final centerX = (midX - shiftPxX / scale).clamp(0.0, 1.0);
+  final centerY = (midY - shiftPxY / scale).clamp(0.0, 1.0);
+
+  return (
+    center: LatLng(_inverseMercatorY(centerY), _inverseMercatorX(centerX)),
+    zoom: zoom,
+  );
+}
+
+/// Projects [point] to screen pixels inside [viewportSize] using Web Mercator math
+/// (used for headless test verification and unsupported-platform fallback).
+Offset projectLatLngToScreenOffset(
+  LatLng point, {
+  required Size viewportSize,
+  required LatLng center,
+  required double zoom,
+  EdgeInsets padding = EdgeInsets.zero,
+  double bearingDegrees = 0.0,
+}) {
+  const tileSize = 512.0;
+  final scale = tileSize * math.pow(2.0, zoom);
+  final dx = (_mercatorX(point.longitude) - _mercatorX(center.longitude)) * scale;
+  final dy = (_mercatorY(point.latitude) - _mercatorY(center.latitude)) * scale;
+  final originX = viewportSize.width * 0.5 + (padding.left - padding.right) * 0.5;
+  final originY = viewportSize.height * 0.5 + (padding.top - padding.bottom) * 0.5;
+  if (bearingDegrees == 0.0) {
+    return Offset(originX + dx, originY + dy);
+  }
+  final rad = -bearingDegrees * math.pi / 180.0;
+  final cosB = math.cos(rad);
+  final sinB = math.sin(rad);
+  return Offset(
+    originX + dx * cosB - dy * sinB,
+    originY + dx * sinB + dy * cosB,
+  );
 }
 
 /// Compact iOS-style proximity label ("With You", "Nearby", "35 mi").
@@ -200,8 +507,57 @@ String formatFindMyEta(double? meters) {
   return rem == 0 ? "$hrs hr" : "$hrs hr $rem min";
 }
 
-/// Distinct Material 3 icon for Apple device categories (iPhone, MacBook, Mac Mini, iPad, AirPods, Watch).
+/// Distinct Material 3 icon for Apple, Google, and Samsung Find My device categories.
 IconData iconForFindMyDevice(FindMyDevice device) {
+  final category = (device.iconCategory ?? '').trim().toLowerCase();
+  final isAppleProvider = device.trackerProvider == null;
+  switch (category) {
+    case 'watch':
+    case 'smartwatch':
+      return Icons.watch;
+    case 'earbuds':
+    case 'headphones':
+    case 'headset':
+    case 'audio':
+    case 'airpods':
+      return Icons.headphones;
+    case 'ipad':
+      return Icons.tablet_mac;
+    case 'tablet':
+      return isAppleProvider ? Icons.tablet_mac : Icons.tablet_android;
+    case 'mac_mini':
+    case 'macmini':
+    case 'mac_studio':
+    case 'mac_pro':
+    case 'server':
+      return Icons.dns_rounded;
+    case 'laptop':
+    case 'macbook':
+      return Icons.laptop_mac;
+    case 'desktop':
+    case 'imac':
+      return Icons.desktop_mac;
+    case 'tag':
+    case 'tracker':
+    case 'airtag':
+    case 'smarttag':
+    case 'accessory':
+    case 'item':
+      return Icons.sell_outlined;
+    case 'speaker':
+    case 'homepod':
+      return Icons.speaker_rounded;
+    case 'tv':
+    case 'appletv':
+      return Icons.tv_rounded;
+    case 'phone':
+    case 'smartphone':
+    case 'iphone':
+      return isAppleProvider ? Icons.phone_iphone : Icons.phone_android;
+    case 'android':
+      return Icons.phone_android;
+  }
+
   final haystack = [
     device.deviceClass ?? '',
     device.rawDeviceModel ?? '',
@@ -215,10 +571,12 @@ IconData iconForFindMyDevice(FindMyDevice device) {
   if (haystack.contains('airpod') ||
       haystack.contains('headphone') ||
       haystack.contains('beats') ||
+      haystack.contains('buds') ||
       haystack.contains('earbud')) {
     return Icons.headphones;
   }
-  if (haystack.contains('ipad') || haystack.contains('tablet')) return Icons.tablet_mac;
+  if (haystack.contains('ipad')) return Icons.tablet_mac;
+  if (haystack.contains('tablet') || haystack.contains('galaxy tab')) return Icons.tablet_android;
   if (haystack.contains('mac mini') ||
       haystack.contains('macmini') ||
       haystack.contains('mac studio') ||
@@ -227,12 +585,21 @@ IconData iconForFindMyDevice(FindMyDevice device) {
     return Icons.dns_rounded;
   }
   if (haystack.contains('macbook') || haystack.contains('laptop')) return Icons.laptop_mac;
-  if (device.isConsideredAccessory == true || haystack.contains('airtag') || haystack.contains('b389')) {
+  if (device.isConsideredAccessory == true ||
+      haystack.contains('airtag') ||
+      haystack.contains('smarttag') ||
+      haystack.contains('tracker') ||
+      haystack.contains('b389')) {
     return Icons.sell_outlined;
   }
   if (device.isMac == true || haystack.contains('imac') || haystack.contains('mac')) {
     return Icons.desktop_mac;
   }
+  if (device.trackerProvider != null ||
+      haystack.contains('android') ||
+      haystack.contains('pixel') ||
+      haystack.contains('galaxy')) {
+    return Icons.phone_android;
+  }
   return Icons.phone_iphone;
 }
-

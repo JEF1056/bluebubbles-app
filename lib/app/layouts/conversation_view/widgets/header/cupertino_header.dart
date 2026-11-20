@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/layouts/conversation_details/conversation_details.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
@@ -56,7 +57,9 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                     end: Alignment.bottomCenter,
                     colors: [
                       context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 1.0),
-                      context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                      context.theme.colorScheme.surfaceContainerHighest.withValues(
+                        alpha: (ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false) ? 0.72 : 0.5,
+                      ),
                     ],
                   ),
                   border: Border(
@@ -102,15 +105,9 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                           )),
                       Align(
                         alignment: Alignment.center,
-                        child: InkWell(
-                          onTap: () {
-                            NavigationSvc.push(context, ConversationDetails(chat: controller.chat));
-                          },
-                          borderRadius: BorderRadius.circular(10),
-                          child: Padding(
-                            padding: const EdgeInsets.all(3.0),
-                            child: _ChatIconAndTitle(parentController: controller),
-                          ),
+                        child: _ChatIconAndTitle(
+                          parentController: controller,
+                          hasWallpaper: ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false,
                         ),
                       ),
                       Padding(
@@ -121,7 +118,27 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 ManualMark(controller: controller),
-                                if ((kIsDesktop || kIsWeb) && MediaQuery.sizeOf(context).width > 1024)
+                                if (!kIsWeb && Platform.isAndroid && canAudioCall(controller.chat))
+                                  IconButton(
+                                    tooltip: 'Call',
+                                    icon: Icon(
+                                      CupertinoIcons.phone,
+                                      size: 22,
+                                      color: context.theme.colorScheme.primary,
+                                    ),
+                                    onPressed: () => startAudioCall(context, controller.chat),
+                                  ),
+                                if (canVideoCall(controller.chat))
+                                  IconButton(
+                                    tooltip: 'Video',
+                                    icon: Icon(
+                                      CupertinoIcons.video_camera,
+                                      size: 24,
+                                      color: context.theme.colorScheme.primary,
+                                    ),
+                                    onPressed: () => startVideoCall(context, controller.chat),
+                                  ),
+                                if (!isWebHeader && kIsDesktop && MediaQuery.sizeOf(context).width > 1024)
                                   Obx(() {
                                     final open = NavigationSvc.showInspectorDrawer.value;
                                     return IconButton(
@@ -157,7 +174,7 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Size get preferredSize =>
-      Size.fromHeight((Get.context!.orientation == Orientation.landscape && Platform.isAndroid ? 55 : 75) *
+      Size.fromHeight((Get.context?.orientation == Orientation.landscape && Platform.isAndroid ? 55 : 75) *
           SettingsSvc.settings.avatarScale.value);
 }
 
@@ -234,7 +251,12 @@ class _UnreadIconState extends State<_UnreadIcon> {
 }
 
 class _ChatIconAndTitle extends CustomStateful<ConversationViewController> {
-  const _ChatIconAndTitle({required super.parentController});
+  const _ChatIconAndTitle({
+    required super.parentController,
+    required this.hasWallpaper,
+  });
+
+  final bool hasWallpaper;
 
   @override
   State<StatefulWidget> createState() => _ChatIconAndTitleState();
@@ -256,115 +278,129 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
     }
   }
 
+  void _openDetails() {
+    if (isWebHeader) {
+      openOrToggleConversationDetails(context, controller.chat);
+      return;
+    }
+    NavigationSvc.push(context, ConversationDetails(chat: controller.chat));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       // Get chat state from scope - handles title logic including redacted mode
       final chatState = ChatStateScope.of(context);
+      final hasWallpaper = widget.hasWallpaper || chatState.hasCustomWallpaper;
       final _title = chatState.title.value ?? controller.chat.getTitle();
       final loc = controller.chat.isGroup ? null : _fm.locationForChat(controller.chat);
       final isLandscapeAndroid = context.orientation == Orientation.landscape && Platform.isAndroid;
 
-      final titleAndLoc = Column(
+      final titleRow = Row(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: isLandscapeAndroid ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxWidth: NavigationSvc.width(context) / 2.5,
-                  ),
-                  child: RichText(
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    text: TextSpan(
-                      style: context.theme.textTheme.bodyMedium,
-                      children: MessageHelper.buildEmojiText(
-                        _title,
-                        context.theme.textTheme.bodyMedium!,
-                      ),
-                    ),
-                  ),
-                ),
-                Icon(
-                  CupertinoIcons.chevron_right,
-                  size: context.theme.textTheme.bodyMedium!.fontSize!,
-                  color: context.theme.colorScheme.outline.withValues(alpha: 0.5),
-                ),
-              ]),
-          if (loc != null)
-            InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () => _fm.openForChat(context, controller.chat),
-              child: Padding(
-                padding: const EdgeInsets.only(top: 1),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      CupertinoIcons.location_fill,
-                      size: 10,
-                      color: context.theme.colorScheme.primary,
-                    ),
-                    const SizedBox(width: 3),
-                    ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: NavigationSvc.width(context) / 2.6),
-                      child: Text(
-                        loc.distanceLabel != null && loc.distanceLabel!.isNotEmpty
-                            ? '${loc.shortLabel} · ${loc.distanceLabel}'
-                            : loc.shortLabel,
-                        style: context.theme.textTheme.labelSmall?.copyWith(
-                          color: context.theme.colorScheme.onSurfaceVariant,
-                          fontSize: 11,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (loc.isLive) ...[
-                      const SizedBox(width: 4),
-                      Container(
-                        width: 5,
-                        height: 5,
-                        decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
-                      ),
-                    ],
-                  ],
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: NavigationSvc.width(context) / 2.5,
+            ),
+            child: RichText(
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              text: TextSpan(
+                style: context.theme.textTheme.bodyMedium,
+                children: MessageHelper.buildEmojiText(
+                  _title,
+                  context.theme.textTheme.bodyMedium!,
                 ),
               ),
             ),
+          ),
+          Icon(
+            CupertinoIcons.chevron_right,
+            size: context.theme.textTheme.bodyMedium!.fontSize!,
+            color: context.theme.colorScheme.outline.withValues(alpha: 0.5),
+          ),
         ],
       );
 
-      final children = [
-        const IgnorePointer(
-          ignoring: true,
-          child: ContactAvatarGroupWidget(
-            size: 54,
-          ),
-        ),
-        const SizedBox(height: 5, width: 5),
-        titleAndLoc,
-      ];
+      final locationChip = loc == null
+          ? null
+          : HeaderLocationChip(
+              key: const ValueKey('cupertino_header_location_chip'),
+              loc: loc,
+              isCupertino: true,
+              hasWallpaper: hasWallpaper,
+              maxWidth: NavigationSvc.width(context) / 2.6,
+              onTap: () => _fm.openForChat(context, controller.chat),
+            );
 
       if (isLandscapeAndroid) {
         return Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
-          children: children,
-        );
-      } else {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: children,
+          children: [
+            HeaderHoverSurface(
+              key: const ValueKey('cupertino_header_name_card'),
+              borderRadius: BorderRadius.circular(14),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              hasWallpaper: hasWallpaper,
+              semanticLabel: _title,
+              onTap: _openDetails,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const IgnorePointer(
+                    ignoring: true,
+                    child: ContactAvatarGroupWidget(size: 36),
+                  ),
+                  const SizedBox(width: 6),
+                  titleRow,
+                ],
+              ),
+            ),
+            if (locationChip != null) ...[
+              const SizedBox(width: 6),
+              locationChip,
+            ],
+          ],
         );
       }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HeaderHoverSurface(
+            key: const ValueKey('cupertino_header_name_card'),
+            borderRadius: BorderRadius.circular(14),
+            padding: EdgeInsets.symmetric(horizontal: 10, vertical: loc != null ? 2 : 3),
+            hasWallpaper: hasWallpaper,
+            semanticLabel: _title,
+            onTap: _openDetails,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                IgnorePointer(
+                  ignoring: true,
+                  child: ContactAvatarGroupWidget(
+                    size: loc != null ? 40 : 54,
+                  ),
+                ),
+                SizedBox(height: loc != null ? 2 : 4),
+                titleRow,
+              ],
+            ),
+          ),
+          if (locationChip != null) ...[
+            const SizedBox(height: 1),
+            locationChip,
+          ],
+        ],
+      );
     });
   }
 }

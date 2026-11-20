@@ -4,6 +4,7 @@ import 'package:bluebubbles/app/layouts/conversation_details/dialogs/address_pic
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/setup/pages/sync/server_credentials.dart';
 import 'package:bluebubbles/database/global/findmy_friend.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/network/firebase/firebase_database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -143,21 +144,34 @@ void main() {
   });
 
   group('Web address picker intent launching', () {
-    test('launchIntent launches tel: and mailto: on web without Permission.phone', () async {
+    test('launchIntent launches tel:, mailto:, and web Meet calling without Permission.phone', () async {
       final launched = <Uri>[];
+      final copied = <String>[];
+      final snackbars = <String>[];
       Future<bool> fakeLaunch(Uri uri) async {
         launched.add(uri);
         return true;
       }
 
       await launchIntent(false, '+15551234567', isWeb: true, launchUrlFn: fakeLaunch);
-      await launchIntent(true, '+15551234567', isWeb: true, launchUrlFn: fakeLaunch);
+      await launchIntent(
+        true,
+        '+15551234567',
+        isWeb: true,
+        isAndroidWebOverride: false,
+        launchUrlFn: fakeLaunch,
+        copyClipboardFn: (text) async => copied.add(text),
+        showSnackbarFn: (title, message, {type = SnackbarType.info}) => snackbars.add('$title: $message'),
+      );
       await launchIntent(false, 'alice@example.com', isWeb: true, launchUrlFn: fakeLaunch);
 
       expect(launched, [
         Uri(scheme: 'tel', path: '+15551234567'),
+        Uri.parse('https://duo.google.com/'),
         Uri(scheme: 'mailto', path: 'alice@example.com'),
       ]);
+      expect(copied, ['+15551234567']);
+      expect(snackbars, ['Google Meet: Copied +15551234567 — paste in Google Meet to ring']);
     });
   });
 

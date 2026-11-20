@@ -27,6 +27,8 @@ import 'package:universal_io/io.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:get_it/get_it.dart';
 
+part 'chats_service_fork.dart';
+
 // ignore: non_constant_identifier_names
 ChatsService get ChatsSvc => GetIt.I<ChatsService>();
 
@@ -57,12 +59,6 @@ class ChatsService {
       activeChatGuid.value = guid;
       _syncLocusContext(guid);
     }
-  }
-
-  void _syncLocusContext(String? chatGuid) {
-    if (kIsWeb || !Platform.isAndroid) return;
-    if (!GetIt.I.isRegistered<MethodChannelService>()) return;
-    unawaited(MethodChannelSvc.actions.setLocusContext(chatGuid));
   }
 
   /// Reactive guid of the active chat. Tiles observe this for highlighting instead
@@ -259,6 +255,8 @@ class ChatsService {
   /// Pinned chats in pin order ([getSortedChats] already puts them first, ordered).
   List<Chat> get pinnedChats => getSortedChats().where((c) => c.isPinned ?? false).toList();
 
+  int _pinReorderEpoch = 0;
+
   /// Saves a new pin order. [visible] may be a filtered subset of the pins: the pins it leaves out keep their
   /// positions, and the visible ones fill the remaining positions in the new order.
   Future<void> reorderPins(List<Chat> visible) async {
@@ -276,6 +274,8 @@ class ChatsService {
       _setPinIndex(chat, i);
     });
     if (previous.isEmpty) return;
+    // shortcut: server pin API is boolean-only (no order endpoint), upgrade to sync order when server adds reorder API
+    _pinReorderEpoch++;
     // Re-sort before saving so the grid shows the new order without waiting on the DB.
     refreshSortOrder();
     // All of them, even past a failure, so one bad write doesn't leave the rest of the order unsaved.
@@ -1055,40 +1055,6 @@ class ChatsService {
   bool get _isUiInteractive =>
       !(GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isUiInteractive);
 
-  /// Set a chat as the active chat synchronously
-  void setActiveChatSync(
-    Chat chat, {
-    bool clearNotifications = true,
-    bool save = true,
-    bool alive = true,
-  }) {
-    Logger.debug('Setting active chat to ${chat.guid} (${chat.displayName})');
-
-    final foreground = _isAppForeground;
-
-    // Get or create the chat state
-    final chatState = getOrCreateChatState(chat);
-
-    // Set this chat as active
-    activeChat = chatState;
-    chatState.updateActiveInternal(true);
-    chatState.updateAliveInternal(alive && foreground);
-
-    // Clear all other chats to inactive
-    setAllInactiveSync(save: false, clearActive: false);
-
-    if (clearNotifications && alive && _isUiInteractive) {
-      // Defer the observable update to avoid updating during build phase
-      Future.microtask(() {
-        setChatHasUnread(chatState.chat, false);
-      });
-    }
-
-    if (save) {
-      unawaited(PrefsSvc.messaging.setLastOpenedChat(chat.guid));
-    }
-  }
-
   /// Set the active chat to dead (not alive)
   void setActiveToDead() {
     Logger.debug('Setting active chat to dead: ${activeChat?.chat.guid}');
@@ -1363,45 +1329,13 @@ class ChatsService {
   }
 
   /// Extract ordered `pinnedChatGuids` from a REST response or socket payload.
-  /// Returns `null` when the payload does not carry a `pinnedChatGuids` list so
-  /// error/unsupported responses never wipe local pins.
-  static List<String>? extractPinnedChatGuids(dynamic payload) {
-    if (payload is! Map) return null;
-    dynamic rawList;
-    if (payload['data'] is Map && (payload['data'] as Map).containsKey('pinnedChatGuids')) {
-      rawList = (payload['data'] as Map)['pinnedChatGuids'];
-    } else if (payload.containsKey('pinnedChatGuids')) {
-      rawList = payload['pinnedChatGuids'];
-    }
-    if (rawList is! List) return null;
-    final seen = <String>{};
-    final result = <String>[];
-    for (final item in rawList) {
-      if (item is String && item.isNotEmpty && seen.add(item)) {
-        result.add(item);
-      }
-    }
-    return result;
-  }
+  static List<String>? extractPinnedChatGuids(dynamic payload) => _extractPinnedChatGuids(payload);
 
-  /// Compute `(chat, isPinned, pinIndex)` updates needed for [chats] to match [pinnedGuids].
   static List<({Chat chat, bool isPinned, int? pinIndex})> computePinUpdates(
     Iterable<Chat> chats,
     List<String> pinnedGuids,
-  ) {
-    final pinIndexByGuid = <String, int>{
-      for (int i = 0; i < pinnedGuids.length; i++) pinnedGuids[i]: i,
-    };
-    final updates = <({Chat chat, bool isPinned, int? pinIndex})>[];
-    for (final chat in chats) {
-      final int? targetIndex = pinIndexByGuid[chat.guid];
-      final bool targetPinned = targetIndex != null;
-      if ((chat.isPinned ?? false) != targetPinned || chat.pinIndex != targetIndex) {
-        updates.add((chat: chat, isPinned: targetPinned, pinIndex: targetIndex));
-      }
-    }
-    return updates;
-  }
+  ) =>
+      _computePinUpdates(chats, pinnedGuids);
 
   DateTime? _lastServerChatFlagsSync;
   static const Duration _serverChatFlagsCooldown = Duration(minutes: 10);
@@ -1555,18 +1489,6 @@ class ChatsService {
 
     _sortedChats.sort(_sortCompare);
     _scheduleListVersionUpdate(immediate: true);
-  }
-
-  Future<void> _syncChatPinToServer(String guid, bool pinned) async {
-    try {
-      final resp = await HttpSvc.chat.setPinned(guid, pinned: pinned);
-      final guids = extractPinnedChatGuids(resp.data);
-      if (guids != null) {
-        await applyPinnedChatGuids(guids);
-      }
-    } catch (e) {
-      Logger.debug("Failed to sync chat pin to server: $e", tag: "ChatsService");
-    }
   }
 
   /// Set chat pin index

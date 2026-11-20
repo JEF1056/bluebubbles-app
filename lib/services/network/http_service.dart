@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:bluebubbles/helpers/ui/ui_helpers.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/network/api/attachment_api.dart';
@@ -107,7 +110,8 @@ class HttpService implements BaseApi {
       if (statusCode == 402 && GetIt.I.isRegistered<SubscriptionService>()) {
         SubscriptionSvc.refused(e is Response ? e.data : (e as DioException).response?.data);
       }
-      if (statusCode == 502 && apiRoot.contains("trycloudflare")) {
+      if ((statusCode == 502 || statusCode == 503) &&
+          (apiRoot.contains("trycloudflare") || apiRoot.startsWith("https://"))) {
         try {
           return await func();
         } catch (e, s) {
@@ -255,6 +259,10 @@ class HttpService implements BaseApi {
 class ApiInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    // Send HttpOnly Cloudflare Access cookie to our own server only (never 3P hosts).
+    if (kIsWeb && HttpSvc.origin.isNotEmpty && options.uri.origin == HttpSvc.origin) {
+      options.extra['withCredentials'] = true;
+    }
     Logger.info("Request: [${options.method}] ${options.path}", tag: "HTTP Service");
     return super.onRequest(options, handler);
   }
@@ -267,6 +275,12 @@ class ApiInterceptor extends Interceptor {
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
+    if (kIsWeb &&
+        err.response == null &&
+        HttpSvc.origin.isNotEmpty &&
+        err.requestOptions.uri.origin == HttpSvc.origin) {
+      unawaited(ensureCloudflareAccessSession(HttpSvc.origin));
+    }
     // Get params without sensitive info
     final params = err.requestOptions.queryParameters;
     params.remove("guid");

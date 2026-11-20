@@ -6,6 +6,7 @@ import com.wearbubbles.api.dto.ChatDto
 import com.wearbubbles.api.dto.ChatQueryRequest
 import com.wearbubbles.api.dto.ContactDto
 import com.wearbubbles.api.dto.CreateChatRequest
+import com.wearbubbles.api.dto.ICloudContactDto
 import com.wearbubbles.api.dto.MessageDto
 import com.wearbubbles.api.dto.MessageQueryRequest
 import com.wearbubbles.api.dto.PinnedChatsResponse
@@ -92,4 +93,9 @@ interface BlueBubblesApi {
         @Query("password") password: String,
         @Query("extraProperties") extraProperties: String = "avatar"
     ): ApiResponse<List<ContactDto>>
+
+    @GET("/api/v1/icloud/contact")
+    suspend fun getICloudContact(
+        @Query("password") password: String
+    ): ApiResponse<ICloudContactDto>
 }

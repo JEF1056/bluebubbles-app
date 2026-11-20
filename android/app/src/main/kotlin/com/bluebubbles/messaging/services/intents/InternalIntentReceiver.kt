@@ -77,6 +77,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val callUuid: String? = intent.getStringExtra("callUuid")
                 val callerName: String = intent.getStringExtra("callerName") ?: "Unknown Caller"
                 val callerAddress: String? = intent.getStringExtra("callerAddress")
+                val isTelephony: Boolean = intent.getBooleanExtra("isTelephony", false)
                 DeleteNotificationHandler().deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
                 if (!callUuid.isNullOrBlank()) {
                     val routed = FaceTimeConnectionService.addIncomingCall(
@@ -84,7 +85,8 @@ class InternalIntentReceiver: BroadcastReceiver() {
                         callUuid = callUuid,
                         callerName = callerName,
                         address = callerAddress,
-                        autoAnswer = true
+                        autoAnswer = true,
+                        isTelephony = isTelephony
                     )
                     if (!routed) {
                         val launch = Intent(context, MainActivity::class.java).apply {
@@ -92,12 +94,22 @@ class InternalIntentReceiver: BroadcastReceiver() {
                             putExtra("callUuid", callUuid)
                             putExtra("answer", true)
                             putExtra("audioOnly", true)
+                            putExtra("isTelephony", isTelephony)
                             putExtra("caller", callerName)
                             type = "AnswerFaceTime"
                         }
                         context.startActivity(launch)
                     }
                 }
+            }
+            "OpenCallingAccounts" -> {
+                val notificationId: Int = intent.getIntExtra("notificationId", 0)
+                val tag: String? = intent.getStringExtra("tag")
+                if (notificationId != 0) {
+                    val nm = context.getSystemService(NotificationManager::class.java)
+                    if (tag != null) nm?.cancel(tag, notificationId) else nm?.cancel(notificationId)
+                }
+                FaceTimeConnectionService.openCallingAccountsSettings(context)
             }
             "MarkChatRead" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
@@ -476,48 +488,26 @@ class InternalIntentReceiver: BroadcastReceiver() {
     }
 
     companion object {
-        private val REACTION_ACTION_TITLES = setOf("Like", "Love", "Un-Like", "Un-Love", "Sending...", "Error - Retry")
+        internal fun extensionForMime(mimeType: String): String =
+            com.bluebubbles.messaging.services.intents.extensionForMime(mimeType)
 
-        internal fun resolveFirstDataResult(dataResults: Map<String, Uri>?): Pair<String, Uri>? =
-            dataResults?.entries?.firstOrNull { it.key.isNotBlank() }?.let { it.key to it.value }
-
-        internal fun extensionForMime(mimeType: String): String = when {
-            mimeType.contains("png", ignoreCase = true) -> "png"
-            mimeType.contains("gif", ignoreCase = true) -> "gif"
-            mimeType.contains("webp", ignoreCase = true) -> "webp"
-            else -> "jpg"
-        }
-
-        internal fun reactionButtonTitle(reactionType: String, reactionSent: Boolean): String = when {
-            reactionType == "love" && reactionSent -> "Un-Love"
-            reactionType == "love" && !reactionSent -> "Love"
-            reactionType == "like" && reactionSent -> "Un-Like"
-            else -> "Like"
-        }
+        internal fun reactionButtonTitle(reactionType: String, reactionSent: Boolean): String =
+            com.bluebubbles.messaging.services.intents.reactionButtonTitle(reactionType, reactionSent)
 
         internal fun matchesMessageNotification(tag: String?, id: Int, targetId: Int): Boolean =
-            tag == Constants.newMessageNotificationTag && id == targetId
+            com.bluebubbles.messaging.services.intents.matchesMessageNotification(tag, id, targetId)
 
-        internal fun isReactionAction(title: String?, semanticAction: Int?): Boolean {
-            if (semanticAction == Notification.Action.SEMANTIC_ACTION_THUMBS_UP) return true
-            return title != null && title in REACTION_ACTION_TITLES
-        }
+        internal fun isReactionAction(title: String?, semanticAction: Int?): Boolean =
+            com.bluebubbles.messaging.services.intents.isReactionAction(title, semanticAction)
 
         internal fun <T> replaceReactionAction(
             actions: List<T>,
             newReactionAction: T,
             predicate: (T) -> Boolean
-        ): List<T> {
-            var replaced = false
-            val result = actions.map { action ->
-                if (!replaced && predicate(action)) {
-                    replaced = true
-                    newReactionAction
-                } else {
-                    action
-                }
-            }
-            return if (replaced) result else result + newReactionAction
-        }
+        ): List<T> = com.bluebubbles.messaging.services.intents.replaceReactionAction(
+            actions,
+            newReactionAction,
+            predicate
+        )
     }
 }

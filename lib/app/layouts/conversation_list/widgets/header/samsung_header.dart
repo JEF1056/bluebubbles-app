@@ -81,7 +81,6 @@ class _SamsungHeaderState extends CustomState<SamsungHeader, void, ConversationL
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             HeaderText(controller: controller, fontSize: 20),
-                            const SyncIndicator(),
                           ],
                         ),
                       ),

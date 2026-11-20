@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:collection';
 import 'package:universal_io/io.dart';
 
-import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_audio_player.dart';
-import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/env.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -1043,43 +1041,16 @@ class IncomingMessageHandler {
 
   // ── Receive sound ────────────────────────────────────────────────────────
 
-  /// Plays the configured receive sound, mirroring the original ActionHandler behavior:
+  /// Plays the configured receive sound (or bundled Google Messages default):
   /// * Android: only while the app process is alive, so headless wake-ups do not play audio.
-  /// * Desktop: may play regardless of window focus.
+  /// * Desktop/Web: plays regardless of window focus.
   Future<void> _playReceiveSound() async {
     if (SettingsSvc.settings.soundVolume.value == 0) return;
-    if (kIsWeb) {
-      await playWebChime(
-        isSend: false,
-        volume: SettingsSvc.settings.soundVolume.value / 100.0,
-        customUrl: SettingsSvc.settings.receiveSoundPath.value,
-      );
-      return;
-    }
-    if (SettingsSvc.settings.receiveSoundPath.value == null) return;
-    if (Platform.isAndroid && !LifecycleSvc.isAlive) return;
-
-    if (kIsDesktop) {
-      final player = Player();
-      player.stream.completed
-          .firstWhere((done) => done)
-          .then((_) => Future.delayed(const Duration(milliseconds: 500), player.dispose));
-      await player.setVolume(SettingsSvc.settings.soundVolume.value.toDouble());
-      await player.open(Media(SettingsSvc.settings.receiveSoundPath.value!));
-    } else if (!kIsWeb) {
-      final controller = PlayerController();
-      await controller.preparePlayer(
-        path: SettingsSvc.settings.receiveSoundPath.value!,
-        volume: SettingsSvc.settings.soundVolume.value / 100,
-      );
-      await controller.startPlayer();
-      // Dispose the controller once playback finishes to avoid leaking native
-      // audio resources.  Uses onCompletion (Stream<void>) rather than
-      // onPlayerStateChanged so we don't need to reference PlayerState, which
-      // is defined in both audio_waveforms and media_kit.
-      unawaited(
-        controller.onCompletion.first.whenComplete(controller.dispose).catchError((Object _) {}),
-      );
-    }
+    if (!kIsWeb && Platform.isAndroid && !LifecycleSvc.isAlive) return;
+    await playAppSound(
+      AppSounds.messageIncoming,
+      customPath: SettingsSvc.settings.receiveSoundPath.value,
+      volume: SettingsSvc.settings.soundVolume.value / 100.0,
+    );
   }
 }

@@ -4,15 +4,19 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.LocusId
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.core.view.WindowCompat
 import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
 import com.bluebubbles.messaging.services.camera.GmsgCameraHost
 import com.bluebubbles.messaging.services.extensions.OpenPigeonHost
+import com.bluebubbles.messaging.services.findmy.FindMyBleHost
 import com.bluebubbles.messaging.services.foreground.ForegroundServiceBroadcastReceiver
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.utils.PersistentLog
@@ -71,6 +75,7 @@ class MainActivity : FlutterFragmentActivity() {
     // Remove once https://github.com/flutter/flutter/pull/191453 lands in our Flutter version.
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureEdgeToEdge()
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
         updateLocusContext(intent?.getStringExtra("chatGuid"))
@@ -86,6 +91,26 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             },
         )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun configureEdgeToEdge() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            window.isStatusBarContrastEnforced = false
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val attrs = window.attributes
+            attrs.layoutInDisplayCutoutMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else {
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+            window.attributes = attrs
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -120,6 +145,7 @@ class MainActivity : FlutterFragmentActivity() {
         }
         OpenPigeonHost.register(flutterEngine, this)
         GmsgCameraHost.register(flutterEngine, this)
+        FindMyBleHost.register(flutterEngine, this)
 
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->

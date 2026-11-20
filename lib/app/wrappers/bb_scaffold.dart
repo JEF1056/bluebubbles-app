@@ -125,8 +125,7 @@ class BBScaffold extends StatelessWidget {
             ? Colors.transparent
             : Theme.of(context).colorScheme.surface);
 
-    final effectiveSafeAreaBottom =
-        safeAreaBottom ?? !(SettingsSvc.settings.immersiveMode.value && extendBodyBehindBottomPill);
+    final effectiveSafeAreaBottom = safeAreaBottom ?? !extendBodyBehindBottomPill;
 
     // SafeArea is applied to the body in all cases so content doesn't overlap
     // system bars. The Scaffold itself is never wrapped in SafeArea — this

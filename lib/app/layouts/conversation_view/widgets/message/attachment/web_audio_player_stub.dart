@@ -20,6 +20,12 @@ class WebAudioController extends ChangeNotifier {
   void setPlaybackRate(double rate) {}
 }
 
+Future<void> playWebSoundAsset(
+  String assetPath, {
+  double volume = 1.0,
+  String? customUrl,
+}) async {}
+
 Future<void> playWebChime({
   required bool isSend,
   double volume = 1.0,

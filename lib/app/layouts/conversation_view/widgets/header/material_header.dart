@@ -110,21 +110,9 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
             ),
             title: Padding(
               padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(10),
-                onTap: () {
-                  Navigator.of(context).push(
-                    ThemeSwitcher.buildPageRoute(
-                      builder: (context) => ConversationDetails(
-                        chat: controller.chat,
-                      ),
-                    ),
-                  );
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(5.0),
-                  child: _ChatIconAndTitle(parentController: controller),
-                ),
+              child: _ChatIconAndTitle(
+                parentController: controller,
+                hasWallpaper: hasWallpaper,
               ),
             ),
             actions: [
@@ -132,7 +120,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                 padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                 child: ManualMark(controller: controller),
               ),
-              if ((kIsDesktop || kIsWeb) && MediaQuery.sizeOf(context).width > 1024)
+              if (!isWebHeader && kIsDesktop && MediaQuery.sizeOf(context).width > 1024)
                 Padding(
                   padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                   child: Obx(() {
@@ -148,16 +136,26 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                     );
                   }),
                 ),
-              if (canFaceTime(controller.chat))
+              if (canVideoCall(controller.chat))
                 Padding(
                   padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                   child: IconButton(
                     icon: Icon(Icons.videocam_outlined, color: _foregroundColor),
-                    tooltip: 'FaceTime Video',
-                    onPressed: () => startFaceTimeCall(context, controller.chat, video: true),
+                    tooltip: 'Video',
+                    onPressed: () => startVideoCall(context, controller.chat),
                   ),
                 ),
-              if ((Platform.isAndroid || (kIsWeb && MediaQuery.sizeOf(context).width < 680)) &&
+              if (!kIsWeb && Platform.isAndroid && canAudioCall(controller.chat))
+                Padding(
+                  padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+                  child: IconButton(
+                    icon: Icon(Icons.call_outlined, color: _foregroundColor),
+                    tooltip: 'Call',
+                    onPressed: () => startAudioCall(context, controller.chat),
+                  ),
+                )
+              else if (kIsWeb &&
+                  MediaQuery.sizeOf(context).width < 680 &&
                   !controller.chat.isGroup &&
                   controller.chat.handles.isNotEmpty &&
                   controller.chat.handles.first.address.isPhoneNumber)
@@ -198,13 +196,17 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                       : null,
                   onSelected: (int value) {
                     if (value == 0) {
-                      Navigator.of(context).push(
-                        ThemeSwitcher.buildPageRoute(
-                          builder: (context) => ConversationDetails(
-                            chat: controller.chat,
+                      if (isWebHeader) {
+                        openOrToggleConversationDetails(context, controller.chat, preferOpenInspector: true);
+                      } else {
+                        Navigator.of(context).push(
+                          ThemeSwitcher.buildPageRoute(
+                            builder: (context) => ConversationDetails(
+                              chat: controller.chat,
+                            ),
                           ),
-                        ),
-                      );
+                        );
+                      }
                     } else if (value == 1) {
                       ChatsSvc.setChatArchived(controller.chat, !controller.chat.isArchived!);
                       if (Get.isSnackbarOpen) {
@@ -340,7 +342,12 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
 }
 
 class _ChatIconAndTitle extends CustomStateful<ConversationViewController> {
-  const _ChatIconAndTitle({required super.parentController});
+  const _ChatIconAndTitle({
+    required super.parentController,
+    required this.hasWallpaper,
+  });
+
+  final bool hasWallpaper;
 
   @override
   State<StatefulWidget> createState() => _ChatIconAndTitleState();
@@ -348,6 +355,10 @@ class _ChatIconAndTitle extends CustomStateful<ConversationViewController> {
 
 class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, ConversationViewController> {
   late final FindMyController _fm;
+  bool _avatarHovered = false;
+  bool _avatarPressed = false;
+  bool _titleHovered = false;
+  bool _titlePressed = false;
 
   @override
   void initState() {
@@ -362,106 +373,157 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
     }
   }
 
+  void _openDetails() {
+    if (isWebHeader) {
+      openOrToggleConversationDetails(context, controller.chat);
+      return;
+    }
+    Navigator.of(context).push(
+      ThemeSwitcher.buildPageRoute(
+        builder: (context) => ConversationDetails(
+          chat: controller.chat,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final chatState = ChatStateScope.of(context);
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(right: 12.5),
-          child: IgnorePointer(
-            ignoring: true,
-            child: ContactAvatarGroupWidget(
-              size: !controller.chat.isGroup ? 35 : 40,
-            ),
+    return Obx(() {
+      final hasWallpaper = widget.hasWallpaper || chatState.hasCustomWallpaper;
+      final _title = controller.inSelectMode.value
+          ? "${controller.selected.length} selected"
+          : chatState.title.value ?? controller.chat.getTitle();
+      final loc = (controller.chat.isGroup || controller.inSelectMode.value)
+          ? null
+          : _fm.locationForChat(controller.chat);
+
+      final titleWidget = Text(
+        _title,
+        style: context.theme.textTheme.titleLarge!
+            .apply(color: context.theme.colorScheme.onSurface, fontSizeFactor: 0.9),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      );
+
+      final avatar = Padding(
+        padding: const EdgeInsets.only(right: 10),
+        child: IgnorePointer(
+          ignoring: true,
+          child: ContactAvatarGroupWidget(
+            size: !controller.chat.isGroup ? 35 : 40,
           ),
         ),
-        Expanded(
-          child: Column(
+      );
+
+      if (loc == null) {
+        final String? samsungSubtitle = !controller.chat.isGroup
+            ? (!controller.inSelectMode.value &&
+                    samsung &&
+                    controller.chat.handles.isNotEmpty &&
+                    !controller.chat.getTitle().isPhoneNumber &&
+                    !controller.chat.getTitle().isEmail
+                ? controller.chat.handles[0].address
+                : null)
+            : (samsung ? "${controller.chat.people.length} recipients" : null);
+
+        return HeaderHoverSurface(
+          key: const ValueKey('material_header_name_card'),
+          borderRadius: BorderRadius.circular(14),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+          hasWallpaper: hasWallpaper,
+          semanticLabel: _title,
+          onTap: _openDetails,
+          child: Row(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Obx(() {
-                // Get title from ChatState - it handles all title logic including redacted mode
-                final _title = controller.inSelectMode.value
-                    ? "${controller.selected.length} selected"
-                    : chatState.title.value ?? controller.chat.getTitle();
-                return Text(
-                  _title,
-                  style: context.theme.textTheme.titleLarge!
-                      .apply(color: context.theme.colorScheme.onSurface, fontSizeFactor: 0.9),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                );
-              }),
-              if (!controller.chat.isGroup)
-                Obx(() {
-                  if (controller.inSelectMode.value) return const SizedBox.shrink();
-                  final loc = _fm.locationForChat(controller.chat);
-                  if (loc == null) {
-                    if (samsung && !controller.chat.getTitle().isPhoneNumber && !controller.chat.getTitle().isEmail) {
-                      return Text(
-                        controller.chat.handles[0].address,
+              avatar,
+              Flexible(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    titleWidget,
+                    if (samsungSubtitle != null)
+                      Text(
+                        samsungSubtitle,
                         style: context.theme.textTheme.labelLarge!.apply(color: context.theme.colorScheme.outline),
                         maxLines: 1,
                         overflow: TextOverflow.fade,
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  }
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => _fm.openForChat(context, controller.chat),
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 1),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.location_on_outlined,
-                            size: 12,
-                            color: context.theme.colorScheme.primary,
-                          ),
-                          const SizedBox(width: 3),
-                          Flexible(
-                            child: Text(
-                              loc.distanceLabel != null && loc.distanceLabel!.isNotEmpty
-                                  ? '${loc.shortLabel} · ${loc.distanceLabel}'
-                                  : loc.shortLabel,
-                              style: context.theme.textTheme.labelSmall?.copyWith(
-                                color: context.theme.colorScheme.onSurfaceVariant,
-                                fontWeight: FontWeight.w500,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (loc.isLive) ...[
-                            const SizedBox(width: 5),
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
-                            ),
-                          ],
-                        ],
                       ),
-                    ),
-                  );
-                })
-              else if (samsung)
-                Text(
-                  "${controller.chat.people.length} recipients",
-                  style: context.theme.textTheme.labelLarge!.apply(color: context.theme.colorScheme.outline),
-                  maxLines: 1,
-                  overflow: TextOverflow.fade,
+                  ],
                 ),
+              ),
             ],
           ),
+        );
+      }
+
+      // Split hit regions so hovering/clicking location never double-highlights or triggers the name card.
+      return AnimatedContainer(
+        key: const ValueKey('material_header_name_card'),
+        duration: kHeaderHoverDuration,
+        curve: kHeaderHoverCurve,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: resolveHeaderHoverColor(
+            context,
+            hovered: _avatarHovered || _titleHovered,
+            pressed: _avatarPressed || _titlePressed,
+            hasWallpaper: hasWallpaper,
+          ),
+          borderRadius: BorderRadius.circular(14),
         ),
-      ],
-    );
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            HeaderHitRegion(
+              key: const ValueKey('material_header_avatar_target'),
+              onHoverChanged: (v) {
+                if (_avatarHovered != v) setState(() => _avatarHovered = v);
+              },
+              onPressChanged: (v) {
+                if (_avatarPressed != v) setState(() => _avatarPressed = v);
+              },
+              onTap: _openDetails,
+              child: avatar,
+            ),
+            Flexible(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  HeaderHitRegion(
+                    key: const ValueKey('material_header_title_target'),
+                    semanticLabel: _title,
+                    onHoverChanged: (v) {
+                      if (_titleHovered != v) setState(() => _titleHovered = v);
+                    },
+                    onPressChanged: (v) {
+                      if (_titlePressed != v) setState(() => _titlePressed = v);
+                    },
+                    onTap: _openDetails,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      child: titleWidget,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  HeaderLocationChip(
+                    key: const ValueKey('material_header_location_chip'),
+                    loc: loc,
+                    isCupertino: false,
+                    hasWallpaper: hasWallpaper,
+                    onTap: () => _fm.openForChat(context, controller.chat),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }

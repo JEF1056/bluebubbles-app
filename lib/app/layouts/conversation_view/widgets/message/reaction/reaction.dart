@@ -265,7 +265,12 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
                 alignment: Alignment.bottomCenter,
                 children: [
                   GestureDetector(onTap: () => Navigator.of(routeCtx).pop()),
-                  Positioned(bottom: 10, left: 15, right: 15, child: ReactionDetails(reactions: list)),
+                  Positioned(
+                    bottom: 10 + MediaQuery.viewPaddingOf(routeCtx).bottom,
+                    left: 15,
+                    right: 15,
+                    child: ReactionDetails(reactions: list),
+                  ),
                 ],
               ),
             ),

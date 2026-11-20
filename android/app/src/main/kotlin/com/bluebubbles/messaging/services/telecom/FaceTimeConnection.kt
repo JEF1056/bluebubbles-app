@@ -14,13 +14,20 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class FaceTimeConnection(
     private val context: Context,
-    @Volatile var callUuid: String?
+    @Volatile var callUuid: String?,
+    val isTelephony: Boolean = false
 ) : Connection() {
 
     companion object {
         private const val TAG = "FaceTimeConnection"
         private const val RINGING_TIMEOUT_MS = 60_000L
+        private val DTMF_DIGIT_REGEX = Regex("^[0-9*#ABCD]$")
         private val audioExecutor = Executors.newSingleThreadExecutor()
+
+        internal fun normalizeDtmfDigit(c: Char): String? {
+            val digit = c.uppercaseChar().toString()
+            return digit.takeIf { DTMF_DIGIT_REGEX.matches(it) }
+        }
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -44,6 +51,36 @@ class FaceTimeConnection(
     fun bindCallUuid(uuid: String) {
         callUuid = uuid
         FaceTimeConnectionService.registerActiveConnection(uuid, this)
+        if (!ended.get() && state == STATE_DIALING) {
+            emitCallState("dialing", uuid)
+        }
+    }
+
+    fun onRemoteAnswered() {
+        if (ended.get() || state != STATE_DIALING) return
+        PersistentLog.d(context, TAG, "onRemoteAnswered for $callUuid")
+        setActive()
+        startAudioBridge(answerCall = false)
+        callUuid?.let { emitCallState("active", it) }
+    }
+
+    fun setMutedFromUi(muted: Boolean) {
+        if (ended.get()) return
+        lastMuted = muted
+        webRtcClient?.setMuted(muted)
+    }
+
+    private fun emitCallState(phase: String, uuid: String, muted: Boolean? = null) {
+        val payload = HashMap<String, Any>(4).apply {
+            put("phase", phase)
+            put("call_uuid", uuid)
+            put("is_telephony", isTelephony)
+            if (muted != null) put("muted", muted)
+        }
+        com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler.invokeMethod(
+            "facetime-call-state",
+            payload
+        )
     }
 
     fun scheduleRingingTimeout() {
@@ -80,6 +117,7 @@ class FaceTimeConnection(
         PersistentLog.d(context, TAG, "onAnswer for $callUuid")
         setActive()
         startAudioBridge(answerCall = true)
+        callUuid?.let { emitCallState("active", it) }
     }
 
     override fun onReject() {
@@ -115,11 +153,30 @@ class FaceTimeConnection(
         webRtcClient?.setMuted(isMuted)
     }
 
+    override fun onPlayDtmfTone(c: Char) {
+        val uuid = callUuid ?: return
+        if (ended.get()) return
+        val digit = normalizeDtmfDigit(c) ?: return
+        PersistentLog.d(context, TAG, "onPlayDtmfTone($digit) for $uuid (telephony=$isTelephony)")
+        HttpService(context).sendFaceTimeDtmf(
+            callUuid = uuid,
+            digit = digit,
+            onError = { err ->
+                PersistentLog.w(context, TAG, "sendFaceTimeDtmf failed for $uuid: $err")
+            }
+        )
+    }
+
+    override fun onStopDtmfTone() {
+        // Server plays discrete DTMF tones on onPlayDtmfTone.
+    }
+
     override fun onCallAudioStateChanged(state: CallAudioState?) {
         if (state == null || ended.get()) return
         if (lastMuted != state.isMuted) {
             lastMuted = state.isMuted
             webRtcClient?.setMuted(state.isMuted)
+            callUuid?.let { emitCallState("mute", it, muted = state.isMuted) }
         }
         @Suppress("DEPRECATION")
         try {
@@ -161,6 +218,7 @@ class FaceTimeConnection(
         cleanupAudio(sendHangup = sendHangup)
         if (!uuid.isNullOrBlank()) {
             FaceTimeConnectionService.unregisterActiveConnection(uuid, this)
+            emitCallState("ended", uuid)
         }
         setDisconnected(cause)
         if (onUuid != null && !uuid.isNullOrBlank()) {

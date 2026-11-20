@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:bluebubbles/platform/shims/native_media.dart';
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/mixins/messages_service_mixin.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/messages_view_components.dart';
@@ -533,24 +534,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         updateReplies(updateConversation: false);
       }
     }
-
-    if (insertIndex == 0 && !message.isFromMe! && !kIsWeb && SettingsSvc.settings.receiveSoundPath.value != null) {
-      if (kIsDesktop && (ChatsSvc.getChatState(chat.guid)?.isActive.value ?? false)) {
-        Player player = Player();
-        player.stream.completed
-            .firstWhere((completed) => completed)
-            .then((_) async => Future.delayed(const Duration(milliseconds: 500), () async => await player.dispose()));
-        await player.setVolume(SettingsSvc.settings.soundVolume.value.toDouble());
-        await player.open(Media(SettingsSvc.settings.receiveSoundPath.value!));
-      } else if (ChatsSvc.isChatActive(chat.guid)) {
-        PlayerController controller = PlayerController();
-        await controller
-            .preparePlayer(
-                path: SettingsSvc.settings.receiveSoundPath.value!,
-                volume: SettingsSvc.settings.soundVolume.value / 100)
-            .then((_) => controller.startPlayer());
-      }
-    }
   }
 
   void handleUpdatedMessage(Message message, {String? oldGuid}) {
@@ -881,13 +864,18 @@ class Loader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
     return Column(
       children: <Widget>[
         Padding(
           padding: const EdgeInsets.all(8.0),
           child: Text(
             text ?? "Loading more messages...",
-            style: context.theme.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.outline),
+            style: WallpaperContrast.unbubbledStyle(
+              context.theme.textTheme.labelLarge!,
+              hasWallpaper: hasBackground,
+              fallbackColor: context.theme.colorScheme.outline,
+            ),
           ),
         ),
         Padding(

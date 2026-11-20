@@ -180,12 +180,12 @@ class NavigatorService {
   /// The phone layout pushes over the current page, as a page opened from the list would be.
   void pushAndRemoveSettingsUntil(BuildContext context, Widget widget, bool Function(Route) predicate,
       {Bindings? binding}) {
+    binding?.dependencies();
     final settings = _settings;
     if (settings == null) {
       openSettings(initialPage: widget);
       return;
     }
-    binding?.dependencies();
     if (_tabletLayout) {
       activeSettingsPage.value = widget.runtimeType;
       settings.pushAndRemoveUntil(_instantRoute(widget), predicate);

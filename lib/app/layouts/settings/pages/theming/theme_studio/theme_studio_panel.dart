@@ -468,20 +468,16 @@ class _ThemeStudioPanelState extends CustomState<ThemeStudioPanel, void, ThemeSt
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) async {
-        if (didPop) return;
-        if (!controller.pendingChanges.value) {
-          Navigator.of(context).pop();
-          return;
-        }
-        final shouldPop = await _confirmDiscard(context);
-        if (shouldPop && context.mounted) Navigator.of(context).pop();
-      },
-      child: Obx(() {
-        final hasPending = controller.pendingChanges.value;
-        return SettingsScaffold(
+    return Obx(() {
+      final hasPending = controller.pendingChanges.value;
+      return PopScope(
+        canPop: !hasPending,
+        onPopInvokedWithResult: (didPop, _) async {
+          if (didPop) return;
+          final shouldPop = await _confirmDiscard(context);
+          if (shouldPop && context.mounted) Navigator.of(context).pop();
+        },
+        child: SettingsScaffold(
           title: "Theme Studio",
           initialHeader: null,
           iosSubtitle: iosSubtitle,
@@ -577,9 +573,9 @@ class _ThemeStudioPanelState extends CustomState<ThemeStudioPanel, void, ThemeSt
 
             const SliverToBoxAdapter(child: SizedBox(height: 48)),
           ],
-        );
-      }),
-    );
+        ),
+      );
+    });
   }
 
   Widget _sectionHeader(BuildContext context, String text) {

@@ -19,14 +19,22 @@ import com.bluebubbles.messaging.R
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
 import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
+import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.utils.PersistentLog
 import io.socket.client.IO
 import io.socket.client.Socket
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URLEncoder
-import org.json.JSONObject
+import java.util.Collections
 import java.util.Collections.singletonList
+import java.util.IdentityHashMap
+import java.util.concurrent.TimeUnit
+import okhttp3.Dns
+import okhttp3.OkHttpClient
+import org.json.JSONObject
 
 
 class SocketIOForegroundService : Service() {
@@ -49,8 +57,41 @@ class SocketIOForegroundService : Service() {
         var activeSocket: Socket? = null
             private set
 
-        internal fun parseConnectErrorMessage(arg: Any?): String =
-            (arg as? Throwable)?.message ?: arg?.toString() ?: "Unknown error"
+        internal fun parseConnectErrorMessage(arg: Any?): String {
+            if (arg !is Throwable) {
+                return arg?.toString() ?: "Unknown error"
+            }
+            val topMessage = arg.message?.takeIf { it.isNotBlank() } ?: arg.javaClass.simpleName
+            val visited = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
+            visited.add(arg)
+            val causes = mutableListOf<String>()
+            var current = arg.cause
+            var depth = 0
+            while (current != null && depth < 6 && visited.add(current)) {
+                val msg = current.message?.takeIf { it.isNotBlank() }
+                causes.add(if (msg != null) "${current.javaClass.simpleName}: $msg" else current.javaClass.simpleName)
+                current = current.cause
+                depth++
+            }
+            return if (causes.isEmpty()) topMessage else "$topMessage (caused by ${causes.joinToString(" -> ")})"
+        }
+
+        internal fun orderIpv4First(addresses: List<InetAddress>): List<InetAddress> {
+            val (ipv4, other) = addresses.partition { it is Inet4Address }
+            return ipv4 + other
+        }
+
+        internal val ipv4FirstDns: Dns = Dns { hostname ->
+            orderIpv4First(Dns.SYSTEM.lookup(hostname))
+        }
+
+        internal fun buildSocketOkHttpClient(dns: Dns = ipv4FirstDns): OkHttpClient =
+            OkHttpClient.Builder()
+                .dns(dns)
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(1, TimeUnit.MINUTES)
+                .writeTimeout(1, TimeUnit.MINUTES)
+                .build()
 
         internal fun parseDisconnectReason(arg: Any?): String =
             (arg as? String) ?: arg?.toString() ?: "unknown"
@@ -175,9 +216,11 @@ class SocketIOForegroundService : Service() {
 
             val encodedPw = URLEncoder.encode(storedPassword, "UTF-8")
             opts.query = "password=$encodedPw"
+            val okHttpClient = buildSocketOkHttpClient()
+            opts.callFactory = okHttpClient
+            opts.webSocketFactory = okHttpClient
             mSocket = IO.socket(serverUrl, opts)
             activeSocket = mSocket
-            mSocket!!.connect()
 
             mSocket!!.on(Socket.EVENT_CONNECT) {
                 PersistentLog.d(applicationContext, Constants.logTag, "Socket.io connected to your server!")
@@ -258,27 +301,33 @@ class SocketIOForegroundService : Service() {
                     }
 
                     PersistentLog.d(applicationContext, Constants.logTag, "Received event of type $event from Socket.io...")
+                    if (event == "ft-call-status-changed") {
+                        handleNativeFaceTimeStatusChanged(data)
+                    }
                     val argsMap = hashMapOf<String, Any>("event" to event, "data" to data)
+                    val enqueueWorker = { DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {} }
                     if (MainActivity.getEngine() != null && MainActivity.isDartReady()) {
                         reconnectHandler.post {
                             try {
                                 if (MainActivity.getEngine() != null && MainActivity.isDartReady()) {
                                     MethodCallHandler.invokeMethod("socket-event", argsMap)
                                 } else {
-                                    DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                                    enqueueWorker()
                                 }
                             } catch (e: Exception) {
                                 PersistentLog.w(applicationContext, Constants.logTag, "Direct socket-event dispatch failed, falling back to DartWorkManager: ${e.message}")
-                                DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                                enqueueWorker()
                             }
                         }
                     } else {
-                        DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                        enqueueWorker()
                     }
                 } catch (e: Exception) {
                     PersistentLog.e(applicationContext, Constants.logTag, "Failed to handle incoming Socket.io event", e)
                 }
             }
+
+            mSocket!!.connect()
         } catch (e: Exception) {
             if (isBeingDestroyed) {
                 return
@@ -369,5 +418,24 @@ class SocketIOForegroundService : Service() {
 
         // Remove the notification when the service is destroyed
         removeNotification()
+    }
+
+    private fun handleNativeFaceTimeStatusChanged(data: String) {
+        try {
+            val json = JSONObject(data)
+            val statusId = json.optInt("status_id", -1)
+            val callUuid = json.optString("uuid", "").takeIf { it.isNotBlank() } ?: return
+            val isOutgoing = json.optBoolean("is_outgoing", false)
+            when (statusId) {
+                1 -> {
+                    if (!FaceTimeConnectionService.markCallActive(callUuid, recordIfPending = isOutgoing)) {
+                        FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = true)
+                    }
+                }
+                6 -> FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
+            }
+        } catch (e: Exception) {
+            PersistentLog.w(applicationContext, Constants.logTag, "Failed native ft-call-status-changed dispatch: ${e.message}")
+        }
     }
 }

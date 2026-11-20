@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:collection/collection.dart';
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart' hide Emoji;
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
 import 'package:bluebubbles/app/components/custom/custom_bouncing_scroll_physics.dart';
@@ -11,6 +9,7 @@ import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart'
 import 'package:bluebubbles/app/layouts/conversation_view/dialogs/custom_mention_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/desktop_attachment_menu.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/emoji_picker_popover.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/gmsg_camera_gallery_sheet.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/text_field_attachment_picker.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/formatting_bar.dart';
@@ -22,7 +21,12 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/tex
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/helpers/ui/html_runs.dart';
-import 'package:bluebubbles/helpers/ui/recent_emojis.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_fork_widgets.dart' as fork;
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_fork_widgets.dart'
+    show DictationMicButton, NativeSpeechDictation;
+
+export 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_fork_widgets.dart'
+    show NativeSpeechDictation, hintTextForService;
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -93,10 +97,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   ClipboardPasteHandler? clipboardHandler;
   StreamSubscription<void>? _webPasteSub;
   Worker? _recordingWorker;
-  Worker? _emojiPickerWorker;
-  OverlayEntry? _emojiOverlayEntry;
-  final LayerLink _emojiLayerLink = LayerLink();
-  final Object _emojiTapGroupId = Object();
+  late final NativeSpeechDictation _dictation;
+  bool _sttAvailable = false;
 
   TextFieldComponentState() : isRecordingNotifier = ValueNotifier<bool>(false);
 
@@ -110,6 +112,18 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     textController = widget.textController;
     subjectTextController = widget.subjectTextController;
     sendMessage = widget.sendMessage;
+
+    _dictation = NativeSpeechDictation(
+      getTextController: () => controller?.textController ?? textController,
+      onInteraction: () => controller?.onUserChatInteraction(),
+      onListeningChanged: (listening) => controller?.isDictating.value = listening,
+      onError: (msg) => showSnackbar("Error", msg, type: SnackbarType.error),
+    );
+    unawaited(_dictation.checkAvailability().then((available) {
+      if (mounted && available) {
+        setState(() => _sttAvailable = true);
+      }
+    }));
 
     // add a listener to recorderController to update isRecordingNotifier
     recorderController?.addListener(() {
@@ -151,11 +165,11 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   void dispose() {
     _webPasteSub?.cancel();
     _recordingWorker?.dispose();
-    _emojiPickerWorker?.dispose();
-    _removeEmojiOverlay();
-    if (controller?.showEmojiPicker.value == true) {
-      controller?.showEmojiPicker.value = false;
+    if (controller?.stopDictation == _stopDictation) {
+      controller?.stopDictation = null;
     }
+    controller?.isDictating.value = false;
+    _dictation.dispose();
     _fieldFocusNode?.removeListener(_onFieldFocusChange);
     // dispose of the ValueNotifier when the state is disposed
     isRecordingNotifier.dispose();
@@ -166,17 +180,19 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   void didUpdateWidget(TextFieldComponent oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.controller != oldWidget.controller) {
+      if (oldWidget.controller?.stopDictation == _stopDictation) {
+        oldWidget.controller?.stopDictation = null;
+      }
       controller = widget.controller;
       _configureHandlers();
     }
   }
 
+  Future<void> _stopDictation() => _dictation.stop();
+
   void _configureHandlers() {
     _recordingWorker?.dispose();
     _recordingWorker = null;
-    _emojiPickerWorker?.dispose();
-    _emojiPickerWorker = null;
-    _removeEmojiOverlay();
     final ctrl = controller;
     clipboardHandler = ClipboardPasteHandler(controller: ctrl, textController: ctrl?.textController ?? textController);
     if (ctrl == null) {
@@ -185,6 +201,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
       keyboardHandler = null;
       return;
     }
+    ctrl.stopDictation = _stopDictation;
+    ctrl.isDictating.value = _dictation.isListening.value;
 
     if (recorderController == null) {
       isRecordingNotifier.value = ctrl.showRecording.value;
@@ -192,15 +210,6 @@ class TextFieldComponentState extends State<TextFieldComponent> {
         isRecordingNotifier.value = val;
       });
     }
-
-    _emojiPickerWorker = ever(ctrl.showEmojiPicker, (bool show) {
-      if (!mounted) return;
-      if (show) {
-        _showEmojiOverlay();
-      } else {
-        _removeEmojiOverlay();
-      }
-    });
 
     emojiHandler = EmojiAutocompleteHandler(controller: ctrl, textField: textController);
     mentionHandler = MentionAutocompleteHandler(controller: ctrl, textField: textController);
@@ -227,14 +236,12 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     required bool material,
     required bool isRCS,
     required bool isIMessage,
-  }) {
-    if (material) {
-      if (isRCS) return "RCS message";
-      return isIMessage ? "iMessage" : "Text message";
-    }
-    if (isRCS) return "Text Message • RCS";
-    return isIMessage ? "iMessage" : "Text Forwarding";
-  }
+  }) =>
+      fork.hintTextForService(
+        material: material,
+        isRCS: isRCS,
+        isIMessage: isIMessage,
+      );
 
   String _hintText(bool isRecording) {
     if (widget.hintText != null) return widget.hintText!;
@@ -252,117 +259,12 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     );
   }
 
-  void _removeEmojiOverlay() {
-    _emojiOverlayEntry?.remove();
-    _emojiOverlayEntry?.dispose();
-    _emojiOverlayEntry = null;
-  }
-
-  void _showEmojiOverlay() {
-    if (_emojiOverlayEntry != null || !mounted) return;
-    final overlay = Overlay.maybeOf(context);
-    final ctrl = controller;
-    if (overlay == null || ctrl == null) return;
-
-    _emojiOverlayEntry = OverlayEntry(
-      builder: (overlayContext) {
-        final screen = MediaQuery.sizeOf(overlayContext);
-        final width = math.min(352.0, screen.width - 24);
-        final height = math.min(356.0, screen.height - 140);
-        final colors = overlayContext.theme.colorScheme;
-        final pickerCard = TapRegion(
-          groupId: _emojiTapGroupId,
-          onTapOutside: (_) => ctrl.showEmojiPicker.value = false,
-          child: CallbackShortcuts(
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.escape): () {
-                ctrl.showEmojiPicker.value = false;
-                (_fieldFocusNode ?? ctrl.focusNode).requestFocus();
-              },
-            },
-            child: Material(
-              elevation: 8,
-              color: colors.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(20),
-              clipBehavior: Clip.antiAlias,
-              child: SizedBox(
-                width: width,
-                height: height,
-                child: EmojiPicker(
-                  textEditingController: ctrl.textController,
-                  onEmojiSelected: (_, emoji) {
-                    unawaited(RecentEmojis.addFromText(emoji.emoji));
-                    (_fieldFocusNode ?? ctrl.focusNode).requestFocus();
-                  },
-                  config: Config(
-                    height: height,
-                    emojiSet: (_) => emojiSetEnglish,
-                    checkPlatformCompatibility: true,
-                    emojiViewConfig: EmojiViewConfig(
-                      emojiSizeMax: 26,
-                      backgroundColor: Colors.transparent,
-                      columns: 8,
-                      noRecents: Text(
-                        "No Recents",
-                        style: overlayContext.textTheme.bodyLarge!.copyWith(color: colors.outline),
-                      ),
-                    ),
-                    viewOrderConfig: const ViewOrderConfig(
-                      top: EmojiPickerItem.searchBar,
-                      middle: EmojiPickerItem.categoryBar,
-                      bottom: EmojiPickerItem.emojiView,
-                    ),
-                    skinToneConfig: const SkinToneConfig(enabled: false),
-                    categoryViewConfig: CategoryViewConfig(
-                      backgroundColor: Colors.transparent,
-                      dividerColor: colors.outline.withValues(alpha: 0.2),
-                      indicatorColor: colors.primary,
-                      iconColor: colors.outline,
-                      iconColorSelected: colors.primary,
-                      backspaceColor: colors.outline,
-                    ),
-                    bottomActionBarConfig: const BottomActionBarConfig(
-                      enabled: false,
-                    ),
-                    searchViewConfig: SearchViewConfig(
-                      backgroundColor: Colors.transparent,
-                      buttonIconColor: colors.outline,
-                      hintText: "Search emoji",
-                      hintTextStyle: overlayContext.textTheme.bodyLarge!.copyWith(color: colors.outline),
-                      inputTextStyle: overlayContext.textTheme.bodyLarge!.copyWith(color: colors.onSurface),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-        return Positioned.fill(
-          child: Stack(
-            children: [
-              if (screen.width < 450)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: 76,
-                  child: Center(child: pickerCard),
-                )
-              else
-                CompositedTransformFollower(
-                  link: _emojiLayerLink,
-                  showWhenUnlinked: false,
-                  targetAnchor: Alignment.topRight,
-                  followerAnchor: Alignment.bottomRight,
-                  offset: const Offset(0, -12),
-                  child: pickerCard,
-                ),
-            ],
-          ),
-        );
-      },
-    );
-    overlay.insert(_emojiOverlayEntry!);
-  }
+  Widget _buildDictationButton(BuildContext context, {bool compact = false}) => DictationMicButton(
+        dictation: _dictation,
+        iOS: iOS,
+        compact: compact,
+        onBeforeToggle: () => controller?.onUserChatInteraction(immediate: true),
+      );
 
   bool _showAttachmentPickerLocal = false;
   bool _pasteHandledOnKeyDown = false;
@@ -460,6 +362,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         keyboardType: TextInputType.multiline,
                         maxLines: 14,
                         minLines: 1,
+                        enableSuggestions: true,
                         enableIMEPersonalizedLearning: !SettingsSvc.settings.incognitoKeyboard.value,
                         textInputAction: TextInputAction.next,
                         cursorColor: context.theme.colorScheme.primary,
@@ -523,6 +426,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         maxLines: 14,
                         minLines: 1,
                         autofocus: (kIsWeb || kIsDesktop) && !isChatCreator,
+                        enableSuggestions: true,
                         enableIMEPersonalizedLearning: !SettingsSvc.settings.incognitoKeyboard.value,
                         textInputAction: SettingsSvc.settings.sendWithReturn.value && !kIsWeb && !kIsDesktop
                             ? TextInputAction.send
@@ -610,39 +514,31 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                               : null,
                           suffixIconConstraints: BoxConstraints(minHeight: iOS ? 0 : 48),
                           suffixIcon: samsung && !isChatCreator
-                              ? null
+                              ? (_sttAvailable && !isRecording
+                                  ? Padding(
+                                      padding: const EdgeInsets.only(right: 4.0),
+                                      child: _buildDictationButton(context),
+                                    )
+                                  : null)
                               : (material && !isChatCreator && controller != null)
                                   ? Padding(
                                       padding: const EdgeInsets.only(right: 4.0),
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
+                                          if (_sttAvailable && !isRecording) _buildDictationButton(context),
                                           if (kIsWeb || kIsDesktop)
-                                            TapRegion(
-                                              groupId: _emojiTapGroupId,
-                                              child: CompositedTransformTarget(
-                                                link: _emojiLayerLink,
-                                                child: Obx(() {
-                                                  final active = controller!.showEmojiPicker.value;
-                                                  return IconButton(
-                                                    tooltip: 'Emoji',
-                                                    constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
-                                                    padding: EdgeInsets.zero,
-                                                    icon: Icon(
-                                                      active ? Icons.emoji_emotions : Icons.emoji_emotions_outlined,
-                                                      color: active
-                                                          ? context.theme.colorScheme.primary
-                                                          : context.theme.colorScheme.onSurfaceVariant,
-                                                      size: 22,
-                                                    ),
-                                                    onPressed: () {
-                                                      controller!.showEmojiPicker.value = !active;
-                                                      if (!active) {
-                                                        (_fieldFocusNode ?? controller!.focusNode).requestFocus();
-                                                      }
-                                                    },
-                                                  );
-                                                }),
+                                            Builder(
+                                              builder: (buttonContext) => IconButton(
+                                                tooltip: 'Emoji',
+                                                constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
+                                                padding: EdgeInsets.zero,
+                                                icon: Icon(
+                                                  Icons.emoji_emotions_outlined,
+                                                  color: context.theme.colorScheme.onSurfaceVariant,
+                                                  size: 22,
+                                                ),
+                                                onPressed: () => showEmojiPickerPopover(buttonContext, controller!),
                                               ),
                                             ),
                                           IconButton(
@@ -670,16 +566,23 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                     )
                                   : Padding(
                                       padding: EdgeInsets.only(right: iOS ? 0.0 : 4.0),
-                                      child: TextFieldSuffix(
-                                        subjectTextController: subjController,
-                                        textController: txtController,
-                                        controller: controller,
-                                        recorderController: recorderController,
-                                        audioRecorder: widget.audioRecorder,
-                                        sendMessage: sendMessage,
-                                        isChatCreator: isChatCreator,
-                                        alwaysShowSend: widget.alwaysShowSend,
-                                        hasInitialAttachments: initialAttachments.isNotEmpty,
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (_sttAvailable && !isRecording)
+                                            _buildDictationButton(context, compact: iOS),
+                                          TextFieldSuffix(
+                                            subjectTextController: subjController,
+                                            textController: txtController,
+                                            controller: controller,
+                                            recorderController: recorderController,
+                                            audioRecorder: widget.audioRecorder,
+                                            sendMessage: sendMessage,
+                                            isChatCreator: isChatCreator,
+                                            alwaysShowSend: widget.alwaysShowSend,
+                                            hasInitialAttachments: initialAttachments.isNotEmpty,
+                                          ),
+                                        ],
                                       ),
                                     ),
                         ),
@@ -802,6 +705,9 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           controller?.showTextFormattingPanel.value = false;
                         },
                         onSubmitted: (String value) {
+                          if (_dictation.isListening.value) {
+                            unawaited(_dictation.stop());
+                          }
                           controller?.focusNode.requestFocus();
                           if (isNullOrEmpty(value) &&
                               (controller?.pickedAttachments.isEmpty ?? false) &&
@@ -1029,13 +935,13 @@ class TextFieldComponentState extends State<TextFieldComponent> {
 
     // Escape: dismiss active composer panels/overlays without wiping pickedAttachments
     if (isEscapeKey) {
+      if (_dictation.isListening.value) {
+        unawaited(_dictation.stop());
+        return KeyEventResult.handled;
+      }
       final ctrl = controller;
       if (ctrl == null) return KeyEventResult.ignored;
 
-      if (ctrl.showEmojiPicker.value) {
-        ctrl.showEmojiPicker.value = false;
-        return KeyEventResult.handled;
-      }
       if (ctrl.showAttachmentPicker.value) {
         ctrl.showAttachmentPicker.value = false;
         return KeyEventResult.handled;

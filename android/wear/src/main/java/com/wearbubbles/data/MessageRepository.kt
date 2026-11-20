@@ -79,6 +79,13 @@ class MessageRepository(
         messageDao.markStalePendingFailed(chatGuid, nowMs - MessageDao.STALE_PENDING_TIMEOUT_MS)
     }
 
+    private suspend fun requireApi(): Pair<com.wearbubbles.api.BlueBubblesApi, String> {
+        val serverUrl = settings.getServerUrl()
+        val password = settings.getPassword()
+        require(serverUrl.isNotBlank() && password.isNotBlank()) { "Not configured" }
+        return ApiClient.getApi(serverUrl, settings.getCustomHeaders()) to password
+    }
+
     suspend fun refreshMessages(chatGuid: String): Result<Unit> {
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
             if (phoneRelay.requestMessagesSyncAwait(chatGuid) != null) {
@@ -87,11 +94,7 @@ class MessageRepository(
         }
 
         return runCatching {
-            val serverUrl = settings.getServerUrl()
-            val password = settings.getPassword()
-            require(serverUrl.isNotBlank() && password.isNotBlank()) { "Not configured" }
-
-            val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
+            val (api, password) = requireApi()
             val response = api.getMessages(
                 password,
                 MessageQueryRequest(chatGuid = chatGuid, limit = 40, offset = 0, sort = "DESC")
@@ -113,11 +116,7 @@ class MessageRepository(
         }
 
         return runCatching {
-            val serverUrl = settings.getServerUrl()
-            val password = settings.getPassword()
-            require(serverUrl.isNotBlank() && password.isNotBlank()) { "Not configured" }
-
-            val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
+            val (api, password) = requireApi()
             val response = api.getMessages(
                 password,
                 MessageQueryRequest(
@@ -235,11 +234,7 @@ class MessageRepository(
 
         // Fallback: Direct Server
         return runCatching {
-            val serverUrl = settings.getServerUrl()
-            val password = settings.getPassword()
-            require(serverUrl.isNotBlank() && password.isNotBlank()) { "Not configured" }
-
-            val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
+            val (api, password) = requireApi()
             val method = if (settings.isPrivateApiSend()) "private-api" else null
             var targetChatGuid = chatGuid
             val sentDto = try {
@@ -353,11 +348,7 @@ class MessageRepository(
         }
 
         return runCatching {
-            val serverUrl = settings.getServerUrl()
-            val password = settings.getPassword()
-            require(serverUrl.isNotBlank() && password.isNotBlank()) { "Not configured" }
-
-            val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
+            val (api, password) = requireApi()
             val plain = "text/plain".toMediaType()
             val method = if (settings.isPrivateApiSend()) "private-api" else "apple-script"
             val part = MultipartBody.Part.createFormData(
@@ -430,11 +421,7 @@ class MessageRepository(
         }
 
         return runCatching {
-            val serverUrl = settings.getServerUrl()
-            val password = settings.getPassword()
-            require(serverUrl.isNotBlank() && password.isNotBlank()) { "Not configured" }
-
-            val api = ApiClient.getApi(serverUrl, settings.getCustomHeaders())
+            val (api, password) = requireApi()
             val response = api.reactToMessage(
                 password,
                 ReactRequest(

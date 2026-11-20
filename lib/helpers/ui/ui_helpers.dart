@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:bluebubbles/platform/shims/desktop_window.dart';
+import 'package:bluebubbles/app/components/app_notice_bar.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/filters/chat_list_filters.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/conversation_tile.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -494,16 +495,143 @@ enum SnackbarType { success, error, info }
 bool shouldUseNativeErrorToast({bool isWeb = kIsWeb, bool? isDesktop, required bool isError}) =>
     !isWeb && !(isDesktop ?? kIsDesktop) && isError;
 
-/// Errors on mobile are native toasts; everything else is this snackbar on every platform.
+/// Tracks currently-open error keys (to prevent duplicate pops while visible) and
+/// user-dismissed error keys (to suppress re-showing after explicit dismiss).
+class _ErrorIssueTracker {
+  static const Duration keylessDismissTtl = Duration(minutes: 10);
+  static const Duration nativeToastCooldown = Duration(seconds: 4);
+
+  final Set<String> _active = <String>{};
+  final Map<String, DateTime> _activeUntil = <String, DateTime>{};
+  final Map<String, DateTime?> _dismissed = <String, DateTime?>{};
+
+  bool shouldShow(String key, {DateTime? now}) {
+    final current = now ?? DateTime.now();
+    if (_active.contains(key)) return false;
+    final until = _activeUntil[key];
+    if (until != null) {
+      if (current.isBefore(until)) return false;
+      _activeUntil.remove(key);
+    }
+    if (!_dismissed.containsKey(key)) return true;
+    final expiresAt = _dismissed[key];
+    if (expiresAt != null && current.isAfter(expiresAt)) {
+      _dismissed.remove(key);
+      return true;
+    }
+    return false;
+  }
+
+  void markActive(String key) => _active.add(key);
+
+  void markActiveUntil(String key, Duration duration, {DateTime? now}) {
+    _activeUntil[key] = (now ?? DateTime.now()).add(duration);
+  }
+
+  void markClosed(String key) {
+    _active.remove(key);
+    _activeUntil.remove(key);
+  }
+
+  void markDismissed(String key, {bool hasExplicitKey = false, DateTime? now}) {
+    _active.remove(key);
+    _activeUntil.remove(key);
+    _dismissed[key] = hasExplicitKey ? null : (now ?? DateTime.now()).add(keylessDismissTtl);
+  }
+
+  void clear(String key) {
+    _active.remove(key);
+    _activeUntil.remove(key);
+    _dismissed.remove(key);
+  }
+
+  void clearAll() {
+    _active.clear();
+    _activeUntil.clear();
+    _dismissed.clear();
+  }
+}
+
+final _ErrorIssueTracker _errorIssueTracker = _ErrorIssueTracker();
+
+String _normalizeIssuePart(String value) =>
+    value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+
+/// Normalizes `(title, message)` (or an explicit [issueKey]) into a stable dedup key.
+String normalizeErrorIssueKey({
+  required String title,
+  required String message,
+  String? issueKey,
+}) {
+  if (issueKey != null && issueKey.trim().isNotEmpty) {
+    return issueKey.trim();
+  }
+  return '${_normalizeIssuePart(title)}|${_normalizeIssuePart(message)}';
+}
+
+/// Marks an error issue as dismissed by the user so it won't re-show until cleared.
+void dismissErrorIssue(String issueKey, {bool hasExplicitKey = true}) =>
+    _errorIssueTracker.markDismissed(issueKey, hasExplicitKey: hasExplicitKey);
+
+/// Clears a resolved error issue key so a future occurrence can notify again.
+void clearErrorIssue(String issueKey) => _errorIssueTracker.clear(issueKey);
+
+/// Clears all tracked error issue keys (e.g. after full recovery or in tests).
+void clearAllErrorIssues() => _errorIssueTracker.clearAll();
+
+@visibleForTesting
+void resetErrorIssuesForTest() {
+  _errorIssueTracker.clearAll();
+  AppNoticeController.instance.resetForTest();
+}
+
+/// Integrated app-shell notice on mounted hosts; falls back to legacy snackbar/toast
+/// only when no [AppNoticeHost] is mounted (e.g. isolated unit tests).
+///
+/// Error notices (`type == SnackbarType.error`) are explicitly dismissible (close button + swipe)
+/// and deduped while open or after explicit user dismissal until cleared via [clearErrorIssue].
 void showSnackbar(String title, String message,
     {SnackbarType type = SnackbarType.success,
     int durationMs = 1500,
     String? actionLabel,
-    VoidCallback? onAction}) {
+    VoidCallback? onAction,
+    String? issueKey}) {
   final isError = type == SnackbarType.error;
-  if (shouldUseNativeErrorToast(isError: isError)) {
-    unawaited(showToast(message, isError: true));
+  final hasExplicitKey = issueKey != null && issueKey.trim().isNotEmpty;
+  String? resolvedIssueKey;
+  if (isError) {
+    resolvedIssueKey = normalizeErrorIssueKey(title: title, message: message, issueKey: issueKey);
+    if (!_errorIssueTracker.shouldShow(resolvedIssueKey)) {
+      return;
+    }
+  }
+
+  if (AppNoticeController.instance.hasMountedHost) {
+    if (resolvedIssueKey != null) {
+      _errorIssueTracker.markActive(resolvedIssueKey);
+    }
+    AppNoticeController.instance.show(
+      title: title,
+      message: message,
+      type: type,
+      durationMs: isError ? max(durationMs, 4000) : durationMs,
+      actionLabel: actionLabel,
+      onAction: onAction,
+      issueKey: resolvedIssueKey,
+      hasExplicitKey: hasExplicitKey,
+      onAutoClosed: (key) => _errorIssueTracker.markClosed(key),
+      onExplicitDismiss: (key, explicitKey) => dismissErrorIssue(key, hasExplicitKey: explicitKey),
+    );
     return;
+  }
+
+  if (isError) {
+    if (shouldUseNativeErrorToast(isError: true)) {
+      _errorIssueTracker.markActiveUntil(resolvedIssueKey!, _ErrorIssueTracker.nativeToastCooldown);
+      unawaited(_showNativeErrorToast(message));
+      return;
+    }
+    _errorIssueTracker.markActive(resolvedIssueKey!);
   }
   // Top of the screen (top-right when there's room), so it never covers the text field; on desktop it also sits
   // under the title bar to keep the window buttons clear. GetX adds the status bar inset on mobile itself.
@@ -511,6 +639,14 @@ void showSnackbar(String title, String message,
   const width = 360.0;
   final hasCustomTitleBar =
       kIsDesktop && (!Platform.isLinux || SettingsSvc.settings.titleBarStyle.value == BBTitleBarStyle.custom);
+  double titleBarOffset = 0;
+  if (hasCustomTitleBar) {
+    try {
+      titleBarOffset = appWindow.titleBarHeight;
+    } catch (_) {
+      // bitsdojo_window native symbol is unavailable in headless flutter test binaries.
+    }
+  }
   final theme = Get.theme;
   final iOS = SettingsSvc.settings.skin.value == Skins.iOS;
   // Errors use the error container. The theme has no success role, so success builds one the way M3 builds
@@ -529,10 +665,41 @@ void showSnackbar(String title, String message,
     SnackbarType.success => iOS ? CupertinoIcons.checkmark_circle : Icons.check_circle_outline,
     SnackbarType.info => iOS ? CupertinoIcons.info_circle : Icons.info_outline,
   };
+
+  void dismissCurrentSnackbar() {
+    if (resolvedIssueKey != null) {
+      dismissErrorIssue(resolvedIssueKey, hasExplicitKey: hasExplicitKey);
+    }
+    if (Get.isSnackbarOpen) {
+      unawaited(Get.closeCurrentSnackbar());
+    }
+  }
+
+  final TextButton? mainButton = actionLabel == null
+      ? null
+      : TextButton(onPressed: onAction, child: Text(actionLabel, style: TextStyle(color: foreground)));
+
+  final titleWidget = isError
+      ? Row(
+          children: [
+            Expanded(child: Text(title, style: theme.textTheme.titleSmall!.copyWith(color: foreground))),
+            IconButton(
+              key: const Key('snackbar_dismiss_button'),
+              tooltip: 'Dismiss',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              visualDensity: VisualDensity.compact,
+              icon: Icon(Icons.close, size: 18, color: foreground),
+              onPressed: dismissCurrentSnackbar,
+            ),
+          ],
+        )
+      : Text(title, style: theme.textTheme.titleSmall!.copyWith(color: foreground));
+
   Get.snackbar(
     title,
     message,
-    titleText: Text(title, style: theme.textTheme.titleSmall!.copyWith(color: foreground)),
+    titleText: titleWidget,
     messageText: Text(message, style: theme.textTheme.bodyMedium!.copyWith(color: foreground)),
     icon: Icon(icon, color: foreground),
     shouldIconPulse: false,
@@ -542,37 +709,56 @@ void showSnackbar(String title, String message,
     barBlur: 0,
     padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
     margin: EdgeInsets.only(
-      top: (hasCustomTitleBar ? appWindow.titleBarHeight : 0) + 10,
+      top: titleBarOffset + 10,
       right: 10,
       left: max(10, Get.width - width - 10),
     ),
     maxWidth: width,
-    isDismissible: false,
+    isDismissible: true,
+    dismissDirection: DismissDirection.horizontal,
     // Errors usually need reading, so they stay up longer.
     duration: Duration(milliseconds: isError ? max(durationMs, 4000) : durationMs),
     animationDuration: const Duration(milliseconds: 250),
-    mainButton: actionLabel == null
+    mainButton: mainButton,
+    snackbarStatus: resolvedIssueKey == null
         ? null
-        : TextButton(onPressed: onAction, child: Text(actionLabel, style: TextStyle(color: foreground))),
+        : (SnackbarStatus? status) {
+            if (status == SnackbarStatus.CLOSED) {
+              _errorIssueTracker.markClosed(resolvedIssueKey!);
+            }
+          },
     onTap: (GetSnackBar bar) {
-      if (Get.isSnackbarOpen) Get.back();
+      dismissCurrentSnackbar();
     },
   );
 }
 
-/// Only errors become native toasts on mobile; anything else is routed through [showSnackbar].
-Future<void> showToast(String message, {bool isError = false}) async {
-  if (message.trim().isEmpty) return;
-  if (!shouldUseNativeErrorToast(isError: isError)) {
-    showSnackbar(isError ? "Error" : "Notice", message, type: isError ? SnackbarType.error : SnackbarType.success);
-    return;
-  }
+Future<void> _showNativeErrorToast(String message) async {
   try {
     await Fluttertoast.showToast(msg: message, toastLength: Toast.LENGTH_LONG, gravity: ToastGravity.BOTTOM);
   } catch (e, s) {
     Logger.warn("Failed to show toast: $e");
     Logger.debug(s.toString());
   }
+}
+
+/// Routes through [showSnackbar] when an [AppNoticeHost] is mounted; otherwise
+/// falls back to native toast on mobile errors.
+Future<void> showToast(String message, {bool isError = false, String? issueKey}) async {
+  if (message.trim().isEmpty) return;
+  if (AppNoticeController.instance.hasMountedHost || !shouldUseNativeErrorToast(isError: isError)) {
+    showSnackbar(
+      isError ? "Error" : "Notice",
+      message,
+      type: isError ? SnackbarType.error : SnackbarType.success,
+      issueKey: issueKey,
+    );
+    return;
+  }
+  final key = normalizeErrorIssueKey(title: "Error", message: message, issueKey: issueKey);
+  if (!_errorIssueTracker.shouldShow(key)) return;
+  _errorIssueTracker.markActiveUntil(key, _ErrorIssueTracker.nativeToastCooldown);
+  await _showNativeErrorToast(message);
 }
 
 /// Confirms any copy the app does on the user's behalf (keyboard Ctrl+C/X never comes through here).

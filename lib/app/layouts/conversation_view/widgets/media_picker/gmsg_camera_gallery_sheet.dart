@@ -996,6 +996,7 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
         },
         child: CustomScrollView(
           controller: scrollController,
+          physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
           slivers: [
             SliverToBoxAdapter(
               child: Padding(
@@ -1102,6 +1103,9 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
                   ),
                 ),
             ],
+            SliverPadding(
+              padding: EdgeInsets.only(bottom: MediaQuery.viewPaddingOf(context).bottom + 84),
+            ),
           ],
         ),
       ),

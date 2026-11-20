@@ -19,6 +19,7 @@ class Constants {
         const val pendingIntentAnswerFaceTimeOffset = -100000
         const val pendingIntentDeclineFaceTimeOffset = -200000
         const val pendingIntentAnswerFaceTimeAudioOffset = -300000
+        const val pendingIntentOpenCallingAccountsOffset = -400000
         const val notificationListenerRequestCode = 1000
         const val dartWorkerNotificationId = 1000000
     }

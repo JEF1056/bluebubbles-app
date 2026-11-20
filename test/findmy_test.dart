@@ -8,6 +8,7 @@ import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_devices_tab_view.d
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friend_list_tile.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_friends_tab_view.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_items_tab_view.dart';
+import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_map_widget.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart';
 import 'package:bluebubbles/database/global/findmy_device.dart';
 import 'package:bluebubbles/database/global/findmy_friend.dart';
@@ -18,7 +19,6 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:get/get.dart' hide Response;
@@ -334,12 +334,11 @@ void main() {
       expect(multi.contains(sf), isTrue);
     });
 
-    test('map style definitions provide valid tile templates', () {
+    test('map style definitions provide valid OpenFreeMap style URLs', () {
       for (final style in FindMyMapStyle.values) {
         expect(style.label, isNotEmpty);
-        expect(style.urlTemplate, contains('{z}'));
-        expect(style.urlTemplate, contains('{x}'));
-        expect(style.urlTemplate, contains('{y}'));
+        expect(style.styleUrl, startsWith('https://tiles.openfreemap.org/styles/'));
+        expect(style.attribution, contains('OpenFreeMap'));
       }
     });
   });
@@ -376,7 +375,7 @@ void main() {
       expect(detailOpenedCount, 1);
       expect(animatedCenter?.latitude, closeTo(37.3349, 0.0001));
       expect(animatedCenter?.longitude, closeTo(-122.009, 0.0001));
-      expect(animatedZoom, 14.5);
+      expect(animatedZoom, FindMyController.defaultFocusZoom);
       expect(animatedOffset, const Offset(0, -120.0));
 
       final device = FindMyDevice.fromJson({
@@ -445,8 +444,8 @@ void main() {
       addTearDown(controller.onClose);
 
       expect(controller.mapStyle.value, FindMyMapStyle.standard);
-      controller.setMapStyle(FindMyMapStyle.satellite);
-      expect(controller.mapStyle.value, FindMyMapStyle.satellite);
+      controller.setMapStyle(FindMyMapStyle.fiord);
+      expect(controller.mapStyle.value, FindMyMapStyle.fiord);
 
       expect(controller.liveTrackingEnabled.value, isTrue);
       controller.toggleLiveTracking();
@@ -474,7 +473,7 @@ void main() {
       await controller.recenterToUser();
       expect(centered?.latitude, closeTo(37.7749, 0.0001));
       expect(centered?.longitude, closeTo(-122.4194, 0.0001));
-      expect(zoomed, 14.5);
+      expect(zoomed, FindMyController.defaultInitialZoom);
     });
   });
 
@@ -689,29 +688,29 @@ void main() {
         expect(find.byIcon(Icons.headphones), findsOneWidget);
         expect(find.text('A'), findsOneWidget);
         expect(find.text('Alice'), findsNothing);
-        expect(find.text('AirPods Pro'), findsNothing);
+        expect(find.text('AirPods Pro'), findsOneWidget);
       } finally {
         semantics.dispose();
       }
     });
 
     test('Dark mode map styling, proximity, ETA, and distinct device icon helpers', () {
-      expect(shouldApplyDarkMapFilter(FindMyMapStyle.standard, Brightness.dark), isTrue);
-      expect(shouldApplyDarkMapFilter(FindMyMapStyle.standard, Brightness.light), isFalse);
-      expect(shouldApplyDarkMapFilter(FindMyMapStyle.dark, Brightness.light), isTrue);
-      expect(shouldApplyDarkMapFilter(FindMyMapStyle.satellite, Brightness.dark), isFalse);
+      expect(isDarkFindMyMapStyle(FindMyMapStyle.standard, Brightness.dark), isTrue);
+      expect(isDarkFindMyMapStyle(FindMyMapStyle.standard, Brightness.light), isFalse);
+      expect(isDarkFindMyMapStyle(FindMyMapStyle.dark, Brightness.light), isTrue);
+      expect(isDarkFindMyMapStyle(FindMyMapStyle.bright, Brightness.dark), isFalse);
 
       expect(
-        resolveFindMyTileUrl(FindMyMapStyle.standard, Brightness.dark),
-        allOf(contains('openstreetmap.org'), isNot(contains('cartocdn'))),
+        resolveFindMyStyleUrl(FindMyMapStyle.standard, Brightness.dark),
+        'https://tiles.openfreemap.org/styles/dark',
       );
       expect(
-        resolveFindMyTileUrl(FindMyMapStyle.standard, Brightness.light),
-        FindMyMapStyle.standard.urlTemplate,
+        resolveFindMyStyleUrl(FindMyMapStyle.standard, Brightness.light),
+        'https://tiles.openfreemap.org/styles/liberty',
       );
       expect(
         resolveFindMyMapBackgroundColor(FindMyMapStyle.standard, Brightness.dark),
-        const Color(0xFF141E2B),
+        const Color(0xFF0C0C0C),
       );
 
       expect(formatFindMyProximity(10, deviceWithYou: true), 'With You');
@@ -1499,7 +1498,7 @@ void main() {
 
       controller.tabIndex.value = 1;
       controller.focusFriend(friends[8]);
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       expect(controller.tabIndex.value, 0);
       expect(controller.friendsController.offset, 0);
@@ -1634,7 +1633,7 @@ void main() {
       expect(cameraCalls, hasLength(1));
       expect(cameraCalls.first.$1.latitude, closeTo(37.7749, 0.0001));
       expect(cameraCalls.first.$1.longitude, closeTo(-122.4194, 0.0001));
-      expect(cameraCalls.first.$2, 10);
+      expect(cameraCalls.first.$2, FindMyController.defaultInitialZoom);
 
       // Stream error must not become an unhandled zone error.
       streamController.addError(Exception('Position unavailable'));
@@ -1768,14 +1767,7 @@ void main() {
             body: SizedBox(
               width: 390,
               height: 844,
-              child: FlutterMap(
-                mapController: controller.mapController,
-                options: const MapOptions(
-                  initialCenter: LatLng(37.5, -122.2),
-                  initialZoom: 8,
-                ),
-                children: const [SizedBox.shrink()],
-              ),
+              child: FindMyMapWidget(controller: controller),
             ),
           ),
         ),
@@ -1784,10 +1776,20 @@ void main() {
 
       controller.fitAllPins();
       await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
 
-      final camera = controller.mapController.camera;
-      final sfOffset = camera.latLngToScreenOffset(const LatLng(37.7749, -122.4194));
-      final cupOffset = camera.latLngToScreenOffset(const LatLng(37.3349, -122.0090));
+      final sfOffset = projectLatLngToScreenOffset(
+        const LatLng(37.7749, -122.4194),
+        center: controller.cameraCenter.value,
+        zoom: controller.cameraZoom.value,
+        viewportSize: const Size(390, 844),
+      );
+      final cupOffset = projectLatLngToScreenOffset(
+        const LatLng(37.3349, -122.0090),
+        center: controller.cameraCenter.value,
+        zoom: controller.cameraZoom.value,
+        viewportSize: const Size(390, 844),
+      );
       final visibleMapBottom = 844.0 - sheetHeight;
 
       expect(sfOffset.dy, greaterThanOrEqualTo(46.0));
@@ -1844,8 +1846,8 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
-      expect(ctrl.panelController.isAttached, isTrue);
-      expect(ctrl.panelController.panelPosition, closeTo(0.48, 0.01));
+      expect(ctrl.sheetController.isAttached, isTrue);
+      expect(ctrl.sheetController.size, closeTo(0.48, 0.01));
       expect(find.text('Alice Chen'), findsOneWidget);
       expect(find.text('Bob Martinez'), findsOneWidget);
       final aliceRect = tester.getRect(find.text('Alice Chen'));
@@ -2034,10 +2036,26 @@ void main() {
       expect(ctrl.tabController, isNotNull);
       expect(ctrl.locationSub, isNotNull);
 
-      // P1-Visual: Even with location already set from ensure(), cached pins fit cleanly above the 48% sheet.
-      final camera = ctrl.mapController.camera;
-      final sfOffset = camera.latLngToScreenOffset(const LatLng(37.7749, -122.4194));
-      final cupOffset = camera.latLngToScreenOffset(const LatLng(37.3349, -122.0090));
+      // Initial load focuses up close in 3D tilt rather than zooming out to a flat overview.
+      expect(ctrl.cameraZoom.value, greaterThanOrEqualTo(15.5));
+      expect(ctrl.cameraPitch.value, FindMyController.default3DPitch);
+
+      // P1-Visual: Explicit fitAllPins fits cached pins cleanly above the 48% sheet.
+      ctrl.fitAllPins();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      final sfOffset = projectLatLngToScreenOffset(
+        const LatLng(37.7749, -122.4194),
+        center: ctrl.cameraCenter.value,
+        zoom: ctrl.cameraZoom.value,
+        viewportSize: const Size(390, 844),
+      );
+      final cupOffset = projectLatLngToScreenOffset(
+        const LatLng(37.3349, -122.0090),
+        center: ctrl.cameraCenter.value,
+        zoom: ctrl.cameraZoom.value,
+        viewportSize: const Size(390, 844),
+      );
       final sheetHeight = 146.0 + (844.0 * 0.78 - 146.0) * 0.48;
       expect(sfOffset.dy, greaterThanOrEqualTo(46.0));
       expect(cupOffset.dy + 46.0, lessThanOrEqualTo(844.0 - sheetHeight));
@@ -2067,6 +2085,231 @@ void main() {
       expect(ctrl.locationSub, isNull);
 
       Get.delete<FindMyController>(force: true);
+    });
+  });
+
+  group('FindMy list & camera UX (#426)', () {
+    testWidgets('pinned friends are never duplicated and focused unpinned friend lifts to index 0 above Pinned',
+        (tester) async {
+      final now = DateTime.now();
+      final pinned = FindMyFriend(
+        latitude: 37.7749,
+        longitude: -122.4194,
+        title: 'Alice Pinned',
+        subtitle: null,
+        handle: Handle(address: '+15550001111'),
+        handleAddress: '+15550001111',
+        longAddress: '100 Market St, San Francisco, CA',
+        shortAddress: 'San Francisco, CA',
+        lastUpdated: now,
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      );
+      final unpinned = FindMyFriend(
+        latitude: 37.7850,
+        longitude: -122.4090,
+        title: 'Bob Unpinned',
+        subtitle: null,
+        handle: Handle(address: '+15550002222'),
+        handleAddress: '+15550002222',
+        longAddress: '200 Howard St, San Francisco, CA',
+        shortAddress: 'San Francisco, CA',
+        lastUpdated: now,
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      );
+      final controller = FindMyController(
+        autoFetch: false,
+        readPrefList: (k) => k == kFindMyPinnedFriendsPrefKey ? ['15550001111'] : const [],
+        writePrefList: (_, __) async {},
+      );
+      controller.setFriendPinned(pinned, true);
+      controller.friends.assignAll([pinned, unpinned]);
+      controller.friendsWithLocation.assignAll([pinned, unpinned]);
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          home: Scaffold(
+            body: CustomScrollView(
+              controller: controller.friendsController,
+              slivers: [FindMyFriendsTabView(controller: controller)],
+            ),
+          ),
+        ),
+      );
+
+      // Pinned friend appears exactly once (only in Pinned section, not duplicated in People).
+      expect(find.text('Pinned'), findsOneWidget);
+      expect(find.text('People'), findsOneWidget);
+      expect(find.text('Alice Pinned'), findsOneWidget);
+      expect(find.text('Bob Unpinned'), findsOneWidget);
+
+      // Focus unpinned friend: moves to index 0 above Pinned with expanded card and no duplicate below.
+      controller.focusFriend(unpinned);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(ValueKey('findmy-inline-friend-${unpinned.stableId}')), findsOneWidget);
+      expect(find.byKey(const ValueKey('findmy-inline-refresh')), findsOneWidget);
+      expect(find.byKey(const ValueKey('findmy-inline-chat')), findsOneWidget);
+      expect(find.byKey(const ValueKey('findmy-inline-close')), findsOneWidget);
+      expect(find.text('Bob Unpinned'), findsOneWidget);
+      expect(find.text('Alice Pinned'), findsOneWidget);
+
+      final bobTop = tester.getTopLeft(find.byKey(ValueKey('findmy-inline-friend-${unpinned.stableId}'))).dy;
+      final pinnedHeaderTop = tester.getTopLeft(find.text('Pinned')).dy;
+      expect(bobTop, lessThan(pinnedHeaderTop));
+
+      // Close/Unfocus restores normal Pinned + People order with no duplicates.
+      await tester.tap(find.byKey(const ValueKey('findmy-inline-close')));
+      await tester.pumpAndSettle();
+      expect(controller.selectedFriendId.value, isNull);
+      expect(find.text('Alice Pinned'), findsOneWidget);
+      expect(find.text('Bob Unpinned'), findsOneWidget);
+    });
+
+    test('map camera follows active friend across location updates and stops on clearSelection', () async {
+      final now = DateTime.now();
+      final cameraCalls = <({LatLng center, double zoom, double? pitch, bool fly})>[];
+      final alice = FindMyFriend(
+        latitude: 37.7749,
+        longitude: -122.4194,
+        title: 'Alice Follow',
+        subtitle: null,
+        handle: Handle(address: '+15550003333'),
+        handleAddress: '+15550003333',
+        longAddress: '100 Market St, San Francisco, CA',
+        shortAddress: 'San Francisco, CA',
+        lastUpdated: now,
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      );
+      final controller = FindMyController(
+        autoFetch: false,
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: ''),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+        fetchCurrentPosition: () async => null,
+      );
+      controller.registerCamera3DAnimator((center, zoom, {offset = Offset.zero, pitch, bearing, padding, fly = false}) {
+        cameraCalls.add((center: center, zoom: zoom, pitch: pitch, fly: fly));
+      });
+      if (!controller.completer.isCompleted) controller.completer.complete();
+      controller.activatePage();
+      controller.friends.assignAll([alice]);
+      controller.friendsWithLocation.assignAll([alice]);
+
+      controller.focusFriend(alice);
+      await Future<void>.delayed(Duration.zero);
+      expect(cameraCalls.length, 1);
+      expect(cameraCalls.last.center.latitude, closeTo(37.7749, 1e-4));
+
+      // Live location update moves Alice -> camera follows keeping current zoom & pitch.
+      controller.cameraZoom.value = 17.5;
+      controller.cameraPitch.value = 32.0;
+      controller.handleNewFindMyLocation(FindMyFriend(
+        latitude: 37.7810,
+        longitude: -122.4110,
+        title: 'Alice Follow',
+        subtitle: null,
+        handle: Handle(address: '+15550003333'),
+        handleAddress: '+15550003333',
+        longAddress: '100 Market St, San Francisco, CA',
+        shortAddress: 'San Francisco, CA',
+        lastUpdated: now.add(const Duration(seconds: 5)),
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      expect(cameraCalls.length, 2);
+      expect(cameraCalls.last.center.latitude, closeTo(37.7810, 1e-4));
+      expect(cameraCalls.last.center.longitude, closeTo(-122.4110, 1e-4));
+      expect(cameraCalls.last.zoom, closeTo(17.5, 1e-4));
+      expect(cameraCalls.last.pitch, closeTo(32.0, 1e-4));
+      expect(cameraCalls.last.fly, isFalse);
+
+      // Unfocus stops following subsequent location updates.
+      controller.clearSelection();
+      final countAfterClear = cameraCalls.length;
+      controller.handleNewFindMyLocation(FindMyFriend(
+        latitude: 37.7900,
+        longitude: -122.4000,
+        title: 'Alice Follow',
+        subtitle: null,
+        handle: Handle(address: '+15550003333'),
+        handleAddress: '+15550003333',
+        longAddress: '100 Market St, San Francisco, CA',
+        shortAddress: 'San Francisco, CA',
+        lastUpdated: now.add(const Duration(seconds: 10)),
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      expect(cameraCalls.length, countAfterClear);
+    });
+
+    test('first-entry camera zooms to user location even when friends load before GPS resolves', () async {
+      final gpsCompleter = Completer<Position?>();
+      final cameraCalls = <({LatLng center, double zoom, double? pitch})>[];
+      final now = DateTime.now();
+      final controller = FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () => gpsCompleter.future,
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: ''),
+          statusCode: 200,
+          data: {
+            'data': [
+              {
+                'id': 'friend-1',
+                'handle': {'address': '+15550004444'},
+                'coordinates': [40.7128, -74.0060],
+                'last_updated': now.millisecondsSinceEpoch,
+                'status': 'live',
+              },
+            ],
+          },
+        ),
+        refreshDevicesRequest: ({deviceId, force = false}) async => Response(
+          requestOptions: RequestOptions(path: ''),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+      );
+      controller.registerCamera3DAnimator((center, zoom, {offset = Offset.zero, pitch, bearing, padding, fly = false}) {
+        cameraCalls.add((center: center, zoom: zoom, pitch: pitch));
+      });
+      if (!controller.completer.isCompleted) controller.completer.complete();
+
+      controller.activatePage();
+      // Friends load while GPS is still in flight -> must NOT prematurely focus NYC friend.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(controller.friendsWithLocation, hasLength(1));
+      expect(cameraCalls, isEmpty);
+
+      // Now user's GPS resolves in San Francisco -> zooms straight to user's location!
+      gpsCompleter.complete(
+        Position(
+          latitude: 37.7749,
+          longitude: -122.4194,
+          timestamp: now,
+          accuracy: 5,
+          altitude: 0,
+          altitudeAccuracy: 0,
+          heading: 0,
+          headingAccuracy: 0,
+          speed: 0,
+          speedAccuracy: 0,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(cameraCalls, hasLength(1));
+      expect(cameraCalls.single.center.latitude, closeTo(37.7749, 1e-4));
+      expect(cameraCalls.single.center.longitude, closeTo(-122.4194, 1e-4));
+      expect(cameraCalls.single.zoom, closeTo(FindMyController.defaultInitialZoom, 1e-4));
+      expect(cameraCalls.single.pitch, closeTo(FindMyController.default3DPitch, 1e-4));
     });
   });
 }

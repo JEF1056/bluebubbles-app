@@ -50,6 +50,8 @@ class FindMyDevice {
     required this.crowdSourcedLocation,
     required this.role,
     required this.lostModeMetadata,
+    this.iconUrl,
+    this.iconCategory,
   });
 
   final String? deviceModel;
@@ -86,7 +88,7 @@ class FindMyDevice {
   final String? rawDeviceModel;
   final String? baUuid;
   final dynamic trackingInfo;
-  final Map<String, bool?>? features;
+  final Map<String, dynamic>? features;
   final String? deviceDiscoveryId;
   final String? prsId;
   final dynamic scd;
@@ -100,6 +102,15 @@ class FindMyDevice {
   final dynamic crowdSourcedLocation;
   final Map<String, dynamic>? role;
   final Map<String, dynamic>? lostModeMetadata;
+  final String? iconUrl;
+  final String? iconCategory;
+
+  String? get roleEmoji {
+    final raw = role?['emoji']?.toString().trim();
+    return (raw == null || raw.isEmpty) ? null : raw;
+  }
+
+  bool get hasPreviewIcon => (id?.trim().isNotEmpty ?? false) && (iconUrl?.trim().isNotEmpty ?? false);
 
   DateTime? get lastUpdated =>
       (location?.timeStamp ?? 0) == 0 ? null : DateTime.fromMillisecondsSinceEpoch(location!.timeStamp!);
@@ -107,6 +118,19 @@ class FindMyDevice {
   bool get isInaccurate => location?.isInaccurate ?? false;
   bool get locationFinished => location?.locationFinished ?? true;
   bool get isLocatingInProgress => location?.isLocatingInProgress ?? false;
+
+  String? get trackerProvider => features?['TRACKER_PROVIDER']?.toString();
+  bool get canRing => features?['CAN_RING'] == true;
+  bool get canFindNearby => features?['CAN_FIND_NEARBY'] == true;
+  bool get hasBleRing => features?['HAS_BLE_RING'] == true;
+  bool get supportsUwb => features?['SUPPORTS_UWB'] == true;
+  List<String> get ringComponents {
+    final raw = features?['RING_COMPONENTS'];
+    if (raw is List) {
+      return raw.map((e) => e.toString()).where((e) => e.isNotEmpty).toList();
+    }
+    return const [];
+  }
 
   bool isLiveFresh([DateTime? now]) {
     if (location?.positionType?.toLowerCase() != 'live' || isOld || lastUpdated == null) return false;
@@ -158,7 +182,7 @@ class FindMyDevice {
         rawDeviceModel: json["rawDeviceModel"],
         baUuid: json["baUUID"],
         trackingInfo: json["trackingInfo"],
-        features: json["features"]?.cast<String, bool?>(),
+        features: json["features"] is Map ? Map<String, dynamic>.from(json["features"]) : null,
         deviceDiscoveryId: json["deviceDiscoveryId"],
         prsId: json["prsId"],
         scd: json["scd"],
@@ -170,8 +194,10 @@ class FindMyDevice {
         maxMsgChar: json["maxMsgChar"],
         deviceClass: json["deviceClass"],
         crowdSourcedLocation: json["crowdSourcedLocation"],
-        role: json["role"],
+        role: json["role"] is Map ? Map<String, dynamic>.from(json["role"]) : null,
         lostModeMetadata: json["lostModeMetadata"],
+        iconUrl: json["iconUrl"]?.toString(),
+        iconCategory: json["iconCategory"]?.toString(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -221,6 +247,9 @@ class FindMyDevice {
         "maxMsgChar": maxMsgChar,
         "deviceClass": deviceClass,
         "crowdSourcedLocation": crowdSourcedLocation,
+        "role": role,
+        "iconUrl": iconUrl,
+        "iconCategory": iconCategory,
       };
 }
 

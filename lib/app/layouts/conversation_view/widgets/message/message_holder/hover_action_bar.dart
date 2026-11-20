@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/actions/media_actions.dart';
@@ -12,7 +13,9 @@ import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart' show MessageReplyContext;
+import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_messaging_actions.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -225,10 +228,39 @@ class _MessageHoverBarState extends State<MessageHoverBar> {
                               borderRadius: BorderRadius.circular(18),
                               onTap: () async {
                                 Navigator.of(dialogCtx).pop();
-                                final picked = await showEmojiTapbackPicker(context);
-                                if (!mounted) return;
-                                if (picked != null && picked.isNotEmpty) {
-                                  _toggleEmojiReaction(picked);
+                                final picked = await showEmojiTapbackPicker(
+                                  context,
+                                  stickers: SettingsSvc.serverDetails.supportsStickerTapbacks,
+                                );
+                                if (!mounted || picked == null) return;
+                                final chat = _message.chat.target ?? widget.cvController.chat;
+                                switch (picked) {
+                                  case EmojiTapbackPick(:final emoji) when emoji.isNotEmpty:
+                                    unawaited(PrefsSvc.messaging.addRecentTapbackEmoji(emoji, chatGuid: chat.guid));
+                                    _toggleEmojiReaction(emoji);
+                                  case StickerTapbackPick(:final sticker):
+                                    HapticFeedback.lightImpact();
+                                    widget.cvController.onUserChatInteraction(immediate: true);
+                                    unawaited(PrefsSvc.messaging.addRecentTapbackEmoji(
+                                      SharedPreferencesMessagingActions.stickerTapbackKey(sticker.identifier),
+                                      chatGuid: chat.guid,
+                                    ));
+                                    try {
+                                      final bytes = await StickerLibrarySvc.imageForSending(sticker);
+                                      await OutgoingMsgHandler.queueStickerTapback(
+                                        chat: chat,
+                                        selected: _message,
+                                        part: widget.part.part,
+                                        bytes: bytes,
+                                        fileName: "sticker.${sticker.fileExtension}",
+                                      );
+                                    } catch (e, s) {
+                                      Logger.error("Failed to get a sticker to send",
+                                          error: e, trace: s, tag: "HoverActionBar");
+                                      showSnackbar("Error", "Couldn't get the sticker", type: SnackbarType.error);
+                                    }
+                                  case EmojiTapbackPick():
+                                    break;
                                 }
                               },
                               child: Container(

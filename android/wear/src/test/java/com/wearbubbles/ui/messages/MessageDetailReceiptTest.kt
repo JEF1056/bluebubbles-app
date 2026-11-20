@@ -1,5 +1,6 @@
 package com.wearbubbles.ui.messages
 
+import com.wearbubbles.ui.theme.extractSpokenText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -13,7 +14,7 @@ import java.util.Locale
 class MessageDetailReceiptTest {
 
     private val zone = ZoneOffset.UTC
-    private val nowMs = ZonedDateTime.of(2026, 11, 20, 14, 0, 0, 0, zone).toInstant().toEpochMilli()
+    private val nowMs = ZonedDateTime.of(2026, 11, 20, 21, 0, 0, 0, zone).toInstant().toEpochMilli()
     private val todayTimeMs = ZonedDateTime.of(2026, 11, 20, 19, 51, 0, 0, zone).toInstant().toEpochMilli()
     private val yesterdayTimeMs = ZonedDateTime.of(2026, 11, 19, 19, 51, 0, 0, zone).toInstant().toEpochMilli()
     private val olderTimeMs = ZonedDateTime.of(2026, 11, 18, 19, 51, 0, 0, zone).toInstant().toEpochMilli()
@@ -161,5 +162,32 @@ class MessageDetailReceiptTest {
         assertTrue(r2Status.showAlways)
         assertEquals(MessageDetailKind.RECEIVED, r2Status.kind)
         assertEquals("Received · 7:51 PM", r2Status.label)
+    }
+
+    @Test
+    fun `extractSpokenText picks first non-blank trimmed result`() {
+        assertNull(extractSpokenText(null))
+        assertNull(extractSpokenText(emptyList()))
+        assertNull(extractSpokenText(listOf("   ", "")))
+        assertEquals("On my way", extractSpokenText(listOf("  ", " On my way ", "fallback")))
+    }
+
+    @Test
+    fun `formatDetailTimestamp uses Now and X min buckets before 60m absolute cutoff`() {
+        val baseNow = ZonedDateTime.of(2026, 11, 20, 14, 30, 0, 0, zone).toInstant().toEpochMilli()
+        assertEquals("Now", formatDetailTimestamp(baseNow, nowMs = baseNow, zoneId = zone, locale = Locale.US))
+        assertEquals("Now", formatDetailTimestamp(baseNow - 59_999L, nowMs = baseNow, zoneId = zone, locale = Locale.US))
+        assertEquals("1 min", formatDetailTimestamp(baseNow - 60_000L, nowMs = baseNow, zoneId = zone, locale = Locale.US))
+        assertEquals("59 min", formatDetailTimestamp(baseNow - 59 * 60_000L, nowMs = baseNow, zoneId = zone, locale = Locale.US))
+        assertEquals("1:30 PM", formatDetailTimestamp(baseNow - 60 * 60_000L, nowMs = baseNow, zoneId = zone, locale = Locale.US))
+
+        assertEquals(60_000L, nextDetailTimestampTickDelayMs(baseNow, nowMs = baseNow))
+        assertEquals(1L, nextDetailTimestampTickDelayMs(baseNow - 59_999L, nowMs = baseNow))
+        assertEquals(60_000L, nextDetailTimestampTickDelayMs(baseNow - 60_000L, nowMs = baseNow))
+        assertEquals(15_000L, nextDetailTimestampTickDelayMs(baseNow - 45_000L, nowMs = baseNow))
+        assertNull(nextDetailTimestampTickDelayMs(baseNow - 60 * 60_000L, nowMs = baseNow))
+        assertNull(nextDetailTimestampTickDelayMs(0L, nowMs = baseNow))
+        assertEquals("Now", formatDetailTimestamp(baseNow + 5 * 60_000L, nowMs = baseNow, zoneId = zone, locale = Locale.US))
+        assertNotNull(nextDetailTimestampTickDelayMs(baseNow + 5 * 60_000L, nowMs = baseNow))
     }
 }

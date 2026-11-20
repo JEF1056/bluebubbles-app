@@ -1,0 +1,23 @@
+{
+  "name": "bluebubbles-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test --project=desktop",
+    "test:all": "playwright test",
+    "test:smoke": "playwright test tests/00-smoke.spec.ts --project=desktop",
+    "test:tablet": "playwright test --project=tablet",
+    "test:mobile": "playwright test --project=mobile",
+    "test:headed": "playwright test --project=desktop --headed",
+    "test:report": "playwright show-report",
+    "build:web": "cd .. && flutter build web --wasm --release --base-href /",
+    "test:full": "npm run build:web && npm run test:all",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^22.0.0",
+    "socket.io": "^4.8.1",
+    "typescript": "^5.8.0"
+  }
+}

@@ -28,6 +28,7 @@ class FindMySharedTile extends StatelessWidget {
   final VoidCallback? onLongPress;
   final bool isPinned;
   final VoidCallback? onTogglePin;
+  final List<Widget> extraActions;
 
   const FindMySharedTile({
     super.key,
@@ -57,7 +58,30 @@ class FindMySharedTile extends StatelessWidget {
     required this.onLongPress,
     this.isPinned = false,
     this.onTogglePin,
+    this.extraActions = const [],
   });
+
+  static const Widget _liveDot = DecoratedBox(
+    decoration: BoxDecoration(color: Color(0xFF22C55E), shape: BoxShape.circle),
+    child: SizedBox(width: 7, height: 7),
+  );
+
+  Widget _titleRow(ColorScheme cs, TextTheme tt, FontWeight weight) => Row(
+        children: [
+          Flexible(
+            child: Text(
+              displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: tt.titleMedium?.copyWith(fontWeight: weight),
+            ),
+          ),
+          if (isPinned) ...[
+            const SizedBox(width: 5),
+            Icon(Icons.push_pin_rounded, size: 13, color: cs.primary),
+          ],
+        ],
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -94,22 +118,7 @@ class FindMySharedTile extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    displayName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                                  ),
-                                ),
-                                if (isPinned) ...[
-                                  const SizedBox(width: 5),
-                                  Icon(Icons.push_pin_rounded, size: 13, color: cs.primary),
-                                ],
-                              ],
-                            ),
+                            _titleRow(cs, tt, FontWeight.w700),
                             if (modelSubtitle != null) ...[
                               const SizedBox(height: 1),
                               Text(
@@ -131,14 +140,7 @@ class FindMySharedTile extends StatelessWidget {
                             Row(
                               children: [
                                 if (showStatusDot) ...[
-                                  Container(
-                                    width: 7,
-                                    height: 7,
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFF22C55E),
-                                      shape: BoxShape.circle,
-                                    ),
-                                  ),
+                                  _liveDot,
                                   const SizedBox(width: 5),
                                 ],
                                 Text(
@@ -202,6 +204,18 @@ class FindMySharedTile extends StatelessWidget {
                           icon: const Icon(Icons.more_horiz, size: 18),
                         ),
                       ),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 34,
+                        height: 34,
+                        child: IconButton.filledTonal(
+                          key: const ValueKey('findmy-inline-close'),
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Close',
+                          onPressed: onClearSelection,
+                          icon: const Icon(Icons.close_rounded, size: 18),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -228,6 +242,15 @@ class FindMySharedTile extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (extraActions.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: extraActions,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -236,26 +259,15 @@ class FindMySharedTile extends StatelessWidget {
       );
     }
 
+    final proximityText = Text(
+      proximity,
+      style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant, fontWeight: FontWeight.w500),
+    );
     return ListTile(
       mouseCursor: MouseCursor.defer,
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: leadingCollapsed,
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(
-              displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-            ),
-          ),
-          if (isPinned) ...[
-            const SizedBox(width: 5),
-            Icon(Icons.push_pin_rounded, size: 13, color: cs.primary),
-          ],
-        ],
-      ),
+      title: _titleRow(cs, tt, FontWeight.w600),
       subtitle: Text(
         rowSubtitle,
         maxLines: 1,
@@ -276,34 +288,8 @@ class FindMySharedTile extends StatelessWidget {
             )
           : (proximity.isNotEmpty
               ? (showLiveDotInRow
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF22C55E),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          proximity,
-                          style: tt.bodyMedium?.copyWith(
-                            color: cs.onSurfaceVariant,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    )
-                  : Text(
-                      proximity,
-                      style: tt.bodyMedium?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ))
+                  ? Row(mainAxisSize: MainAxisSize.min, children: [_liveDot, const SizedBox(width: 6), proximityText])
+                  : proximityText)
               : null),
       onTap: onTapRow,
       onLongPress: onLongPress,

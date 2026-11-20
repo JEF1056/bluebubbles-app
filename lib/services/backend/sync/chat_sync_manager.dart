@@ -38,18 +38,18 @@ class ChatSyncManager extends SyncManager {
     flush();
     addToOutput('Fetching chats from the server...');
 
-    int? totalChats = await getChatCount();
-    if (totalChats == null) {
-      throw Exception("Unable to get chat count from server!");
-    } else {
-      addToOutput('Received $totalChats handles(s) from the server!');
-    }
-
-    if (totalChats == 0) {
-      return await complete();
-    }
-
     try {
+      int? totalChats = await getChatCount();
+      if (totalChats == null) {
+        throw Exception("Unable to get chat count from server!");
+      } else {
+        addToOutput('Received $totalChats handles(s) from the server!');
+      }
+
+      if (totalChats == 0) {
+        return await complete();
+      }
+
       if (kIsDesktop && Platform.isWindows) {
         await WindowsTaskbar.setProgressMode(TaskbarProgressMode.normal);
       }

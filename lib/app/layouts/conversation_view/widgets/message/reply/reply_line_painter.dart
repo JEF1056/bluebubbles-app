@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:flutter/gestures.dart';
@@ -505,6 +506,48 @@ class ReplyLinePainter extends BoxPainter {
   }
 
   static const double connectorHitPadding = 20.0;
+  static const double maxVisualArmWidth = 72.0;
+
+  /// Shortens the painted horizontal arm from [verticalX] toward [fullEndX] while
+  /// leaving [compactHookTipX] and hit-testing untouched.
+  static double visualArmEndX(
+    double verticalX,
+    double fullEndX, {
+    double minArmAfterCurve = 0.0,
+  }) {
+    final delta = fullEndX - verticalX;
+    final fullLen = delta.abs();
+    if (fullLen <= 0.0) return verticalX;
+    final targetLen = max(min(fullLen, minArmAfterCurve), min(fullLen * 0.5, maxVisualArmWidth));
+    return verticalX + delta.sign * min(fullLen, targetLen);
+  }
+
+  /// Stroke paint that keeps [color] opaque/normal at [startX] and fades to `alpha: 0` at [endX].
+  static Paint createHorizontalFadePaint({
+    required Color color,
+    required double strokeWidth,
+    required double startX,
+    required double endX,
+    required double y,
+  }) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    if ((endX - startX).abs() > 0.5) {
+      // Keep base paint opaque so Paint.color alpha does not double-multiply shader alpha.
+      paint.color = const Color(0xFFFFFFFF);
+      paint.shader = ui.Gradient.linear(
+        Offset(startX, y),
+        Offset(endX, y),
+        [color, color.withValues(alpha: 0)],
+      );
+    } else {
+      paint.color = color;
+    }
+    return paint;
+  }
 
   static double compactHookTipX(
     Offset offset,
@@ -627,45 +670,49 @@ class ReplyLinePainter extends BoxPainter {
     bool compactHook = false,
   }) {
     if (compactHook) {
-      // Material L-hook on the opposite-sender margin reaching 8dp from the reply bubble edge.
-      final paint = Paint()
-        ..color = color
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.0
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round;
+      if (!connectUpper) return;
+      // Material L-hook on the opposite-sender margin; hit area stays full-width while
+      // the rendered horizontal arm is shortened and fades out smoothly toward its tip.
       final path = Path();
       const double edgeInset = 18.0;
       final double r = min(14.0, size.height / 2);
       final double midY = offset.dy + size.height / 2;
       final double verticalX = isFromMe ? offset.dx + edgeInset : offset.dx + size.width - edgeInset;
-      final double tipX = compactHookTipX(
+      final double fullTipX = compactHookTipX(
         offset,
         size,
         isFromMe: isFromMe,
         bubbleWidth: bubbleWidth,
         fallbackMaxWidth: fallbackMaxWidth,
       );
-      if (connectUpper) {
-        path.moveTo(verticalX, offset.dy - 4.0);
-        path.lineTo(verticalX, midY - r);
-        if (isFromMe) {
-          final double turnEndX = verticalX + r;
-          path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(r));
-          if (tipX > turnEndX) {
-            path.lineTo(tipX, midY);
-          }
-        } else {
-          final double turnEndX = verticalX - r;
-          path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(r));
-          if (tipX < turnEndX) {
-            path.lineTo(tipX, midY);
-          }
+      final double tipX = visualArmEndX(verticalX, fullTipX, minArmAfterCurve: r + 8.0);
+      path.moveTo(verticalX, offset.dy - 4.0);
+      path.lineTo(verticalX, midY - r);
+      if (isFromMe) {
+        final double turnEndX = verticalX + r;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(r));
+        if (tipX > turnEndX) {
+          path.lineTo(tipX, midY);
+        }
+      } else {
+        final double turnEndX = verticalX - r;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(r));
+        if (tipX < turnEndX) {
+          path.lineTo(tipX, midY);
         }
       }
+      final paint = createHorizontalFadePaint(
+        color: color,
+        strokeWidth: 2.0,
+        startX: verticalX,
+        endX: tipX,
+        y: midY,
+      );
       canvas.drawPath(path, paint);
       return;
     }
+
+    if (!connectUpper && !connectLower) return;
 
     final localOffset = offset + Offset(isFromMe ? 35 : 0, 0);
     final midY = localOffset.dy + size.height / 2;
@@ -673,47 +720,57 @@ class ReplyLinePainter extends BoxPainter {
     final verticalX = isFromMe ? localOffset.dx : localOffset.dx + size.width - 35;
 
     // Aim horizontal tip cleanly 8dp from the actual bubble edge when known.
-    final double horizontalTarget;
+    final double fullHorizontalTarget;
     if (bubbleWidth != null) {
-      horizontalTarget = isFromMe
+      fullHorizontalTarget = isFromMe
           ? offset.dx + size.width - bubbleWidth - 8
           : offset.dx + bubbleWidth + 8;
     } else {
       final maxW = fallbackMaxWidth ?? (size.width * MessageState.maxBubbleSizeFactor);
-      horizontalTarget = isFromMe
+      fullHorizontalTarget = isFromMe
           ? localOffset.dx + size.width - maxW - 30
           : localOffset.dx + maxW - 35;
     }
 
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+    final upperRadius = min(
+      radius * (isFromMe ? _outgoingVisualBottomRadiusFactor : _incomingVisualBottomRadiusFactor),
+      size.height / 2,
+    );
+    final lowerRadius = min(
+      radius * (isFromMe ? _outgoingVisualTopRadiusFactor : _incomingVisualTopRadiusFactor),
+      size.height / 2,
+    );
+    final double maxCurveRadius = max(connectUpper ? upperRadius : 0.0, connectLower ? lowerRadius : 0.0);
+    final double directedFullTarget =
+        isFromMe ? max(verticalX, fullHorizontalTarget) : min(verticalX, fullHorizontalTarget);
+    final double horizontalTarget = visualArmEndX(
+      verticalX,
+      directedFullTarget,
+      minArmAfterCurve: maxCurveRadius + 8.0,
+    );
 
     final path = Path();
 
     // Bridge the small vertical gap between stacked reply rows.
     const double verticalOverlap = 6.0;
+    double? upperTurnEndX;
 
     if (connectUpper) {
-      final effectiveRadius =
-          isFromMe ? radius * _outgoingVisualBottomRadiusFactor : radius * _incomingVisualBottomRadiusFactor;
-      final clampedRadius = min(effectiveRadius, size.height / 2);
-      final verticalEndY = midY - clampedRadius;
+      final verticalEndY = midY - upperRadius;
 
       path.moveTo(verticalX, localOffset.dy - verticalOverlap);
       path.lineTo(verticalX, verticalEndY);
       if (isFromMe) {
-        final turnEndX = verticalX + clampedRadius;
-        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(clampedRadius));
+        final turnEndX = verticalX + upperRadius;
+        upperTurnEndX = turnEndX;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(upperRadius));
         if (horizontalTarget > turnEndX) {
           path.lineTo(horizontalTarget, midY);
         }
       } else {
-        final turnEndX = verticalX - clampedRadius;
-        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(clampedRadius));
+        final turnEndX = verticalX - upperRadius;
+        upperTurnEndX = turnEndX;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(upperRadius));
         if (horizontalTarget < turnEndX) {
           path.lineTo(horizontalTarget, midY);
         }
@@ -721,28 +778,35 @@ class ReplyLinePainter extends BoxPainter {
     }
 
     if (connectLower) {
-      final effectiveRadius =
-          isFromMe ? radius * _outgoingVisualTopRadiusFactor : radius * _incomingVisualTopRadiusFactor;
-      final clampedRadius = min(effectiveRadius, size.height / 2);
-      final verticalEndY = midY + clampedRadius;
+      final verticalEndY = midY + lowerRadius;
 
       path.moveTo(verticalX, localOffset.dy + size.height + verticalOverlap);
       path.lineTo(verticalX, verticalEndY);
       if (isFromMe) {
-        final turnEndX = verticalX + clampedRadius;
-        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(clampedRadius));
-        if (horizontalTarget > turnEndX) {
-          path.lineTo(horizontalTarget, midY);
+        final turnEndX = verticalX + lowerRadius;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(lowerRadius));
+        // Avoid double-stroking the horizontal fade segment when connectUpper already drew it.
+        final double armEndX = upperTurnEndX != null ? min(horizontalTarget, upperTurnEndX) : horizontalTarget;
+        if (armEndX > turnEndX) {
+          path.lineTo(armEndX, midY);
         }
       } else {
-        final turnEndX = verticalX - clampedRadius;
-        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(clampedRadius));
-        if (horizontalTarget < turnEndX) {
-          path.lineTo(horizontalTarget, midY);
+        final turnEndX = verticalX - lowerRadius;
+        path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(lowerRadius));
+        final double armEndX = upperTurnEndX != null ? max(horizontalTarget, upperTurnEndX) : horizontalTarget;
+        if (armEndX < turnEndX) {
+          path.lineTo(armEndX, midY);
         }
       }
     }
 
+    final paint = createHorizontalFadePaint(
+      color: color,
+      strokeWidth: 2.5,
+      startX: verticalX,
+      endX: horizontalTarget,
+      y: midY,
+    );
     canvas.drawPath(path, paint);
   }
 }

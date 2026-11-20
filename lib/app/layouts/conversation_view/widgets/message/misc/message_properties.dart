@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -98,9 +99,13 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
       // Also observe showEdits since that's toggled directly
       controller.showEdits.value;
 
+      final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
       final props = _getPropertyActions();
-      final textStyle = context.theme.textTheme.labelSmall!
-          .copyWith(color: context.theme.colorScheme.primary, fontWeight: FontWeight.bold);
+      final textStyle = WallpaperContrast.unbubbledStyle(
+        context.theme.textTheme.labelSmall!.copyWith(fontWeight: FontWeight.bold),
+        hasWallpaper: hasBackground,
+        fallbackColor: context.theme.colorScheme.primary,
+      );
       return AnimatedSize(
         curve: Curves.easeInOut,
         alignment: Alignment.bottomCenter,

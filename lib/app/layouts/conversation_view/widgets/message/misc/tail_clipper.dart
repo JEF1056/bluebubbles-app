@@ -23,20 +23,32 @@ abstract final class BubbleConnect {
       isIOS ? 35.0 * avatarScale : 5.0 + (35.0 * avatarScale).roundToDouble() + 6.0;
 
   /// [part] joins the bubble below it (it isn't the message's trailing part, or the newer message groups with it).
-  static bool lower(MessageState state, MessagePart part) {
+  static bool lower(MessageState state, MessagePart part, {Message? newerMessage}) {
     if (CurrentSkin.iOS) return false;
     if (!state.isTrailingMessagePart(part)) return true;
-    final newer = state.newMessage;
+    final newer = newerMessage ?? state.newMessage;
     return newer != null && !newer.isGroupEvent && !state.message.showTail(newer);
   }
 
   /// [part] joins the bubble above it (it isn't the message's leading part, or the older message groups with it).
-  static bool upper(MessageState state, MessagePart part) {
+  static bool upper(MessageState state, MessagePart part, {Message? olderMessage}) {
     if (CurrentSkin.iOS) return false;
     if (!state.isLeadingMessagePart(part)) return true;
-    final older = state.oldMessage;
+    final older = olderMessage ?? state.oldMessage;
     return older != null && !older.isGroupEvent && !older.showTail(state.message);
   }
+}
+
+/// Marks a quoted/ghost bubble (e.g. reply thread originator) so nested attachment/grid widgets
+/// round all four corners uniformly without tail or neighbor flattening.
+class GhostBubbleScope extends InheritedWidget {
+  const GhostBubbleScope({super.key, required super.child});
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<GhostBubbleScope>() != null;
+
+  @override
+  bool updateShouldNotify(covariant GhostBubbleScope oldWidget) => false;
 }
 
 class TailClipper extends CustomClipper<Path> {

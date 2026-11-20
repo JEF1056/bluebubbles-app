@@ -193,6 +193,9 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                         );
                       });
                     }),
+                    SliverToBoxAdapter(
+                      child: SizedBox(height: MediaQuery.paddingOf(context).bottom + 16),
+                    ),
                   ],
                 )),
           )),

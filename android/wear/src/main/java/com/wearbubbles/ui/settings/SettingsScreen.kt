@@ -52,6 +52,7 @@ import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.BuildConfig
 import com.wearbubbles.ui.components.WearConfirmModal
+import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.ErrorColor
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.SuccessColor
@@ -109,6 +110,52 @@ fun SettingsScreen(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+            }
+
+            if (state.userName.isNotBlank() || state.userHandle.isNotBlank() || !state.userAvatarPath.isNullOrBlank()) {
+                item(key = "account_header") {
+                    val primaryText = state.userName.ifBlank { state.userHandle }
+                    val secondaryText = state.userHandle.takeIf { it.isNotBlank() && it != primaryText }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = 56.dp)
+                            .clip(RoundedCornerShape(26.dp))
+                            .background(palette.surfaceContainer)
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ContactAvatar(
+                            title = primaryText,
+                            seed = state.userHandle.ifBlank { primaryText },
+                            avatarPath = state.userAvatarPath,
+                            size = 36.dp,
+                            badgeCutoutColor = palette.surfaceContainer
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
+                        ) {
+                            Text(
+                                text = primaryText,
+                                style = centeredTextStyle(13.5.sp, 17.sp, FontWeight.SemiBold),
+                                color = palette.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (secondaryText != null) {
+                                Text(
+                                    text = secondaryText,
+                                    style = centeredTextStyle(11.sp, 14.sp),
+                                    color = palette.subtleText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
             }
 

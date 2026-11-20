@@ -1,9 +1,8 @@
 package com.wearbubbles.ui.messages
 
 import android.Manifest
-import android.app.RemoteInput
 import android.content.pm.PackageManager
-import android.os.Bundle
+import android.view.inputmethod.EditorInfo
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
@@ -58,6 +57,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -90,6 +91,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -97,8 +99,6 @@ import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.ListHeader
 import androidx.wear.compose.material.Text
-import androidx.wear.input.RemoteInputIntentHelper
-import androidx.wear.input.wearableExtender
 import coil.Coil
 import coil.ImageLoader
 import coil.compose.SubcomposeAsyncImage
@@ -130,8 +130,10 @@ import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.WearCircleIconButton
+import com.wearbubbles.ui.theme.WearDirectKeyboardInput
 import com.wearbubbles.ui.theme.WearPillButton
 import com.wearbubbles.ui.theme.centeredTextStyle
+import com.wearbubbles.ui.theme.rememberSpeechInputLauncher
 import java.io.File
 import java.util.Locale
 
@@ -222,14 +224,43 @@ fun MessageDetailScreen(
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var isResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+    }
     DisposableEffect(lifecycleOwner, chatGuid) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.onScreenResumed()
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    isResumed = true
+                    nowMs = System.currentTimeMillis()
+                    viewModel.onScreenResumed()
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    isResumed = false
+                }
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(isResumed, nowMs, messages) {
+        if (!isResumed) return@LaunchedEffect
+        val minDelayMs = messages.asSequence()
+            .filterNot { it.sendFailed || MessageDao.isTempPlaceholderGuid(it.guid) }
+            .mapNotNull { msg ->
+                val ts = when {
+                    msg.dateRead > 0L -> msg.dateRead
+                    msg.dateDelivered > 0L -> msg.dateDelivered
+                    else -> msg.dateCreated
+                }
+                nextDetailTimestampTickDelayMs(ts, nowMs)
+            }
+            .minOrNull() ?: return@LaunchedEffect
+        delay(minDelayMs)
+        nowMs = System.currentTimeMillis()
     }
 
     // Only auto-scroll when the thread first populates or a new message arrives at the bottom;
@@ -272,33 +303,35 @@ fun MessageDetailScreen(
         }
     }
 
-    val replyLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val data = result.data ?: return@rememberLauncherForActivityResult
-        val results: Bundle? = RemoteInput.getResultsFromIntent(data)
-        val text = results?.getCharSequence("reply_text")?.toString()
-        if (!text.isNullOrBlank()) {
-            viewModel.sendMessage(text)
-        }
-    }
+    var keyboardRequestToken by remember { mutableIntStateOf(0) }
 
     val launchKeyboardReply = {
-        val remoteInput = RemoteInput.Builder("reply_text")
-            .setLabel("Reply")
-            .wearableExtender { setEmojisAllowed(true) }
-            .build()
-        val intent = RemoteInputIntentHelper.createActionRemoteInputIntent().also {
-            RemoteInputIntentHelper.putRemoteInputsExtra(it, listOf(remoteInput))
-        }
-        replyLauncher.launch(intent)
+        keyboardRequestToken = if (keyboardRequestToken <= 0) 1 else keyboardRequestToken + 1
     }
+
+    val launchSpeechReply = rememberSpeechInputLauncher(
+        prompt = "Message",
+        onResult = { viewModel.sendMessage(it) },
+        onUnavailable = launchKeyboardReply
+    )
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
             viewModel.startRecording()
+        }
+    }
+
+    val startVoiceMemo = {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            viewModel.startRecording()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -386,6 +419,7 @@ fun MessageDetailScreen(
                     maxBubbleWidth = maxBubbleWidth,
                     imageLoader = imageLoader,
                     isPlayingAudio = playingMessageGuid == msg.guid,
+                    nowMs = nowMs,
                     onLongPress = {
                         when {
                             msg.sendFailed -> failedActionMsg = msg
@@ -416,7 +450,7 @@ fun MessageDetailScreen(
 
             if (sendFailedCount > 0) {
                 item(key = "send_failed_banner") {
-                    WearPillButton(
+                    ErrorBannerPill(
                         label = "$sendFailedCount not sent",
                         secondaryLabel = if (sendFailedCount == 1) "Tap for options" else "Tap to clear all",
                         onClick = {
@@ -425,43 +459,17 @@ fun MessageDetailScreen(
                             } else {
                                 showClearFailedConfirm = true
                             }
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.ErrorOutline,
-                                contentDescription = null,
-                                tint = OnErrorContainer,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        backgroundColor = ErrorContainer,
-                        contentColor = OnErrorContainer,
-                        minHeight = 44.dp,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        modifier = Modifier.padding(top = 8.dp)
+                        }
                     )
                 }
             }
 
             if (error != null) {
                 item(key = "error_banner") {
-                    WearPillButton(
+                    ErrorBannerPill(
                         label = error!!,
                         secondaryLabel = "Tap to dismiss",
-                        onClick = { viewModel.clearError() },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Rounded.ErrorOutline,
-                                contentDescription = null,
-                                tint = OnErrorContainer,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        },
-                        backgroundColor = ErrorContainer,
-                        contentColor = OnErrorContainer,
-                        minHeight = 44.dp,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        modifier = Modifier.padding(top = 8.dp)
+                        onClick = { viewModel.clearError() }
                     )
                 }
             }
@@ -482,17 +490,8 @@ fun MessageDetailScreen(
                     } else {
                         ReplyActionCluster(
                             isSending = isSending,
-                            onVoiceClick = {
-                                val granted = ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.RECORD_AUDIO
-                                ) == PackageManager.PERMISSION_GRANTED
-                                if (granted) {
-                                    viewModel.startRecording()
-                                } else {
-                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                            },
+                            onMicClick = launchSpeechReply,
+                            onMicLongClick = startVoiceMemo,
                             onEmojiClick = { showEmojiPicker = true },
                             onKeyboardClick = launchKeyboardReply
                         )
@@ -524,61 +523,37 @@ fun MessageDetailScreen(
                 }
             }
 
+            item(key = "action_voice_message") {
+                MoreActionPill(
+                    label = "Voice message",
+                    icon = Icons.Outlined.Mic,
+                    onClick = startVoiceMemo
+                )
+            }
+
             item(key = "action_view_people") {
-                WearPillButton(
+                MoreActionPill(
                     label = "View people",
+                    icon = Icons.Outlined.Group,
                     onClick = { showPeopleDialog = true },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.Group,
-                            contentDescription = null,
-                            tint = palette.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    },
-                    backgroundColor = palette.surfaceContainer,
-                    contentColor = palette.onSurface,
-                    minHeight = 54.dp,
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
+                    modifier = Modifier.padding(top = 6.dp)
                 )
             }
 
             item(key = "action_move_to_trash") {
-                WearPillButton(
+                MoreActionPill(
                     label = "Move to trash",
+                    icon = Icons.Outlined.Delete,
                     onClick = { showTrashConfirm = true },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Outlined.Delete,
-                            contentDescription = null,
-                            tint = palette.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    },
-                    backgroundColor = palette.surfaceContainer,
-                    contentColor = palette.onSurface,
-                    minHeight = 54.dp,
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
 
             item(key = "action_open_on_phone") {
-                WearPillButton(
+                MoreActionPill(
                     label = "Open on phone",
+                    icon = Icons.AutoMirrored.Rounded.SendToMobile,
                     onClick = { RemoteLauncher.openServerOnPhoneAsync(context) },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.SendToMobile,
-                            contentDescription = null,
-                            tint = palette.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    },
-                    backgroundColor = palette.surfaceContainer,
-                    contentColor = palette.onSurface,
-                    minHeight = 54.dp,
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
@@ -615,6 +590,14 @@ fun MessageDetailScreen(
             launchKeyboardReply()
         },
         onDismiss = { showEmojiPicker = false }
+    )
+
+    WearDirectKeyboardInput(
+        requestToken = keyboardRequestToken,
+        hint = "Reply",
+        imeAction = EditorInfo.IME_ACTION_SEND,
+        onSubmit = { text -> viewModel.sendMessage(text) },
+        onDismiss = { keyboardRequestToken = 0 }
     )
 
     PeopleModal(
@@ -733,9 +716,63 @@ internal fun FailedMessageActionsModal(
 }
 
 @Composable
+private fun ErrorBannerPill(
+    label: String,
+    secondaryLabel: String,
+    onClick: () -> Unit
+) {
+    WearPillButton(
+        label = label,
+        secondaryLabel = secondaryLabel,
+        onClick = onClick,
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Rounded.ErrorOutline,
+                contentDescription = null,
+                tint = OnErrorContainer,
+                modifier = Modifier.size(16.dp)
+            )
+        },
+        backgroundColor = ErrorContainer,
+        contentColor = OnErrorContainer,
+        minHeight = 44.dp,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier.padding(top = 8.dp)
+    )
+}
+
+@Composable
+private fun MoreActionPill(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalWearPalette.current
+    WearPillButton(
+        label = label,
+        onClick = onClick,
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = palette.primary,
+                modifier = Modifier.size(22.dp)
+            )
+        },
+        backgroundColor = palette.surfaceContainer,
+        contentColor = palette.onSurface,
+        minHeight = 54.dp,
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        modifier = modifier
+    )
+}
+
+@Composable
 private fun ReplyActionCluster(
     isSending: Boolean,
-    onVoiceClick: () -> Unit,
+    onMicClick: () -> Unit,
+    onMicLongClick: () -> Unit,
     onEmojiClick: () -> Unit,
     onKeyboardClick: () -> Unit
 ) {
@@ -761,8 +798,9 @@ private fun ReplyActionCluster(
 
         WearCircleIconButton(
             icon = Icons.Outlined.Mic,
-            contentDescription = "Voice message",
-            onClick = onVoiceClick,
+            contentDescription = "Voice reply",
+            onClick = onMicClick,
+            onLongClick = onMicLongClick,
             enabled = !isSending,
             backgroundColor = palette.surfaceContainerHigh,
             contentColor = palette.onSurface,
@@ -1177,6 +1215,7 @@ private fun MessageBubble(
     maxBubbleWidth: Dp,
     imageLoader: ImageLoader,
     isPlayingAudio: Boolean,
+    nowMs: Long,
     onLongPress: () -> Unit,
     onFailedClick: () -> Unit,
     onImageClick: () -> Unit,
@@ -1196,7 +1235,8 @@ private fun MessageBubble(
         message.dateRead,
         message.isLatestOutgoing,
         message.isLastReadOutgoing,
-        message.isLatestIncoming
+        message.isLatestIncoming,
+        nowMs
     ) {
         resolveMessageDetailStatus(
             isFromMe = message.isFromMe,
@@ -1207,7 +1247,8 @@ private fun MessageBubble(
             dateRead = message.dateRead,
             isLatestOutgoing = message.isLatestOutgoing,
             isLastReadOutgoing = message.isLastReadOutgoing,
-            isLatestIncoming = message.isLatestIncoming
+            isLatestIncoming = message.isLatestIncoming,
+            nowMs = nowMs
         )
     }
 

@@ -29,7 +29,6 @@ import com.bluebubbles.messaging.utils.Utils
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
-import java.util.Locale
 
 class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
     companion object {
@@ -44,62 +43,43 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             convChannelId: String?,
             convId: String?,
             chatGuid: String
-        ): String {
-            return if (!convChannelId.isNullOrEmpty() && convId == chatGuid) {
-                convChannelId
-            } else {
-                baseChannelId
-            }
-        }
-
-        internal fun buildPerson(
-            name: String,
-            icon: IconCompat?,
-            uri: String?,
-            key: String?,
-            isImportant: Boolean
-        ): Person {
-            val builder = Person.Builder()
-                .setName(name)
-                .setImportant(isImportant)
-            if (icon != null) {
-                builder.setIcon(icon)
-            }
-            if (!uri.isNullOrEmpty()) {
-                builder.setUri(uri)
-            }
-            if (!key.isNullOrEmpty()) {
-                builder.setKey(key)
-            }
-            return builder.build()
-        }
+        ): String = com.bluebubbles.messaging.services.notifications.resolveTargetChannelId(
+            baseChannelId,
+            convChannelId,
+            convId,
+            chatGuid
+        )
 
         internal fun buildSummaryLines(
             existingLines: List<String>,
             newLine: String,
             maxLines: Int = 5
-        ): List<String> {
-            val combined = existingLines.filter { it.isNotBlank() } + listOf(newLine).filter { it.isNotBlank() }
-            return if (combined.size <= maxLines) combined else combined.takeLast(maxLines)
-        }
+        ): List<String> = com.bluebubbles.messaging.services.notifications.buildSummaryLines(
+            existingLines,
+            newLine,
+            maxLines
+        )
 
         internal fun shouldOnlyAlertOnce(
             messageIsFromMe: Boolean,
             isReaction: Boolean,
             isEdit: Boolean,
             explicitOnlyAlertOnce: Boolean
-        ): Boolean = messageIsFromMe || isReaction || isEdit || explicitOnlyAlertOnce
+        ): Boolean = com.bluebubbles.messaging.services.notifications.shouldOnlyAlertOnce(
+            messageIsFromMe,
+            isReaction,
+            isEdit,
+            explicitOnlyAlertOnce
+        )
 
         internal fun sortKeyForTimestamp(timestampMs: Long): String =
-            String.format(Locale.US, "%019d", Long.MAX_VALUE - timestampMs.coerceAtLeast(0L))
+            com.bluebubbles.messaging.services.notifications.sortKeyForTimestamp(timestampMs)
 
-        internal fun shouldShowPhoneMuteAction(showReactionAction: Boolean): Boolean = !showReactionAction
+        internal fun shouldShowPhoneMuteAction(showReactionAction: Boolean): Boolean =
+            com.bluebubbles.messaging.services.notifications.shouldShowPhoneMuteAction(showReactionAction)
 
-        internal fun resolveNotificationId(chatId: Int?, chatGuid: String): Int {
-            if (chatId != null && chatId != 0) return chatId
-            val hash = chatGuid.hashCode() and 0x7fffffff
-            return if (hash == 0) 1 else hash
-        }
+        internal fun resolveNotificationId(chatId: Int?, chatGuid: String): Int =
+            com.bluebubbles.messaging.services.notifications.resolveNotificationId(chatId, chatGuid)
     }
 
     override fun handleMethodCall(

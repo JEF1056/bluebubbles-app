@@ -685,6 +685,19 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
           throw Exception("Could not detect server URL and password!");
         }
 
+        if (result.length >= 3 && result[2] is Map) {
+          final scannedHeaders = <String, String>{};
+          (result[2] as Map).forEach((k, v) {
+            if (k != null && v != null && k.toString().isNotEmpty) {
+              scannedHeaders[k.toString()] = v.toString();
+            }
+          });
+          SettingsSvc.settings.customHeaders.value = scannedHeaders;
+          await SettingsSvc.settings.saveOneAsync('customHeaders');
+          await PrefsSvc.network.setCustomHeadersJson(jsonEncode(HttpSvc.headers));
+          HttpSvc.updateHeaders();
+        }
+
         connect(serverURL, password);
       }
     } catch (e) {

@@ -1,7 +1,10 @@
 package com.bluebubbles.messaging.services.telecom
 
+import android.telecom.Connection
+import com.bluebubbles.messaging.services.network.HttpService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -154,5 +157,106 @@ class FaceTimeRoutingTest {
         assertEquals("ft-uuid-3", bound)
         assertEquals(null, left)
         assertTrue(activated)
+    }
+
+    @Test
+    fun `telephony incoming routes to telecom when enabled and enable-account notification when disabled`() {
+        assertEquals(
+            IncomingFaceTimeRoute.TELECOM_DIRECT,
+            FaceTimeRoutingPolicy.resolveIncomingRoute(
+                isVideo = false,
+                callUuid = "cell-1",
+                phoneAccountEnabled = true,
+                isTelephony = true
+            )
+        )
+        assertEquals(
+            IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT,
+            FaceTimeRoutingPolicy.resolveIncomingRoute(
+                isVideo = false,
+                callUuid = "cell-1",
+                phoneAccountEnabled = false,
+                isTelephony = true
+            )
+        )
+    }
+
+    @Test
+    fun `notification actions omit facetime link for disabled telephony and offer enable calling for audio`() {
+        assertEquals(
+            listOf(IncomingNotificationAction.ENABLE_CALLING, IncomingNotificationAction.DECLINE),
+            FaceTimeRoutingPolicy.buildIncomingNotificationActions(
+                isVideo = false,
+                callUuid = "cell-1",
+                phoneAccountEnabled = false,
+                isTelephony = true
+            )
+        )
+        assertEquals(
+            listOf(
+                IncomingNotificationAction.ENABLE_CALLING,
+                IncomingNotificationAction.ANSWER_LINK,
+                IncomingNotificationAction.DECLINE
+            ),
+            FaceTimeRoutingPolicy.buildIncomingNotificationActions(
+                isVideo = false,
+                callUuid = "ft-audio-1",
+                phoneAccountEnabled = false,
+                isTelephony = false
+            )
+        )
+        assertEquals(
+            listOf(
+                IncomingNotificationAction.ANSWER_VIDEO,
+                IncomingNotificationAction.ANSWER_AUDIO,
+                IncomingNotificationAction.DECLINE
+            ),
+            FaceTimeRoutingPolicy.buildIncomingNotificationActions(
+                isVideo = true,
+                callUuid = "ft-video-1",
+                phoneAccountEnabled = true,
+                isTelephony = false
+            )
+        )
+    }
+
+    @Test
+    fun `telephony handle scheme forces tel even for email-like handles`() {
+        assertEquals("tel", FaceTimeRoutingPolicy.resolveHandleScheme("alice@icloud.com", isTelephony = true))
+        assertEquals("mailto", FaceTimeRoutingPolicy.resolveHandleScheme("alice@icloud.com", isTelephony = false))
+    }
+
+    @Test
+    fun `onlyIfRinging ends ringing connections but preserves active local calls`() {
+        assertTrue(FaceTimeConnectionService.shouldEndCallForState(Connection.STATE_RINGING, onlyIfRinging = true))
+        assertFalse(FaceTimeConnectionService.shouldEndCallForState(Connection.STATE_ACTIVE, onlyIfRinging = true))
+        assertFalse(FaceTimeConnectionService.shouldEndCallForState(Connection.STATE_HOLDING, onlyIfRinging = true))
+        assertTrue(FaceTimeConnectionService.shouldEndCallForState(Connection.STATE_ACTIVE, onlyIfRinging = false))
+    }
+
+    @Test
+    fun `dtmf normalization accepts 0-9 star hash A-D and rejects invalid input`() {
+        assertEquals("5", FaceTimeConnection.normalizeDtmfDigit('5'))
+        assertEquals("*", FaceTimeConnection.normalizeDtmfDigit('*'))
+        assertEquals("#", FaceTimeConnection.normalizeDtmfDigit('#'))
+        assertEquals("A", FaceTimeConnection.normalizeDtmfDigit('a'))
+        assertNull(FaceTimeConnection.normalizeDtmfDigit('E'))
+        assertNull(FaceTimeConnection.normalizeDtmfDigit('x'))
+
+        assertEquals("9", HttpService.normalizeDtmfDigit("9"))
+        assertEquals("D", HttpService.normalizeDtmfDigit(" d "))
+        assertNull(HttpService.normalizeDtmfDigit("12"))
+        assertNull(HttpService.normalizeDtmfDigit(""))
+    }
+
+    @Test
+    fun `pending outgoing answer and end events replay and respect state guards`() {
+        FaceTimeConnectionService.markCallActive("prebind-ans-1", recordIfPending = true)
+        assertFalse(FaceTimeConnectionService.shouldEndCallForState(Connection.STATE_DIALING, onlyIfRinging = true))
+        assertTrue(FaceTimeConnectionService.shouldEndCallForState(Connection.STATE_DIALING, onlyIfRinging = false))
+
+        FaceTimeConnectionService.endCall("prebind-end-1", onlyIfRinging = false, recordIfPending = true)
+        assertEquals("tel", FaceTimeRoutingPolicy.resolveHandleScheme("alice@icloud.com", isTelephony = true))
+        assertEquals("mailto", FaceTimeRoutingPolicy.resolveHandleScheme("+15551234567".let { "alice@icloud.com" }, isTelephony = false))
     }
 }

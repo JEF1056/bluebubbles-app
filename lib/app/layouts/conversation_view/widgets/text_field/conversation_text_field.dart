@@ -300,6 +300,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     recorderController?.dispose();
     audioRecorder?.dispose();
     controller.showAttachmentPicker.value = false;
+    unawaited(controller.stopDictation?.call());
     localController.cancelAllTimers();
     Get.delete<ConversationTextFieldLocalController>();
     if (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value) {
@@ -311,6 +312,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   Future<void> sendMessage({String? effect}) async {
     controller.onUserChatInteraction(immediate: true);
+    if (controller.isDictating.value) {
+      await controller.stopDictation?.call();
+    }
     final text = controller.textController.text;
     final game = controller.pendingGame.value;
     if (game != null && controller.scheduledDate.value != null) {
