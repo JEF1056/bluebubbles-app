@@ -107,14 +107,15 @@ String formatFindMyFreshness({
   required DateTime? lastUpdated,
   DateTime? now,
 }) {
-  if (locatingInProgress) return "Locating...";
   if (isLiveFresh) return "Live";
-  if (lastUpdated != null) {
-    final rel = formatFindMyRelativeTime(lastUpdated, now: now);
-    return isOld ? "Old · $rel" : rel;
+  final rel = lastUpdated != null ? formatFindMyRelativeTime(lastUpdated, now: now) : "";
+  if (locatingInProgress) {
+    return rel.isNotEmpty ? "Locating… · $rel" : "Locating…";
   }
-  if (isOld) return "Old";
-  return "";
+  if (isOld) {
+    return rel.isNotEmpty ? "Old · $rel" : "Old";
+  }
+  return rel;
 }
 
 class FindMyFriend {
@@ -130,6 +131,7 @@ class FindMyFriend {
     required this.lastUpdated,
     required this.status,
     required this.locatingInProgress,
+    this.isLive,
     this.horizontalAccuracy,
     this.verticalAccuracy,
     this.speed,
@@ -151,6 +153,7 @@ class FindMyFriend {
   final DateTime? lastUpdated;
   final LocationStatus? status;
   final bool locatingInProgress;
+  final bool? isLive;
   final double? horizontalAccuracy;
   final double? verticalAccuracy;
   final double? speed;
@@ -167,8 +170,9 @@ class FindMyFriend {
   String? get stableId => handle?.uniqueAddressAndService ?? handleAddress;
 
   bool isLiveFresh([DateTime? now]) {
-    if (status != LocationStatus.live || isOld || lastUpdated == null) return false;
-    return (now ?? DateTime.now()).difference(lastUpdated!) < const Duration(seconds: 60);
+    if (isOld) return false;
+    if (isLive != null) return isLive!;
+    return status == LocationStatus.live;
   }
 
   String displayFreshness([DateTime? now]) => formatFindMyFreshness(
@@ -199,23 +203,37 @@ class FindMyFriend {
 
   factory FindMyFriend.fromJson(Map<String, dynamic> json) {
     final rawTs = json["last_updated"] ?? json["timeStamp"] ?? json["timestamp"] ?? 0;
-    final tsMs = rawTs is num ? rawTs.toInt() : 0;
+    final tsMs = rawTs is num ? rawTs.toInt() : (rawTs is String ? (int.tryParse(rawTs) ?? 0) : 0);
     final rawHandle = json["handle"] is String
         ? json["handle"] as String
         : (json["handle"] is Map ? (json["handle"]["address"] as String?) : null);
     final rawAddress = rawHandle ?? (json["title"] as String?);
+    final parsedStatus = LocationStatus.values.firstWhereOrNull((e) => e.name == json["status"]);
+    final rawIsLive = json["is_live"] ?? json["isLive"];
+    final parsedIsLive = rawIsLive is bool ? rawIsLive : null;
+    final addrMap = json["address"] is Map ? json["address"] as Map : null;
+    final street = (json["street"] ?? addrMap?["street"])?.toString().trim() ?? '';
+    final city = (json["city"] ?? addrMap?["city"])?.toString().trim() ?? '';
+    final state = (json["state"] ?? addrMap?["state"])?.toString().trim() ?? '';
+    final structuredLong = street.isNotEmpty
+        ? [street, city, state].where((p) => p.isNotEmpty).join(', ')
+        : null;
+    final rawLong = (json["long_address"] as String?)?.trim();
+    final longAddress = (rawLong != null && rawLong.isNotEmpty) ? rawLong : structuredLong;
     return FindMyFriend(
       latitude: (json["coordinates"]?[0] as num?)?.toDouble(),
       longitude: (json["coordinates"]?[1] as num?)?.toDouble(),
-      longAddress: json["long_address"],
+      longAddress: longAddress,
       shortAddress: json["short_address"],
       title: json["title"],
       subtitle: json["subtitle"],
       handleAddress: rawAddress,
       handle: findHandleForAddress(rawAddress),
-      lastUpdated: tsMs == 0 ? null : DateTime.fromMillisecondsSinceEpoch(tsMs),
-      status: LocationStatus.values.firstWhereOrNull((e) => e.name == json["status"]),
-      locatingInProgress: json["is_locating_in_progress"] ?? json["isLocatingInProgress"] ?? false,
+      lastUpdated: tsMs <= 0 ? null : DateTime.fromMillisecondsSinceEpoch(tsMs),
+      status: parsedStatus,
+      isLive: parsedIsLive,
+      locatingInProgress:
+          json["locating_in_progress"] ?? json["is_locating_in_progress"] ?? json["isLocatingInProgress"] ?? false,
       horizontalAccuracy: ((json["horizontalAccuracy"] ?? json["horizontal_accuracy"]) as num?)?.toDouble(),
       verticalAccuracy: ((json["verticalAccuracy"] ?? json["vertical_accuracy"]) as num?)?.toDouble(),
       speed: (json["speed"] as num?)?.toDouble(),

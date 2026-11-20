@@ -47,7 +47,7 @@ class ContactRepository(
 
         // Primary: Phone Relay when tethered
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
-            if (phoneRelay.requestContactsSync()) {
+            if (phoneRelay.requestContactsSyncAwait()) {
                 loadFromDb()
                 return@withContext
             }

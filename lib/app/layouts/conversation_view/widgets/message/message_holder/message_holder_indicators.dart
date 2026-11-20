@@ -5,6 +5,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -49,34 +50,87 @@ class ErrorIndicatorObserver extends StatelessWidget {
       if (hasError) {
         final errorCode = message.error;
         final errorText = ErrorHelper.getErrorText(message);
+        final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
+
+        void openErrorDialog() {
+          showMessageErrorDialog(
+            context,
+            errorCode: errorCode,
+            errorText: errorText,
+            chatId: chat.id ?? 0,
+            onRetry: () => retryMessage(
+              message: message,
+              chat: chat,
+              service: service,
+              controller: ms,
+            ),
+            onRemove: () async {
+              await service.deleteMessage(message);
+              if (chat.id != null) {
+                final latest = await Chat.getMessagesAsync(chat, limit: 1);
+                if (latest.isNotEmpty) {
+                  ChatsSvc.setChatLatestMessage(chat, latest.first);
+                }
+                await chat.saveAsync();
+              }
+            },
+          );
+        }
+
+        if (isMaterial || kIsWeb || kIsDesktop) {
+          return Padding(
+            padding: const EdgeInsets.only(left: 4, top: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Tooltip(
+                  message: errorText,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: openErrorDialog,
+                    child: Padding(
+                      padding: const EdgeInsets.all(2),
+                      child: Icon(
+                        SettingsSvc.settings.skin.value == Skins.iOS
+                            ? CupertinoIcons.exclamationmark_circle
+                            : Icons.error_outline,
+                        size: 16,
+                        color: context.theme.colorScheme.error,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 2),
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => retryMessage(
+                    message: message,
+                    chat: chat,
+                    service: service,
+                    controller: ms,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      "Not sent · Retry",
+                      style: context.theme.textTheme.labelSmall?.copyWith(
+                        color: context.theme.colorScheme.error,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
 
         return IconButton(
           icon: Icon(
             SettingsSvc.settings.skin.value == Skins.iOS ? CupertinoIcons.exclamationmark_circle : Icons.error_outline,
             color: context.theme.colorScheme.error,
           ),
-          onPressed: () {
-            showMessageErrorDialog(
-              context,
-              errorCode: errorCode,
-              errorText: errorText,
-              chatId: chat.id!,
-              onRetry: () => retryMessage(
-                message: message,
-                chat: chat,
-                service: service,
-                controller: ms,
-              ),
-              onRemove: () async {
-                // Delete the message from DB and remove from service
-                await service.deleteMessage(message);
-                // Get the "new" latest info
-                List<Message> latest = await Chat.getMessagesAsync(chat, limit: 1);
-                ChatsSvc.setChatLatestMessage(chat, latest.first);
-                await chat.saveAsync();
-              },
-            );
-          },
+          onPressed: openErrorDialog,
         );
       }
       return const SizedBox.shrink();

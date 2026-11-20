@@ -97,10 +97,16 @@ class AttachmentPreview extends StatefulWidget {
     Attachment attachment, {
     required bool generateVideoThumbnail,
   }) {
-    if (kIsWeb) return false;
     if (_hidePreview()) return false;
     final mimeStart = attachment.mimeStart;
     if (mimeStart != 'image' && mimeStart != 'video') return false;
+    if (kIsWeb) {
+      final content = AttachmentsSvc.getContent(attachment);
+      if (content is PlatformFile && content.bytes != null && content.bytes!.isNotEmpty) {
+        return true;
+      }
+      return mimeStart == 'image' && attachment.guid != null;
+    }
     if (!AttachmentsSvc.hasLocalFile(attachment)) return false;
     if (mimeStart == 'video') {
       if (AttachmentsSvc.getCachedVideoThumbnailSync(attachment.path) != null) return true;
@@ -124,6 +130,7 @@ class AttachmentPreview extends StatefulWidget {
 
 class _AttachmentPreviewState extends State<AttachmentPreview> with ThemeHelpers {
   String? _imagePath;
+  Uint8List? _imageBytes;
   bool _isVideo = false;
   int _loadToken = 0;
 
@@ -158,10 +165,48 @@ class _AttachmentPreviewState extends State<AttachmentPreview> with ThemeHelpers
     _loadToken++;
     final token = _loadToken;
     _imagePath = null;
+    _imageBytes = null;
     _processing = false;
     _isVideo = widget.attachment.mimeStart == 'video';
 
-    if (kIsWeb || !AttachmentsSvc.hasLocalFile(widget.attachment)) {
+    if (kIsWeb) {
+      final content = AttachmentsSvc.getContent(widget.attachment);
+      if (content is PlatformFile && content.bytes != null && content.bytes!.isNotEmpty) {
+        _imageBytes = content.bytes;
+      } else if (widget.attachment.mimeStart == 'image' && widget.attachment.guid != null) {
+        final guid = widget.attachment.guid!;
+        final cacheKey = '${guid}_thumb_200';
+        _processing = true;
+        () async {
+          try {
+            final cached = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, cacheKey);
+            if (cached != null && cached.isNotEmpty) return cached;
+          } catch (_) {}
+          try {
+            final response = await HttpSvc.attachment.download(guid, width: 200, quality: 'good');
+            final data = response.data;
+            if (data is List<int> && data.isNotEmpty) {
+              final bytes = Uint8List.fromList(data);
+              await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, cacheKey, bytes);
+              return bytes;
+            }
+          } catch (e, s) {
+            Logger.warn('Failed to load web attachment preview', error: e, trace: s, tag: 'AttachmentPreview');
+          }
+          return null;
+        }().then((bytes) {
+          if (!mounted || token != _loadToken) return;
+          setState(() {
+            _imageBytes = bytes;
+            _processing = false;
+          });
+        });
+      }
+      if (rebuild && mounted) setState(() {});
+      return;
+    }
+
+    if (!AttachmentsSvc.hasLocalFile(widget.attachment)) {
       if (rebuild && mounted) setState(() {});
       return;
     }
@@ -262,13 +307,38 @@ class _AttachmentPreviewState extends State<AttachmentPreview> with ThemeHelpers
       }
       final radius = widget.borderRadius ?? BorderRadius.circular(widget.size * 0.15);
       final path = _imagePath;
-      if (path == null) {
+      final bytes = _imageBytes;
+      if (path == null && bytes == null) {
         // The parent only builds this once the file is on disk, so a missing path after
         // processing means the file can't be shown, not that it hasn't arrived.
         return _processing ? _loader(context, radius) : _unavailable(context, radius);
       }
 
       final cacheWidth = (widget.size * MediaQuery.devicePixelRatioOf(context)).round().clamp(1, 512);
+      final imageWidget = bytes != null
+          ? Image.memory(
+              bytes,
+              fit: BoxFit.cover,
+              width: widget.size,
+              height: widget.size,
+              gaplessPlayback: true,
+              cacheWidth: cacheWidth,
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+                  wasSynchronouslyLoaded || frame != null ? child : _loader(context, radius),
+              errorBuilder: (context, _, _) => _unavailable(context, radius),
+            )
+          : Image.file(
+              File(path!),
+              fit: BoxFit.cover,
+              width: widget.size,
+              height: widget.size,
+              gaplessPlayback: true,
+              cacheWidth: cacheWidth,
+              // The decode itself is async too; keep the loader up until the first frame.
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+                  wasSynchronouslyLoaded || frame != null ? child : _loader(context, radius),
+              errorBuilder: (context, _, _) => _unavailable(context, radius),
+            );
 
       return IgnorePointer(
         child: SizedBox(
@@ -279,18 +349,7 @@ class _AttachmentPreviewState extends State<AttachmentPreview> with ThemeHelpers
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Image.file(
-                  File(path),
-                  fit: BoxFit.cover,
-                  width: widget.size,
-                  height: widget.size,
-                  gaplessPlayback: true,
-                  cacheWidth: cacheWidth,
-                  // The decode itself is async too; keep the loader up until the first frame.
-                  frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
-                      wasSynchronouslyLoaded || frame != null ? child : _loader(context, radius),
-                  errorBuilder: (context, _, _) => _unavailable(context, radius),
-                ),
+                imageWidget,
                 if (_isVideo)
                   Center(
                     child: Icon(

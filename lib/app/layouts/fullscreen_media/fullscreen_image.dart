@@ -11,6 +11,7 @@ import 'package:bluebubbles/services/backend/interfaces/image_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -27,6 +28,8 @@ class FullscreenImage extends StatefulWidget {
     required this.updatePhysics,
     this.onOverlayToggle,
     this.onOpenCollectionGallery,
+    this.pageIndex = 0,
+    this.zoomCommand,
   });
 
   final PlatformFile file;
@@ -35,6 +38,8 @@ class FullscreenImage extends StatefulWidget {
   final Function(ScrollPhysics) updatePhysics;
   final Function(bool)? onOverlayToggle;
   final VoidCallback? onOpenCollectionGallery;
+  final int pageIndex;
+  final ValueListenable<({int seq, int index, double? factor})?>? zoomCommand;
 
   @override
   State<FullscreenImage> createState() => _FullscreenImageState();
@@ -43,10 +48,12 @@ class FullscreenImage extends StatefulWidget {
 class _FullscreenImageState extends State<FullscreenImage>
     with AutomaticKeepAliveClientMixin, LivePhotoMixin, ThemeHelpers {
   final PhotoViewController controller = PhotoViewController();
+  final PhotoViewScaleStateController scaleStateController = PhotoViewScaleStateController();
   bool showOverlay = true;
   bool hasError = false;
   Uint8List? bytes;
   String? compatiblePath; // For converted HEIC/TIFF files
+  int _lastHandledZoomSeq = -1;
 
   PlatformFile get file => widget.file;
   Attachment get attachment => widget.attachment;
@@ -60,10 +67,29 @@ class _FullscreenImageState extends State<FullscreenImage>
   void initState() {
     super.initState();
     _setFullscreen(true);
+    widget.zoomCommand?.addListener(_onZoomCommand);
     initBytes();
   }
 
+  void _onZoomCommand() {
+    final cmd = widget.zoomCommand?.value;
+    if (cmd == null || cmd.index != widget.pageIndex || cmd.seq == _lastHandledZoomSeq) return;
+    _lastHandledZoomSeq = cmd.seq;
+    _applyZoom(cmd.factor);
+  }
+
+  void _applyZoom(double? factor) {
+    if (factor == null) {
+      scaleStateController.reset();
+      return;
+    }
+    final currentScale = controller.scale ?? 1.0;
+    final nextScale = (currentScale * factor).clamp(0.5, 10.0);
+    controller.scale = nextScale;
+  }
+
   void _setFullscreen(bool fullscreen) {
+    if (kIsWeb) return;
     if (fullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
     } else {
@@ -74,12 +100,34 @@ class _FullscreenImageState extends State<FullscreenImage>
   Future<void> initBytes() async {
     // For web, we need bytes in memory
     if (kIsWeb || file.path == null) {
-      if (attachment.mimeType?.contains("image/tif") ?? false) {
-        bytes = await ImageInterface.convertToPng(file);
-      } else {
-        bytes = file.bytes;
+      if (file.bytes != null && file.bytes!.isNotEmpty) {
+        if (attachment.mimeType?.contains("image/tif") ?? false) {
+          bytes = await ImageInterface.convertToPng(file);
+        } else {
+          bytes = file.bytes;
+        }
+        if (mounted) setState(() {});
+        return;
       }
-      setState(() {});
+      if (attachment.guid != null) {
+        AttachmentsSvc.redownloadAttachment(
+          attachment,
+          onComplete: (newFile) async {
+            if (!mounted) return;
+            if (attachment.mimeType?.contains("image/tif") ?? false) {
+              bytes = await ImageInterface.convertToPng(newFile);
+            } else {
+              bytes = newFile.bytes;
+            }
+            if (mounted) setState(() {});
+          },
+          onError: () {
+            if (mounted) setState(() => hasError = true);
+          },
+        );
+      } else {
+        if (mounted) setState(() => hasError = true);
+      }
       return;
     }
 
@@ -91,9 +139,36 @@ class _FullscreenImageState extends State<FullscreenImage>
 
   @override
   void dispose() {
+    widget.zoomCommand?.removeListener(_onZoomCommand);
     _setFullscreen(false);
     controller.dispose();
+    scaleStateController.dispose();
     super.dispose();
+  }
+
+  void _saveImage() {
+    final currentBytes = bytes;
+    if (kIsWeb && (widget.file.bytes == null || widget.file.bytes!.isEmpty)) {
+      if (currentBytes != null && currentBytes.isNotEmpty) {
+        AttachmentsSvc.saveToDisk(PlatformFile(
+          name: widget.file.name,
+          size: currentBytes.length,
+          bytes: currentBytes,
+        ));
+        return;
+      }
+      if (widget.attachment.guid != null) {
+        AttachmentsSvc.redownloadAttachment(
+          widget.attachment,
+          onComplete: (downloaded) {
+            if (mounted) setState(() => bytes = downloaded.bytes);
+            AttachmentsSvc.saveToDisk(downloaded);
+          },
+        );
+        return;
+      }
+    }
+    AttachmentsSvc.saveToDisk(widget.file);
   }
 
   void refreshAttachment() {
@@ -105,6 +180,7 @@ class _FullscreenImageState extends State<FullscreenImage>
     AttachmentsSvc.redownloadAttachment(
       widget.attachment,
       onComplete: (newFile) {
+        if (!mounted) return;
         if (kIsWeb || newFile.path == null) {
           setState(() {
             bytes = newFile.bytes;
@@ -114,6 +190,7 @@ class _FullscreenImageState extends State<FullscreenImage>
         }
       },
       onError: () {
+        if (!mounted) return;
         setState(() {
           hasError = true;
         });
@@ -131,11 +208,12 @@ class _FullscreenImageState extends State<FullscreenImage>
     // No orientation handling here: the decoder applies EXIF orientation
     // itself, so the provider's reported size is already display-space and
     // PhotoViewComputedScale.contained reads it correctly.
-    return PhotoView(
+    Widget viewer = PhotoView(
       gaplessPlayback: true,
       minScale: PhotoViewComputedScale.contained,
       maxScale: PhotoViewComputedScale.contained * 10,
       controller: controller,
+      scaleStateController: scaleStateController,
       imageProvider: bytes != null
           ? MemoryImage(bytes!) as ImageProvider
           : FileImage(File(compatiblePath ?? file.path!)),
@@ -155,6 +233,19 @@ class _FullscreenImageState extends State<FullscreenImage>
           Center(child: Text("Failed to display image", style: context.theme.textTheme.bodyLarge)),
       filterQuality: FilterQuality.high,
     );
+
+    if (kIsWeb || kIsDesktop) {
+      viewer = Listener(
+        onPointerSignal: (event) {
+          if (event is PointerScrollEvent && event.scrollDelta.dy != 0) {
+            _applyZoom(event.scrollDelta.dy < 0 ? 1.15 : 0.87);
+          }
+        },
+        child: viewer,
+      );
+    }
+
+    return viewer;
   }
 
   @override
@@ -191,7 +282,7 @@ class _FullscreenImageState extends State<FullscreenImage>
                 opacity: showOverlay ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 125),
                 child: Container(
-                  height: kIsDesktop ? 80 : 100.0,
+                  height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 100.0),
                   width: NavigationSvc.width(context),
                   color: context.theme.colorScheme.shadow.withValues(alpha: samsung ? 1 : 0.65),
                   child: SafeArea(
@@ -199,7 +290,7 @@ class _FullscreenImageState extends State<FullscreenImage>
                     right: false,
                     bottom: false,
                     child: SizedBox(
-                      height: kIsDesktop ? 80 : 50,
+                      height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 50.0),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
@@ -233,7 +324,7 @@ class _FullscreenImageState extends State<FullscreenImage>
                                     children: [
                                       Text(
                                         (message?.isFromMe ?? false)
-                                            ? 'You'
+                                            ? SettingsSvc.effectiveUserName
                                             : message?.handleRelation.target?.displayName ?? "Unknown",
                                         style: context.theme.textTheme.titleLarge!.copyWith(color: Colors.white),
                                       ),
@@ -350,7 +441,7 @@ class _FullscreenImageState extends State<FullscreenImage>
                               CupertinoIcons.cloud_download,
                               color: samsung ? Colors.white : context.theme.colorScheme.primary,
                             ),
-                            onPressed: () => AttachmentsSvc.saveToDisk(widget.file),
+                            onPressed: _saveImage,
                           ),
                           if (!kIsWeb && !kIsDesktop)
                             IconButton(
@@ -400,7 +491,7 @@ class _FullscreenImageState extends State<FullscreenImage>
                       top: false,
                       child: Center(
                         child: FullscreenMediaActionPill(
-                          onSave: () => AttachmentsSvc.saveToDisk(widget.file),
+                          onSave: _saveImage,
                           onShare: (!kIsWeb && !kIsDesktop)
                               ? () {
                                   if (widget.file.path != null) {
@@ -410,6 +501,42 @@ class _FullscreenImageState extends State<FullscreenImage>
                               : null,
                           onDetails: () => showMetadataDialog(widget.attachment, context),
                         ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if ((kIsWeb || kIsDesktop) && !iOS)
+              Positioned(
+                right: 20,
+                bottom: MediaQuery.sizeOf(context).width < 600 ? 78 : 24,
+                child: IgnorePointer(
+                  ignoring: !showOverlay,
+                  child: AnimatedOpacity(
+                    opacity: showOverlay ? 1.0 : 0.0,
+                    duration: M3EMotion.effectsFast.duration,
+                    child: Material(
+                      color: Colors.black54,
+                      borderRadius: M3EShapes.radiusXl,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Zoom out (-)',
+                            icon: const Icon(Icons.remove, color: Colors.white, size: 20),
+                            onPressed: () => _applyZoom(0.8),
+                          ),
+                          IconButton(
+                            tooltip: 'Reset zoom (0)',
+                            icon: const Icon(Icons.fit_screen, color: Colors.white, size: 18),
+                            onPressed: () => _applyZoom(null),
+                          ),
+                          IconButton(
+                            tooltip: 'Zoom in (+)',
+                            icon: const Icon(Icons.add, color: Colors.white, size: 20),
+                            onPressed: () => _applyZoom(1.25),
+                          ),
+                        ],
                       ),
                     ),
                   ),

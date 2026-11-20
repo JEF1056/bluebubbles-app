@@ -50,6 +50,22 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   final recorderController = kIsWeb ? null : RecorderController();
   final AudioRecorder? audioRecorder = kIsWeb ? AudioRecorder() : null;
   final localController = ConversationTextFieldLocalController();
+  bool _suppressInteractionOnTextChange = false;
+
+  // Persist in-memory web attachment drafts (which have bytes != null, path == null) across chat switches.
+  static final Map<String, List<PlatformFile>> _webAttachmentDrafts = <String, List<PlatformFile>>{};
+
+  static void syncWebAttachmentDraft(String chatGuid, List<PlatformFile> files, {bool isWeb = kIsWeb}) {
+    if (!isWeb) return;
+    if (files.isEmpty) {
+      _webAttachmentDrafts.remove(chatGuid);
+    } else {
+      _webAttachmentDrafts[chatGuid] = files;
+    }
+  }
+
+  @visibleForTesting
+  static List<PlatformFile>? webAttachmentDraftFor(String chatGuid) => _webAttachmentDrafts[chatGuid];
 
   Chat get chat => controller.chat;
 
@@ -85,6 +101,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   void getDrafts() async {
     getTextDraft();
+    localController.oldText.value =
+        "${controller.subjectTextController.text}\n${controller.textController.text}";
     await getAttachmentDrafts();
   }
 
@@ -103,11 +121,23 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       final (draft, runs) = storedRuns == null
           ? MentionTextEditingController.parseLegacyDraft(incomingText, controller.textController.mentionables)
           : (incomingText, (jsonDecode(storedRuns) as List).map((r) => Run.fromMap((r as Map).cast())).toList());
-      controller.textController.setTextAndRuns(draft, runs);
+      _suppressInteractionOnTextChange = true;
+      try {
+        controller.textController.setTextAndRuns(draft, runs);
+      } finally {
+        _suppressInteractionOnTextChange = false;
+      }
     }
   }
 
   Future<void> getAttachmentDrafts({List<String> attachments = const []}) async {
+    if (kIsWeb && attachments.isEmpty) {
+      final webDrafts = _webAttachmentDrafts[chatGuid];
+      if (webDrafts != null && webDrafts.isNotEmpty && controller.pickedAttachments.isEmpty) {
+        controller.pickedAttachments.assignAll(webDrafts);
+      }
+      return;
+    }
     // Read from ChatState — it is the source of truth and is always up-to-date.
     // Fall back to chat.textFieldAttachments for the first load after a cold start
     // (before ChatState has been updated by any setChatTextFieldAttachments call).
@@ -194,6 +224,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
     localController.debounceTyping?.cancel();
     localController.oldText.value = newText;
+    if (!_suppressInteractionOnTextChange) {
+      controller.onUserChatInteraction();
+    }
     // don't send a bunch of duplicate events for every typing change
     if (SettingsSvc.settings.enablePrivateAPI.value &&
         (chat.autoSendTypingIndicators ?? SettingsSvc.settings.privateSendTypingIndicators.value)) {
@@ -239,6 +272,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   void dispose() {
     final hasDraft = controller.textController.text.trim().isNotEmpty;
     final draftAttachments = controller.pickedAttachments.where((e) => e.path != null).map((e) => e.path!).toList();
+    if (kIsWeb) {
+      syncWebAttachmentDraft(chatGuid, controller.pickedAttachments.toList());
+    }
     // Update ChatState synchronously and fire DB save in the background.
     unawaited(ChatsSvc.setChatTextFieldText(chat, hasDraft ? controller.textController.text : '',
         runs: hasDraft ? controller.textController.runs : const []));
@@ -261,6 +297,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> sendMessage({String? effect}) async {
+    controller.onUserChatInteraction(immediate: true);
     final text = controller.textController.text;
     final game = controller.pendingGame.value;
     if (game != null && controller.scheduledDate.value != null) {
@@ -351,17 +388,27 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     // The composer's picker records what's picked in it; typed and pasted emoji only get here
     unawaited(RecentEmojis.addFromText("${controller.subjectTextController.text} $text"));
     controller.pickedAttachments.clear();
-    controller.textController.clear();
-    controller.subjectTextController.clear();
+    _suppressInteractionOnTextChange = true;
+    try {
+      controller.textController.clear();
+      controller.subjectTextController.clear();
+    } finally {
+      _suppressInteractionOnTextChange = false;
+    }
     controller.replyToMessage = null;
     controller.scheduledDate.value = null;
     localController.debounceTyping = null;
     // Clear the draft now that the message has been sent.
+    _webAttachmentDrafts.remove(chatGuid);
     unawaited(ChatsSvc.setChatTextFieldText(chat, ''));
     unawaited(ChatsSvc.setChatTextFieldAttachments(chat, []));
   }
 
   Future<void> openFullCamera({String type = 'camera'}) async {
+    if (kIsWeb) {
+      showSnackbar("Unsupported", "Camera capture is not available on web.", type: SnackbarType.info);
+      return;
+    }
     bool granted = (await Permission.camera.request()).isGranted;
     if (!granted) {
       showSnackbar("Error", "Camera access was denied!", type: SnackbarType.error);
@@ -395,7 +442,10 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() => Padding(
+    Widget content = Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => controller.onUserChatInteraction(),
+      child: Obx(() => Padding(
           padding: EdgeInsets.only(
             bottom: showAttachmentPicker ? 0 : 10.0,
             top: 10.0,
@@ -479,6 +529,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
               }),
             ],
           ),
-        ));
+        )),
+    );
+    return content;
   }
 }

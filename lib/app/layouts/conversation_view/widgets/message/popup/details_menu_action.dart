@@ -11,7 +11,7 @@ enum DetailsMenuAction {
   Reply(PlatformSupport.all, CupertinoIcons.reply, Icons.reply, "Reply"),
   Save(PlatformSupport.all, CupertinoIcons.cloud_download, Icons.file_download, "Save"),
   OpenInImageViewer(PlatformSupport.desktop, CupertinoIcons.photo, Icons.image_outlined, "Open In Image Viewer"),
-  OpenInBrowser(PlatformSupport.android, CupertinoIcons.macwindow, Icons.open_in_browser, "Open In Browser"),
+  OpenInBrowser(PlatformSupport.android | PlatformSupport.web, CupertinoIcons.macwindow, Icons.open_in_browser, "Open In Browser"),
   OpenInNewTab(PlatformSupport.web, CupertinoIcons.macwindow, Icons.open_in_browser, "Open In New Tab"),
   CopyText(PlatformSupport.all, CupertinoIcons.doc_on_clipboard, Icons.content_copy, "Copy"),
   CopyAttachment(PlatformSupport.desktop, CupertinoIcons.doc_on_clipboard, Icons.content_copy, "Copy Attachment"),

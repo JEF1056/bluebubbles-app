@@ -301,7 +301,8 @@ class MethodChannelHandlers {
       if (arguments != null) {
         final Chat? chat = Chat.findOne(guid: arguments['chatGuid']);
         if (chat != null) {
-          await chat.toggleHasUnreadAsync(false, clearLocalNotifications: false);
+          final bool privateMark = arguments['privateMark'] as bool? ?? true;
+          await chat.toggleHasUnreadAsync(false, clearLocalNotifications: false, privateMark: privateMark);
           ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(false);
           return await _ok();
         }
@@ -341,16 +342,21 @@ class MethodChannelHandlers {
       final Map<String, dynamic>? data = arguments;
       if (!isNullOrEmpty(data)) {
         final payload = ServerPayload.fromJson(data!);
+        final dynamic rawRead = payload.data['read'] ?? payload.data['status'];
+        if (rawRead is! bool) return await _ok();
+
         final Chat? chat = Chat.findOne(guid: payload.data['chatGuid']);
-        if (chat == null || (payload.data['read'] != true && payload.data['read'] != false)) {
+        if (chat == null) {
           return await _retry();
         }
 
-        final int? readBefore = (payload.data['lastReadMessageTimestamp'] as num?)?.toInt();
-        Logger.info('Received chat status change from FCM (read: ${payload.data['read']}, readBefore: $readBefore)');
-        if (payload.data['read'] == true && await chat.clearNotificationsForPartialRead(readBefore)) return await _ok();
-        await chat.toggleHasUnreadAsync(!payload.data['read']!,
-            force: payload.data['read'] == true, privateMark: false, readBefore: readBefore);
+        final int? readBefore = ActionHandler.extractReadBefore(payload.data);
+        Logger.info('Received chat status change from FCM (read: $rawRead, readBefore: $readBefore)');
+        if (rawRead && await chat.clearNotificationsForPartialRead(readBefore)) return await _ok();
+        await chat.toggleHasUnreadAsync(!rawRead, force: rawRead, privateMark: false, readBefore: readBefore);
+        if (!service.headless && GetIt.I.isRegistered<ChatsService>()) {
+          ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(!rawRead);
+        }
         return await _ok();
       }
 

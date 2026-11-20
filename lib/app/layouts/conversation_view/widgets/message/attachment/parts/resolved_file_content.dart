@@ -12,6 +12,7 @@ import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/conversation_fullscreen_holder.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:passkit_ui/passkit_ui.dart';
@@ -45,19 +46,18 @@ class ResolvedFileContent extends StatelessWidget {
   /// Bubble-style media radius, or zero when [fill] (parent owns clip/shadow).
   BorderRadius _mediaBorderRadius(Message message) {
     if (fill) return BorderRadius.zero;
-    if (isiOS) {
-      return BorderRadius.only(
-        topLeft: const Radius.circular(20.0),
-        topRight: const Radius.circular(20.0),
-        bottomLeft: forceAllCornersRounded
-            ? const Radius.circular(20.0)
-            : (message.isFromMe! ? const Radius.circular(20.0) : Radius.zero),
-        bottomRight: forceAllCornersRounded
-            ? const Radius.circular(20.0)
-            : (!message.isFromMe! ? const Radius.circular(20.0) : Radius.zero),
-      );
-    }
-    return const BorderRadius.all(Radius.circular(5.0));
+    final isFromMe = message.isFromMe ?? false;
+    final innerRadius = isiOS ? Radius.zero : const Radius.circular(4.0);
+    return BorderRadius.only(
+      topLeft: const Radius.circular(20.0),
+      topRight: const Radius.circular(20.0),
+      bottomLeft: forceAllCornersRounded
+          ? const Radius.circular(20.0)
+          : (isFromMe ? const Radius.circular(20.0) : innerRadius),
+      bottomRight: forceAllCornersRounded
+          ? const Radius.circular(20.0)
+          : (!isFromMe ? const Radius.circular(20.0) : innerRadius),
+    );
   }
 
   @override
@@ -134,15 +134,18 @@ class ResolvedFileContent extends StatelessWidget {
     }
 
     if (attachment.mimeType == "text/x-vlocation" || attachment.uti == 'public.vlocation') {
+      final preview = UrlPreview(
+        data: UrlPreviewData(
+          title: "Location from ${DateFormat.yMd().format(message.dateCreated!)}",
+          siteName: "Tap to open",
+        ),
+        file: file,
+      );
       return Padding(
         padding: showTail ? tailPadding : EdgeInsets.zero,
-        child: UrlPreview(
-          data: UrlPreviewData(
-            title: "Location from ${DateFormat.yMd().format(message.dateCreated!)}",
-            siteName: "Tap to open",
-          ),
-          file: file,
-        ),
+        child: kIsWeb
+            ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: preview)
+            : preview,
       );
     }
 

@@ -140,10 +140,17 @@ class FilesystemService {
 
   /// Resolves an existing custom background for a chat using the same folder
   /// layout as the background cropper.
-  String? getExistingChatBackgroundPath(String chatGuid) {
+  String? getExistingChatBackgroundPath(String chatGuid, {String? fallbackStoredPath}) {
     if (kIsWeb) {
-      return _webChatBackgroundPaths[chatGuid] ??
-          (_webChatBackgrounds.containsKey(chatGuid) ? 'web-bg://${sanitizeGuid(chatGuid)}' : null);
+      final tracked = _webChatBackgroundPaths[chatGuid];
+      if (tracked != null) return tracked;
+      if (!_webChatBackgrounds.containsKey(chatGuid)) return null;
+      // Preserve server-synced vs local path distinction across reloads via Chat.customBackgroundPath.
+      if (fallbackStoredPath != null && fallbackStoredPath.startsWith('web-bg://')) {
+        _webChatBackgroundPaths[chatGuid] = fallbackStoredPath;
+        return fallbackStoredPath;
+      }
+      return 'web-bg://${sanitizeGuid(chatGuid)}';
     }
 
     final sanitizedGuid = sanitizeGuid(chatGuid);
@@ -163,7 +170,7 @@ class FilesystemService {
   Uint8List? getCachedChatBackgroundByPath(String path) {
     final base = stripWebPathVersion(path);
     if (!base.startsWith('web-bg://')) return null;
-    final sanitized = base.substring('web-bg://'.length);
+    final sanitized = base.substring('web-bg://'.length).split('/').first;
     for (final entry in _webChatBackgrounds.entries) {
       if (sanitizeGuid(entry.key) == sanitized) return entry.value;
     }
@@ -183,12 +190,53 @@ class FilesystemService {
     return 'web-avatar://$id?v=${++_webAssetSeq}';
   }
 
+  Future<String> saveWebContactAvatar(String contactId, Uint8List bytes) async {
+    final safeId = sanitizeFileName(contactId);
+    final shortHash = sha256.convert(bytes).toString().substring(0, 12);
+    final id = 'contact_${safeId}_$shortHash';
+    final key = 'avatar_$id';
+    final existing = _webAvatars[key];
+    if (existing != null && existing.length == bytes.length) {
+      return 'web-avatar://$id';
+    }
+    _webAvatars[key] = bytes;
+    await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, key, bytes);
+    final prefix = 'avatar_contact_${safeId}_';
+    final staleKeys = _webAvatars.keys.where((k) => k.startsWith(prefix) && k != key).toList();
+    for (final stale in staleKeys) {
+      _webAvatars.remove(stale);
+      await WebMediaCache.instance.delete(WebMediaCache.attachmentsStore, stale);
+    }
+    return 'web-avatar://$id';
+  }
+
   Future<void> deleteWebAvatar(String path) async {
     final base = stripWebPathVersion(path);
     if (!base.startsWith('web-avatar://')) return;
     final key = 'avatar_${base.substring('web-avatar://'.length)}';
     _webAvatars.remove(key);
     await WebMediaCache.instance.delete(WebMediaCache.attachmentsStore, key);
+  }
+
+  Future<String> saveServerChatBackground(
+    String chatGuid,
+    String serverGuid,
+    Uint8List bytes, {
+    String ext = 'jpg',
+  }) async {
+    final filename = serverBackgroundFilename(serverGuid, ext: ext);
+    if (kIsWeb) {
+      _webChatBackgrounds[chatGuid] = bytes;
+      final versioned = 'web-bg://${sanitizeGuid(chatGuid)}/$filename?v=${++_webAssetSeq}';
+      _webChatBackgroundPaths[chatGuid] = versioned;
+      await WebMediaCache.instance.put(WebMediaCache.chatBackgroundsStore, chatGuid, bytes);
+      return versioned;
+    }
+    final dir = Directory(join(customBackgroundsPath, sanitizeGuid(chatGuid)));
+    await dir.create(recursive: true);
+    final file = File(join(dir.path, filename));
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
   }
 
   Future<String> saveChatBackground(String chatGuid, Uint8List bytes) async {

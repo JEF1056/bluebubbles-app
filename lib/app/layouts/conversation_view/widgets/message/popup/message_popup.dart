@@ -288,7 +288,10 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
         child: FittedBox(
           child: Text(emoji,
               style: const TextStyle(
-                  height: 1, leadingDistribution: TextLeadingDistribution.even, fontFamily: 'Apple Color Emoji')),
+                height: 1,
+                leadingDistribution: TextLeadingDistribution.even,
+                fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
+              )),
         ),
       );
 
@@ -454,7 +457,13 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
     final double maxMaterialBubbleHeight = max(80.0, screenHeight - bottomReserved - minBubbleTop);
     final double maxMaterialBubbleWidth = max(widget.size.width, popupWidth * 0.78);
 
-    return Theme(
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): popDetails,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Theme(
       data: context.theme.copyWith(
         // in case some components still use legacy theming
         primaryColor: context.theme.colorScheme.bubble(context, chat.isIMessage),
@@ -787,6 +796,8 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                     ),
                 ],
               ))),
+        ),
+      ),
     );
   }
 
@@ -1073,7 +1084,10 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                               : Builder(builder: (context) {
                                   final text = Text(
                                     ReactionTypes.reactionToEmoji[e] ?? "X",
-                                    style: const TextStyle(fontSize: 20, fontFamily: 'Apple Color Emoji'),
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
+                                    ),
                                     textAlign: TextAlign.center,
                                   );
                                   // rotate thumbs down to match iOS

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:collection/collection.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart' hide Emoji;
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
 import 'package:bluebubbles/app/components/custom/custom_bouncing_scroll_physics.dart';
@@ -20,6 +22,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/tex
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/helpers/ui/html_runs.dart';
+import 'package:bluebubbles/helpers/ui/recent_emojis.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -90,6 +93,10 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   ClipboardPasteHandler? clipboardHandler;
   StreamSubscription<void>? _webPasteSub;
   Worker? _recordingWorker;
+  Worker? _emojiPickerWorker;
+  OverlayEntry? _emojiOverlayEntry;
+  final LayerLink _emojiLayerLink = LayerLink();
+  final Object _emojiTapGroupId = Object();
 
   TextFieldComponentState() : isRecordingNotifier = ValueNotifier<bool>(false);
 
@@ -144,6 +151,11 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   void dispose() {
     _webPasteSub?.cancel();
     _recordingWorker?.dispose();
+    _emojiPickerWorker?.dispose();
+    _removeEmojiOverlay();
+    if (controller?.showEmojiPicker.value == true) {
+      controller?.showEmojiPicker.value = false;
+    }
     _fieldFocusNode?.removeListener(_onFieldFocusChange);
     // dispose of the ValueNotifier when the state is disposed
     isRecordingNotifier.dispose();
@@ -162,6 +174,9 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   void _configureHandlers() {
     _recordingWorker?.dispose();
     _recordingWorker = null;
+    _emojiPickerWorker?.dispose();
+    _emojiPickerWorker = null;
+    _removeEmojiOverlay();
     final ctrl = controller;
     clipboardHandler = ClipboardPasteHandler(controller: ctrl, textController: ctrl?.textController ?? textController);
     if (ctrl == null) {
@@ -177,6 +192,15 @@ class TextFieldComponentState extends State<TextFieldComponent> {
         isRecordingNotifier.value = val;
       });
     }
+
+    _emojiPickerWorker = ever(ctrl.showEmojiPicker, (bool show) {
+      if (!mounted) return;
+      if (show) {
+        _showEmojiOverlay();
+      } else {
+        _removeEmojiOverlay();
+      }
+    });
 
     emojiHandler = EmojiAutocompleteHandler(controller: ctrl, textField: textController);
     mentionHandler = MentionAutocompleteHandler(controller: ctrl, textField: textController);
@@ -228,6 +252,118 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     );
   }
 
+  void _removeEmojiOverlay() {
+    _emojiOverlayEntry?.remove();
+    _emojiOverlayEntry?.dispose();
+    _emojiOverlayEntry = null;
+  }
+
+  void _showEmojiOverlay() {
+    if (_emojiOverlayEntry != null || !mounted) return;
+    final overlay = Overlay.maybeOf(context);
+    final ctrl = controller;
+    if (overlay == null || ctrl == null) return;
+
+    _emojiOverlayEntry = OverlayEntry(
+      builder: (overlayContext) {
+        final screen = MediaQuery.sizeOf(overlayContext);
+        final width = math.min(352.0, screen.width - 24);
+        final height = math.min(356.0, screen.height - 140);
+        final colors = overlayContext.theme.colorScheme;
+        final pickerCard = TapRegion(
+          groupId: _emojiTapGroupId,
+          onTapOutside: (_) => ctrl.showEmojiPicker.value = false,
+          child: CallbackShortcuts(
+            bindings: {
+              const SingleActivator(LogicalKeyboardKey.escape): () {
+                ctrl.showEmojiPicker.value = false;
+                (_fieldFocusNode ?? ctrl.focusNode).requestFocus();
+              },
+            },
+            child: Material(
+              elevation: 8,
+              color: colors.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(20),
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                width: width,
+                height: height,
+                child: EmojiPicker(
+                  textEditingController: ctrl.textController,
+                  onEmojiSelected: (_, emoji) {
+                    unawaited(RecentEmojis.addFromText(emoji.emoji));
+                    (_fieldFocusNode ?? ctrl.focusNode).requestFocus();
+                  },
+                  config: Config(
+                    height: height,
+                    emojiSet: (_) => emojiSetEnglish,
+                    checkPlatformCompatibility: true,
+                    emojiViewConfig: EmojiViewConfig(
+                      emojiSizeMax: 26,
+                      backgroundColor: Colors.transparent,
+                      columns: 8,
+                      noRecents: Text(
+                        "No Recents",
+                        style: overlayContext.textTheme.bodyLarge!.copyWith(color: colors.outline),
+                      ),
+                    ),
+                    viewOrderConfig: const ViewOrderConfig(
+                      top: EmojiPickerItem.searchBar,
+                      middle: EmojiPickerItem.categoryBar,
+                      bottom: EmojiPickerItem.emojiView,
+                    ),
+                    skinToneConfig: const SkinToneConfig(enabled: false),
+                    categoryViewConfig: CategoryViewConfig(
+                      backgroundColor: Colors.transparent,
+                      dividerColor: colors.outline.withValues(alpha: 0.2),
+                      indicatorColor: colors.primary,
+                      iconColor: colors.outline,
+                      iconColorSelected: colors.primary,
+                      backspaceColor: colors.outline,
+                    ),
+                    bottomActionBarConfig: const BottomActionBarConfig(
+                      enabled: false,
+                    ),
+                    searchViewConfig: SearchViewConfig(
+                      backgroundColor: Colors.transparent,
+                      buttonIconColor: colors.outline,
+                      hintText: "Search emoji",
+                      hintTextStyle: overlayContext.textTheme.bodyLarge!.copyWith(color: colors.outline),
+                      inputTextStyle: overlayContext.textTheme.bodyLarge!.copyWith(color: colors.onSurface),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        return Positioned.fill(
+          child: Stack(
+            children: [
+              if (screen.width < 450)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: 76,
+                  child: Center(child: pickerCard),
+                )
+              else
+                CompositedTransformFollower(
+                  link: _emojiLayerLink,
+                  showWhenUnlinked: false,
+                  targetAnchor: Alignment.topRight,
+                  followerAnchor: Alignment.bottomRight,
+                  offset: const Offset(0, -12),
+                  child: pickerCard,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    overlay.insert(_emojiOverlayEntry!);
+  }
+
   bool _showAttachmentPickerLocal = false;
   bool _pasteHandledOnKeyDown = false;
   final _fieldKey = GlobalKey();
@@ -268,7 +404,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                             : context.theme.colorScheme.surfaceContainerHigh)
                         .withValues(alpha: hasBackground ? 0.86 : 1.0)
                     : null,
-                borderRadius: BorderRadius.circular(iOS ? 20 : 28),
+                borderRadius: BorderRadius.circular(iOS ? 20 : (kIsWeb && material ? 26 : 28)),
               ),
               clipBehavior: Clip.antiAlias,
               child: AnimatedSize(
@@ -477,6 +613,34 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
+                                          if (kIsWeb || kIsDesktop)
+                                            TapRegion(
+                                              groupId: _emojiTapGroupId,
+                                              child: CompositedTransformTarget(
+                                                link: _emojiLayerLink,
+                                                child: Obx(() {
+                                                  final active = controller!.showEmojiPicker.value;
+                                                  return IconButton(
+                                                    tooltip: 'Emoji',
+                                                    constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
+                                                    padding: EdgeInsets.zero,
+                                                    icon: Icon(
+                                                      active ? Icons.emoji_emotions : Icons.emoji_emotions_outlined,
+                                                      color: active
+                                                          ? context.theme.colorScheme.primary
+                                                          : context.theme.colorScheme.onSurfaceVariant,
+                                                      size: 22,
+                                                    ),
+                                                    onPressed: () {
+                                                      controller!.showEmojiPicker.value = !active;
+                                                      if (!active) {
+                                                        (_fieldFocusNode ?? controller!.focusNode).requestFocus();
+                                                      }
+                                                    },
+                                                  );
+                                                }),
+                                              ),
+                                            ),
                                           IconButton(
                                             tooltip: 'Gallery',
                                             constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
@@ -563,7 +727,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                       item.onPressed?.call();
                                     })
                                   : item,
-                            if (!kIsDesktop && controller != null && txtController.allowFormatting)
+                            if (!kIsDesktop && !kIsWeb && controller != null && txtController.allowFormatting)
                               ContextMenuButtonItem(
                                 onPressed: () {
                                   editableTextState.hideToolbar();
@@ -575,7 +739,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
 
                           // The stock paste item only exists when the clipboard has text, and only pastes text.
                           // Replace it (or add one) with our handler, which handles media and falls back to text.
-                          if (kIsDesktop) {
+                          if (kIsDesktop || kIsWeb) {
                             final pasteItem = ContextMenuButtonItem(
                               type: ContextMenuButtonType.paste,
                               onPressed: () {
@@ -809,9 +973,9 @@ class TextFieldComponentState extends State<TextFieldComponent> {
       }
     }
 
-    if (HardwareKeyboard.instance.isMetaPressed ||
-        HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isAltPressed) {
+    if (HardwareKeyboard.instance.isAltPressed ||
+        ((HardwareKeyboard.instance.isMetaPressed || HardwareKeyboard.instance.isControlPressed) &&
+            ev.logicalKey != LogicalKeyboardKey.enter)) {
       return KeyEventResult.ignored;
     }
 
@@ -858,7 +1022,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     KeyEventResult shortcutResult = keyboardHandler?.handleKeyEvent(ev) ?? KeyEventResult.ignored;
     if (shortcutResult == KeyEventResult.handled) return KeyEventResult.handled;
 
-    // Escape: clear picker state if not handled by handlers above
+    // Escape: dismiss active composer panels/overlays without wiping pickedAttachments
     if (isEscapeKey) {
       final ctrl = controller;
       if (ctrl == null) return KeyEventResult.ignored;
@@ -867,12 +1031,35 @@ class TextFieldComponentState extends State<TextFieldComponent> {
         ctrl.showEmojiPicker.value = false;
         return KeyEventResult.handled;
       }
-      if (ctrl.replyToMessage != null) {
-        ctrl.replyToMessage = null;
+      if (ctrl.showAttachmentPicker.value) {
+        ctrl.showAttachmentPicker.value = false;
         return KeyEventResult.handled;
       }
-      if (ctrl.pickedAttachments.isNotEmpty) {
-        ctrl.pickedAttachments.clear();
+      if (ctrl.showGamePicker.value) {
+        ctrl.showGamePicker.value = false;
+        return KeyEventResult.handled;
+      }
+      if (ctrl.showTextFormattingPanel.value) {
+        ctrl.showTextFormattingPanel.value = false;
+        return KeyEventResult.handled;
+      }
+      if (ctrl.scheduledDate.value != null) {
+        ctrl.scheduledDate.value = null;
+        return KeyEventResult.handled;
+      }
+      if (ctrl.showRecording.value) {
+        ctrl.showRecording.value = false;
+        if (kIsWeb) {
+          unawaited(widget.audioRecorder?.stop().then((path) {
+            if (path != null) revokeWebObjectUrl(path);
+          }).catchError((_) {}));
+        } else {
+          unawaited(recorderController?.stop().catchError((_) => null));
+        }
+        return KeyEventResult.handled;
+      }
+      if (ctrl.replyToMessage != null) {
+        ctrl.replyToMessage = null;
         return KeyEventResult.handled;
       }
     }

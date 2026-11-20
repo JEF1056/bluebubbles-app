@@ -6,6 +6,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
@@ -132,6 +133,7 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
 
   void sendTapback([String? type, int? part, String? emoji]) {
     HapticFeedback.lightImpact();
+    widget.cvController.onUserChatInteraction(immediate: true);
     final reaction = type ?? SettingsSvc.settings.quickTapbackType.value;
     Logger.info("Sending reaction type: $reaction");
 
@@ -169,33 +171,43 @@ class _MessagePopupHolderState extends State<MessagePopupHolder> with ThemeHelpe
       final supportsTapback = widget.cvController.chat.isIMessage ||
           widget.cvController.chat.isRCS ||
           (ChatServiceType.fromServiceName(widget.controller.message.service)?.supportsTapbackAndReply ?? false);
-      return GestureDetector(
-        key: globalKey,
-        onDoubleTap: disabled
-            ? null
-            : SettingsSvc.settings.doubleTapForDetails.value || isTempMessage
-                ? () => openPopup()
-                : SettingsSvc.settings.enableQuickTapback.value && supportsTapback
-                    ? () => sendTapback(null, widget.part.part)
-                    : null,
-        onLongPress: disabled
-            ? null
-            : SettingsSvc.settings.doubleTapForDetails.value &&
-                    SettingsSvc.settings.enableQuickTapback.value &&
-                    supportsTapback &&
-                    !isTempMessage
-                ? () => sendTapback(null, widget.part.part)
-                : () => openPopup(),
-        onSecondaryTapUp: disabled
-            ? null
-            : (details) async {
-                if (!kIsWeb && !kIsDesktop) return;
-                if (kIsWeb) {
-                  await preventNextContextMenu();
-                }
-                openPopup();
+      return RawGestureDetector(
+        gestures: disabled || (!kIsWeb && !kIsDesktop)
+            ? const <Type, GestureRecognizerFactory>{}
+            : <Type, GestureRecognizerFactory>{
+                _ImmediateSecondaryTapRecognizer:
+                    GestureRecognizerFactoryWithHandlers<_ImmediateSecondaryTapRecognizer>(
+                  () => _ImmediateSecondaryTapRecognizer(debugOwner: this),
+                  (_ImmediateSecondaryTapRecognizer instance) {
+                    instance.onSecondaryTapUp = (_) {
+                      if (kIsWeb) {
+                        suppressBrowserContextMenu();
+                      }
+                      ContextMenuController.removeAny();
+                      openPopup();
+                    };
+                  },
+                ),
               },
-        child: widget.child,
+        child: GestureDetector(
+          key: globalKey,
+          onDoubleTap: disabled
+              ? null
+              : SettingsSvc.settings.doubleTapForDetails.value || isTempMessage
+                  ? () => openPopup()
+                  : SettingsSvc.settings.enableQuickTapback.value && supportsTapback
+                      ? () => sendTapback(null, widget.part.part)
+                      : null,
+          onLongPress: disabled
+              ? null
+              : SettingsSvc.settings.doubleTapForDetails.value &&
+                      SettingsSvc.settings.enableQuickTapback.value &&
+                      supportsTapback &&
+                      !isTempMessage
+                  ? () => sendTapback(null, widget.part.part)
+                  : () => openPopup(),
+          child: widget.child,
+        ),
       );
     });
   }
@@ -219,4 +231,22 @@ class PopupScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(PopupScope oldWidget) => true;
+}
+
+class _ImmediateSecondaryTapRecognizer extends TapGestureRecognizer {
+  _ImmediateSecondaryTapRecognizer({super.debugOwner});
+
+  @override
+  bool isPointerAllowed(PointerDownEvent event) {
+    if (event.buttons != kSecondaryButton) return false;
+    return super.isPointerAllowed(event);
+  }
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    super.addAllowedPointer(event);
+    // Claim secondary-click immediately on pointer-down so ancestor SelectionArea
+    // cannot fire _handleRightClickDown / open a competing selection toolbar.
+    resolve(GestureDisposition.accepted);
+  }
 }

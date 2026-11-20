@@ -472,7 +472,7 @@ extension MessageNotificationExtension on Message {
       } else if (isReaction) {
         // It's a reaction message, get the sender
         String reactionSender = isFromMe!
-            ? 'You'
+            ? SettingsSvc.effectiveUserName
             : (hideContactInfo ? "Someone" : (handleRelation.target?.reactionDisplayName ?? "Someone"));
         // fetch the associated message object
         Message? associatedMessage = Message.findOne(guid: associatedMessageGuid);

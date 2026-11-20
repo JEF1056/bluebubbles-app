@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:bluebubbles/app/layouts/settings/pages/server/backup_restore_panel.dart';
@@ -11,6 +12,7 @@ import 'package:bluebubbles/app/layouts/setup/pages/page_template.dart';
 import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:confetti/confetti.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:shimmer/shimmer.dart';
@@ -30,6 +32,7 @@ class _SyncProgressState extends State<SyncProgress> {
   final controller = Get.find<SetupViewController>();
   final Tween<double> tween = Tween<double>(begin: 0, end: 5);
   bool hasPlayed = false;
+  Worker? _statusWorker;
 
   FullSyncManager get syncManager => SyncSvc.fullSyncManager!;
 
@@ -37,7 +40,17 @@ class _SyncProgressState extends State<SyncProgress> {
   void initState() {
     super.initState();
 
-    ever<SyncStatus>(syncManager.status, (event) async {
+    // Guard against landing on SyncProgress before fullSyncManager is created (e.g. web skips SyncSettings).
+    if (SyncSvc.fullSyncManager == null) {
+      if (kIsWeb) {
+        unawaited(setup.startSetup(25, true, false, false, null));
+      } else {
+        SyncSvc.initFullSync();
+      }
+    }
+
+    _statusWorker = ever<SyncStatus>(syncManager.status, (event) async {
+      if (!mounted) return;
       String err = syncManager.error ?? "Unknown Error";
       if (event == SyncStatus.COMPLETED_ERROR) {
         await FailedToScanDialog.show(
@@ -45,7 +58,7 @@ class _SyncProgressState extends State<SyncProgress> {
           exception: err,
           title: "An error occured during setup!",
         );
-
+        if (!mounted) return;
         controller.pageController.animateToPage(
           controller.pageOfNoReturn - 1,
           duration: const Duration(milliseconds: 500),
@@ -58,6 +71,18 @@ class _SyncProgressState extends State<SyncProgress> {
         confettiController.play();
       }
     });
+
+    if (syncManager.status.value == SyncStatus.COMPLETED_SUCCESS && !hasPlayed) {
+      hasPlayed = true;
+      confettiController.play();
+    }
+  }
+
+  @override
+  void dispose() {
+    _statusWorker?.dispose();
+    confettiController.dispose();
+    super.dispose();
   }
 
   @override
@@ -215,8 +240,8 @@ class _SyncProgressState extends State<SyncProgress> {
                           Get.delete<SetupViewController>(force: true);
                         },
                         child: Shimmer.fromColors(
-                          baseColor: Colors.white70,
-                          highlightColor: Colors.white,
+                          baseColor: context.theme.colorScheme.onPrimary.withValues(alpha: 0.7),
+                          highlightColor: context.theme.colorScheme.onPrimary,
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
@@ -226,9 +251,9 @@ class _SyncProgressState extends State<SyncProgress> {
                                 duration: const Duration(milliseconds: 600),
                                 curve: Curves.easeOut,
                                 builder: (context, _, anim) {
-                                  return const Padding(
-                                    padding: EdgeInsets.only(left: 0.0),
-                                    child: Icon(Icons.check, color: Colors.white, size: 25),
+                                  return Padding(
+                                    padding: const EdgeInsets.only(left: 0.0),
+                                    child: Icon(Icons.check, color: context.theme.colorScheme.onPrimary, size: 25),
                                   );
                                 },
                               ),
@@ -236,7 +261,7 @@ class _SyncProgressState extends State<SyncProgress> {
                                 padding: const EdgeInsets.only(right: 0.0, left: 5.0),
                                 child: Text("Finish",
                                     style: context.theme.textTheme.bodyLarge!
-                                        .apply(fontSizeFactor: 1.1, color: Colors.white)),
+                                        .apply(fontSizeFactor: 1.1, color: context.theme.colorScheme.onPrimary)),
                               ),
                             ],
                           ),

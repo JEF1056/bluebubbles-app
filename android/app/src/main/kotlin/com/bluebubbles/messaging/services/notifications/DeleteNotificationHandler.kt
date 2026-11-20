@@ -28,6 +28,13 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
             val visible = if (nonBlank.size <= maxLines) nonBlank else nonBlank.takeLast(maxLines)
             return childLines.size to visible
         }
+
+        internal fun matchesNotification(
+            sbnTag: String?,
+            sbnId: Int,
+            targetId: Int,
+            targetTag: String?
+        ): Boolean = sbnId == targetId && (targetTag == null || sbnTag == targetTag)
     }
 
     override fun handleMethodCall(
@@ -39,7 +46,7 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
         val tag: String? = call.argument("tag")
         val readBefore: Long? = call.argument<Number>("read_before")?.toLong()
         val callUuid: String? = call.argument("call_uuid")
-        if (readBefore != null && trimReadMessages(context, notificationId, readBefore)) {
+        if (readBefore != null && trimReadMessages(context, notificationId, tag, readBefore)) {
             return result.success(null)
         }
         val success = deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
@@ -52,9 +59,16 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
 
     // Drops messages dated at or before [readBefore] from the chat notification and reposts it silently.
     // Returns false when nothing newer is left, so the caller deletes the whole notification.
-    private fun trimReadMessages(context: Context, notificationId: Int, readBefore: Long): Boolean {
+    private fun trimReadMessages(
+        context: Context,
+        notificationId: Int,
+        tag: String?,
+        readBefore: Long
+    ): Boolean {
         val notificationManager = context.getSystemService(NotificationManager::class.java)
-        val active = notificationManager.activeNotifications.firstOrNull { it.id == notificationId } ?: return false
+        val active = notificationManager.activeNotifications.firstOrNull {
+            matchesNotification(it.tag, it.id, notificationId, tag)
+        } ?: return false
         val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(active.notification)
             ?: return false
         PersistentLog.d(context, Constants.logTag, "Trimming notification $notificationId through $readBefore: ${style.messages.map { it.timestamp }}")
@@ -135,8 +149,10 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
         val notificationManager = context.getSystemService(NotificationManager::class.java)
 
         try {
-            // Get the notification by ID
-            val notification = notificationManager.activeNotifications.firstOrNull { it.id == notificationId }
+            // Get the notification by ID (scoped by tag when provided so FaceTime/chat IDs don't collide)
+            val notification = notificationManager.activeNotifications.firstOrNull {
+                matchesNotification(it.tag, it.id, notificationId, tag)
+            }
 
             if (notification == null) {
                 PersistentLog.d(context, Constants.logTag, "Notification with ID $notificationId not found!")

@@ -4,22 +4,46 @@ import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.Utils
 import com.google.gson.Gson
-import com.google.gson.JsonElement
+import com.google.gson.GsonBuilder
+import com.google.gson.ToNumberPolicy
 import com.google.gson.reflect.TypeToken
 
 import org.unifiedpush.android.connector.MessagingReceiver
-import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
 
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import androidx.core.os.bundleOf
 
 class UnifiedPushReceiver : MessagingReceiver() {
     companion object {
         const val tag: String = "UnifiedPushReceiver"
+        internal const val TASKER_EVENT_ACTION = "net.dinglisch.android.taskerm.BB_EVENT"
+
+        private val gson: Gson = GsonBuilder()
+            .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
+            .create()
+        private val mapType = object : TypeToken<Map<String, Any?>>() {}.type
+
+        internal fun parsePayload(msg: String): Pair<String, HashMap<String, Any?>>? {
+            if (msg.isBlank()) return null
+            val parsed: Map<String, Any?> = try {
+                gson.fromJson(msg, mapType) ?: return null
+            } catch (_: Exception) {
+                return null
+            }
+            val type = (parsed["type"] as? String)?.takeIf { it.isNotBlank() } ?: return null
+            return type to HashMap(parsed)
+        }
+
+        internal fun toTaskerExtras(map: Map<String, Any?>): Array<Pair<String, Any?>> =
+            map.entries.map { (k, v) ->
+                val bundleSafe: Any? = when (v) {
+                    null, is String, is Boolean, is Int, is Long, is Double, is Float -> v
+                    else -> gson.toJson(v)
+                }
+                k to bundleSafe
+            }.toTypedArray()
     }
 
     override fun onNewEndpoint(context: Context, endpoint: String, instance: String) {
@@ -44,23 +68,16 @@ class UnifiedPushReceiver : MessagingReceiver() {
         DartWorkManager.createWorker(context, "unifiedpush-settings", data) {}
     }
 
-    inline fun <reified T> Gson.fromJson(json: String) = fromJson<T>(json, object: TypeToken<T>() {}.type)
-
     override fun onMessage(context: Context, payload: ByteArray, instance: String) {
         val applicationContext = context.getApplicationContext()
         val msg = payload.toString(Charsets.UTF_8)
-        val gson: Gson = Gson()
-        val json: Map<String, JsonElement> = gson.fromJson(msg)
-        val type: String
-        try {
-            type = json.get("type")?.getAsString() ?: return
-        } catch (e: UnsupportedOperationException) {
-            PersistentLog.d(applicationContext, tag, "Invalid message type")
+        val (type, payloadMap) = parsePayload(msg) ?: run {
+            PersistentLog.d(applicationContext, tag, "Invalid or malformed UnifiedPush message payload")
             return
         }
 
         PersistentLog.i(applicationContext, tag, "Received new message of type $type from UnifiedPush...")
-        DartWorkManager.createWorker(applicationContext, type, HashMap(json)) {}
+        DartWorkManager.createWorker(applicationContext, type, payloadMap) {}
 
         // check if the user configured "Send Events to Tasker"
         val prefs = applicationContext.getSharedPreferences("FlutterSharedPreferences", 0)
@@ -69,10 +86,10 @@ class UnifiedPushReceiver : MessagingReceiver() {
                 override fun success(result: Any?) {
                     PersistentLog.w(applicationContext, tag, "Got URL: $result - sending to Tasker...")
                     val intent = Intent()
-                    intent.setAction("net.dinglisch.android.taserm.BB_EVENT")
+                    intent.setAction(TASKER_EVENT_ACTION)
                     intent.putExtra("url", result.toString())
                     intent.putExtra("event", type)
-                    intent.putExtras(bundleOf(*json.toList().toTypedArray()))
+                    intent.putExtras(bundleOf(*toTaskerExtras(payloadMap)))
                     applicationContext.sendBroadcast(intent)
                 }
 

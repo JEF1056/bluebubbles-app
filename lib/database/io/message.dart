@@ -620,7 +620,7 @@ class Message {
   /// the transient field.
   String get groupEventText {
     final h = handle ?? handleRelation.target;
-    final name = h?.displayName ?? (isFromMe! || handleRelation.target == null ? 'You' : 'Unknown');
+    final name = h?.displayName ?? (isFromMe! || handleRelation.target == null ? SettingsSvc.effectiveUserName : 'Unknown');
     return buildGroupEventText(name);
   }
 

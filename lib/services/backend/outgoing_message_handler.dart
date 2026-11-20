@@ -200,6 +200,19 @@ class OutgoingMessageHandler {
       return;
     }
 
+    // Mark unread chat read when the user explicitly sends from an interactive UI
+    final isInteractive = !GetIt.I.isRegistered<LifecycleService>() || LifecycleSvc.isUiInteractive;
+    final hasUnread = item.chat.hasUnreadMessage == true ||
+        (GetIt.I.isRegistered<ChatsService>() &&
+            (ChatsSvc.getChatState(item.chat.guid)?.hasUnreadMessage.value ?? false));
+    if (isInteractive && hasUnread) {
+      if (GetIt.I.isRegistered<ChatsService>()) {
+        unawaited(ChatsSvc.setChatHasUnread(item.chat, false, privateMark: true));
+      } else {
+        unawaited(item.chat.toggleHasUnreadAsync(false, privateMark: true));
+      }
+    }
+
     // Prep the item (writes temp messages / copies attachment files to disk),
     // retrying a transient failure and surfacing a terminal one as a failed
     // message so it is never silently dropped. See [_prepItemWithRetry].
@@ -696,64 +709,80 @@ class OutgoingMessageHandler {
     final progress = AttachmentUploadProgress(attachment.guid!, 0.0.obs);
     attachmentProgress.add(progress);
 
-    if (!kIsWeb) {
-      final sourcePath = attachment.metadata?['source_path'] as String?;
-      if (sourcePath == null && attachment.bytes == null) {
-        throw Exception('Attachment has no source_path in metadata or bytes');
+    if (kIsWeb) {
+      var bytes = attachment.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        throw Exception('Attachment has no bytes on web');
       }
-
-      final destinationPath = attachment.path;
-      final destinationFile = await File(destinationPath).create(recursive: true);
-
-      if (sourcePath != null) {
-        if (attachment.mimeType == 'image/gif') {
-          final bytes = await File(sourcePath).readAsBytes();
-          final optimizedBytes = await fixSpeedyGifs(bytes);
-          await destinationFile.writeAsBytes(optimizedBytes);
-        } else {
-          await File(sourcePath).copy(destinationPath);
-        }
-        // For interactive messages (any balloonBundleId), also stage the media
-        // at interactiveMediaPath so EmbeddedMedia can display it on first
-        // render without waiting for a server download.
-        if (m.balloonBundleId != null) {
-          final mediaPath = m.interactiveMediaPath;
-          if (mediaPath != null) {
-            await File(mediaPath).create(recursive: true);
-            await File(destinationPath).copy(mediaPath);
-          }
-        }
-      } else {
-        Uint8List bytesToWrite = attachment.bytes!;
-        if (attachment.mimeType == 'image/gif') {
-          bytesToWrite = await fixSpeedyGifs(bytesToWrite);
-        }
-        await destinationFile.writeAsBytes(bytesToWrite);
-
-        // For interactive messages (any balloonBundleId), also stage the media
-        // at interactiveMediaPath so EmbeddedMedia can display it on first
-        // render without waiting for a server download.
-        if (m.balloonBundleId != null) {
-          final mediaPath = m.interactiveMediaPath;
-          if (mediaPath != null) {
-            await File(mediaPath).create(recursive: true);
-            await File(mediaPath).writeAsBytes(bytesToWrite);
-          }
-        }
-
-        attachment.bytes = null;
+      if (attachment.mimeType == 'image/gif') {
+        bytes = await fixSpeedyGifs(bytes);
+        attachment.bytes = bytes;
       }
-
-      if (attachment.mimeStart == 'image') {
-        try {
-          await AttachmentsSvc.loadImageProperties(attachment, actualPath: destinationPath);
-        } catch (ex) {
-          Logger.warn('Failed to load image properties for outgoing attachment', error: ex, tag: _tag);
-        }
+      try {
+        await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, attachment.guid!, bytes);
+      } catch (ex) {
+        Logger.warn('Failed to cache outgoing web attachment ${attachment.guid}', error: ex, tag: _tag);
       }
-
       attachment.isDownloaded = true;
+      return;
     }
+
+    final sourcePath = attachment.metadata?['source_path'] as String?;
+    if (sourcePath == null && attachment.bytes == null) {
+      throw Exception('Attachment has no source_path in metadata or bytes');
+    }
+
+    final destinationPath = attachment.path;
+    final destinationFile = await File(destinationPath).create(recursive: true);
+
+    if (sourcePath != null) {
+      if (attachment.mimeType == 'image/gif') {
+        final bytes = await File(sourcePath).readAsBytes();
+        final optimizedBytes = await fixSpeedyGifs(bytes);
+        await destinationFile.writeAsBytes(optimizedBytes);
+      } else {
+        await File(sourcePath).copy(destinationPath);
+      }
+      // For interactive messages (any balloonBundleId), also stage the media
+      // at interactiveMediaPath so EmbeddedMedia can display it on first
+      // render without waiting for a server download.
+      if (m.balloonBundleId != null) {
+        final mediaPath = m.interactiveMediaPath;
+        if (mediaPath != null) {
+          await File(mediaPath).create(recursive: true);
+          await File(destinationPath).copy(mediaPath);
+        }
+      }
+    } else {
+      Uint8List bytesToWrite = attachment.bytes!;
+      if (attachment.mimeType == 'image/gif') {
+        bytesToWrite = await fixSpeedyGifs(bytesToWrite);
+      }
+      await destinationFile.writeAsBytes(bytesToWrite);
+
+      // For interactive messages (any balloonBundleId), also stage the media
+      // at interactiveMediaPath so EmbeddedMedia can display it on first
+      // render without waiting for a server download.
+      if (m.balloonBundleId != null) {
+        final mediaPath = m.interactiveMediaPath;
+        if (mediaPath != null) {
+          await File(mediaPath).create(recursive: true);
+          await File(mediaPath).writeAsBytes(bytesToWrite);
+        }
+      }
+
+      attachment.bytes = null;
+    }
+
+    if (attachment.mimeStart == 'image') {
+      try {
+        await AttachmentsSvc.loadImageProperties(attachment, actualPath: destinationPath);
+      } catch (ex) {
+        Logger.warn('Failed to load image properties for outgoing attachment', error: ex, tag: _tag);
+      }
+    }
+
+    attachment.isDownloaded = true;
   }
 
   // ── Send methods ─────────────────────────────────────────────────────────
@@ -927,11 +956,20 @@ class OutgoingMessageHandler {
       ChatsSvc.updateChatLatestMessage(c.guid, m);
     }
 
-    // On web the isolate path is not supported (web is deprecated).
-    if (kIsWeb) return;
-
-    // Fail fast if the file was not staged correctly during prepAttachments.
-    if (!File(attachment.path).existsSync()) {
+    Uint8List? webBytes;
+    String? webBytesMissing;
+    if (kIsWeb) {
+      final attachmentGuid = attachment.guid;
+      webBytes = attachment.bytes;
+      if ((webBytes == null || webBytes.isEmpty) && attachmentGuid != null) {
+        webBytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, attachmentGuid);
+      }
+      if (attachmentGuid == null || webBytes == null || webBytes.isEmpty) {
+        webBytesMissing = 'Attachment bytes not found for ${attachment.transferName ?? attachmentGuid ?? 'unknown'}';
+        Logger.error(webBytesMissing, tag: _tag);
+      }
+    } else if (!File(attachment.path).existsSync()) {
+      // Fail fast if the file was not staged correctly during prepAttachments.
       Logger.error('Attachment file not found at ${attachment.path}', tag: _tag);
       return;
     }
@@ -939,18 +977,55 @@ class OutgoingMessageHandler {
     return _sendWithRace(
       tempGuid: tempGuid,
       chat: c,
-      httpCall: () => SendMessageInterface.sendAttachmentMessage(
-        chatGuid: c.guid,
-        tempGuid: attachment.guid!,
-        filePath: attachment.path,
-        fileName: attachment.transferName!,
-        fileSize: attachment.totalBytes ?? 0,
-        method: _resolveMethod(m, forAttachment: true),
-        selectedMessageGuid: m.threadOriginatorGuid,
-        effectId: m.expressiveSendStyleId,
-        partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
-        isAudioMessage: isAudioMessage,
-      ),
+      httpCall: () {
+        if (kIsWeb) {
+          if (webBytesMissing != null) {
+            return Future<Map<String, dynamic>>.error(Exception(webBytesMissing));
+          }
+          final attachmentGuid = attachment.guid!;
+          final cancelToken = CancelToken();
+          latestCancelToken = cancelToken;
+          return HttpSvc.message
+              .sendAttachment(
+                c.guid,
+                attachmentGuid,
+                PlatformFile(
+                  name: attachment.transferName ?? 'attachment',
+                  size: webBytes!.length,
+                  bytes: webBytes,
+                ),
+                method: _resolveMethod(m, forAttachment: true),
+                effectId: m.expressiveSendStyleId,
+                subject: m.subject,
+                selectedMessageGuid: m.threadOriginatorGuid,
+                partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
+                isAudioMessage: isAudioMessage,
+                cancelToken: cancelToken,
+                onSendProgress: (count, total) {
+                  if (total <= 0) return;
+                  _handleAttachmentUploadProgressEvent({
+                    'chatGuid': c.guid,
+                    'messageGuid': tempGuid,
+                    'attachmentGuid': attachment.guid!,
+                    'progress': count / total,
+                  });
+                },
+              )
+              .then((res) => res.data as Map<String, dynamic>);
+        }
+        return SendMessageInterface.sendAttachmentMessage(
+          chatGuid: c.guid,
+          tempGuid: attachment.guid!,
+          filePath: attachment.path,
+          fileName: attachment.transferName!,
+          fileSize: attachment.totalBytes ?? 0,
+          method: _resolveMethod(m, forAttachment: true),
+          selectedMessageGuid: m.threadOriginatorGuid,
+          effectId: m.expressiveSendStyleId,
+          partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
+          isAudioMessage: isAudioMessage,
+        );
+      },
       onSuccess: (Map<String, dynamic> data) async {
         final newMessage = Message.fromMap(data['data']);
         final responseAttachments = ((data['data']?['attachments'] as List?) ?? <dynamic>[])
@@ -1067,9 +1142,24 @@ class OutgoingMessageHandler {
       ChatsSvc.updateChatLatestMessage(c.guid, m);
     }
 
-    if (kIsWeb) return;
-
-    final missing = attachments.where((a) => !File(a.path).existsSync()).map((a) => a.path).toList();
+    final Map<String, Uint8List> webBytesByGuid = {};
+    final List<String> missing = [];
+    if (kIsWeb) {
+      for (final a in attachments) {
+        final aGuid = a.guid;
+        var bytes = a.bytes;
+        if ((bytes == null || bytes.isEmpty) && aGuid != null) {
+          bytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, aGuid);
+        }
+        if (aGuid == null || bytes == null || bytes.isEmpty) {
+          missing.add(a.transferName ?? aGuid ?? 'unknown');
+        } else {
+          webBytesByGuid[aGuid] = bytes;
+        }
+      }
+    } else {
+      missing.addAll(attachments.where((a) => !File(a.path).existsSync()).map((a) => a.path));
+    }
     // A retry can come after the server or the Private API setting changed
     final unsendable = missing.isNotEmpty
         ? 'Attachment files not found: ${missing.join(', ')}'
@@ -1082,17 +1172,67 @@ class OutgoingMessageHandler {
     return _sendWithRace(
       tempGuid: tempGuid,
       chat: c,
-      httpCall: () => unsendable != null
-          ? Future.error(Exception(unsendable))
-          : SendMessageInterface.sendMultiAttachmentMessage(
-        chatGuid: c.guid,
-        tempGuid: tempGuid,
-        files: attachments.map((a) => {'guid': a.guid, 'path': a.path, 'name': a.transferName}).toList(),
-        subject: m.subject,
-        selectedMessageGuid: m.threadOriginatorGuid,
-        effectId: m.expressiveSendStyleId,
-        partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
-      ),
+      httpCall: () async {
+        if (unsendable != null) {
+          throw Exception(unsendable);
+        }
+        if (kIsWeb) {
+          final cancelToken = CancelToken();
+          latestCancelToken = cancelToken;
+          final parts = <Map<String, dynamic>>[];
+          for (var index = 0; index < attachments.length; index++) {
+            final a = attachments[index];
+            final aGuid = a.guid!;
+            final name = a.transferName ?? 'attachment';
+            final upload = await HttpSvc.attachment.upload(
+              a.path,
+              name,
+              bytes: webBytesByGuid[aGuid]!,
+              cancelToken: cancelToken,
+              onSendProgress: (count, total) {
+                if (total <= 0) return;
+                _handleAttachmentUploadProgressEvent({
+                  'chatGuid': c.guid,
+                  'messageGuid': tempGuid,
+                  'attachmentGuid': aGuid,
+                  'progress': count / total,
+                });
+              },
+            );
+            final uploadBody = upload.data;
+            final uploadData = uploadBody is Map ? uploadBody['data'] : null;
+            final uploadedPath = uploadData is Map ? uploadData['path'] : null;
+            if (uploadedPath is! String || uploadedPath.isEmpty) {
+              throw StateError('Attachment upload response missing data.path for $name');
+            }
+            parts.add({
+              'partIndex': index,
+              'attachment': uploadedPath,
+              'name': name,
+            });
+          }
+          final response = await HttpSvc.message.sendMultipart(
+            c.guid,
+            tempGuid,
+            parts,
+            effectId: m.expressiveSendStyleId,
+            subject: m.subject,
+            selectedMessageGuid: m.threadOriginatorGuid,
+            partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
+            cancelToken: cancelToken,
+          );
+          return response.data as Map<String, dynamic>;
+        }
+        return SendMessageInterface.sendMultiAttachmentMessage(
+          chatGuid: c.guid,
+          tempGuid: tempGuid,
+          files: attachments.map((a) => {'guid': a.guid, 'path': a.path, 'name': a.transferName}).toList(),
+          subject: m.subject,
+          selectedMessageGuid: m.threadOriginatorGuid,
+          effectId: m.expressiveSendStyleId,
+          partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
+        );
+      },
       onSuccess: (Map<String, dynamic> data) async {
         final newMessage = Message.fromMap(data['data']);
         final responseAttachments = ((data['data']?['attachments'] as List?) ?? <dynamic>[])
@@ -1338,6 +1478,27 @@ class OutgoingMessageHandler {
     String existingGuid,
     Attachment replacement,
   ) async {
+    if (kIsWeb && existingGuid != replacement.guid && replacement.guid != null) {
+      try {
+        final cached =
+            replacement.bytes ?? await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, existingGuid);
+        if (cached != null && cached.isNotEmpty) {
+          replacement.bytes ??= cached;
+          replacement.isDownloaded = true;
+          await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, replacement.guid!, cached);
+        }
+        if (existingGuid.startsWith('temp')) {
+          await WebMediaCache.instance.delete(WebMediaCache.attachmentsStore, existingGuid);
+        }
+      } catch (ex) {
+        Logger.warn(
+          '[_matchAttachmentWithExisting] failed to migrate web media cache $existingGuid → ${replacement.guid}',
+          error: ex,
+          tag: _tag,
+        );
+      }
+    }
+
     final alreadyPresent = await Attachment.findOneAsync(replacement.guid!);
     if (alreadyPresent != null) {
       await Attachment.replaceAttachmentAsync(replacement.guid, replacement);

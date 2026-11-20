@@ -406,13 +406,13 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(CupertinoIcons.camera, color: Colors.white, size: 20),
+                        Icon(CupertinoIcons.camera, color: context.theme.colorScheme.onPrimary, size: 20),
                         const SizedBox(width: 10),
                         Padding(
                           padding: const EdgeInsets.only(right: 0.0, left: 5.0),
                           child: Text("Scan QR Code",
-                              style:
-                                  context.theme.textTheme.bodyLarge!.apply(fontSizeFactor: 1.1, color: Colors.white)),
+                              style: context.theme.textTheme.bodyLarge!
+                                  .apply(fontSizeFactor: 1.1, color: context.theme.colorScheme.onPrimary)),
                         ),
                       ],
                     ),
@@ -608,10 +608,12 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Text("Connect",
-                                                  style: context.theme.textTheme.bodyLarge!
-                                                      .apply(fontSizeFactor: 1.1, color: Colors.white)),
+                                                  style: context.theme.textTheme.bodyLarge!.apply(
+                                                      fontSizeFactor: 1.1,
+                                                      color: context.theme.colorScheme.onPrimary)),
                                               const SizedBox(width: 10),
-                                              const Icon(Icons.arrow_forward, color: Colors.white, size: 20),
+                                              Icon(Icons.arrow_forward,
+                                                  color: context.theme.colorScheme.onPrimary, size: 20),
                                             ],
                                           ),
                                         ),
@@ -630,6 +632,10 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
 
   Future<void> goToNextPage() async {
     if (controller.currentPage == controller.pageOfNoReturn) {
+      if (kIsWeb) {
+        // SyncSettings is omitted on web; startSetup synchronously initializes fullSyncManager before awaiting.
+        unawaited(setup.startSetup(25, true, false, true, null));
+      }
       controller.pageController.nextPage(
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
@@ -763,7 +769,7 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
         FCMData fcmData = FCMData.fromMap(data["data"]);
         await SettingsSvc.saveFCMData(fcmData);
       } catch (_) {
-        if (Platform.isAndroid) {
+        if (!kIsWeb && Platform.isAndroid) {
           showBBDialog(
             context: Get.context!,
             barrierDismissible: false,

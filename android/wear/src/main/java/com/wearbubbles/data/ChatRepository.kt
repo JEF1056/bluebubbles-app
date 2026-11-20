@@ -6,6 +6,9 @@ import com.wearbubbles.api.dto.ChatQueryRequest
 import com.wearbubbles.db.ChatDao
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.relay.PhoneRelayClient
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 
 class ChatRepository(
@@ -19,7 +22,7 @@ class ChatRepository(
     suspend fun refreshChats(): Result<Unit> {
         // Primary: Phone Relay when tethered
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
-            if (phoneRelay.requestChatsSync()) {
+            if (phoneRelay.requestChatsSyncAwait()) {
                 return Result.success(Unit)
             }
         }
@@ -38,17 +41,19 @@ class ChatRepository(
             val recentChats = response.data ?: emptyList()
 
             val seenGuids = recentChats.map { it.guid }.toHashSet()
-            val extraPinned = mutableListOf<ChatDto>()
-            if (pinnedGuids != null) {
-                for (guid in pinnedGuids) {
-                    if (guid !in seenGuids) {
-                        val fetched = runCatching { api.getChat(guid, password).data }.getOrNull()
-                        if (fetched != null) {
-                            extraPinned.add(fetched)
-                            seenGuids.add(fetched.guid)
-                        }
+            val extraPinned = if (pinnedGuids != null) {
+                val missingGuids = pinnedGuids.filter { it !in seenGuids }
+                if (missingGuids.isNotEmpty()) {
+                    coroutineScope {
+                        missingGuids.map { guid ->
+                            async { runCatching { api.getChat(guid, password).data }.getOrNull() }
+                        }.awaitAll().filterNotNull()
                     }
+                } else {
+                    emptyList()
                 }
+            } else {
+                emptyList()
             }
 
             val pinIndexByGuid = pinnedGuids?.withIndex()?.associate { it.value to it.index }
@@ -64,12 +69,18 @@ class ChatRepository(
         }
     }
 
+    companion object {
+        internal fun shouldSendStandaloneReadReceipt(privateMarkChatAsRead: Boolean): Boolean =
+            privateMarkChatAsRead
+    }
+
     suspend fun markChatRead(chatGuid: String) {
         chatDao.markRead(chatGuid)
         if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
             phoneRelay.sendMarkReadAwait(chatGuid)
             return
         }
+        if (!shouldSendStandaloneReadReceipt(settings.isPrivateMarkChatAsRead())) return
         try {
             val serverUrl = settings.getServerUrl()
             val password = settings.getPassword()

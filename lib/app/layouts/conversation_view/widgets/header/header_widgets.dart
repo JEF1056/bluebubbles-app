@@ -7,6 +7,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
@@ -98,7 +99,10 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
                       .map((e) => AttachmentsSvc.getContent(e, autoDownload: false) as PlatformFile);
                   for (PlatformFile a in _attachments) {
                     Uint8List? bytes = a.bytes;
-                    bytes ??= await File(a.path!).readAsBytes();
+                    if (bytes == null && !kIsWeb && a.path != null) {
+                      bytes = await File(a.path!).readAsBytes();
+                    }
+                    if (bytes == null) continue;
                     attachments.add(PlatformFile(
                       name: a.name,
                       path: a.path,
@@ -149,10 +153,10 @@ class _ConnectionIndicatorState extends State<ConnectionIndicator> {
   @override
   void initState() {
     super.initState();
-    // Only pre-show if already mid-reconnect (e.g. widget remounted during retry cycle)
+    // Only show when genuinely degraded/offline (avoid noisy stripe during normal startup connecting)
     final initial = SocketSvc.state.value;
     if (SettingsSvc.settings.finishedSetup.value &&
-        (initial == SocketState.reconnecting || initial == SocketState.error)) {
+        (initial == SocketState.reconnecting || initial == SocketState.error || initial == SocketState.disconnected)) {
       _isVisible = true;
       _displayState = initial;
       _hasHadConnectionFailure = true;
@@ -163,36 +167,41 @@ class _ConnectionIndicatorState extends State<ConnectionIndicator> {
   void _onSocketStateChanged(SocketState state) {
     if (!mounted) return;
     if (!SettingsSvc.settings.finishedSetup.value) return;
-    if (state == SocketState.reconnecting) {
+    if (state == SocketState.reconnecting || state == SocketState.error || state == SocketState.disconnected) {
       _hasHadConnectionFailure = true;
       _hideTimer?.cancel();
       setState(() {
-        _displayState = SocketState.reconnecting;
+        _displayState = state;
         _isVisible = true;
       });
-    } else if (state == SocketState.error) {
-      _hasHadConnectionFailure = true;
+    } else if (state == SocketState.connecting) {
+      // Quiet during normal initial connect; keep hairline visible only if recovering from failure.
+      if (_hasHadConnectionFailure) {
+        _hideTimer?.cancel();
+        setState(() {
+          _displayState = SocketState.reconnecting;
+          _isVisible = true;
+        });
+      }
+    } else if (state == SocketState.connected) {
       _hideTimer?.cancel();
-      setState(() {
-        _displayState = SocketState.error;
-        _isVisible = true;
-      });
-    } else if (state == SocketState.connected && _hasHadConnectionFailure) {
-      _hideTimer?.cancel();
-      setState(() {
-        _displayState = SocketState.connected;
-        _isVisible = true;
-      });
-      _hideTimer = Timer(const Duration(milliseconds: 1500), () {
-        if (mounted) {
-          setState(() {
-            _isVisible = false;
-            _hasHadConnectionFailure = false;
-          });
-        }
-      });
+      if (_hasHadConnectionFailure) {
+        setState(() {
+          _displayState = SocketState.connected;
+          _isVisible = true;
+        });
+        _hideTimer = Timer(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            setState(() {
+              _isVisible = false;
+              _hasHadConnectionFailure = false;
+            });
+          }
+        });
+      } else if (_isVisible) {
+        setState(() => _isVisible = false);
+      }
     }
-    // connecting and disconnected: no indicator change
   }
 
   @override
@@ -209,11 +218,13 @@ class _ConnectionIndicatorState extends State<ConnectionIndicator> {
       top: topPadding,
       left: 0,
       right: 0,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-        height: _isVisible ? 4.0 : 0.0,
-        color: getIndicatorColor(_displayState),
+      child: IgnorePointer(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          height: _isVisible ? 1.5 : 0.0,
+          color: getIndicatorColor(_displayState).withValues(alpha: 0.85),
+        ),
       ),
     );
   }

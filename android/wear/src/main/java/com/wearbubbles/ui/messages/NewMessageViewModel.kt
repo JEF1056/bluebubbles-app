@@ -7,11 +7,27 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.data.ContactRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+internal data class NewMessageUiState(
+    val query: String = "",
+    val isLoading: Boolean = true,
+    val hasContacts: Boolean = false,
+    val filteredContacts: List<ContactEntity> = emptyList(),
+    val favoriteRows: List<List<ContactEntity>> = emptyList(),
+    val duplicateNames: Set<String> = emptySet(),
+    val alphabeticalSections: List<ContactSection> = emptyList(),
+    val recentChats: List<ChatEntity> = emptyList()
+)
 
 class NewMessageViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getInstance(application)
@@ -20,44 +36,48 @@ class NewMessageViewModel(application: Application) : AndroidViewModel(applicati
     private val contactRepo = ContactRepository(application, db.contactDao(), settings, relay)
 
     private val _query = MutableStateFlow("")
-    val query: StateFlow<String> = _query.asStateFlow()
+    private val _isLoading = MutableStateFlow(true)
 
-    private val _contacts = MutableStateFlow<List<ContactEntity>>(emptyList())
-    val contacts: StateFlow<List<ContactEntity>> = _contacts.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private var allContacts: List<ContactEntity> = emptyList()
+    internal val uiState: StateFlow<NewMessageUiState> = combine(
+        _query,
+        db.contactDao().getAllContactsFlow(),
+        db.chatDao().getAllChats(),
+        _isLoading
+    ) { query, allContacts, recentChats, isLoading ->
+        val filtered = filterContacts(allContacts, query)
+        val favorites = selectFavoriteContacts(
+            contacts = allContacts,
+            recentChats = recentChats,
+            resolveAvatarPath = { norm -> relay.getAvatarFile(norm)?.absolutePath }
+        )
+        NewMessageUiState(
+            query = query,
+            isLoading = isLoading,
+            hasContacts = allContacts.isNotEmpty(),
+            filteredContacts = filtered,
+            favoriteRows = favorites.chunked(2),
+            duplicateNames = duplicateDisplayNames(filtered),
+            alphabeticalSections = groupContactsAlphabetically(filtered),
+            recentChats = recentChats
+        )
+    }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), NewMessageUiState())
 
     init {
-        viewModelScope.launch {
-            _isLoading.value = true
-            allContacts = db.contactDao().getAllContacts()
-            if (allContacts.isEmpty()) {
-                contactRepo.refreshContacts(force = false)
-                allContacts = db.contactDao().getAllContacts()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (db.contactDao().getAllContacts().isEmpty()) {
+                    contactRepo.refreshContacts(force = false)
+                }
+            } finally {
+                _isLoading.value = false
             }
-            applyFilter(_query.value)
-            _isLoading.value = false
         }
     }
 
     fun setQuery(q: String) {
         _query.value = q
-        applyFilter(q)
-    }
-
-    private fun applyFilter(q: String) {
-        val trimmed = q.trim().lowercase()
-        _contacts.value = if (trimmed.isBlank()) {
-            allContacts.take(60)
-        } else {
-            allContacts.filter {
-                it.displayName.lowercase().contains(trimmed) ||
-                    it.normalizedAddress.lowercase().contains(trimmed)
-            }.take(60)
-        }
     }
 
     fun chatGuidForAddress(rawAddress: String): String {

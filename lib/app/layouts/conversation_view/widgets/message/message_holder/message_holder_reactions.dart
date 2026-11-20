@@ -36,10 +36,12 @@ class ReactionObserver extends StatelessWidget {
       final isFromMe = state.isFromMe.value;
       final reactionList = state.tapbacksForBubble(part);
 
+      final top = CurrentSkin.material ? -10.0 : ReactionHolder.bubbleOverhangTop;
+      final side = CurrentSkin.material ? -6.0 : ReactionHolder.bubbleOverhangSide;
       return Positioned(
-        top: ReactionHolder.bubbleOverhangTop,
-        left: isFromMe ? ReactionHolder.bubbleOverhangSide : null,
-        right: isFromMe ? null : ReactionHolder.bubbleOverhangSide,
+        top: top,
+        left: isFromMe ? side : null,
+        right: isFromMe ? null : side,
         child: ReactionHolder(
           reactions: reactionList,
         ),
@@ -96,10 +98,12 @@ class ReactionSpacing extends StatelessWidget {
     super.key,
     required this.part,
     this.minHeightWhenNoReactions = 0,
+    this.tapbackHeight,
   });
 
   final MessagePart part;
   final double minHeightWhenNoReactions;
+  final double? tapbackHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -108,7 +112,7 @@ class ReactionSpacing extends StatelessWidget {
       // Reads associatedMessages, so this rebuilds when tapbacks change. Collapsed collection spans are
       // matched via MessagePart.coversPartId.
       if (state.hasVisibleTapbacks(part)) {
-        return const SizedBox(height: 12.5);
+        return SizedBox(height: tapbackHeight ?? (CurrentSkin.iOS ? 15.0 : 14.0));
       }
 
       if (minHeightWhenNoReactions > 0) {

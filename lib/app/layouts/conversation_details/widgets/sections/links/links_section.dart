@@ -71,11 +71,7 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   @override
   void initState() {
     super.initState();
-    if (!kIsWeb) {
-      _fetchLinks();
-    } else {
-      _isLoading = false;
-    }
+    _fetchLinks();
   }
 
   @override
@@ -89,20 +85,29 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   }
 
   Future<void> _fetchLinks() async {
-    if (kIsWeb || widget.chat.id == null) {
-      setState(() => _isLoading = false);
-      return;
-    }
-
     try {
-      final query = (Database.messages.query(Message_.dateDeleted.isNull() &
-              Message_.dbPayloadData.notNull() &
-              Message_.balloonBundleId.contains("URLBalloonProvider"))
-            ..link(Message_.chat, Chat_.id.equals(widget.chat.id!))
-            ..order(Message_.dateCreated, flags: Order.descending))
-          .build();
-      final fetchedLinks = await query.findAsync();
-      query.close();
+      List<Message> fetchedLinks = [];
+      if (widget.chat.id != null) {
+        final query = (Database.messages.query(Message_.dateDeleted.isNull() &
+                Message_.dbPayloadData.notNull() &
+                Message_.balloonBundleId.contains("URLBalloonProvider"))
+              ..link(Message_.chat, Chat_.id.equals(widget.chat.id!))
+              ..order(Message_.dateCreated, flags: Order.descending))
+            .build();
+        fetchedLinks = await query.findAsync();
+        query.close();
+      }
+
+      if (kIsWeb && fetchedLinks.isEmpty) {
+        final messages = maybeFindMessagesSvc(widget.chat.guid)?.struct.messages ?? const <Message>[];
+        fetchedLinks = messages
+            .where((m) =>
+                m.dateDeleted == null &&
+                m.dbPayloadData != null &&
+                (m.balloonBundleId?.contains("URLBalloonProvider") ?? false))
+            .toList()
+          ..sort((a, b) => (b.dateCreated ?? DateTime(0)).compareTo(a.dateCreated ?? DateTime(0)));
+      }
 
       if (mounted) {
         setState(() {
@@ -157,10 +162,6 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-
     final hideWhenEmpty = !widget.fullPage && !_isLoading && _displayedLinks.isEmpty;
 
     return SliverMainAxisGroup(

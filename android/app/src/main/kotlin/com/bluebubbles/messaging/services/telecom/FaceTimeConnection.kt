@@ -10,6 +10,7 @@ import android.telecom.DisconnectCause
 import com.bluebubbles.messaging.services.network.HttpService
 import com.bluebubbles.messaging.utils.PersistentLog
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class FaceTimeConnection(
     private val context: Context,
@@ -24,14 +25,15 @@ class FaceTimeConnection(
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ringingTimeoutRunnable = Runnable {
-        if (!ended && state == STATE_RINGING) {
+        if (!ended.get() && state == STATE_RINGING) {
             PersistentLog.w(context, TAG, "Ringing timeout for $callUuid")
             onRemoteDisconnect()
         }
     }
 
-    @Volatile
-    private var ended = false
+    private val ended = AtomicBoolean(false)
+    val isEnded: Boolean
+        get() = ended.get()
 
     @Volatile
     private var webRtcClient: WebRtcAudioClient? = null
@@ -51,7 +53,7 @@ class FaceTimeConnection(
 
     fun startAudioBridge(answerCall: Boolean) {
         val uuid = callUuid ?: return
-        if (ended || webRtcClient != null) return
+        if (ended.get() || webRtcClient != null) return
 
         val client = WebRtcAudioClient(
             context = context,
@@ -64,7 +66,7 @@ class FaceTimeConnection(
         )
         webRtcClient = client
         audioExecutor.execute {
-            if (!ended && webRtcClient === client) {
+            if (!ended.get() && webRtcClient === client) {
                 client.start()
             }
         }
@@ -73,7 +75,7 @@ class FaceTimeConnection(
     fun answerFromHandoff() = onAnswer()
 
     override fun onAnswer() {
-        if (ended) return
+        if (ended.get()) return
         mainHandler.removeCallbacks(ringingTimeoutRunnable)
         PersistentLog.d(context, TAG, "onAnswer for $callUuid")
         setActive()
@@ -82,8 +84,15 @@ class FaceTimeConnection(
 
     override fun onReject() {
         PersistentLog.d(context, TAG, "onReject for $callUuid")
-        finishCall(DisconnectCause(DisconnectCause.REJECTED)) { uuid ->
-            HttpService(context).declineFaceTimeCall(uuid)
+        finishCall(DisconnectCause(DisconnectCause.REJECTED)) { uuid, done ->
+            HttpService(context).declineFaceTimeCall(
+                callUuid = uuid,
+                onSuccess = { done() },
+                onError = { err ->
+                    PersistentLog.w(context, TAG, "declineFaceTimeCall failed for $uuid: $err")
+                    done()
+                }
+            )
         }
     }
 
@@ -107,7 +116,7 @@ class FaceTimeConnection(
     }
 
     override fun onCallAudioStateChanged(state: CallAudioState?) {
-        if (state == null || ended) return
+        if (state == null || ended.get()) return
         if (lastMuted != state.isMuted) {
             lastMuted = state.isMuted
             webRtcClient?.setMuted(state.isMuted)
@@ -130,26 +139,51 @@ class FaceTimeConnection(
 
     private fun endLocalCall(causeCode: Int) {
         PersistentLog.d(context, TAG, "endLocalCall($causeCode) for $callUuid")
-        finishCall(DisconnectCause(causeCode), sendHangup = true) { uuid ->
-            HttpService(context).leaveFaceTimeCall(uuid)
+        finishCall(DisconnectCause(causeCode), sendHangup = true) { uuid, done ->
+            HttpService(context).leaveFaceTimeCall(
+                callUuid = uuid,
+                onSuccess = { done() },
+                onError = { err ->
+                    PersistentLog.w(context, TAG, "leaveFaceTimeCall failed for $uuid: $err")
+                    done()
+                }
+            )
         }
     }
 
     private fun finishCall(
         cause: DisconnectCause,
         sendHangup: Boolean = false,
-        onUuid: ((String) -> Unit)? = null
+        onUuid: ((String, () -> Unit) -> Unit)? = null
     ) {
-        if (ended) return
-        ended = true
+        if (!ended.compareAndSet(false, true)) return
         val uuid = callUuid
         cleanupAudio(sendHangup = sendHangup)
         if (!uuid.isNullOrBlank()) {
             FaceTimeConnectionService.unregisterActiveConnection(uuid, this)
-            onUuid?.invoke(uuid)
         }
         setDisconnected(cause)
-        destroy()
+        if (onUuid != null && !uuid.isNullOrBlank()) {
+            // Keep ConnectionService bound briefly until leave/decline HTTP completes or times out.
+            var destroyed = false
+            val destroyOnce: () -> Unit = {
+                mainHandler.post {
+                    if (!destroyed) {
+                        destroyed = true
+                        destroy()
+                    }
+                }
+            }
+            mainHandler.postDelayed({
+                if (!destroyed) {
+                    PersistentLog.w(context, TAG, "Timed out waiting for FaceTime end HTTP for $uuid; destroying connection")
+                    destroyOnce()
+                }
+            }, 3_000L)
+            onUuid(uuid, destroyOnce)
+        } else {
+            destroy()
+        }
     }
 
     private fun cleanupAudio(sendHangup: Boolean) {

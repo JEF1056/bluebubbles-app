@@ -69,5 +69,55 @@ void main() {
       expect(fs.getCachedChatBackgroundByPath('web-bg://missing?v=1'), isNull);
       expect(FilesystemService.transparent1x1Png.sublist(0, 4), equals([0x89, 0x50, 0x4E, 0x47]));
     });
+
+    test('server web-bg:// background path preserves server GUID across updates and clears', () {
+      const serverWebPath =
+          'web-bg://any;-;+19499980689/background-server-AB8083A0-FC1A-4948-9B42-8DA282874142.jpg?v=1';
+      expect(serverBackgroundGuidFromPath(serverWebPath), 'AB8083A0-FC1A-4948-9B42-8DA282874142');
+      expect(serverBackgroundGuidFromPath('web-bg://any;-;+19499980689?v=2'), isNull);
+      expect(
+        shouldSyncServerBackground(
+          serverGuid: 'AB8083A0-FC1A-4948-9B42-8DA282874142',
+          hasServerProperties: true,
+          existingPath: serverWebPath,
+          wallpaperType: 'image',
+        ),
+        isFalse,
+      );
+      expect(
+        shouldSyncServerBackground(
+          serverGuid: 'NEW-GUID-1234',
+          hasServerProperties: true,
+          existingPath: serverWebPath,
+          wallpaperType: 'image',
+        ),
+        isTrue,
+      );
+      expect(
+        shouldSyncServerBackground(
+          serverGuid: null,
+          hasServerProperties: true,
+          existingPath: serverWebPath,
+          wallpaperType: 'image',
+        ),
+        isTrue,
+      );
+    });
+
+    test('FilesystemService.saveWebContactAvatar content-hashes and evicts superseded photos', () async {
+      final fs = FilesystemService();
+      final a = Uint8List.fromList([10, 20, 30, 40]);
+      final b = Uint8List.fromList([50, 60, 70, 80, 90]);
+      final pathA1 = await fs.saveWebContactAvatar('uuid:ABPerson', a);
+      final pathA2 = await fs.saveWebContactAvatar('uuid:ABPerson', a);
+      expect(pathA1, startsWith('web-avatar://contact_'));
+      expect(pathA2, equals(pathA1));
+      expect(fs.getCachedWebAvatarByPath(pathA1), equals(a));
+
+      final pathB = await fs.saveWebContactAvatar('uuid:ABPerson', b);
+      expect(pathB, isNot(equals(pathA1)));
+      expect(fs.getCachedWebAvatarByPath(pathA1), isNull);
+      expect(fs.getCachedWebAvatarByPath(pathB), equals(b));
+    });
   });
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui';
 
 import 'package:bluebubbles/app/layouts/conversation_details/material/chat_detail_theme.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/material/material_chat_header.dart';
@@ -8,6 +9,7 @@ import 'package:bluebubbles/app/layouts/conversation_details/material/material_p
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/attachments_loader.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_info.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_options.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/widgets/findmy_location_card.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/participants_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/sections/documents/documents_section.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/sections/links/links_section.dart';
@@ -15,12 +17,14 @@ import 'package:bluebubbles/app/layouts/conversation_details/widgets/sections/me
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
+import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 
 class TabletModeWrapper extends StatefulWidget {
   final Widget left;
@@ -53,6 +57,20 @@ class TabletModeWrapper extends StatefulWidget {
       : assert(initialRatio >= 0),
         assert(initialRatio <= 1);
 
+  static ({double leftWidth, double rightWidth, double inspectorReserved}) computePaneWidths({
+    required double maxWidth,
+    required double desiredLeftWidth,
+    required bool showInspectorPane,
+    required bool showInspectorToggle,
+  }) {
+    final inspectorReserved = showInspectorPane ? 321.0 : (showInspectorToggle ? 29.0 : 0.0);
+    const minRightWidth = 360.0;
+    final availableForLeft = max(0.0, maxWidth - inspectorReserved - minRightWidth);
+    final leftWidth = min(desiredLeftWidth, availableForLeft);
+    final rightWidth = max(0.0, maxWidth - leftWidth - inspectorReserved);
+    return (leftWidth: leftWidth, rightWidth: rightWidth, inspectorReserved: inspectorReserved);
+  }
+
   @override
   State<TabletModeWrapper> createState() => _TabletModeWrapperState();
 }
@@ -60,15 +78,15 @@ class TabletModeWrapper extends StatefulWidget {
 class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers {
   //from 0-1
   late final RxDouble _ratio;
+
   double? _maxWidth;
   bool? altLayoutCache;
   bool _preserveRightOneFrame = false;
   StreamSubscription? _eventSub;
+  Worker? _activeChatWorker;
 
   double get _width1 => max(
       min(_ratio * _maxWidth!, widget.maxWidthLeft ?? double.infinity), widget.minWidthLeft ?? double.negativeInfinity);
-
-  double get _width2 => _maxWidth! - _width1;
 
   @override
   void initState() {
@@ -89,11 +107,19 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
       await PrefsSvc.desktop.setSplitRatio(val);
       EventDispatcherSvc.emit('split-refresh', null);
     });
+    if (kIsWeb && GetIt.I.isRegistered<ChatsService>()) {
+      _activeChatWorker = ever<String?>(ChatsSvc.activeChatGuid, (_) {
+        if (NavigationSvc.showInspectorDrawer.value) {
+          NavigationSvc.showInspectorDrawer.value = false;
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
     _eventSub?.cancel();
+    _activeChatWorker?.dispose();
     super.dispose();
   }
 
@@ -181,7 +207,8 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
     _preserveRightOneFrame = false;
     return LayoutBuilder(
       builder: (context, BoxConstraints constraints) {
-        _maxWidth = constraints.maxWidth - widget.dividerWidth;
+        final effectiveDividerWidth = kIsWeb ? 1.0 : widget.dividerWidth;
+        _maxWidth = max(0.0, constraints.maxWidth - effectiveDividerWidth);
         final canShowInspector = widget.enableInspector && (kIsDesktop || kIsWeb) && constraints.maxWidth > 1024;
         return TitleBarWrapper(
           child: SizedBox(
@@ -190,22 +217,68 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
               final activeGuid = canShowInspector ? ChatsSvc.activeChatGuid.value : null;
               final inspectorOpen = canShowInspector ? NavigationSvc.showInspectorDrawer.value : false;
               final activeChat = activeGuid != null ? ChatsSvc.activeChat?.chat : null;
-              final showInspectorPane = canShowInspector && activeChat != null && inspectorOpen;
-              final showInspectorToggle = canShowInspector && activeChat != null && !inspectorOpen;
-              final inspectorReserved = showInspectorPane ? 321.0 : (showInspectorToggle ? 29.0 : 0.0);
-              final rightWidth = max(0.0, _width2 - inspectorReserved);
+              final hasInspectorHost = canShowInspector && activeChat != null;
+              final showInspectorPane = hasInspectorHost && inspectorOpen;
+              // Web collapses Details flush so no stray chevron strip remains on the right edge.
+              final showCollapsedInspectorEdge = hasInspectorHost && !kIsWeb;
+              final closedPanes = TabletModeWrapper.computePaneWidths(
+                maxWidth: _maxWidth!,
+                desiredLeftWidth: _width1,
+                showInspectorPane: false,
+                showInspectorToggle: showCollapsedInspectorEdge,
+              );
+              final openPanes = TabletModeWrapper.computePaneWidths(
+                maxWidth: _maxWidth!,
+                desiredLeftWidth: _width1,
+                showInspectorPane: hasInspectorHost,
+                showInspectorToggle: false,
+              );
 
-              return Row(
-                children: <Widget>[
-                  SizedBox(
-                    width: _width1,
-                    child: widget.left,
-                  ),
-                  (widget.allowResize)
-                      ? MouseRegion(
+              void onResizeUpdate(DragUpdateDetails details) {
+                if (_maxWidth == null || _maxWidth! <= 0) return;
+                _ratio.value = (_ratio.value + (details.delta.dx / _maxWidth!)).clamp(widget.minRatio, widget.maxRatio);
+                NavigationSvc.listener.refresh();
+              }
+
+              return TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: showInspectorPane ? 1.0 : 0.0),
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                child: hasInspectorHost
+                    ? _ChatInspectorPane(
+                        key: ValueKey(activeChat.guid),
+                        chat: activeChat,
+                        onClose: NavigationSvc.toggleInspectorDrawer,
+                      )
+                    : null,
+                builder: (context, t, inspectorChild) {
+                  final leftWidth = hasInspectorHost
+                      ? lerpDouble(closedPanes.leftWidth, openPanes.leftWidth, t)!
+                      : closedPanes.leftWidth;
+                  final rightWidth = hasInspectorHost
+                      ? lerpDouble(closedPanes.rightWidth, openPanes.rightWidth, t)!
+                      : closedPanes.rightWidth;
+                  final collapsedInspectorWidth = showCollapsedInspectorEdge ? 28.0 : 0.0;
+                  final inspectorWidth = hasInspectorHost ? lerpDouble(collapsedInspectorWidth, 320.0, t)! : 0.0;
+
+                  final row = Row(
+                    children: <Widget>[
+                      SizedBox(
+                        width: leftWidth,
+                        child: widget.left,
+                      ),
+                      if (kIsWeb)
+                        Container(
+                          width: 1.0,
+                          height: constraints.maxHeight,
+                          color: context.theme.colorScheme.outlineVariant,
+                        )
+                      else if (widget.allowResize)
+                        MouseRegion(
                           cursor: SystemMouseCursors.resizeLeftRight,
                           child: GestureDetector(
                             behavior: HitTestBehavior.translucent,
+                            onPanUpdate: onResizeUpdate,
                             child: Container(
                               color: context.theme.colorScheme.surfaceContainerHighest,
                               width: widget.dividerWidth,
@@ -240,68 +313,102 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                                 ],
                               ),
                             ),
-                            onPanUpdate: (DragUpdateDetails details) {
-                              _ratio.value =
-                                  (_ratio.value + (details.delta.dx / _maxWidth!)).clamp(widget.minRatio, widget.maxRatio);
-                              NavigationSvc.listener.refresh();
-                            },
                           ),
                         )
-                      : Container(
-                          width: widget.dividerWidth,
-                          height: constraints.maxHeight,
-                          color: context.theme.colorScheme.surfaceContainerHighest),
-                  SizedBox(
-                    width: rightWidth,
-                    child: widget.right,
-                  ),
-                  if (showInspectorPane) ...[
-                    VerticalDivider(
-                      width: 1,
-                      thickness: 1,
-                      color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
-                    ),
-                    SizedBox(
-                      width: 320,
-                      height: constraints.maxHeight,
-                      child: _ChatInspectorPane(
-                        key: ValueKey(activeChat.guid),
-                        chat: activeChat,
-                        onClose: NavigationSvc.toggleInspectorDrawer,
+                      else
+                        Container(
+                            width: widget.dividerWidth,
+                            height: constraints.maxHeight,
+                            color: context.theme.colorScheme.surfaceContainerHighest),
+                      SizedBox(
+                        width: rightWidth,
+                        child: widget.right,
                       ),
-                    ),
-                  ] else if (showInspectorToggle) ...[
-                    VerticalDivider(
-                      width: 1,
-                      thickness: 1,
-                      color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
-                    ),
-                    SizedBox(
-                      width: 28,
-                      height: constraints.maxHeight,
-                      child: Material(
-                        color: context.theme.colorScheme.surface,
-                        child: Align(
-                          alignment: Alignment.topCenter,
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 10),
-                            child: IconButton(
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
-                              tooltip: 'Show chat details (Alt+I)',
-                              icon: Icon(
-                                Icons.chevron_left_rounded,
-                                size: 18,
-                                color: context.theme.colorScheme.onSurfaceVariant,
-                              ),
-                              onPressed: NavigationSvc.toggleInspectorDrawer,
+                      if (hasInspectorHost && (showCollapsedInspectorEdge || t > 0.001)) ...[
+                        SizedBox(
+                          width: showCollapsedInspectorEdge ? 1.0 : t.clamp(0.0, 1.0),
+                          height: constraints.maxHeight,
+                          child: ColoredBox(
+                            color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+                          ),
+                        ),
+                        SizedBox(
+                          width: inspectorWidth,
+                          height: constraints.maxHeight,
+                          child: ClipRect(
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                if (showCollapsedInspectorEdge && t < 0.999)
+                                  Opacity(
+                                    opacity: (1.0 - t * 4.0).clamp(0.0, 1.0),
+                                    child: Material(
+                                      color: context.theme.colorScheme.surface,
+                                      child: Align(
+                                        alignment: Alignment.topCenter,
+                                        child: Padding(
+                                          padding: const EdgeInsets.only(top: 10),
+                                          child: IconButton(
+                                            padding: EdgeInsets.zero,
+                                            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                                            tooltip: 'Show chat details (Alt+I)',
+                                            icon: Icon(
+                                              Icons.chevron_left_rounded,
+                                              size: 18,
+                                              color: context.theme.colorScheme.onSurfaceVariant,
+                                            ),
+                                            onPressed: t < 0.2 ? NavigationSvc.toggleInspectorDrawer : null,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                if (t > 0.001 && inspectorChild != null)
+                                  OverflowBox(
+                                    alignment: Alignment.topLeft,
+                                    minWidth: 320,
+                                    maxWidth: 320,
+                                    minHeight: constraints.maxHeight,
+                                    maxHeight: constraints.maxHeight,
+                                    child: FractionalTranslation(
+                                      translation: Offset((1.0 - t) * 0.14, 0.0),
+                                      child: Opacity(
+                                        opacity: t.clamp(0.0, 1.0),
+                                        child: IgnorePointer(
+                                          ignoring: t < 0.5 && !showInspectorPane,
+                                          child: inspectorChild,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ),
+                      ],
+                    ],
+                  );
+
+                  if (!kIsWeb || !widget.allowResize) return row;
+                  return Stack(
+                    children: [
+                      row,
+                      Positioned(
+                        left: max(0.0, leftWidth - 3.0),
+                        top: 0,
+                        bottom: 0,
+                        width: 7.0,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.resizeLeftRight,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.translucent,
+                            onPanUpdate: onResizeUpdate,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                ],
+                    ],
+                  );
+                },
               );
             }),
           ),
@@ -350,7 +457,14 @@ class _ChatInspectorPaneState extends State<_ChatInspectorPane> {
     return ChatStateScope(
       chatState: chatState,
       child: Obx(() {
-        final chatDetailTheme = ChatDetailTheme.resolve(context, widget.chat);
+        final dbReady = Database.initComplete.isCompleted;
+        final chatDetailTheme = dbReady
+            ? ChatDetailTheme.resolve(context, widget.chat)
+            : ChatDetailTheme(
+                theme: Theme.of(context),
+                headerColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                tileColor: Theme.of(context).colorScheme.surface,
+              );
         final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
 
         return Theme(
@@ -388,31 +502,35 @@ class _ChatInspectorPaneState extends State<_ChatInspectorPane> {
                 Expanded(
                   child: CustomScrollView(
                     slivers: [
-                      SliverToBoxAdapter(
-                        child: isIOS ? ChatInfo(chat: widget.chat) : ExpressiveChatHeader(chat: widget.chat),
-                      ),
-                      isIOS
-                          ? ParticipantsList(chat: widget.chat)
-                          : ExpressiveParticipantsSection(chat: widget.chat),
-                      SliverToBoxAdapter(
-                        child: AttachmentsLoader(
-                          chat: widget.chat,
-                          onAttachmentsLoaded: _onAttachmentsLoaded,
+                      if (dbReady)
+                        SliverToBoxAdapter(
+                          child: isIOS ? ChatInfo(chat: widget.chat) : ExpressiveChatHeader(chat: widget.chat),
                         ),
-                      ),
-                      isIOS ? ChatOptions(chat: widget.chat) : ExpressiveChatOptions(chat: widget.chat),
-                      MediaGridSection(
-                        chat: widget.chat,
-                        media: media,
-                        selected: selected,
-                        isLoading: isLoadingAttachments,
-                      ),
-                      LinksSection(chat: widget.chat),
-                      DocumentsSection(
-                        chat: widget.chat,
-                        docs: docs,
-                        isLoading: isLoadingAttachments,
-                      ),
+                      SliverToBoxAdapter(child: FindMyLocationCard(chat: widget.chat)),
+                      if (dbReady) ...[
+                        isIOS
+                            ? ParticipantsList(chat: widget.chat)
+                            : ExpressiveParticipantsSection(chat: widget.chat),
+                        SliverToBoxAdapter(
+                          child: AttachmentsLoader(
+                            chat: widget.chat,
+                            onAttachmentsLoaded: _onAttachmentsLoaded,
+                          ),
+                        ),
+                        isIOS ? ChatOptions(chat: widget.chat) : ExpressiveChatOptions(chat: widget.chat),
+                        MediaGridSection(
+                          chat: widget.chat,
+                          media: media,
+                          selected: selected,
+                          isLoading: isLoadingAttachments,
+                        ),
+                        LinksSection(chat: widget.chat),
+                        DocumentsSection(
+                          chat: widget.chat,
+                          docs: docs,
+                          isLoading: isLoadingAttachments,
+                        ),
+                      ],
                       const SliverPadding(padding: EdgeInsets.only(bottom: 32)),
                     ],
                   ),

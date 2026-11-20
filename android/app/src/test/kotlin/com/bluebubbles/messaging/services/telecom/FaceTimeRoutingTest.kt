@@ -82,4 +82,77 @@ class FaceTimeRoutingTest {
         assertEquals("mailto", FaceTimeRoutingPolicy.resolveHandleScheme("alice@icloud.com"))
         assertEquals("tel", FaceTimeRoutingPolicy.resolveHandleScheme("+15551234567"))
     }
+
+    @Test
+    fun `outgoing call pre-uuid cancel leaves call and skips bind and audio bridge`() {
+        var failed: String? = null
+        var bound: String? = null
+        var unregistered: String? = null
+        var left: String? = null
+        var activated = false
+
+        FaceTimeConnectionService.handleOutgoingCallSuccess(
+            uuid = "ft-uuid-1",
+            isEnded = { true },
+            failOutgoing = { failed = it },
+            bindCallUuid = { bound = it },
+            unregisterActive = { unregistered = it },
+            leaveCall = { left = it },
+            activateAndStart = { activated = true }
+        )
+
+        assertEquals(null, failed)
+        assertEquals(null, bound)
+        assertEquals("ft-uuid-1", unregistered)
+        assertEquals("ft-uuid-1", left)
+        assertFalse(activated)
+    }
+
+    @Test
+    fun `outgoing call cancel racing with bind unregisters and leaves without activating`() {
+        var ended = false
+        var bound: String? = null
+        var unregistered: String? = null
+        var left: String? = null
+        var activated = false
+
+        FaceTimeConnectionService.handleOutgoingCallSuccess(
+            uuid = "ft-uuid-2",
+            isEnded = { ended },
+            failOutgoing = {},
+            bindCallUuid = {
+                bound = it
+                ended = true
+            },
+            unregisterActive = { unregistered = it },
+            leaveCall = { left = it },
+            activateAndStart = { activated = true }
+        )
+
+        assertEquals("ft-uuid-2", bound)
+        assertEquals("ft-uuid-2", unregistered)
+        assertEquals("ft-uuid-2", left)
+        assertFalse(activated)
+    }
+
+    @Test
+    fun `outgoing call normal success binds and activates without leaving`() {
+        var bound: String? = null
+        var left: String? = null
+        var activated = false
+
+        FaceTimeConnectionService.handleOutgoingCallSuccess(
+            uuid = "ft-uuid-3",
+            isEnded = { false },
+            failOutgoing = {},
+            bindCallUuid = { bound = it },
+            unregisterActive = {},
+            leaveCall = { left = it },
+            activateAndStart = { activated = true }
+        )
+
+        assertEquals("ft-uuid-3", bound)
+        assertEquals(null, left)
+        assertTrue(activated)
+    }
 }

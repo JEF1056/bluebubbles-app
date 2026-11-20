@@ -244,8 +244,8 @@ class PageButtons extends StatelessWidget {
                   if (proceed) nextPage();
                 },
                 child: Shimmer.fromColors(
-                  baseColor: Colors.white70,
-                  highlightColor: Colors.white,
+                  baseColor: context.theme.colorScheme.onPrimary.withValues(alpha: 0.7),
+                  highlightColor: context.theme.colorScheme.onPrimary,
                   child: Stack(
                     clipBehavior: Clip.none,
                     alignment: Alignment.center,
@@ -253,7 +253,8 @@ class PageButtons extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.only(right: 30.0),
                         child: Text("Next",
-                            style: context.theme.textTheme.bodyLarge!.apply(fontSizeFactor: 1.1, color: Colors.white)),
+                            style: context.theme.textTheme.bodyLarge!
+                                .apply(fontSizeFactor: 1.1, color: context.theme.colorScheme.onPrimary)),
                       ),
                       Positioned(
                         left: 40,
@@ -265,7 +266,7 @@ class PageButtons extends StatelessWidget {
                           builder: (context, anim, _) {
                             return Padding(
                               padding: EdgeInsets.only(left: anim),
-                              child: const Icon(Icons.arrow_forward, color: Colors.white, size: 20),
+                              child: Icon(Icons.arrow_forward, color: context.theme.colorScheme.onPrimary, size: 20),
                             );
                           },
                         ),

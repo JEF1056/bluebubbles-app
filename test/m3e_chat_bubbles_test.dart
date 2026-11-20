@@ -224,7 +224,8 @@ void main() {
   });
 
   group('P1-5 DeliveredIndicator Material checkmarks & tap-to-expand', () {
-    testWidgets('shows compact primary Read icon collapsed and expands timestamp on forceShow', (tester) async {
+    testWidgets('always shows Read icon and detail text when active, and expands older bubbles on forceShow',
+        (tester) async {
       final now = DateTime(2026, 11, 19, 14, 14);
       final message = Message(
         guid: 'msg-1',
@@ -252,18 +253,26 @@ void main() {
       await tester.pumpWidget(buildWidget(false));
       await tester.pumpAndSettle();
 
-      final icon = tester.widget<Icon>(find.byIcon(Icons.done_all));
-      expect(icon.color, scheme.primary);
-      expect(find.textContaining('Read'), findsNothing);
+      final readPainter = tester
+          .widget<CustomPaint>(find.descendant(of: find.bySemanticsLabel('Read'), matching: find.byType(CustomPaint)));
+      expect(readPainter.size, const Size(18, 12));
+      expect((readPainter.painter as dynamic).color, scheme.primary);
+      expect(find.textContaining('Read · ', findRichText: true), findsOneWidget);
+
+      // Older message (indicator flag false) is hidden until tapped (forceShow: true).
+      messageState.showReadIndicator.value = false;
+      await tester.pumpWidget(buildWidget(false));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Read', findRichText: true), findsNothing);
 
       await tester.pumpWidget(buildWidget(true));
       await tester.pumpAndSettle();
 
-      expect(find.byIcon(Icons.done_all), findsOneWidget);
-      expect(find.textContaining('Read', findRichText: true), findsOneWidget);
+      expect(find.bySemanticsLabel('Read'), findsOneWidget);
+      expect(find.textContaining('Read · ', findRichText: true), findsOneWidget);
     });
 
-    testWidgets('shows schedule icon while sending and check icon when Sent with forceShow', (tester) async {
+    testWidgets('shows schedule icon while sending and Sent status painter when Sent with forceShow', (tester) async {
       final now = DateTime(2026, 11, 19, 14, 15);
       final sendingMsg = Message(guid: 'msg-2', text: 'Sending', isFromMe: true, dateCreated: now);
       final sendingState = MessageState(sendingMsg)..isSending.value = true;
@@ -296,8 +305,20 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byIcon(Icons.check), findsOneWidget);
+      final sentPainter = tester
+          .widget<CustomPaint>(find.descendant(of: find.bySemanticsLabel('Sent'), matching: find.byType(CustomPaint)));
+      expect(sentPainter.size, const Size(12, 12));
       expect(find.textContaining('Sent', findRichText: true), findsOneWidget);
+    });
+  });
+
+  group('Group chat avatar-to-bubble gap', () {
+    test('BubbleConnect.incomingAvatarIndent clears 35dp Material avatar at left 5dp with 6dp gap', () {
+      // Material/Samsung avatar sits at left 5.0 with rendered diameter (35 * scale).roundToDouble().
+      expect(BubbleConnect.incomingAvatarIndent(isIOS: false, avatarScale: 1.0), 46.0);
+      expect(BubbleConnect.incomingAvatarIndent(isIOS: false, avatarScale: 1.2), 53.0);
+      // iOS keeps its 35 * scale indent where the 10dp tail gutter already separates avatar from bubble body.
+      expect(BubbleConnect.incomingAvatarIndent(isIOS: true, avatarScale: 1.0), 35.0);
     });
   });
 }

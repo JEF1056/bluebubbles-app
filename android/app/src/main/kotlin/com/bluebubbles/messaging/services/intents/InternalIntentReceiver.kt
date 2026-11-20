@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
@@ -36,7 +37,6 @@ import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.BufferedInputStream
-import java.io.DataInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
@@ -194,7 +194,9 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val replyText = RemoteInput.getResultsFromIntent(intent)?.getString("text_reply") ?: return
 
                 DartWorkManager.createWorker(context, intent.type!!, hashMapOf("chatGuid" to chatGuid, "messageGuid" to messageGuid, "text" to replyText)) { succeeded ->
-                    updateReplyNotification(context, notificationId, replyText = replyText, succeeded = succeeded)
+                    CoroutineScope(Dispatchers.IO).launch {
+                        updateReplyNotification(context, notificationId, replyText = replyText, succeeded = succeeded)
+                    }
                 }
             }
             "LikeMessage" -> {
@@ -292,9 +294,17 @@ class InternalIntentReceiver: BroadcastReceiver() {
         mediaUri: Uri? = null,
         succeeded: Boolean
     ) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            CoroutineScope(Dispatchers.IO).launch {
+                updateReplyNotification(context, notificationId, replyText, mediaMime, mediaUri, succeeded)
+            }
+            return
+        }
         val notificationManager = context.getSystemService(NotificationManager::class.java)
         PersistentLog.d(context, Constants.logTag, "Fetching existing notification values")
-        val chatNotification = notificationManager.activeNotifications.lastOrNull { it.id == notificationId }
+        val chatNotification = notificationManager.activeNotifications.lastOrNull {
+            matchesMessageNotification(it.tag, it.id, notificationId)
+        }
         if (chatNotification == null) {
             PersistentLog.e(context, Constants.logTag, "Could not find notification with ID $notificationId")
             return
@@ -328,14 +338,19 @@ class InternalIntentReceiver: BroadcastReceiver() {
         val avatarPath = prefs.getString("userAvatarPath", "")
         if (!avatarPath.isNullOrEmpty()) {
             val file = File(avatarPath)
-            val bytes = ByteArray(file.length().toInt())
-            try {
-                val bis = BufferedInputStream(FileInputStream(file))
-                val dis = DataInputStream(bis)
-                dis.readFully(bytes)
-                sender.setIcon(Utils.getAdaptiveIconFromByteArray(bytes).toIcon(context))
-            } catch (e: IOException) {
-                e.printStackTrace()
+            if (file.isFile) {
+                try {
+                    val bytes = FileInputStream(file).use { fis ->
+                        BufferedInputStream(fis).use { it.readBytes() }
+                    }
+                    if (bytes.isNotEmpty()) {
+                        Utils.getAdaptiveIconFromByteArray(bytes)?.let { icon ->
+                            sender.setIcon(icon.toIcon(context))
+                        }
+                    }
+                } catch (e: IOException) {
+                    PersistentLog.w(context, Constants.logTag, "Failed to load user avatar for reply notification: ${e.message}")
+                }
             }
         }
         val msg = Notification.MessagingStyle.Message(
@@ -479,6 +494,9 @@ class InternalIntentReceiver: BroadcastReceiver() {
             reactionType == "like" && reactionSent -> "Un-Like"
             else -> "Like"
         }
+
+        internal fun matchesMessageNotification(tag: String?, id: Int, targetId: Int): Boolean =
+            tag == Constants.newMessageNotificationTag && id == targetId
 
         internal fun isReactionAction(title: String?, semanticAction: Int?): Boolean {
             if (semanticAction == Notification.Action.SEMANTIC_ACTION_THUMBS_UP) return true

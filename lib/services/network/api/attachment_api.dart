@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -150,18 +152,22 @@ class AttachmentApi {
     });
   }
 
-  /// Stages [filePath] for `message/multipart`, whose parts name it by the response's `data.path`.
+  /// Stages [filePath] (or [bytes] on web) for `message/multipart`, whose parts name it by the response's `data.path`.
   Future<Response> upload(
     String filePath,
     String fileName, {
+    Uint8List? bytes,
     void Function(int, int)? onSendProgress,
     CancelToken? cancelToken,
   }) async {
     return _svc.runApiGuarded(() async {
+      final multipart = bytes != null
+          ? MultipartFile.fromBytes(bytes, filename: fileName)
+          : await MultipartFile.fromFile(filePath, filename: fileName);
       final response = await _svc.dio.post(
         "${_svc.apiRoot}/attachment/upload",
         queryParameters: _svc.buildQueryParams(),
-        data: FormData.fromMap({"attachment": await MultipartFile.fromFile(filePath, filename: fileName)}),
+        data: FormData.fromMap({"attachment": multipart}),
         onSendProgress: onSendProgress,
         cancelToken: cancelToken,
         options: Options(sendTimeout: _svc.dio.options.sendTimeout! * 12),

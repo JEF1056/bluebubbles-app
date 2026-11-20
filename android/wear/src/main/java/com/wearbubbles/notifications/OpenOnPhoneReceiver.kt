@@ -4,7 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.wearbubbles.WearBubblesApp
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class OpenOnPhoneReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -12,22 +14,20 @@ class OpenOnPhoneReceiver : BroadcastReceiver() {
         val appContext = context.applicationContext
         val app = appContext as WearBubblesApp
         val pendingResult = goAsync()
-        Thread {
+        CoroutineScope(Dispatchers.IO).launch {
             try {
-                runBlocking {
-                    val sent = if (app.phoneRelayClient.refreshPhoneConnected()) {
-                        app.phoneRelayClient.sendOpenChatAwait(chatGuid)
-                    } else {
-                        false
-                    }
-                    if (!sent) {
-                        RemoteLauncher.openServerOnPhone(appContext)
-                    }
+                val sent = if (app.phoneRelayClient.refreshPhoneConnected()) {
+                    app.phoneRelayClient.sendOpenChatAwait(chatGuid)
+                } else {
+                    false
+                }
+                if (!sent) {
+                    RemoteLauncher.openServerOnPhone(appContext)
                 }
                 NotificationHelper.cancelNotification(appContext, chatGuid)
             } finally {
                 pendingResult.finish()
             }
-        }.start()
+        }
     }
 }

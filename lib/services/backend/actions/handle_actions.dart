@@ -56,14 +56,20 @@ class HandleActions {
 
     return Database.runInTransaction(TxMode.write, () {
       final newHandles = <Handle>[];
+      final seenByKey = <String, Handle>{};
+      final toPersist = <Handle>[];
       /// Match existing to the handles to save, where possible
       for (Handle h in handles) {
-        Handle? existing;
-        if (matchOnOriginalROWID) {
-          existing = Handle.findOne(originalROWID: h.originalROWID);
-        } else {
-          existing = Handle.findOne(addressAndService: HandleLookupKey(h.address, h.service));
+        final prior = seenByKey[h.uniqueAddressAndService];
+        if (prior != null) {
+          prior.originalROWID ??= h.originalROWID;
+          continue;
         }
+        Handle? existing;
+        if (matchOnOriginalROWID && h.originalROWID != null) {
+          existing = Handle.findOne(originalROWID: h.originalROWID);
+        }
+        existing ??= Handle.findOne(addressAndService: HandleLookupKey(h.address, h.service));
 
         if (existing != null) {
           h.id = existing.id;
@@ -71,11 +77,16 @@ class HandleActions {
         } else {
           newHandles.add(h);
         }
+        seenByKey[h.uniqueAddressAndService] = h;
+        toPersist.add(h);
       }
 
-      List<int> insertedIds = Database.handles.putMany(handles);
+      List<int> insertedIds = Database.handles.putMany(toPersist);
       for (int i = 0; i < insertedIds.length; i++) {
-        handles[i].id = insertedIds[i];
+        toPersist[i].id = insertedIds[i];
+      }
+      for (final h in handles) {
+        h.id ??= seenByKey[h.uniqueAddressAndService]?.id;
       }
       if (newHandles.isNotEmpty) {
         ContactV2Actions.linkHandlesToContactsInTx(newHandles);

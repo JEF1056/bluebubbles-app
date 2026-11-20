@@ -60,7 +60,7 @@ class MessagesService extends GetxController {
   late Function(Message) newFunc;
   late Function(Message, {String? oldGuid}) updateFunc;
   late Function(Message) removeFunc;
-  late Function(String) jumpToMessage;
+  Function(String) jumpToMessage = (_) {};
   late List<Message> messagesRef;
 
   final String tag;
@@ -101,6 +101,12 @@ class MessagesService extends GetxController {
 
   /// Tracks the outgoing message that currently owns the "Delivered" indicator tier.
   MessageReceiptInfo? _lastDeliveredInfo;
+
+  /// Tracks the outgoing message that currently owns the "Sent" indicator tier.
+  MessageReceiptInfo? _lastSentInfo;
+
+  /// Tracks the incoming message that currently owns the "Received" indicator tier.
+  MessageReceiptInfo? _lastReceivedInfo;
 
   // ========== End Delivered Indicator Tracking ==========
 
@@ -732,6 +738,10 @@ class MessagesService extends GetxController {
       messageState.onClose();
     }
     messageStates.clear();
+    _lastReadInfo = null;
+    _lastDeliveredInfo = null;
+    _lastSentInfo = null;
+    _lastReceivedInfo = null;
     super.onClose();
   }
 
@@ -748,6 +758,10 @@ class MessagesService extends GetxController {
       state.onClose();
     }
     messageStates.clear();
+    _lastReadInfo = null;
+    _lastDeliveredInfo = null;
+    _lastSentInfo = null;
+    _lastReceivedInfo = null;
   }
 
   void reload() {
@@ -872,7 +886,7 @@ class MessagesService extends GetxController {
       newFunc.call(message);
     }
 
-    // Incrementally update indicator ownership for new outgoing messages.
+    // Incrementally update indicator ownership for new messages.
     // Reactions don't carry receipt status so skip them.
     if (!message.isReaction) {
       _updateIndicatorsForMessage(message);
@@ -1021,6 +1035,59 @@ class MessagesService extends GetxController {
 
   // ========== Delivered Indicator Recomputation ==========
 
+  bool _isIndicatorVisibleMessage(Message m) {
+    if (m.guid == null || m.dateDeleted != null) return false;
+    if (m.isReaction || m.isGroupEvent) return false;
+    final state = messageStates[m.guid!];
+    if (AppSessionTypes.isGame(m) &&
+        (state?.associatedMessageType.value ?? m.associatedMessageType) == AppSessionTypes.SUPERSEDED) {
+      return false;
+    }
+    if (state != null ? state.isFullyUnsent : m.hasUnsentParts) return false;
+    return true;
+  }
+
+  bool _isSentOnlyEligible(Message m) {
+    if (m.isFromMe != true || !_isIndicatorVisibleMessage(m)) return false;
+    final guid = m.guid!;
+    if (guid.startsWith('temp') || guid.startsWith('error')) return false;
+    if (m.error > 0) return false;
+    if (m.dateRead != null || m.dateDelivered != null || m.isDelivered) return false;
+    return true;
+  }
+
+  /// True when [candidate] is newer than [current] (using [dateCreated], with
+  /// [struct.messages] newest-first ordering as tie-breaker for identical ms).
+  bool _isMoreRecentMessage(Message candidate, MessageReceiptInfo? current) {
+    if (current == null) return true;
+    if (candidate.guid == current.guid) return false;
+    final candidateDate = candidate.dateCreated;
+    final currentDate = current.createdDate;
+    if (candidateDate == null) return false;
+    if (currentDate == null) return true;
+    if (candidateDate.isAfter(currentDate)) return true;
+    if (candidateDate.isBefore(currentDate)) return false;
+    final list = struct.messages;
+    final candIdx = list.indexWhere((m) => m.guid == candidate.guid);
+    final currIdx = list.indexWhere((m) => m.guid == current.guid);
+    return candIdx >= 0 && (currIdx < 0 || candIdx < currIdx);
+  }
+
+  /// True when [candidate] is strictly newer than [against] (or [against] is
+  /// null). When dates are unavailable, the higher tier wins (returns false).
+  bool _isReceiptNewer(MessageReceiptInfo candidate, MessageReceiptInfo? against) {
+    if (against == null) return true;
+    final candDate = candidate.createdDate;
+    final againstDate = against.createdDate;
+    if (candDate == null || againstDate == null) return false;
+    if (candDate.isAfter(againstDate)) return true;
+    if (candDate.isBefore(againstDate)) return false;
+    final list = struct.messages;
+    final candIdx = list.indexWhere((m) => m.guid == candidate.guid);
+    final againstIdx = list.indexWhere((m) => m.guid == against.guid);
+    return candIdx >= 0 && againstIdx >= 0 && candIdx < againstIdx;
+  }
+
   /// Renames tracking refs when a message GUID changes (temp → real).
   /// Must be called BEFORE [_updateIndicatorsForMessage] on the same update
   /// so that the tracking fields stay consistent with [messageStates] keys.
@@ -1032,24 +1099,65 @@ class MessagesService extends GetxController {
       _lastDeliveredInfo =
           MessageReceiptInfo(newGuid, date: _lastDeliveredInfo!.date, createdDate: _lastDeliveredInfo!.createdDate);
     }
+    if (_lastSentInfo?.guid == oldGuid) {
+      _lastSentInfo = MessageReceiptInfo(newGuid, date: _lastSentInfo!.date, createdDate: _lastSentInfo!.createdDate);
+    }
+    if (_lastReceivedInfo?.guid == oldGuid) {
+      _lastReceivedInfo =
+          MessageReceiptInfo(newGuid, date: _lastReceivedInfo!.date, createdDate: _lastReceivedInfo!.createdDate);
+    }
   }
 
-  /// Incrementally updates indicator ownership for a single outgoing [message].
+  /// Incrementally updates indicator ownership for a single [message].
   ///
-  /// Used on [_handleNewMessage] and [updateMessage].  Avoids a full list scan
+  /// Used on [_handleNewMessage] and [updateMessage]. Avoids a full list scan
   /// by comparing the incoming message's tier-relevant date against the stored
   /// tracking info:
-  /// - **Read**: compares [Message.dateRead] vs stored date (also dateRead).
-  /// - **Delivered**: compares [Message.dateDelivered] vs stored date; when
-  ///   [Message.isDelivered] is true but no timestamp is present, falls back
-  ///   to [Message.dateCreated] compared against whatever date the current
-  ///   owner stored.
-  ///
-  /// Only outgoing (isFromMe == true) messages participate in any indicator tier.
+  /// - **Read** (outgoing): newest [Message.dateRead].
+  /// - **Delivered** (outgoing unread): newest [Message.dateDelivered] (or
+  ///   [Message.dateCreated] when only [Message.isDelivered] is set).
+  /// - **Sent** (outgoing sent-only): newest visible sent-only message newer
+  ///   than both [_lastReadInfo] and [_lastDeliveredInfo].
+  /// - **Received** (incoming): newest visible non-event incoming message.
   void _updateIndicatorsForMessage(Message message) {
-    if (message.isFromMe != true || message.guid == null) return;
+    if (message.guid == null) return;
 
     final guid = message.guid!;
+
+    if (!_isIndicatorVisibleMessage(message)) {
+      final wasOwner = _lastReadInfo?.guid == guid ||
+          _lastDeliveredInfo?.guid == guid ||
+          _lastSentInfo?.guid == guid ||
+          _lastReceivedInfo?.guid == guid;
+      if (wasOwner) {
+        final state = messageStates[guid];
+        state?.updateShowReadIndicatorInternal(false);
+        state?.updateShowDeliveredIndicatorInternal(false);
+        state?.updateShowSentIndicatorInternal(false);
+        state?.updateShowReceivedIndicatorInternal(false);
+        if (_lastReadInfo?.guid == guid) _lastReadInfo = null;
+        if (_lastDeliveredInfo?.guid == guid) _lastDeliveredInfo = null;
+        if (_lastSentInfo?.guid == guid) _lastSentInfo = null;
+        if (_lastReceivedInfo?.guid == guid) _lastReceivedInfo = null;
+        _recomputeDeliveredIndicators();
+      }
+      return;
+    }
+
+    // ---- Received tier (incoming messages) ----
+    if (message.isFromMe == false) {
+      final current = _lastReceivedInfo;
+      if (current?.guid == guid) {
+        messageStates[guid]?.updateShowReceivedIndicatorInternal(true);
+      } else if (_isMoreRecentMessage(message, current)) {
+        messageStates[current?.guid]?.updateShowReceivedIndicatorInternal(false);
+        _lastReceivedInfo = MessageReceiptInfo(guid, createdDate: message.dateCreated);
+        messageStates[guid]?.updateShowReceivedIndicatorInternal(true);
+      }
+      return;
+    }
+
+    if (message.isFromMe != true) return;
 
     // Helper: returns true when [candidate] is strictly newer than [stored].
     bool isNewer(DateTime? candidate, DateTime? stored) {
@@ -1058,14 +1166,24 @@ class MessagesService extends GetxController {
       return candidate.isAfter(stored);
     }
 
-    // ---- Read tier: compare by dateRead ----
+    // ---- Read tier: compare by dateRead (tie-break by createdDate / order) ----
     if (message.dateRead != null) {
       final current = _lastReadInfo;
-      if (current?.guid != guid && isNewer(message.dateRead, current?.date)) {
+      final beatsRead = current?.guid != guid &&
+          (isNewer(message.dateRead, current?.date) ||
+              (current?.date != null &&
+                  message.dateRead!.isAtSameMomentAs(current!.date!) &&
+                  _isMoreRecentMessage(message, current)));
+      if (beatsRead) {
         messageStates[current?.guid]?.updateShowReadIndicatorInternal(false);
         _lastReadInfo = MessageReceiptInfo(guid, date: message.dateRead, createdDate: message.dateCreated);
         messageStates[guid]?.updateShowReadIndicatorInternal(true);
       }
+    } else if (_lastReadInfo?.guid == guid) {
+      messageStates[guid]?.updateShowReadIndicatorInternal(false);
+      _lastReadInfo = null;
+      _recomputeDeliveredIndicators();
+      return;
     }
 
     // ---- Delivered tier: qualifies only when delivered but NOT yet read.  ----
@@ -1075,20 +1193,39 @@ class MessagesService extends GetxController {
     if (hasDelivered && message.dateRead == null) {
       final effectiveDate = message.dateDelivered ?? message.dateCreated;
       final current = _lastDeliveredInfo;
-      if (current?.guid != guid && isNewer(effectiveDate, current?.date)) {
+      final beatsDelivered = current?.guid != guid &&
+          (isNewer(effectiveDate, current?.date) ||
+              (effectiveDate != null &&
+                  current?.date != null &&
+                  effectiveDate.isAtSameMomentAs(current!.date!) &&
+                  _isMoreRecentMessage(message, current)));
+      if (beatsDelivered) {
         messageStates[current?.guid]?.updateShowDeliveredIndicatorInternal(false);
         _lastDeliveredInfo = MessageReceiptInfo(guid, date: effectiveDate, createdDate: message.dateCreated);
         messageStates[guid]?.updateShowDeliveredIndicatorInternal(true);
       }
-    } else if (message.dateRead != null && _lastDeliveredInfo?.guid == guid) {
-      // This message was the delivered-tier owner but has now been read.
+    } else if ((message.dateRead != null || !hasDelivered) && _lastDeliveredInfo?.guid == guid) {
+      // This message was the delivered-tier owner but has now been read (or lost delivery).
       // Clear its delivered flag and find the next eligible message.
       messageStates[guid]?.updateShowDeliveredIndicatorInternal(false);
       _lastDeliveredInfo = null;
       _recomputeDeliveredIndicator();
     }
 
+    // ---- Sent tier: qualifies only when sent-only (no read/delivery/error/temp) ----
+    if (_isSentOnlyEligible(message)) {
+      if (_lastSentInfo?.guid != guid && _isMoreRecentMessage(message, _lastSentInfo)) {
+        messageStates[_lastSentInfo?.guid]?.updateShowSentIndicatorInternal(false);
+        _lastSentInfo = MessageReceiptInfo(guid, createdDate: message.dateCreated);
+      }
+    } else if (_lastSentInfo?.guid == guid) {
+      messageStates[guid]?.updateShowSentIndicatorInternal(false);
+      _lastSentInfo = null;
+      _recomputeSentIndicator();
+    }
+
     _normalizeDeliveredVsRead();
+    _normalizeSentVsReadAndDelivered();
   }
 
   /// Targeted rescan for the delivered tier only.  Called when the previous
@@ -1097,7 +1234,7 @@ class MessagesService extends GetxController {
   void _recomputeDeliveredIndicator() {
     Message? best;
     DateTime? bestDate;
-    for (final m in struct.messages.where((e) => e.isFromMe == true)) {
+    for (final m in struct.messages.where((e) => e.isFromMe == true && _isIndicatorVisibleMessage(e))) {
       if ((m.dateDelivered == null && !m.isDelivered) || m.dateRead != null) continue;
       final effectiveDate = m.dateDelivered ?? m.dateCreated;
       if (best == null || (effectiveDate != null && (bestDate == null || effectiveDate.isAfter(bestDate)))) {
@@ -1112,32 +1249,48 @@ class MessagesService extends GetxController {
     _normalizeDeliveredVsRead();
   }
 
+  /// Targeted rescan for the sent-only tier.
+  void _recomputeSentIndicator() {
+    final outgoing = struct.messages
+        .where((e) => _isSentOnlyEligible(e))
+        .toList()
+      ..sort(Message.sort);
+    final best = outgoing.firstOrNull;
+    if (best?.guid != null) {
+      _lastSentInfo = MessageReceiptInfo(best!.guid!, createdDate: best.dateCreated);
+    }
+    _normalizeSentVsReadAndDelivered();
+  }
+
   /// Suppresses or re-enables the delivered indicator based on whether a newer
   /// read message exists.  A read receipt on a newer (or same-age) message
   /// supersedes any older "Delivered" label.  Call this after updating either
   /// the read or delivered tier so the flag always reflects cross-tier state.
   void _normalizeDeliveredVsRead() {
     if (_lastDeliveredInfo == null) return;
-    final bool shouldShow;
-    if (_lastReadInfo == null) {
-      shouldShow = true;
-    } else {
-      final readCreated = _lastReadInfo!.createdDate;
-      final deliveredCreated = _lastDeliveredInfo!.createdDate;
-      // Show delivered only if it is strictly newer than the read message.
-      // When dates are unavailable, the read message wins (hide delivered).
-      shouldShow = readCreated != null && deliveredCreated != null && deliveredCreated.isAfter(readCreated);
-    }
+    final shouldShow = _isReceiptNewer(_lastDeliveredInfo!, _lastReadInfo);
     messageStates[_lastDeliveredInfo!.guid]?.updateShowDeliveredIndicatorInternal(shouldShow);
   }
 
-  /// Full two-tier recompute across all loaded outgoing messages.
+  /// Suppresses or enables the sent indicator based on whether a newer (or
+  /// same-age) read or delivered message exists.
+  void _normalizeSentVsReadAndDelivered() {
+    if (_lastSentInfo == null) return;
+    final shouldShow =
+        _isReceiptNewer(_lastSentInfo!, _lastReadInfo) && _isReceiptNewer(_lastSentInfo!, _lastDeliveredInfo);
+    messageStates[_lastSentInfo!.guid]?.updateShowSentIndicatorInternal(shouldShow);
+  }
+
+  /// Full four-tier recompute across all loaded messages.
   ///
-  /// Used on initial load ([loadChunk] / [loadSearchChunk]) and on [removeMessage]
-  /// when the removed message may have been an indicator owner.  Prefer
-  /// [_updateIndicatorsForMessage] for add/update events.
+  /// Used on initial load ([loadChunk] / [loadSearchChunk]), on [removeMessage],
+  /// and when an existing indicator owner becomes ineligible (unsent/deleted).
+  /// Prefer [_updateIndicatorsForMessage] for normal add/update events.
   void _recomputeDeliveredIndicators() {
-    final outgoing = struct.messages.where((e) => e.isFromMe == true).toList()..sort(Message.sort);
+    final outgoing = struct.messages
+        .where((e) => e.isFromMe == true && _isIndicatorVisibleMessage(e))
+        .toList()
+      ..sort(Message.sort);
 
     // ---- Read tier: find message with newest dateRead ----
     Message? newLastRead;
@@ -1151,6 +1304,8 @@ class MessagesService extends GetxController {
           ? MessageReceiptInfo(newLastRead.guid!, date: newLastRead.dateRead, createdDate: newLastRead.dateCreated)
           : null;
       if (_lastReadInfo != null) messageStates[_lastReadInfo!.guid]?.updateShowReadIndicatorInternal(true);
+    } else if (_lastReadInfo != null) {
+      messageStates[_lastReadInfo!.guid]?.updateShowReadIndicatorInternal(true);
     }
 
     // ---- Delivered tier: find message with newest effective delivery date.
@@ -1178,7 +1333,41 @@ class MessagesService extends GetxController {
       }
     }
 
+    // ---- Sent tier: newest visible sent-only outgoing message ----
+    Message? newLastSent;
+    for (final m in outgoing) {
+      if (_isSentOnlyEligible(m)) {
+        newLastSent = m;
+        break;
+      }
+    }
+    if (newLastSent?.guid != _lastSentInfo?.guid) {
+      messageStates[_lastSentInfo?.guid]?.updateShowSentIndicatorInternal(false);
+      _lastSentInfo = newLastSent != null
+          ? MessageReceiptInfo(newLastSent.guid!, createdDate: newLastSent.dateCreated)
+          : null;
+    }
+
+    // ---- Received tier: newest visible incoming message ----
+    final incoming = struct.messages
+        .where((e) => e.isFromMe == false && _isIndicatorVisibleMessage(e))
+        .toList()
+      ..sort(Message.sort);
+    final newLastReceived = incoming.firstOrNull;
+    if (newLastReceived?.guid != _lastReceivedInfo?.guid) {
+      messageStates[_lastReceivedInfo?.guid]?.updateShowReceivedIndicatorInternal(false);
+      _lastReceivedInfo = newLastReceived != null
+          ? MessageReceiptInfo(newLastReceived.guid!, createdDate: newLastReceived.dateCreated)
+          : null;
+      if (_lastReceivedInfo != null) {
+        messageStates[_lastReceivedInfo!.guid]?.updateShowReceivedIndicatorInternal(true);
+      }
+    } else if (_lastReceivedInfo != null) {
+      messageStates[_lastReceivedInfo!.guid]?.updateShowReceivedIndicatorInternal(true);
+    }
+
     _normalizeDeliveredVsRead();
+    _normalizeSentVsReadAndDelivered();
   }
 
   // ========== End Delivered Indicator Recomputation ==========
@@ -1242,6 +1431,12 @@ class MessagesService extends GetxController {
     messageState.updateDateCreatedInternal(message.dateCreated);
     messageState.updateDateDeliveredInternal(null);
     messageState.updateDateReadInternal(null);
+    if (_lastReadInfo?.guid == guidToDelete ||
+        _lastDeliveredInfo?.guid == guidToDelete ||
+        _lastSentInfo?.guid == guidToDelete ||
+        _lastReceivedInfo?.guid == guidToDelete) {
+      _recomputeDeliveredIndicators();
+    }
 
     // Clear notification
     await NotificationsSvc.clearFailedToSend(chat.id!);

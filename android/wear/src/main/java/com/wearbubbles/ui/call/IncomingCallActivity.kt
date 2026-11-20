@@ -25,13 +25,17 @@ import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CallEnd
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.wearbubbles.WearBubblesApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,15 +68,21 @@ class IncomingCallActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        setContent {
-            val callState by CallNotificationHelper.activeCallState.collectAsState()
-            LaunchedEffect(callState) {
+        lifecycleScope.launch {
+            CallNotificationHelper.activeCallState.collect { callState ->
                 if (callState == null) {
                     finish()
+                } else if (callState.phase == CallPhase.RINGING) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
             }
+        }
+
+        setContent {
+            val callState by CallNotificationHelper.activeCallState.collectAsStateWithLifecycle()
             callState?.let { state ->
                 IncomingCallScreen(state = state)
             }
@@ -83,20 +93,8 @@ class IncomingCallActivity : ComponentActivity() {
 @Composable
 private fun IncomingCallScreen(state: ActiveCallState) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val appScope = remember(context) { (context.applicationContext as WearBubblesApp).applicationScope }
     var actionInFlight by remember(state.callUuid, state.phase) { mutableStateOf(false) }
-
-    var elapsedSeconds by remember(state.phase, state.startedAtElapsedMs) {
-        mutableLongStateOf(0L)
-    }
-    LaunchedEffect(state.phase, state.startedAtElapsedMs) {
-        if (state.phase == CallPhase.ONGOING && state.startedAtElapsedMs > 0L) {
-            while (true) {
-                elapsedSeconds = ((SystemClock.elapsedRealtime() - state.startedAtElapsedMs) / 1000L).coerceAtLeast(0L)
-                delay(1000L)
-            }
-        }
-    }
 
     val avatarBitmap = remember(state.avatarPath) {
         state.avatarPath?.let { path ->
@@ -166,26 +164,17 @@ private fun IncomingCallScreen(state: ActiveCallState) {
 
                 Spacer(modifier = Modifier.height(2.dp))
 
-                val subtitle = when (state.phase) {
-                    CallPhase.RINGING -> if (state.isVideo) {
-                        "FaceTime Video • Audio only"
-                    } else {
-                        "FaceTime Audio"
-                    }
-                    CallPhase.ONGOING -> {
-                        val mins = elapsedSeconds / 60L
-                        val secs = elapsedSeconds % 60L
-                        String.format(Locale.US, "%02d:%02d • Audio", mins, secs)
-                    }
+                when (state.phase) {
+                    CallPhase.RINGING -> Text(
+                        text = if (state.isVideo) "FaceTime Video • Audio only" else "FaceTime Audio",
+                        color = Color(0xFF9AA4B2),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                    CallPhase.ONGOING -> CallTimerText(startedAtElapsedMs = state.startedAtElapsedMs)
                 }
-                Text(
-                    text = subtitle,
-                    color = if (state.phase == CallPhase.ONGOING) Color(0xFF30D158) else Color(0xFF9AA4B2),
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center
-                )
             }
 
             Row(
@@ -203,11 +192,13 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                         .semantics { contentDescription = if (state.phase == CallPhase.ONGOING) "End Call" else "Decline" }
                         .clickable(enabled = !actionInFlight, role = Role.Button) {
                             actionInFlight = true
-                            scope.launch {
+                            appScope.launch {
                                 try {
-                                    CallNotificationHelper.declineOrEndCall(context, state.callUuid)
+                                    CallNotificationHelper.declineOrEndCall(context.applicationContext, state.callUuid)
                                 } finally {
-                                    actionInFlight = false
+                                    withContext(Dispatchers.Main) {
+                                        actionInFlight = false
+                                    }
                                 }
                             }
                         },
@@ -230,11 +221,13 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                             .semantics { contentDescription = "Answer Audio" }
                             .clickable(enabled = !actionInFlight, role = Role.Button) {
                                 actionInFlight = true
-                                scope.launch {
+                                appScope.launch {
                                     try {
-                                        CallNotificationHelper.answerCallAudio(context, state.callUuid)
+                                        CallNotificationHelper.answerCallAudio(context.applicationContext, state.callUuid)
                                     } finally {
-                                        actionInFlight = false
+                                        withContext(Dispatchers.Main) {
+                                            actionInFlight = false
+                                        }
                                     }
                                 }
                             },
@@ -251,4 +244,35 @@ private fun IncomingCallScreen(state: ActiveCallState) {
             }
         }
     }
+}
+
+@Composable
+private fun CallTimerText(startedAtElapsedMs: Long) {
+    var elapsedSeconds by remember(startedAtElapsedMs) {
+        mutableLongStateOf(
+            if (startedAtElapsedMs > 0L) {
+                ((SystemClock.elapsedRealtime() - startedAtElapsedMs) / 1000L).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+        )
+    }
+    LaunchedEffect(startedAtElapsedMs) {
+        if (startedAtElapsedMs > 0L) {
+            while (true) {
+                elapsedSeconds = ((SystemClock.elapsedRealtime() - startedAtElapsedMs) / 1000L).coerceAtLeast(0L)
+                delay(1000L)
+            }
+        }
+    }
+    val mins = elapsedSeconds / 60L
+    val secs = elapsedSeconds % 60L
+    Text(
+        text = String.format(Locale.US, "%02d:%02d • Audio", mins, secs),
+        color = Color(0xFF30D158),
+        fontSize = 12.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center
+    )
 }

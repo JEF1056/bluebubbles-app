@@ -14,8 +14,10 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.bluebubbles.messaging.Constants
+import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.R
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
+import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
 import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
 import com.bluebubbles.messaging.utils.PersistentLog
 import io.socket.client.IO
@@ -46,6 +48,15 @@ class SocketIOForegroundService : Service() {
         @Volatile
         var activeSocket: Socket? = null
             private set
+
+        internal fun parseConnectErrorMessage(arg: Any?): String =
+            (arg as? Throwable)?.message ?: arg?.toString() ?: "Unknown error"
+
+        internal fun parseDisconnectReason(arg: Any?): String =
+            (arg as? String) ?: arg?.toString() ?: "unknown"
+
+        internal fun shouldReconnectOnDisconnect(reason: String): Boolean =
+            reason == "io server disconnect"
     }
 
     private var mSocket: Socket? = null
@@ -95,16 +106,7 @@ class SocketIOForegroundService : Service() {
             val storedPassword: String? = prefs.getString("guidAuthKey", null)
             val customHeaders: String? = prefs.getString("customHeaders", null)
 
-            // Make sure the user has enabled the service
-            if (!keepAppAlive) {
-                PersistentLog.d(applicationContext, Constants.logTag, DISABLED)
-                
-                // Stop the service
-                stopSelf()
-                return
-            }
-
-            // Create notification for foreground service
+            // Create notification for foreground service before any early stopSelf() to satisfy FGS contract
             createNotificationChannel()
             ServiceCompat.startForeground(
                 this,
@@ -112,6 +114,13 @@ class SocketIOForegroundService : Service() {
                 createNotification(DEFAULT_NOTIFICATION),
                 FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
             )
+
+            // Make sure the user has enabled the service
+            if (!keepAppAlive) {
+                PersistentLog.d(applicationContext, Constants.logTag, DISABLED)
+                stopSelf()
+                return
+            }
 
             hasStarted = true
 
@@ -176,14 +185,14 @@ class SocketIOForegroundService : Service() {
             }
 
             mSocket!!.on(Socket.EVENT_CONNECT_ERROR) { args ->
-                val error = args[0] as Exception
-                PersistentLog.d(applicationContext, Constants.logTag, "Socket.io failed to connect to server! Error: ${error.message}")
-                updateNotification(CONNECT_FAILED + error.message)
+                val message = parseConnectErrorMessage(args.getOrNull(0))
+                PersistentLog.d(applicationContext, Constants.logTag, "Socket.io failed to connect to server! Error: $message")
+                updateNotification(CONNECT_FAILED + message)
             }
 
             // with reason, details args
             mSocket!!.on(Socket.EVENT_DISCONNECT) { args ->
-                val reason = args[0] as String
+                val reason = parseDisconnectReason(args.getOrNull(0))
                 PersistentLog.d(applicationContext, Constants.logTag, "Socket.io disconnected from server! Reason: $reason")
                 if (isBeingDestroyed) {
                     return@on
@@ -192,6 +201,9 @@ class SocketIOForegroundService : Service() {
                 val details = args.getOrNull(1)
                 PersistentLog.d(applicationContext, Constants.logTag, "Socket.io disconnected from server! Reason: $reason, Details: $details")
                 updateNotification(DISCONNECTED + reason)
+                if (shouldReconnectOnDisconnect(reason)) {
+                    tryReconnect()
+                }
             }
 
             mSocket!!.on("reconnecting") {
@@ -202,6 +214,9 @@ class SocketIOForegroundService : Service() {
             mSocket!!.on("reconnect_failed") {
                 PersistentLog.d(applicationContext, Constants.logTag, "Socket.io failed to reconnect to your server...")
                 updateNotification(RECONNECT_FAILED)
+                if (!isBeingDestroyed) {
+                    tryReconnect()
+                }
             }
 
             // This runs on socket.io's own event thread, outside the try/catch wrapping
@@ -243,7 +258,23 @@ class SocketIOForegroundService : Service() {
                     }
 
                     PersistentLog.d(applicationContext, Constants.logTag, "Received event of type $event from Socket.io...")
-                    DartWorkManager.createWorker(applicationContext, "socket-event", hashMapOf("event" to event, "data" to data)) {}
+                    val argsMap = hashMapOf<String, Any>("event" to event, "data" to data)
+                    if (MainActivity.getEngine() != null && MainActivity.isDartReady()) {
+                        reconnectHandler.post {
+                            try {
+                                if (MainActivity.getEngine() != null && MainActivity.isDartReady()) {
+                                    MethodCallHandler.invokeMethod("socket-event", argsMap)
+                                } else {
+                                    DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                                }
+                            } catch (e: Exception) {
+                                PersistentLog.w(applicationContext, Constants.logTag, "Direct socket-event dispatch failed, falling back to DartWorkManager: ${e.message}")
+                                DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                            }
+                        }
+                    } else {
+                        DartWorkManager.createWorker(applicationContext, "socket-event", HashMap(argsMap)) {}
+                    }
                 } catch (e: Exception) {
                     PersistentLog.e(applicationContext, Constants.logTag, "Failed to handle incoming Socket.io event", e)
                 }

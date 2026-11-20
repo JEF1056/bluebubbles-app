@@ -107,7 +107,10 @@ class ReactionDetails extends StatelessWidget {
                                     }
                                     final text = Text(
                                       ReactionTypes.emojiFor(message),
-                                      style: const TextStyle(fontSize: 18, fontFamily: 'Apple Color Emoji'),
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
+                                      ),
                                       textAlign: TextAlign.center,
                                     );
                                     if (message.associatedMessageType == "dislike") {

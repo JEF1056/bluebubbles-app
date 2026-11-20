@@ -15,12 +15,19 @@ import 'package:flutter/material.dart';
 /// grid's silhouette. Position is decided by [MessageState.isLeadingMessagePart] /
 /// [MessageState.isTrailingMessagePart], so a collapsed collection counts as covering its whole span.
 abstract final class BubbleConnect {
+  /// Left indent for incoming group-chat message rows beside the sender avatar (`left: 5.0`).
+  static double incomingAvatarIndent({
+    required bool isIOS,
+    required double avatarScale,
+  }) =>
+      isIOS ? 35.0 * avatarScale : 5.0 + (35.0 * avatarScale).roundToDouble() + 6.0;
+
   /// [part] joins the bubble below it (it isn't the message's trailing part, or the newer message groups with it).
   static bool lower(MessageState state, MessagePart part) {
     if (CurrentSkin.iOS) return false;
     if (!state.isTrailingMessagePart(part)) return true;
     final newer = state.newMessage;
-    return newer != null && !state.message.showTail(newer);
+    return newer != null && !newer.isGroupEvent && !state.message.showTail(newer);
   }
 
   /// [part] joins the bubble above it (it isn't the message's leading part, or the older message groups with it).

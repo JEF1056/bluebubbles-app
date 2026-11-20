@@ -87,7 +87,9 @@ class ChatState {
         isArchived = (chat.isArchived ?? false).obs,
         displayName = RxnString(chat.displayName),
         customAvatarPath = RxnString(chat.customAvatarPath),
-        customBackgroundPath = RxnString(FilesystemSvc.getExistingChatBackgroundPath(chat.guid)),
+        customBackgroundPath = RxnString(
+          FilesystemSvc.getExistingChatBackgroundPath(chat.guid, fallbackStoredPath: chat.customBackgroundPath),
+        ),
         // Placeholder; recomputed from live participant state once [participants]
         // is populated below, so a contact link resolved concurrently with chat
         // creation isn't missed by a one-shot snapshot of chat.getTitle().

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
@@ -66,13 +67,17 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
 
   bool get shouldShow {
     if (controller.audioWasKept.value != null) return true;
+    if (message.isGroupEvent) return false;
     if (widget.forceShow || _isSendingDisplayed) return true;
-    if ((!message.isFromMe! && iOS) || (controller.parts.lastOrNull?.isUnsent ?? false)) return false;
+    if (controller.isFullyUnsent || (controller.parts.lastOrNull?.isUnsent ?? false)) return false;
 
-    // Visibility for "last delivered/read/sent" is computed by
+    // Visibility for "last read / delivered / sent / received" is computed by
     // MessagesService._recomputeDeliveredIndicators and stored reactively on
     // the MessageState — each tier is independent.
-    return controller.showReadIndicator.value || controller.showDeliveredIndicator.value;
+    return controller.showReadIndicator.value ||
+        controller.showDeliveredIndicator.value ||
+        controller.showSentIndicator.value ||
+        controller.showReceivedIndicator.value;
   }
 
   List<InlineSpan> buildTwoPiece(String action, String? date) {
@@ -91,7 +96,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
       ),
       if (hasDate)
         TextSpan(
-          text: material ? " · $date" : " $date",
+          text: " · $date",
           style: baseStyle.copyWith(color: color, fontWeight: FontWeight.normal, shadows: shadows),
         ),
     ];
@@ -102,42 +107,44 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     final material = !iOS && !samsung;
     final dateRead = controller.dateRead.value ?? message.dateRead;
     final dateDelivered = controller.dateDelivered.value ?? message.dateDelivered;
+    final dateCreated = controller.dateCreated.value ?? message.dateCreated;
     final wasDeliveredQuietly = controller.wasDeliveredQuietly.value;
     final didNotifyRecipient = controller.didNotifyRecipient.value;
 
     if (controller.audioWasKept.value != null) {
       return buildTwoPiece("Kept", buildDate(controller.audioWasKept.value!));
     } else if (!(message.isFromMe ?? false)) {
-      return buildTwoPiece("Received", buildDate(message.dateCreated));
+      return buildTwoPiece("Received", buildDate(dateCreated));
     } else if (dateRead != null) {
       return buildTwoPiece("Read", buildDate(dateRead));
     } else if (dateDelivered != null) {
       return buildTwoPiece(
-          "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
-          SettingsSvc.settings.showDeliveryTimestamps.value || !iOS || widget.forceShow
-              ? buildDate(dateDelivered)
-              : null);
+        "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
+        buildDate(dateDelivered),
+      );
     } else if (message.isDelivered) {
-      return buildTwoPiece("Delivered", null);
+      return buildTwoPiece("Delivered", buildDate(dateCreated));
     } else if (_isSendingDisplayed && (material || !(controller.cvController?.chat.isGroup ?? _isGroup)) && !iOS) {
       return buildTwoPiece("Sending...", null);
-    } else if (widget.forceShow) {
-      return buildTwoPiece("Sent", buildDate(message.dateCreated));
+    } else if (controller.showSentIndicator.value || widget.forceShow) {
+      return buildTwoPiece("Sent", buildDate(dateCreated));
     }
 
     return [];
   }
 
-  ({IconData? icon, Color? iconColor, String? semanticLabel, List<InlineSpan> spans}) _materialStatus(
-      bool hasBackground) {
+  ({IconData? icon, _GMsgStatusKind? gmsgKind, Color? iconColor, String? semanticLabel, List<InlineSpan> spans})
+      _materialStatus(bool hasBackground) {
     final dateRead = controller.dateRead.value ?? message.dateRead;
     final dateDelivered = controller.dateDelivered.value ?? message.dateDelivered;
+    final dateCreated = controller.dateCreated.value ?? message.dateCreated;
     final wasDeliveredQuietly = controller.wasDeliveredQuietly.value;
     final didNotifyRecipient = controller.didNotifyRecipient.value;
 
     if (controller.audioWasKept.value != null) {
       return (
         icon: Icons.check_circle_outline,
+        gmsgKind: null,
         iconColor: null,
         semanticLabel: 'Kept',
         spans: buildTwoPiece("Kept", buildDate(controller.audioWasKept.value!)),
@@ -145,52 +152,56 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     } else if (!(message.isFromMe ?? false)) {
       return (
         icon: null,
+        gmsgKind: null,
         iconColor: null,
         semanticLabel: 'Received',
-        spans: widget.forceShow ? buildTwoPiece("Received", buildDate(message.dateCreated)) : const [],
+        spans: buildTwoPiece("Received", buildDate(dateCreated)),
       );
     } else if (_isSendingDisplayed) {
       return (
         icon: Icons.schedule,
+        gmsgKind: null,
         iconColor: null,
         semanticLabel: 'Sending',
         spans: buildTwoPiece("Sending...", null),
       );
     } else if (dateRead != null) {
       return (
-        icon: Icons.done_all,
+        icon: null,
+        gmsgKind: _GMsgStatusKind.read,
         iconColor: hasBackground ? Colors.white.withValues(alpha: 0.92) : context.theme.colorScheme.primary,
         semanticLabel: 'Read',
-        spans: widget.forceShow ? buildTwoPiece("Read", buildDate(dateRead)) : const [],
+        spans: buildTwoPiece("Read", buildDate(dateRead)),
       );
     } else if (dateDelivered != null) {
       return (
-        icon: Icons.done_all,
+        icon: null,
+        gmsgKind: _GMsgStatusKind.delivered,
         iconColor: null,
         semanticLabel: 'Delivered',
-        spans: widget.forceShow
-            ? buildTwoPiece(
-                "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
-                buildDate(dateDelivered),
-              )
-            : const [],
+        spans: buildTwoPiece(
+          "Delivered${wasDeliveredQuietly && !didNotifyRecipient ? " Quietly" : ""}",
+          buildDate(dateDelivered),
+        ),
       );
     } else if (message.isDelivered) {
       return (
-        icon: Icons.done_all,
+        icon: null,
+        gmsgKind: _GMsgStatusKind.delivered,
         iconColor: null,
         semanticLabel: 'Delivered',
-        spans: widget.forceShow ? buildTwoPiece("Delivered", null) : const [],
+        spans: buildTwoPiece("Delivered", buildDate(dateCreated)),
       );
-    } else if (widget.forceShow) {
+    } else if (controller.showSentIndicator.value || widget.forceShow) {
       return (
-        icon: Icons.check,
+        icon: null,
+        gmsgKind: _GMsgStatusKind.sent,
         iconColor: null,
         semanticLabel: 'Sent',
-        spans: buildTwoPiece("Sent", buildDate(message.dateCreated)),
+        spans: buildTwoPiece("Sent", buildDate(dateCreated)),
       );
     }
-    return (icon: null, iconColor: null, semanticLabel: null, spans: const []);
+    return (icon: null, gmsgKind: null, iconColor: null, semanticLabel: null, spans: const []);
   }
 
   @override
@@ -202,7 +213,10 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         : context.theme.colorScheme.onSurfaceVariant;
     final indentLeft =
         (showAvatar || (!material && SettingsSvc.settings.alwaysShowAvatars.value)) && !(message.isFromMe ?? false)
-            ? 35.0
+            ? BubbleConnect.incomingAvatarIndent(
+                isIOS: iOS,
+                avatarScale: SettingsSvc.settings.avatarScale.value,
+              )
             : 0.0;
     return AnimatedSize(
       curve: material ? M3EMotion.spatialFast.curve : Curves.easeInOut,
@@ -214,14 +228,20 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         // not subscribed here, so the "Sending..." label outlives the animation.
         controller.showReadIndicator.value;
         controller.showDeliveredIndicator.value;
+        controller.showSentIndicator.value;
+        controller.showReceivedIndicator.value;
         controller.audioWasKept.value;
         controller.dateDelivered.value;
         controller.dateRead.value;
+        controller.dateCreated.value;
+        controller.dateEdited.value;
+        controller.parts.length;
         if (!shouldShow) return const SizedBox.shrink();
 
         if (material) {
           final status = _materialStatus(hasBackground);
-          if (status.icon == null && status.spans.isEmpty) {
+          final hasIcon = status.icon != null || status.gmsgKind != null;
+          if (!hasIcon && status.spans.isEmpty) {
             return const SizedBox.shrink();
           }
           return Padding(
@@ -230,7 +250,19 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                if (status.icon != null)
+                if (status.gmsgKind != null)
+                  Semantics(
+                    label: status.semanticLabel,
+                    child: CustomPaint(
+                      size: Size(status.gmsgKind == _GMsgStatusKind.sent ? 12 : 18, 12),
+                      painter: _GMsgStatusPainter(
+                        kind: status.gmsgKind!,
+                        color: status.iconColor ?? mutedColor,
+                        checkColor: hasBackground ? Colors.black87 : context.theme.colorScheme.onPrimary,
+                      ),
+                    ),
+                  )
+                else if (status.icon != null)
                   Icon(
                     status.icon,
                     size: 14,
@@ -249,7 +281,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
                         ? const SizedBox.shrink()
                         : Padding(
                             key: ValueKey('${status.semanticLabel}_${widget.forceShow}'),
-                            padding: EdgeInsets.only(left: status.icon != null ? 4 : 0),
+                            padding: EdgeInsets.only(left: hasIcon ? 4 : 0),
                             child: Text.rich(TextSpan(children: status.spans)),
                           ),
                   ),
@@ -271,4 +303,72 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
       }),
     );
   }
+}
+
+enum _GMsgStatusKind { sent, delivered, read }
+
+class _GMsgStatusPainter extends CustomPainter {
+  const _GMsgStatusPainter({
+    required this.kind,
+    required this.color,
+    required this.checkColor,
+  });
+
+  final _GMsgStatusKind kind;
+  final Color color;
+  final Color checkColor;
+
+  void _drawCheck(Canvas canvas, Offset center, double radius, Paint paint) {
+    final p = Path()
+      ..moveTo(center.dx - radius * 0.44, center.dy + radius * 0.04)
+      ..lineTo(center.dx - radius * 0.10, center.dy + radius * 0.36)
+      ..lineTo(center.dx + radius * 0.46, center.dy - radius * 0.30);
+    canvas.drawPath(p, paint);
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cy = size.height / 2;
+    const r = 4.6;
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    if (kind == _GMsgStatusKind.sent) {
+      final c = Offset(size.width / 2, cy);
+      canvas.drawCircle(c, r, stroke);
+      _drawCheck(canvas, c, r, stroke);
+      return;
+    }
+
+    final c1 = Offset(5.5, cy);
+    final c2 = Offset(12.0, cy);
+    if (kind == _GMsgStatusKind.read) {
+      final fill = Paint()
+        ..color = color
+        ..style = PaintingStyle.fill;
+      final innerCheck = Paint()
+        ..color = checkColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.25
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      canvas.drawCircle(c1, r, fill);
+      canvas.drawCircle(c2, r, fill);
+      _drawCheck(canvas, c1, r, innerCheck);
+      _drawCheck(canvas, c2, r, innerCheck);
+    } else {
+      canvas.drawCircle(c1, r, stroke);
+      canvas.drawCircle(c2, r, stroke);
+      _drawCheck(canvas, c1, r, stroke);
+      _drawCheck(canvas, c2, r, stroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_GMsgStatusPainter oldDelegate) =>
+      oldDelegate.kind != kind || oldDelegate.color != color || oldDelegate.checkColor != checkColor;
 }

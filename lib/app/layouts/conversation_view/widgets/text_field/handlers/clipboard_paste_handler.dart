@@ -4,6 +4,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/helpers/ui/html_runs.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get_it/get_it.dart';
@@ -60,57 +61,63 @@ class ClipboardPasteHandler {
   }
 
   Future<bool> _pasteAttachments(ConversationViewController? controller) async {
-    // Try to get GIF URL from clipboard HTML
-    final html = await Pasteboard.html;
-    if (html != null) {
-      final gifMatch = RegExp(r'src="(https?://[^"]+\.gif)"').firstMatch(html);
-      if (gifMatch != null) {
-        if (controller == null) return _rejectAttachment();
-        final url = gifMatch.group(1)!;
-        final response = await GetIt.I<HttpService>().dio.get<List<int>>(
-              url,
-              options: Options(responseType: ResponseType.bytes),
-            );
-        final bytes = response.data;
-        if (bytes != null && bytes.isNotEmpty) {
-          final gifBytes = Uint8List.fromList(bytes);
-          controller.pickedAttachments.add(PlatformFile(
-            name: "gif-${controller.pickedAttachments.length + 1}.gif",
-            bytes: gifBytes,
-            size: gifBytes.length,
-          ));
+    try {
+      // Try to get GIF URL from clipboard HTML
+      final html = await Pasteboard.html;
+      if (html != null) {
+        final gifMatch = RegExp(r'src="(https?://[^"]+\.gif)"').firstMatch(html);
+        if (gifMatch != null) {
+          if (controller == null) return _rejectAttachment();
+          final url = gifMatch.group(1)!;
+          final response = await GetIt.I<HttpService>().dio.get<List<int>>(
+                url,
+                options: Options(responseType: ResponseType.bytes),
+              );
+          final bytes = response.data;
+          if (bytes != null && bytes.isNotEmpty) {
+            final gifBytes = Uint8List.fromList(bytes);
+            controller.pickedAttachments.add(PlatformFile(
+              name: "gif-${controller.pickedAttachments.length + 1}.gif",
+              bytes: gifBytes,
+              size: gifBytes.length,
+            ));
+            return true;
+          }
+        }
+      }
+
+      // Try to get files (not supported on web)
+      if (!kIsWeb) {
+        final files = await Pasteboard.files();
+        if (files.isNotEmpty) {
+          if (controller == null) return _rejectAttachment();
+          for (final String path in files) {
+            final String name = basename(path);
+            final File file = File(path);
+            controller.pickedAttachments.add(PlatformFile(
+              name: name,
+              path: path,
+              bytes: await file.readAsBytes(),
+              size: await file.length(),
+            ));
+          }
           return true;
         }
       }
-    }
 
-    // Try to get files
-    final files = await Pasteboard.files();
-    if (files.isNotEmpty) {
-      if (controller == null) return _rejectAttachment();
-      for (final String path in files) {
-        final String name = basename(path);
-        final File file = File(path);
+      // Try to get image from clipboard
+      final image = await Pasteboard.image;
+      if (image != null) {
+        if (controller == null) return _rejectAttachment();
         controller.pickedAttachments.add(PlatformFile(
-          name: name,
-          path: path,
-          bytes: await file.readAsBytes(),
-          size: await file.length(),
+          name: "image-${controller.pickedAttachments.length + 1}.png",
+          bytes: image,
+          size: image.length,
         ));
+        return true;
       }
-      return true;
-    }
-
-    // Try to get image from clipboard
-    final image = await Pasteboard.image;
-    if (image != null) {
-      if (controller == null) return _rejectAttachment();
-      controller.pickedAttachments.add(PlatformFile(
-        name: "image-${controller.pickedAttachments.length + 1}.png",
-        bytes: image,
-        size: image.length,
-      ));
-      return true;
+    } catch (_) {
+      // Fall back to text paste if Pasteboard fails (e.g., on web browsers without image clipboard read).
     }
     return false;
   }

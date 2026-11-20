@@ -1,6 +1,7 @@
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -15,7 +16,11 @@ class MessageSender extends StatelessWidget {
     if (state == null) return const SizedBox.shrink();
     final chatState = ChatStateScope.maybeOf(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 25).add(const EdgeInsets.only(bottom: 3)),
+      padding: EdgeInsets.only(
+        left: CurrentSkin.material ? 12.0 : 22.0,
+        right: 16.0,
+        bottom: 2.0,
+      ),
       // Obx makes the sender name reactive: updates when contact data syncs.
       child: Obx(() {
         final hasCustomBackground = chatState?.hasCustomWallpaper ?? false;

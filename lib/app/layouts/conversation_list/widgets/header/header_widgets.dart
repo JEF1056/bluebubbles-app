@@ -55,10 +55,53 @@ class SyncIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (!SettingsSvc.settings.showSyncIndicator.value || !SyncSvc.isIncrementalSyncing.value) {
-        return const SizedBox.shrink();
-      }
-      return buildProgressIndicator(context, size: size);
+      final isSyncing = SettingsSvc.settings.showSyncIndicator.value && SyncSvc.isIncrementalSyncing.value;
+      // Fixed-size slot prevents header icons from shifting when background sync starts/stops.
+      return SizedBox(
+        width: size,
+        height: size,
+        child: AnimatedOpacity(
+          opacity: isSyncing ? 0.72 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          child: isSyncing
+              ? CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    context.theme.colorScheme.primary.withValues(alpha: 0.8),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      );
+    });
+  }
+}
+
+/// Whisper-quiet 1.5px hairline bar overlaid at the top of the chat list during background sync.
+class SyncHairlineIndicator extends StatelessWidget {
+  const SyncHairlineIndicator({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final isSyncing = SettingsSvc.settings.showSyncIndicator.value && SyncSvc.isIncrementalSyncing.value;
+      return IgnorePointer(
+        child: AnimatedOpacity(
+          opacity: isSyncing ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          child: isSyncing
+              ? LinearProgressIndicator(
+                  minHeight: 1.5,
+                  backgroundColor: Colors.transparent,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    context.theme.colorScheme.primary.withValues(alpha: 0.55),
+                  ),
+                )
+              : const SizedBox(height: 1.5),
+        ),
+      );
     });
   }
 }
@@ -189,7 +232,7 @@ class MaterialAvatarMenu extends StatelessWidget {
         final moveChatCreatorToHeader = SettingsSvc.settings.moveChatCreatorToHeader.value;
         final filterUnknownSenders = SettingsSvc.settings.filterUnknownSenders.value;
         final hasActiveChatFilter = ChatsSvc.chatListFilters.value.hasActiveFilter;
-        final userName = SettingsSvc.settings.userName.value;
+        final userName = SettingsSvc.effectiveUserName;
         final iCloudAccount = SettingsSvc.settings.iCloudAccount.value;
 
         return DropdownMenuCard(
@@ -333,7 +376,8 @@ class CupertinoOverflowMenu extends StatelessWidget {
     // which only tracks the skin setting) so the "Filter Chats" icon reacts to
     // `chatListFilters` changes instead of only reflecting its value at first build.
     return Obx(() {
-      final userName = SettingsSvc.settings.userName.value;
+      final userName = SettingsSvc.effectiveUserName;
+      final iCloudAccount = SettingsSvc.settings.iCloudAccount.value;
       final moveChatCreatorToHeader = SettingsSvc.settings.moveChatCreatorToHeader.value;
       final filterUnknownSenders = SettingsSvc.settings.filterUnknownSenders.value;
       final hasActiveChatFilter = ChatsSvc.chatListFilters.value.hasActiveFilter;
@@ -364,7 +408,7 @@ class CupertinoOverflowMenu extends StatelessWidget {
                 child: const ContactAvatarWidget(
                     size: 50, preferHighResAvatar: true, borderThickness: 0.1, editable: false, fontSize: 16));
           },
-          subtitle: "Tap to open profile",
+          subtitle: iCloudAccount.isNotEmpty ? iCloudAccount : "Tap to open profile",
           onTap: () => goToProfile(context),
         ),
         PullDownMenuItem(
@@ -475,8 +519,9 @@ Future<void> goToFindMy(BuildContext context) async {
     ),
   );
   if (currentChat != null) {
-    await ChatsSvc.setActiveChat(currentChat);
     if (SettingsSvc.settings.tabletMode.value) {
+      await ChatsSvc.setActiveChat(currentChat);
+      if (!context.mounted) return;
       NavigationSvc.pushAndRemoveUntil(
         context,
         ConversationView(
@@ -593,8 +638,9 @@ Future<void> goToSettings(BuildContext context) async {
     ),
   );
   if (currentChat != null) {
-    await ChatsSvc.setActiveChat(currentChat);
     if (SettingsSvc.settings.tabletMode.value) {
+      await ChatsSvc.setActiveChat(currentChat);
+      if (!context.mounted) return;
       NavigationSvc.pushAndRemoveUntil(
         context,
         ConversationView(

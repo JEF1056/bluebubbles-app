@@ -4,6 +4,7 @@ import 'dart:ui';
 import 'package:bluebubbles/app/layouts/conversation_details/conversation_details.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
@@ -159,7 +160,31 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                       ),
                       Padding(
                           padding: const EdgeInsets.only(top: 5),
-                          child: Align(alignment: Alignment.topRight, child: ManualMark(controller: controller))),
+                          child: Align(
+                            alignment: Alignment.topRight,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ManualMark(controller: controller),
+                                if ((kIsDesktop || kIsWeb) && MediaQuery.sizeOf(context).width > 1024)
+                                  Obx(() {
+                                    final open = NavigationSvc.showInspectorDrawer.value;
+                                    return IconButton(
+                                      tooltip: open ? 'Hide chat details (Alt+I)' : 'Show chat details (Alt+I)',
+                                      isSelected: open,
+                                      icon: Icon(
+                                        open ? CupertinoIcons.info_circle_fill : CupertinoIcons.info_circle,
+                                        size: 20,
+                                        color: open
+                                            ? context.theme.colorScheme.primary
+                                            : context.theme.colorScheme.onSurface,
+                                      ),
+                                      onPressed: NavigationSvc.toggleInspectorDrawer,
+                                    );
+                                  }),
+                              ],
+                            ),
+                          )),
                     ]),
                   ),
                 ),
@@ -261,6 +286,8 @@ class _ChatIconAndTitle extends CustomStateful<ConversationViewController> {
 }
 
 class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, ConversationViewController> {
+  late final FindMyController _fm;
+
   @override
   void initState() {
     super.initState();
@@ -268,6 +295,10 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
     // keep controller in memory since the widget is part of a list
     // (it will be disposed when scrolled out of view)
     forceDelete = false;
+    _fm = FindMyController.ensure();
+    if (!controller.chat.isGroup) {
+      unawaited(_fm.ensureFriendsLoaded());
+    }
   }
 
   @override
@@ -276,6 +307,84 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
       // Get chat state from scope - handles title logic including redacted mode
       final chatState = ChatStateScope.of(context);
       final _title = chatState.title.value ?? controller.chat.getTitle();
+      final loc = controller.chat.isGroup ? null : _fm.locationForChat(controller.chat);
+      final isLandscapeAndroid = context.orientation == Orientation.landscape && Platform.isAndroid;
+
+      final titleAndLoc = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: isLandscapeAndroid ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+        children: [
+          Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: NavigationSvc.width(context) / 2.5,
+                  ),
+                  child: RichText(
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    text: TextSpan(
+                      style: context.theme.textTheme.bodyMedium,
+                      children: MessageHelper.buildEmojiText(
+                        _title,
+                        context.theme.textTheme.bodyMedium!,
+                      ),
+                    ),
+                  ),
+                ),
+                Icon(
+                  CupertinoIcons.chevron_right,
+                  size: context.theme.textTheme.bodyMedium!.fontSize!,
+                  color: context.theme.colorScheme.outline.withValues(alpha: 0.5),
+                ),
+              ]),
+          if (loc != null)
+            InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () => _fm.openForChat(context, controller.chat),
+              child: Padding(
+                padding: const EdgeInsets.only(top: 1),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      CupertinoIcons.location_fill,
+                      size: 10,
+                      color: context.theme.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 3),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: NavigationSvc.width(context) / 2.6),
+                      child: Text(
+                        loc.distanceLabel != null && loc.distanceLabel!.isNotEmpty
+                            ? '${loc.shortLabel} · ${loc.distanceLabel}'
+                            : loc.shortLabel,
+                        style: context.theme.textTheme.labelSmall?.copyWith(
+                          color: context.theme.colorScheme.onSurfaceVariant,
+                          fontSize: 11,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (loc.isLive) ...[
+                      const SizedBox(width: 4),
+                      Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+        ],
+      );
 
       final children = [
         const IgnorePointer(
@@ -285,37 +394,10 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
           ),
         ),
         const SizedBox(height: 5, width: 5),
-        Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: NavigationSvc.width(context) / 2.5,
-                ),
-                child: RichText(
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  text: TextSpan(
-                    style: context.theme.textTheme.bodyMedium,
-                    children: MessageHelper.buildEmojiText(
-                      _title,
-                      context.theme.textTheme.bodyMedium!,
-                    ),
-                  ),
-                ),
-              ),
-              Icon(
-                CupertinoIcons.chevron_right,
-                size: context.theme.textTheme.bodyMedium!.fontSize!,
-                color: context.theme.colorScheme.outline.withValues(alpha: 0.5),
-              ),
-            ]),
+        titleAndLoc,
       ];
 
-      if (context.orientation == Orientation.landscape && Platform.isAndroid) {
+      if (isLandscapeAndroid) {
         return Row(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,

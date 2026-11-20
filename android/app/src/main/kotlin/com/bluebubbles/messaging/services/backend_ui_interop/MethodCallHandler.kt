@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.LocusId
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.utils.PersistentLog
@@ -101,9 +103,17 @@ class MethodCallHandler {
 
         /// Send a method call back to Dart (app must be launched, otherwise use the DartWorker!)
         fun invokeMethod(method: String, arguments: Map<String, Any>) {
-            val currentEngine = MainActivity.getEngine()
-            if (currentEngine != null) {
-                MethodChannel(currentEngine.dartExecutor.binaryMessenger, Constants.methodChannel).invokeMethod(method, arguments)
+            if (MainActivity.getEngine() == null || !MainActivity.isDartReady()) return
+            val invoke = Runnable {
+                val engine = MainActivity.getEngine()
+                if (engine != null && MainActivity.isDartReady()) {
+                    MethodChannel(engine.dartExecutor.binaryMessenger, Constants.methodChannel).invokeMethod(method, arguments)
+                }
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                invoke.run()
+            } else {
+                Handler(Looper.getMainLooper()).post(invoke)
             }
         }
     }

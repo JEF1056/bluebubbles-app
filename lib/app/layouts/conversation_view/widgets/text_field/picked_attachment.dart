@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:animations/animations.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/single_attachment_fullscreen_viewer.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -197,6 +198,12 @@ class _PickedAttachmentState extends State<PickedAttachment> with AutomaticKeepA
                                       .map((e) => e.path!)
                                       .toList();
                                   unawaited(ChatsSvc.setChatTextFieldAttachments(widget.controller!.chat, remaining));
+                                  if (kIsWeb) {
+                                    ConversationTextFieldState.syncWebAttachmentDraft(
+                                      widget.controller!.chat.guid,
+                                      widget.controller!.pickedAttachments.toList(),
+                                    );
+                                  }
                                   // Don't request focus if attachment picker is open
                                   if (!widget.controller!.showAttachmentPicker.value) {
                                     widget.controller!.lastFocusedNode.requestFocus();
@@ -233,8 +240,17 @@ class _PickedAttachmentState extends State<PickedAttachment> with AutomaticKeepA
                 onPressed: () {
                   if (widget.controller != null) {
                     widget.controller!.pickedAttachments.removeAt(widget.pickedAttachmentIndex);
-                    widget.controller!.chat.textFieldAttachments.removeWhere((e) => e == widget.data.path);
-                    widget.controller!.chat.saveAsync(updateTextFieldAttachments: true);
+                    final remaining = widget.controller!.pickedAttachments
+                        .where((e) => e.path != null)
+                        .map((e) => e.path!)
+                        .toList();
+                    unawaited(ChatsSvc.setChatTextFieldAttachments(widget.controller!.chat, remaining));
+                    if (kIsWeb) {
+                      ConversationTextFieldState.syncWebAttachmentDraft(
+                        widget.controller!.chat.guid,
+                        widget.controller!.pickedAttachments.toList(),
+                      );
+                    }
                     // Don't request focus if attachment picker is open
                     if (!widget.controller!.showAttachmentPicker.value) {
                       widget.controller!.lastFocusedNode.requestFocus();
@@ -255,7 +271,7 @@ class _PickedAttachmentState extends State<PickedAttachment> with AutomaticKeepA
     if (imagePath != null) {
       return Image.file(
         File(imagePath!),
-        key: ValueKey(widget.data.path),
+        key: ObjectKey(widget.data),
         gaplessPlayback: true,
         fit: iOS ? BoxFit.fitHeight : BoxFit.cover,
         height: iOS ? 150 : 75,
@@ -268,7 +284,7 @@ class _PickedAttachmentState extends State<PickedAttachment> with AutomaticKeepA
     if (imageBytes != null) {
       return Image.memory(
         imageBytes!,
-        key: ValueKey(widget.data.path),
+        key: ObjectKey(widget.data),
         gaplessPlayback: true,
         fit: iOS ? BoxFit.fitHeight : BoxFit.cover,
         height: iOS ? 150 : 75,

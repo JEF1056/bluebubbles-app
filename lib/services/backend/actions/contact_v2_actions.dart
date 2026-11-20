@@ -956,13 +956,7 @@ class ContactV2Actions {
   static Future<String?> _saveContactAvatar(String contactId, Uint8List avatarData) async {
     try {
       if (kIsWeb) {
-        await WebMediaCache.instance.put(
-          WebMediaCache.attachmentsStore,
-          _webAvatarCacheKey(contactId),
-          avatarData,
-        );
-        // Leave ContactV2.avatarPath null on web while ContactAvatarWidget uses FileImage.
-        return null;
+        return await FilesystemSvc.saveWebContactAvatar(contactId, avatarData);
       }
 
       final avatarsDir = Directory(FilesystemSvc.contactAvatarsPath);
@@ -1034,6 +1028,17 @@ class ContactV2Actions {
 
     try {
       if (kIsWeb) {
+        final storedPath = Database.runInTransaction(TxMode.read, () {
+          final q = Database.contactsV2.query(ContactV2_.nativeContactId.equals(nativeContactId)).build();
+          q.limit = 1;
+          final c = q.findFirst();
+          q.close();
+          return c?.avatarPath;
+        });
+        if (!isNullOrEmpty(storedPath)) {
+          final cached = FilesystemSvc.getCachedWebAvatarByPath(storedPath!);
+          if (cached != null) return cached;
+        }
         return await WebMediaCache.instance.get(
           WebMediaCache.attachmentsStore,
           _webAvatarCacheKey(nativeContactId),

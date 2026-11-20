@@ -20,6 +20,7 @@ class PhoneRelayTimeoutTest {
             tempGuid = "temp-123"
         )
         assertFalse(result.success)
+        assertTrue(result.timedOut)
         assertEquals("req-1", result.requestId)
         assertEquals("temp-123", result.tempGuid)
         assertEquals("Phone relay timed out", result.error)
@@ -37,6 +38,7 @@ class PhoneRelayTimeoutTest {
             requestId = "req-1",
             tempGuid = "temp-123"
         )
+        assertFalse(actual.timedOut)
         assertSame(expected, actual)
     }
 }

@@ -14,6 +14,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import "package:flutter/material.dart";
+import 'package:flutter/services.dart';
 import 'package:gesture_x_detector/gesture_x_detector.dart';
 import 'package:get/get.dart';
 
@@ -62,12 +63,18 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
 
   late List<Attachment> attachments = _scopedGallery != null
       ? List<Attachment>.from(_scopedGallery!)
-      : (kIsWeb || !widget.showInteractions || widget.currentChat == null
+      : (!widget.showInteractions || widget.currentChat == null
           ? [attachment]
-          : (messageService?.struct.attachments.where((e) => e.mimeStart == "image").toList() ?? [attachment]));
+          : (messageService?.struct.attachments
+                  .where((e) => e.mimeStart == "image" || e.mimeStart == "video")
+                  .toList() ??
+              [attachment]));
 
   int currentIndex = 0;
   ScrollPhysics? physics;
+  bool _hoveringGallery = false;
+  int _zoomSeq = 0;
+  final ValueNotifier<({int seq, int index, double? factor})?> _zoomCommand = ValueNotifier(null);
 
   // media_kit_video_controls' seek/volume/brightness GestureDetector always registers a
   // non-null onHorizontalDragUpdate regardless of the `seekGesture` theme flag (only its
@@ -97,7 +104,7 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
   @override
   void initState() {
     super.initState();
-    if (_scopedGallery != null || (!kIsWeb && widget.showInteractions && widget.currentChat != null)) {
+    if (_scopedGallery != null || (widget.showInteractions && widget.currentChat != null)) {
       final targetGuid = widget.initialAttachmentGuid ?? attachment.guid;
       currentIndex = attachments.indexWhere((e) => e.guid == targetGuid);
       if (currentIndex == -1 && widget.currentChat != null) {
@@ -111,6 +118,7 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
 
   @override
   void dispose() {
+    _zoomCommand.dispose();
     controller.dispose();
     super.dispose();
   }
@@ -158,7 +166,7 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                     ),
                   ),
                   leadingWidth: 75,
-                  titleText: kIsWeb || !widget.showInteractions || widget.currentChat == null
+                  titleText: !widget.showInteractions || widget.currentChat == null
                       ? "Media"
                       : "${currentIndex + 1} of ${attachments.length}",
                   titleStyle:
@@ -184,23 +192,39 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
               focusNode: focusNode,
               autofocus: true,
               onKeyEvent: (node, event) {
+                if (event is! KeyDownEvent) return KeyEventResult.ignored;
                 Logger.info(
                     "Got device label ${event.deviceType.label}, physical key ${event.physicalKey.toString()}, logical key ${event.logicalKey.toString()}",
                     tag: "RawKeyboardListener");
-                if (event.physicalKey.debugName == "Arrow Right") {
+                if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
                   if (SettingsSvc.settings.fullscreenViewerSwipeDir.value == SwipeDirection.RIGHT) {
                     controller.previousPage(duration: const Duration(milliseconds: 300), curve: Curves.easeIn);
                   } else {
                     controller.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeIn);
                   }
-                } else if (event.physicalKey.debugName == "Arrow Left") {
+                  return KeyEventResult.handled;
+                } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
                   if (SettingsSvc.settings.fullscreenViewerSwipeDir.value == SwipeDirection.LEFT) {
                     controller.previousPage(duration: const Duration(milliseconds: 300), curve: Curves.easeIn);
                   } else {
                     controller.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeIn);
                   }
-                } else if (event.physicalKey.debugName == "Escape") {
+                  return KeyEventResult.handled;
+                } else if (event.logicalKey == LogicalKeyboardKey.escape) {
                   Navigator.of(context).pop();
+                  return KeyEventResult.handled;
+                } else if (event.logicalKey == LogicalKeyboardKey.equal ||
+                    event.logicalKey == LogicalKeyboardKey.add ||
+                    event.logicalKey == LogicalKeyboardKey.numpadAdd) {
+                  _zoomCommand.value = (seq: ++_zoomSeq, index: currentIndex, factor: 1.25);
+                  return KeyEventResult.handled;
+                } else if (event.logicalKey == LogicalKeyboardKey.minus ||
+                    event.logicalKey == LogicalKeyboardKey.numpadSubtract) {
+                  _zoomCommand.value = (seq: ++_zoomSeq, index: currentIndex, factor: 0.8);
+                  return KeyEventResult.handled;
+                } else if (event.logicalKey == LogicalKeyboardKey.digit0 ||
+                    event.logicalKey == LogicalKeyboardKey.numpad0) {
+                  _zoomCommand.value = (seq: ++_zoomSeq, index: currentIndex, factor: null);
                   return KeyEventResult.handled;
                 }
                 return KeyEventResult.ignored;
@@ -248,7 +272,20 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                   _videoSwipeVelocityTracker = null;
                   _videoSwipeDragDx = 0;
                 },
-                child: PageView.builder(
+                child: MouseRegion(
+                  onEnter: (_) {
+                    if ((kIsWeb || kIsDesktop) && !_hoveringGallery) {
+                      setState(() => _hoveringGallery = true);
+                    }
+                  },
+                  onExit: (_) {
+                    if ((kIsWeb || kIsDesktop) && _hoveringGallery) {
+                      setState(() => _hoveringGallery = false);
+                    }
+                  },
+                  child: Stack(
+                    children: [
+                      PageView.builder(
                 physics: physics ??
                     (attachments.length == 1 ? const NeverScrollableScrollPhysics() : ThemeSwitcher.getScrollPhysics()),
                 reverse: SettingsSvc.settings.fullscreenViewerSwipeDir.value == SwipeDirection.RIGHT,
@@ -285,6 +322,8 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                         attachment: attachment,
                         file: resolvedFile,
                         showInteractions: widget.showInteractions,
+                        pageIndex: index,
+                        zoomCommand: _zoomCommand,
                         onOpenCollectionGallery: _hasCollectionGallery ? _openCollectionGallery : null,
                         updatePhysics: (ScrollPhysics p) {
                           if (physics != p) {
@@ -434,6 +473,65 @@ class ConversationFullscreenHolderState extends State<ConversationFullscreenHold
                     );
                   }
                 },
+                      ),
+                      if ((kIsWeb || kIsDesktop) && attachments.length > 1) ...[
+                        if (currentIndex > 0)
+                          Positioned(
+                            left: 16,
+                            top: 0,
+                            bottom: 0,
+                            child: Center(
+                              child: AnimatedOpacity(
+                                opacity: _hoveringGallery ? 1.0 : 0.0,
+                                duration: const Duration(milliseconds: 150),
+                                child: IgnorePointer(
+                                  ignoring: !_hoveringGallery,
+                                  child: IconButton.filledTonal(
+                                    tooltip: 'Previous',
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: Colors.black54,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () => controller.previousPage(
+                                      duration: const Duration(milliseconds: 250),
+                                      curve: Curves.easeOut,
+                                    ),
+                                    icon: const Icon(Icons.chevron_left, size: 28),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (currentIndex < attachments.length - 1)
+                          Positioned(
+                            right: 16,
+                            top: 0,
+                            bottom: 0,
+                            child: Center(
+                              child: AnimatedOpacity(
+                                opacity: _hoveringGallery ? 1.0 : 0.0,
+                                duration: const Duration(milliseconds: 150),
+                                child: IgnorePointer(
+                                  ignoring: !_hoveringGallery,
+                                  child: IconButton.filledTonal(
+                                    tooltip: 'Next',
+                                    style: IconButton.styleFrom(
+                                      backgroundColor: Colors.black54,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () => controller.nextPage(
+                                      duration: const Duration(milliseconds: 250),
+                                      curve: Curves.easeOut,
+                                    ),
+                                    icon: const Icon(Icons.chevron_right, size: 28),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ),

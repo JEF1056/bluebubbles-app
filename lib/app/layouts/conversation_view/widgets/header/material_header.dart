@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/layouts/conversation_details/conversation_details.dart';
@@ -6,6 +7,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/header/header_
 import 'package:bluebubbles/app/components/avatars/contact_avatar_group_widget.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/components/wallpaper/chat_wallpaper_type.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
@@ -66,7 +68,8 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
 
     return Stack(clipBehavior: Clip.none, children: [
       Obx(() {
-        final hasCurve = SettingsSvc.settings.skin.value == Skins.Material;
+        final hasCurve = SettingsSvc.settings.skin.value == Skins.Material &&
+            !(kIsWeb && MediaQuery.sizeOf(context).width >= 680);
         final chatState = ChatStateScope.maybeOf(context) ?? ChatsSvc.getChatState(controller.chat.guid);
         final hasDynamicWallpaper = chatState?.wallpaperType.value == ChatWallpaperType.dynamic;
         final hasWallpaper = chatState?.hasCustomWallpaper ?? false;
@@ -129,6 +132,22 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                 padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
                 child: ManualMark(controller: controller),
               ),
+              if ((kIsDesktop || kIsWeb) && MediaQuery.sizeOf(context).width > 1024)
+                Padding(
+                  padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
+                  child: Obx(() {
+                    final open = NavigationSvc.showInspectorDrawer.value;
+                    return IconButton(
+                      tooltip: open ? 'Hide chat details (Alt+I)' : 'Show chat details (Alt+I)',
+                      isSelected: open,
+                      icon: Icon(
+                        open ? Icons.info : Icons.info_outlined,
+                        color: open ? context.theme.colorScheme.primary : _foregroundColor,
+                      ),
+                      onPressed: NavigationSvc.toggleInspectorDrawer,
+                    );
+                  }),
+                ),
               if (canFaceTime(controller.chat))
                 Padding(
                   padding: EdgeInsets.only(top: kIsDesktop ? 20 : 0),
@@ -138,7 +157,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
                     onPressed: () => startFaceTimeCall(context, controller.chat, video: true),
                   ),
                 ),
-              if ((Platform.isAndroid || kIsWeb) &&
+              if ((Platform.isAndroid || (kIsWeb && MediaQuery.sizeOf(context).width < 680)) &&
                   !controller.chat.isGroup &&
                   controller.chat.handles.isNotEmpty &&
                   controller.chat.handles.first.address.isPhoneNumber)
@@ -328,6 +347,8 @@ class _ChatIconAndTitle extends CustomStateful<ConversationViewController> {
 }
 
 class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, ConversationViewController> {
+  late final FindMyController _fm;
+
   @override
   void initState() {
     super.initState();
@@ -335,6 +356,10 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
     // keep controller in memory since the widget is part of a list
     // (it will be disposed when scrolled out of view)
     forceDelete = false;
+    _fm = FindMyController.ensure();
+    if (!controller.chat.isGroup) {
+      unawaited(_fm.ensureFriendsLoaded());
+    }
   }
 
   @override
@@ -355,6 +380,7 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
         ),
         Expanded(
           child: Column(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Obx(() {
@@ -370,13 +396,64 @@ class _ChatIconAndTitleState extends CustomState<_ChatIconAndTitle, void, Conver
                   overflow: TextOverflow.ellipsis,
                 );
               }),
-              if (samsung &&
-                  (controller.chat.isGroup ||
-                      (!controller.chat.getTitle().isPhoneNumber && !controller.chat.getTitle().isEmail)))
+              if (!controller.chat.isGroup)
+                Obx(() {
+                  if (controller.inSelectMode.value) return const SizedBox.shrink();
+                  final loc = _fm.locationForChat(controller.chat);
+                  if (loc == null) {
+                    if (samsung && !controller.chat.getTitle().isPhoneNumber && !controller.chat.getTitle().isEmail) {
+                      return Text(
+                        controller.chat.handles[0].address,
+                        style: context.theme.textTheme.labelLarge!.apply(color: context.theme.colorScheme.outline),
+                        maxLines: 1,
+                        overflow: TextOverflow.fade,
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  }
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () => _fm.openForChat(context, controller.chat),
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 1),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.location_on_outlined,
+                            size: 12,
+                            color: context.theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text(
+                              loc.distanceLabel != null && loc.distanceLabel!.isNotEmpty
+                                  ? '${loc.shortLabel} · ${loc.distanceLabel}'
+                                  : loc.shortLabel,
+                              style: context.theme.textTheme.labelSmall?.copyWith(
+                                color: context.theme.colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (loc.isLive) ...[
+                            const SizedBox(width: 5),
+                            Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(color: Colors.green, shape: BoxShape.circle),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                })
+              else if (samsung)
                 Text(
-                  controller.chat.isGroup
-                      ? "${controller.chat.people.length} recipients"
-                      : controller.chat.handles[0].address,
+                  "${controller.chat.people.length} recipients",
                   style: context.theme.textTheme.labelLarge!.apply(color: context.theme.colorScheme.outline),
                   maxLines: 1,
                   overflow: TextOverflow.fade,

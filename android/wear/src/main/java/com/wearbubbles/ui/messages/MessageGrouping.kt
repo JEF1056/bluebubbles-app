@@ -186,3 +186,129 @@ fun formatReceiptTime(
         .atZone(zoneId)
         .format(DateTimeFormatter.ofPattern("h:mm a", locale))
 }
+
+fun formatDetailTimestamp(
+    epochMs: Long,
+    nowMs: Long = System.currentTimeMillis(),
+    zoneId: ZoneId = ZoneId.systemDefault(),
+    locale: Locale = Locale.getDefault()
+): String {
+    if (epochMs <= 0L) return ""
+    val target = Instant.ofEpochMilli(epochMs).atZone(zoneId)
+    val targetDate = target.toLocalDate()
+    val today = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
+    val timePart = target.format(DateTimeFormatter.ofPattern("h:mm a", locale))
+    return when (targetDate) {
+        today -> timePart
+        today.minusDays(1) -> "Yesterday $timePart"
+        else -> "${target.format(DateTimeFormatter.ofPattern("MMM d", locale))}, $timePart"
+    }
+}
+
+enum class MessageDetailKind {
+    FAILED,
+    SENDING,
+    READ,
+    DELIVERED,
+    SENT,
+    RECEIVED
+}
+
+data class MessageDetailStatus(
+    val kind: MessageDetailKind,
+    val label: String,
+    val showAlways: Boolean
+)
+
+data class MessageReceiptCandidate(
+    val guid: String,
+    val isFromMe: Boolean,
+    val sendFailed: Boolean,
+    val isPending: Boolean,
+    val dateRead: Long
+)
+
+data class MessageReceiptFlags(
+    val latestOutgoingGuid: String?,
+    val lastReadOutgoingGuid: String?,
+    val latestIncomingGuid: String?
+)
+
+fun computeMessageReceiptFlags(items: List<MessageReceiptCandidate>): MessageReceiptFlags =
+    MessageReceiptFlags(
+        latestOutgoingGuid = items.lastOrNull { it.isFromMe }?.guid,
+        lastReadOutgoingGuid = items.lastOrNull {
+            it.isFromMe && !it.sendFailed && !it.isPending && it.dateRead > 0L
+        }?.guid,
+        latestIncomingGuid = items.lastOrNull {
+            !it.isFromMe && !it.sendFailed && !it.isPending
+        }?.guid
+    )
+
+fun resolveMessageDetailStatus(
+    isFromMe: Boolean,
+    sendFailed: Boolean,
+    isPending: Boolean,
+    dateCreated: Long,
+    dateDelivered: Long,
+    dateRead: Long,
+    isLatestOutgoing: Boolean,
+    isLastReadOutgoing: Boolean,
+    isLatestIncoming: Boolean,
+    nowMs: Long = System.currentTimeMillis(),
+    zoneId: ZoneId = ZoneId.systemDefault(),
+    locale: Locale = Locale.getDefault()
+): MessageDetailStatus? {
+    if (sendFailed) {
+        return MessageDetailStatus(
+            kind = MessageDetailKind.FAILED,
+            label = "Not sent · Tap",
+            showAlways = true
+        )
+    }
+    if (isFromMe) {
+        if (isPending) {
+            return if (isLatestOutgoing) {
+                MessageDetailStatus(
+                    kind = MessageDetailKind.SENDING,
+                    label = "Sending…",
+                    showAlways = true
+                )
+            } else {
+                null
+            }
+        }
+        return when {
+            dateRead > 0L -> {
+                val time = formatDetailTimestamp(dateRead, nowMs, zoneId, locale)
+                MessageDetailStatus(
+                    kind = MessageDetailKind.READ,
+                    label = if (time.isNotBlank()) "Read · $time" else "Read",
+                    showAlways = isLatestOutgoing || isLastReadOutgoing
+                )
+            }
+            dateDelivered > 0L -> {
+                val time = formatDetailTimestamp(dateDelivered, nowMs, zoneId, locale)
+                MessageDetailStatus(
+                    kind = MessageDetailKind.DELIVERED,
+                    label = if (time.isNotBlank()) "Delivered · $time" else "Delivered",
+                    showAlways = isLatestOutgoing
+                )
+            }
+            else -> {
+                val time = formatDetailTimestamp(dateCreated, nowMs, zoneId, locale)
+                MessageDetailStatus(
+                    kind = MessageDetailKind.SENT,
+                    label = if (time.isNotBlank()) "Sent · $time" else "Sent",
+                    showAlways = isLatestOutgoing
+                )
+            }
+        }
+    }
+    val time = formatDetailTimestamp(dateCreated, nowMs, zoneId, locale)
+    return MessageDetailStatus(
+        kind = MessageDetailKind.RECEIVED,
+        label = if (time.isNotBlank()) "Received · $time" else "Received",
+        showAlways = isLatestIncoming
+    )
+}

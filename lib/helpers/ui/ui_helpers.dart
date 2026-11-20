@@ -107,6 +107,7 @@ Widget buildBackButton(BuildContext context,
                 }
               },
         child: IconButton(
+          tooltip: 'Back',
           constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
           iconSize: iconSize ?? (SettingsSvc.settings.skin.value != Skins.Material ? 30 : 24),
           icon: skin != null
@@ -519,6 +520,11 @@ IconData getAttachmentIcon(String mimeType) {
 /// Controls a snackbar's icon, colors and how long it stays up, and whether mobile shows a toast instead.
 enum SnackbarType { success, error, info }
 
+/// Errors on mobile become native toasts; web/desktop and non-errors use [Get.snackbar].
+@visibleForTesting
+bool shouldUseNativeErrorToast({bool isWeb = kIsWeb, bool? isDesktop, required bool isError}) =>
+    !isWeb && !(isDesktop ?? kIsDesktop) && isError;
+
 /// Errors on mobile are native toasts; everything else is this snackbar on every platform.
 void showSnackbar(String title, String message,
     {SnackbarType type = SnackbarType.success,
@@ -526,7 +532,7 @@ void showSnackbar(String title, String message,
     String? actionLabel,
     VoidCallback? onAction}) {
   final isError = type == SnackbarType.error;
-  if (!kIsDesktop && isError) {
+  if (shouldUseNativeErrorToast(isError: isError)) {
     unawaited(showToast(message, isError: true));
     return;
   }
@@ -588,7 +594,7 @@ void showSnackbar(String title, String message,
 /// Only errors become native toasts on mobile; anything else is routed through [showSnackbar].
 Future<void> showToast(String message, {bool isError = false}) async {
   if (message.trim().isEmpty) return;
-  if (kIsDesktop || !isError) {
+  if (!shouldUseNativeErrorToast(isError: isError)) {
     showSnackbar(isError ? "Error" : "Notice", message, type: isError ? SnackbarType.error : SnackbarType.success);
     return;
   }
@@ -603,7 +609,7 @@ Future<void> showToast(String message, {bool isError = false}) async {
 /// Confirms any copy the app does on the user's behalf (keyboard Ctrl+C/X never comes through here).
 /// Android 13+ always shows its own confirmation, so only Android 12 and older get a snackbar.
 void showCopiedToast(String message) {
-  if (Platform.isAndroid && (FilesystemSvc.androidInfo?.version.sdkInt ?? 0) >= 33) return;
+  if (!kIsWeb && Platform.isAndroid && (FilesystemSvc.androidInfo?.version.sdkInt ?? 0) >= 33) return;
   showSnackbar("Copied", message);
 }
 
@@ -669,7 +675,7 @@ Future<void> paintGroupAvatar({
     theme = Get.context!.theme;
   }
 
-  if (chat.customAvatarPath != null && !usingParticipantsOverride) {
+  if (!kIsWeb && chat.customAvatarPath != null && !usingParticipantsOverride) {
     Uint8List? customAvatar;
     try {
       customAvatar = await clip(await File(chat.customAvatarPath!).readAsBytes(), size: size.toInt(), circle: true);
@@ -769,7 +775,7 @@ Future<void> paintAvatar(
   borderWidth ??= size * 0.05;
 
   // Check ContactV2 avatars from disk first (more efficient)
-  final avatarPath = handle?.contactsV2.map((c) => c.avatarPath).nonNulls.firstOrNull;
+  final avatarPath = !kIsWeb ? handle?.contactsV2.map((c) => c.avatarPath).nonNulls.firstOrNull : null;
   if (avatarPath != null) {
     try {
       final avatarBytes = await File(avatarPath).readAsBytes();

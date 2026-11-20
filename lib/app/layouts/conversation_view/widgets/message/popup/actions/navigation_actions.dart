@@ -11,6 +11,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/models/models.dart' show MessageReplyContext;
 import 'package:flutter/cupertino.dart' as cupertino;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 void reply(MessagePopupActionContext ctx) {
@@ -74,7 +75,10 @@ Future<void> forward(MessagePopupActionContext ctx) async {
       .map((e) => AttachmentsSvc.getContent(e, autoDownload: false) as PlatformFile);
   for (final PlatformFile a in _attachments) {
     Uint8List? bytes = a.bytes;
-    bytes ??= await File(a.path!).readAsBytes();
+    if (bytes == null && !kIsWeb && a.path != null) {
+      bytes = await File(a.path!).readAsBytes();
+    }
+    if (bytes == null) continue;
     attachments.add(PlatformFile(
       name: a.name,
       path: a.path,

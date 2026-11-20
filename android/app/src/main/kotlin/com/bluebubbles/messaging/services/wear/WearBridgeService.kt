@@ -9,10 +9,12 @@ import com.google.android.gms.wearable.WearableListenerService
 import com.google.gson.JsonParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.URLDecoder
 
@@ -81,7 +83,8 @@ class WearBridgeService : WearableListenerService() {
                     0
                 }
                 val requestId = obj.str("requestId") ?: msgGuid
-                WearSyncManager.sendReaction(applicationContext, nodeId, chatGuid, msgGuid, reaction, partIndex, requestId)
+                val tempGuid = obj.str("tempGuid")
+                WearSyncManager.sendReaction(applicationContext, nodeId, chatGuid, msgGuid, reaction, partIndex, requestId, tempGuid)
             }
             WearSyncManager.PATH_REQUEST_ATTACHMENT -> {
                 val obj = parseJson(dataStr) ?: return
@@ -133,7 +136,7 @@ class WearBridgeService : WearableListenerService() {
         val tempGuid = URLDecoder.decode(parts[1], "UTF-8")
         val nodeId = channel.nodeId
 
-        scope.launch {
+        WearSyncManager.scope.launch {
             val channelClient = Wearable.getChannelClient(applicationContext)
             val tempFile = File(applicationContext.cacheDir, "wear_audio_${System.currentTimeMillis()}.m4a")
             try {
@@ -147,10 +150,18 @@ class WearBridgeService : WearableListenerService() {
             } catch (e: Exception) {
                 PersistentLog.e(applicationContext, TAG, "onChannelOpened audio read failed: ${e.message}")
                 tempFile.delete()
+                WearSyncManager.notifyAudioReceiveFailed(
+                    applicationContext,
+                    nodeId,
+                    tempGuid,
+                    e.message ?: "Audio stream failed"
+                )
             } finally {
-                try {
-                    channelClient.close(channel).await()
-                } catch (_: Exception) {
+                withContext(NonCancellable) {
+                    try {
+                        channelClient.close(channel).await()
+                    } catch (_: Exception) {
+                    }
                 }
             }
         }

@@ -4,6 +4,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/t
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/text/text_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/message_timestamp.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -56,8 +57,11 @@ class EditHistoryObserver extends StatelessWidget {
   Widget build(BuildContext context) {
     final ms = MessageStateScope.of(context);
     final message = MessageStateScope.messageOf(context);
+    final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
     return Padding(
-      padding: showAvatar || alwaysShowAvatars ? EdgeInsets.only(left: 35.0 * avatarScale) : EdgeInsets.zero,
+      padding: showAvatar || alwaysShowAvatars
+          ? EdgeInsets.only(left: BubbleConnect.incomingAvatarIndent(isIOS: isIOS, avatarScale: avatarScale))
+          : EdgeInsets.zero,
       child: Obx(() => AnimatedSize(
             duration: const Duration(milliseconds: 250),
             alignment: Alignment.bottomCenter,
@@ -87,8 +91,7 @@ class EditHistoryObserver extends StatelessWidget {
                   )
                 : Container(
                     height: 0,
-                    constraints:
-                        BoxConstraints(maxWidth: NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 30)),
+                    constraints: BoxConstraints(maxWidth: MessageState.maxBubbleWidth(context, inset: 30))),
           )),
     );
   }

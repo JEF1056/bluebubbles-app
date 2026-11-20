@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_location_clipper.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart';
+import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -73,6 +77,148 @@ typedef FindMyLiveStopFn = Future<Response> Function({
 });
 
 typedef FindMyReverseGeocodeFn = Future<String?> Function(double latitude, double longitude);
+typedef FindMyPrefReadListFn = List<String>? Function(String key);
+typedef FindMyPrefWriteListFn = Future<void> Function(String key, List<String> values);
+typedef FindMyPinnedChatHandlesFn = Iterable<String> Function();
+
+const String kFindMyPinnedFriendsPrefKey = 'findmy_pinned_friends';
+const String kFindMyUnpinnedFriendsPrefKey = 'findmy_unpinned_friends';
+
+/// Normalizes a phone number or email handle for reliable matching across
+/// Find My friends, 1:1 chats, and persisted pin state.
+String normalizeFindMyHandle(String? raw) {
+  final trimmed = raw?.trim() ?? '';
+  if (trimmed.isEmpty) return '';
+  if (trimmed.contains('@')) return trimmed.toLowerCase();
+  return trimmed.replaceAll(RegExp(r'[^0-9]'), '');
+}
+
+bool findMyHandlesMatch(String? a, String? b) {
+  final na = normalizeFindMyHandle(a);
+  final nb = normalizeFindMyHandle(b);
+  if (na.isEmpty || nb.isEmpty) return false;
+  if (na == nb) return true;
+  if (!na.contains('@') && !nb.contains('@') && na.length >= 10 && nb.length >= 10) {
+    return na.substring(na.length - 10) == nb.substring(nb.length - 10);
+  }
+  return false;
+}
+
+/// Great-circle Haversine distance in meters between two WGS84 coordinates.
+double haversineDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
+  const earthRadiusMeters = 6371000.0;
+  final dLat = (lat2 - lat1) * math.pi / 180.0;
+  final dLon = (lon2 - lon1) * math.pi / 180.0;
+  final rLat1 = lat1 * math.pi / 180.0;
+  final rLat2 = lat2 * math.pi / 180.0;
+  final sinHalfLat = math.sin(dLat / 2);
+  final sinHalfLon = math.sin(dLon / 2);
+  final a = sinHalfLat * sinHalfLat + math.cos(rLat1) * math.cos(rLat2) * sinHalfLon * sinHalfLon;
+  final c = 2 * math.atan2(math.sqrt(a), math.sqrt(math.max(0.0, 1.0 - a)));
+  return earthRadiusMeters * c;
+}
+
+/// Formats friend distance from user's real device coordinates.
+/// Returns `Nearby` ONLY when <= 100m, otherwise formatted miles (e.g. `1.4 mi`),
+/// or `""` when distance is unknown.
+String formatFindMyFriendDistance(double? meters) {
+  if (meters == null || !meters.isFinite || meters < 0) return "";
+  if (meters <= 100.0) return "Nearby";
+  final miles = meters / 1609.344;
+  if (miles < 10.0) {
+    final formatted = miles.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
+    return "$formatted mi";
+  }
+  return "${miles.round()} mi";
+}
+
+final RegExp _streetKeywordRegex = RegExp(
+  r'\b(st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ln|lane|way|ct|court|pl|place|pkwy|parkway|cir|circle|ter|terrace|hwy|highway|sq|square|aly|alley|trl|trail)\b',
+  caseSensitive: false,
+);
+
+/// Returns true when [address] appears to include a street line rather than
+/// only a city/state (e.g. `"Berkeley, CA"`).
+bool hasStreetAddressLine(String? address) {
+  final trimmed = address?.trim() ?? '';
+  if (trimmed.isEmpty) return false;
+  if (RegExp(r'\d').hasMatch(trimmed)) return true;
+  if (_streetKeywordRegex.hasMatch(trimmed)) return true;
+  final parts = trimmed.split(',').map((p) => p.trim()).where((p) => p.isNotEmpty).length;
+  return parts >= 3;
+}
+
+bool _hasValidFriendCoords(double? lat, double? lng) =>
+    lat != null && lng != null && lat.isFinite && lng.isFinite && !(lat == 0 && lng == 0);
+
+/// Stable sort putting pinned friends first, and within each group sorting by
+/// ascending Haversine distance from [userLatitude]/[userLongitude] when
+/// available (friends with missing coords fall back after those with coords).
+List<FindMyFriend> sortFindMyFriends(
+  Iterable<FindMyFriend> friends,
+  bool Function(FindMyFriend) isPinned, {
+  double? userLatitude,
+  double? userLongitude,
+}) {
+  final hasUserCoords = _hasValidFriendCoords(userLatitude, userLongitude);
+
+  double? distanceFor(FindMyFriend f) {
+    if (!hasUserCoords || !_hasValidFriendCoords(f.latitude, f.longitude)) return null;
+    return haversineDistanceMeters(userLatitude!, userLongitude!, f.latitude!, f.longitude!);
+  }
+
+  final pinned = <(int, FindMyFriend, double?)>[];
+  final unpinned = <(int, FindMyFriend, double?)>[];
+  var index = 0;
+  for (final f in friends) {
+    final entry = (index++, f, distanceFor(f));
+    if (isPinned(f)) {
+      pinned.add(entry);
+    } else {
+      unpinned.add(entry);
+    }
+  }
+
+  int compareEntries((int, FindMyFriend, double?) a, (int, FindMyFriend, double?) b) {
+    final da = a.$3;
+    final db = b.$3;
+    if (da != null && db != null) {
+      final cmp = da.compareTo(db);
+      if (cmp != 0) return cmp;
+    } else if (da != null) {
+      return -1;
+    } else if (db != null) {
+      return 1;
+    }
+    return a.$1.compareTo(b.$1);
+  }
+
+  pinned.sort(compareEntries);
+  unpinned.sort(compareEntries);
+  return [...pinned.map((e) => e.$2), ...unpinned.map((e) => e.$2)];
+}
+
+class FindMyChatLocation {
+  const FindMyChatLocation({
+    required this.friend,
+    required this.shortLabel,
+    required this.fullAddress,
+    required this.freshness,
+    required this.isLive,
+    required this.latitude,
+    required this.longitude,
+    this.distanceLabel,
+  });
+
+  final FindMyFriend friend;
+  final String shortLabel;
+  final String fullAddress;
+  final String freshness;
+  final bool isLive;
+  final double latitude;
+  final double longitude;
+  final String? distanceLabel;
+}
 
 @visibleForTesting
 String formatNominatimAddress(Map<String, dynamic> data) {
@@ -102,33 +248,60 @@ class FindMyController extends GetxController {
     DateTime Function()? now,
     this.autoFetch = true,
     FindMyFriendsRefreshFn? refreshFriendsRequest,
+    Future<Response> Function({String? deviceId, bool force})? refreshDevicesRequest,
     FindMyLiveStartFn? startLiveFriendRequest,
     FindMyLiveStopFn? stopLiveFriendRequest,
     FindMyReverseGeocodeFn? reverseGeocodeRequest,
+    Future<Position?> Function()? fetchCurrentPosition,
+    Stream<Position> Function()? positionStream,
     Duration? livePollInterval,
     Duration? liveFallbackInterval,
     Duration? liveKeepaliveInterval,
     Duration? geocodeMinInterval,
+    FindMyPrefReadListFn? readPrefList,
+    FindMyPrefWriteListFn? writePrefList,
+    FindMyPinnedChatHandlesFn? pinnedChatHandlesProvider,
   })  : _now = now ?? DateTime.now,
         _refreshFriendsFn = refreshFriendsRequest,
+        _refreshDevicesFn = refreshDevicesRequest,
         _startLiveFriendFn = startLiveFriendRequest,
         _stopLiveFriendFn = stopLiveFriendRequest,
         _reverseGeocodeFn = reverseGeocodeRequest,
+        _fetchCurrentPositionFn = fetchCurrentPosition,
+        _positionStreamFn = positionStream,
         _livePollInterval = livePollInterval ?? const Duration(seconds: 5),
         _liveFallbackInterval = liveFallbackInterval ?? const Duration(seconds: 25),
         _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(minutes: 3),
-        _geocodeMinInterval = geocodeMinInterval ?? const Duration(seconds: 1);
+        _geocodeMinInterval = geocodeMinInterval ?? const Duration(seconds: 1),
+        _readPrefListFn = readPrefList,
+        _writePrefListFn = writePrefList,
+        _pinnedChatHandlesProvider = pinnedChatHandlesProvider;
+
+  static FindMyController ensure() {
+    if (Get.isRegistered<FindMyController>()) {
+      return Get.find<FindMyController>();
+    }
+    // Keep shared background controller permanent so popping a chat route never disposes live Find My state.
+    return Get.put(FindMyController(autoFetch: false)..isBackgroundShared = true, permanent: true);
+  }
 
   final DateTime Function() _now;
   final bool autoFetch;
+  bool isBackgroundShared = false;
   final FindMyFriendsRefreshFn? _refreshFriendsFn;
+  final Future<Response> Function({String? deviceId, bool force})? _refreshDevicesFn;
   final FindMyLiveStartFn? _startLiveFriendFn;
   final FindMyLiveStopFn? _stopLiveFriendFn;
   final FindMyReverseGeocodeFn? _reverseGeocodeFn;
+  final Future<Position?> Function()? _fetchCurrentPositionFn;
+  final Stream<Position> Function()? _positionStreamFn;
   final Duration _livePollInterval;
   final Duration _liveFallbackInterval;
   final Duration _liveKeepaliveInterval;
   final Duration _geocodeMinInterval;
+  final FindMyPrefReadListFn? _readPrefListFn;
+  final FindMyPrefWriteListFn? _writePrefListFn;
+  final FindMyPinnedChatHandlesFn? _pinnedChatHandlesProvider;
 
   DateTime get currentTime => _now();
   // Scroll Controllers
@@ -140,7 +313,7 @@ class FindMyController extends GetxController {
   final PopupController popupController = PopupController();
   final MapController mapController = MapController();
   final PanelController panelController = PanelController();
-  final completer = Completer<void>();
+  Completer<void> completer = Completer<void>();
 
   // Tab Controller (needs to be created with vsync in the widget)
   TabController? tabController;
@@ -168,6 +341,12 @@ class FindMyController extends GetxController {
   final Rx<FindMyMapStyle> mapStyle = FindMyMapStyle.standard.obs;
   final RxBool liveTrackingEnabled = true.obs;
   final RxnString lastRefreshFeedback = RxnString();
+  final RxSet<String> _explicitlyPinnedKeys = <String>{}.obs;
+  final RxSet<String> _explicitlyUnpinnedKeys = <String>{}.obs;
+  final RxInt pinVersion = 0.obs;
+  String? _pendingFocusFriendId;
+  bool _pageActivated = false;
+  bool get _interactive => autoFetch || _pageActivated;
 
   /// Reverse-geocoded addresses for friends whose server payload carries none
   /// (the macOS 14.4+ decryption path can't persist address strings). Keyed by
@@ -188,6 +367,9 @@ class FindMyController extends GetxController {
   bool _refreshFriendsInFlight = false;
   bool _refreshDevicesInFlight = false;
   bool _hardRefreshInFlight = false;
+  bool _fetchingUserLocation = false;
+  bool _hasAutoFittedInitialPins = false;
+  bool _waitingMapReadyForAutoFit = false;
   DateTime? _lastHardRefreshAt;
   DateTime? _lastFriendsRefreshAt;
   DateTime? _lastDevicesRefreshAt;
@@ -206,6 +388,7 @@ class FindMyController extends GetxController {
   void Function(String key, LatLng from, LatLng to, void Function(LatLng) onStep)? _pinInterpolator;
   VoidCallback? onRequestDetailSheetOpen;
   double Function()? detailSheetOffsetProvider;
+  EdgeInsets Function()? fitAllPinsPaddingProvider;
 
   StreamSubscription? locationSub;
   Timer? _hardRefreshDebounceTimer;
@@ -220,28 +403,64 @@ class FindMyController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    _loadPinPrefs();
     if (autoFetch) {
-      getLocations(refreshFriends: true, refreshDevices: true);
-
-      // Listen via the event dispatcher rather than the socket itself — the socket is
-      // torn down and rebuilt on every restart (backgrounding, a server URL refresh),
-      // and a listener bound to the old instance would just stop receiving updates.
-      if (GetIt.I.isRegistered<EventDispatcher>()) {
-        _findMyLocationListener = EventDispatcherSvc.stream.listen((event) {
-          if (event.type == 'new-findmy-location') {
-            handleNewFindMyLocation(event.data);
-          } else if (event.type == 'new-findmy-device') {
-            handleNewFindMyDevice(event.data);
-          }
-        });
-      }
+      activatePage();
     }
 
+    _startStalenessTimer();
+    _setupRedactionListeners();
+  }
+
+  void _startStalenessTimer() {
+    if (_stalenessTimer != null || !_isAlive) return;
     _stalenessTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       if (!_isAlive) return;
       freshnessTick.value++;
     });
-    _setupRedactionListeners();
+  }
+
+  void _stopStalenessTimer() {
+    _stalenessTimer?.cancel();
+    _stalenessTimer = null;
+  }
+
+  /// Starts full Find My page data fetching & live socket listeners (idempotent).
+  void activatePage() {
+    if (_pageActivated) {
+      _scheduleInitialAutoFitIfNeeded();
+      refreshOnView(refreshFriends: tabIndex.value == 0, refreshDevices: tabIndex.value != 0);
+      return;
+    }
+    _pageActivated = true;
+    _scheduleInitialAutoFitIfNeeded();
+    getLocations(refreshFriends: true, refreshDevices: true);
+
+    // Listen via the event dispatcher rather than the socket itself — the socket is
+    // torn down and rebuilt on every restart (backgrounding, a server URL refresh),
+    // and a listener bound to the old instance would just stop receiving updates.
+    if (GetIt.I.isRegistered<EventDispatcher>()) {
+      _findMyLocationListener ??= EventDispatcherSvc.stream.listen((event) {
+        if (event.type == 'new-findmy-location') {
+          handleNewFindMyLocation(event.data);
+        } else if (event.type == 'new-findmy-device') {
+          handleNewFindMyDevice(event.data);
+        }
+      });
+    }
+  }
+
+  /// Stops page-only continuous GPS streaming and resets page-scoped map state.
+  void deactivatePage() {
+    _pageActivated = false;
+    _waitingMapReadyForAutoFit = false;
+    _hasAutoFittedInitialPins = false;
+    hasMovedToCurrentLocation.value = false;
+    locationSub?.cancel();
+    locationSub = null;
+    if (completer.isCompleted) {
+      completer = Completer<void>();
+    }
   }
 
   bool get _isAlive => !isClosed;
@@ -291,9 +510,9 @@ class FindMyController extends GetxController {
     return friend?.handle?.address ?? friend?.handleAddress;
   }
 
-  bool get _canRefreshFriends => autoFetch || _refreshFriendsFn != null;
-  bool get _canStartLiveFriend => autoFetch || _startLiveFriendFn != null;
-  bool get _canStopLiveFriend => autoFetch || _stopLiveFriendFn != null;
+  bool get _canRefreshFriends => _interactive || _refreshFriendsFn != null;
+  bool get _canStartLiveFriend => _interactive || _startLiveFriendFn != null;
+  bool get _canStopLiveFriend => _interactive || _stopLiveFriendFn != null;
 
   Future<Response> _performRefreshFriends({
     String? handle,
@@ -486,7 +705,7 @@ class FindMyController extends GetxController {
     selectedFriendId.value = null;
     if (changed) _forcedLiveForSelection = false;
     _syncLiveHeartbeat();
-    if (autoFetch) {
+    if (_interactive) {
       refreshOnView(
         refreshFriends: false,
         refreshDevices: true,
@@ -575,16 +794,131 @@ class FindMyController extends GetxController {
     _syncLiveHeartbeat();
   }
 
-  Future<Position?> _fetchCurrentPosition() async {
+  Future<Position?> _fetchCurrentPosition({bool requestPermission = true}) async {
     var perm = await Geolocator.checkPermission();
     if (!_isAlive) return null;
-    if (perm == LocationPermission.denied) {
+    if (perm == LocationPermission.denied && requestPermission) {
       perm = await Geolocator.requestPermission();
       if (!_isAlive) return null;
     }
     if (perm != LocationPermission.whileInUse && perm != LocationPermission.always) return null;
-    final pos = await Geolocator.getCurrentPosition();
-    return _isAlive ? pos : null;
+    try {
+      final pos = await Geolocator.getCurrentPosition();
+      return _isAlive ? pos : null;
+    } catch (_) {
+      if (!kIsWeb && _isAlive) {
+        final lastKnown = await Geolocator.getLastKnownPosition().catchError((_) => null);
+        if (lastKnown != null) return lastKnown;
+      }
+      rethrow;
+    }
+  }
+
+  Future<Position?> _performFetchCurrentPosition({bool requestPermission = true}) =>
+      _fetchCurrentPositionFn != null
+          ? _fetchCurrentPositionFn()
+          : _fetchCurrentPosition(requestPermission: requestPermission);
+
+  bool get _hasAnyPins =>
+      friendsWithLocation.isNotEmpty ||
+      devices.any((d) => d.location?.latitude != null && d.location?.longitude != null);
+
+  void _runWhenMapReady(VoidCallback fn) {
+    if (completer.isCompleted) {
+      fn();
+    } else {
+      unawaited(completer.future.then((_) {
+        if (_isAlive) fn();
+      }));
+    }
+  }
+
+  void _scheduleInitialAutoFitIfNeeded() {
+    if (_hasAutoFittedInitialPins) return;
+    if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
+    if (!_hasAnyPins) return;
+
+    void runFit() {
+      if (!_isAlive || _hasAutoFittedInitialPins) return;
+      if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
+      if (!_hasAnyPins) return;
+      _hasAutoFittedInitialPins = true;
+      fitAllPins();
+    }
+
+    if (completer.isCompleted) {
+      runFit();
+    } else if (!_waitingMapReadyForAutoFit) {
+      _waitingMapReadyForAutoFit = true;
+      unawaited(completer.future.then((_) {
+        _waitingMapReadyForAutoFit = false;
+        runFit();
+      }));
+    }
+  }
+
+  Future<void> _initUserLocation({bool requestPermission = true, bool startStream = true}) async {
+    if (_fetchingUserLocation || !_isAlive) return;
+    _fetchingUserLocation = true;
+    try {
+      final loc = await _performFetchCurrentPosition(requestPermission: requestPermission);
+      if (!_isAlive || loc == null) return;
+      location.value = loc;
+      _resortFriendsLists();
+      buildLocationMarker(loc);
+      if (startStream &&
+          !hasMovedToCurrentLocation.value &&
+          !_hasAutoFittedInitialPins &&
+          !_hasAnyPins &&
+          selectedFriendId.value == null &&
+          selectedDeviceId.value == null &&
+          _pendingFocusFriendId == null) {
+        hasMovedToCurrentLocation.value = true;
+        _runWhenMapReady(() {
+          if (!_isAlive ||
+              _hasAutoFittedInitialPins ||
+              _hasAnyPins ||
+              selectedFriendId.value != null ||
+              selectedDeviceId.value != null) return;
+          animateCameraTo(LatLng(loc.latitude, loc.longitude), 10);
+        });
+      }
+      if (startStream && (_positionStreamFn != null || !kIsDesktop) && locationSub == null) {
+        final stream = _positionStreamFn != null ? _positionStreamFn() : Geolocator.getPositionStream();
+        locationSub = stream.listen(
+          (event) {
+            if (!_isAlive) return;
+            location.value = event;
+            _resortFriendsLists();
+            buildLocationMarker(event);
+            if (!hasMovedToCurrentLocation.value &&
+                !_hasAutoFittedInitialPins &&
+                !_hasAnyPins &&
+                selectedFriendId.value == null &&
+                selectedDeviceId.value == null &&
+                _pendingFocusFriendId == null) {
+              hasMovedToCurrentLocation.value = true;
+              _runWhenMapReady(() {
+                if (!_isAlive ||
+                    _hasAutoFittedInitialPins ||
+                    _hasAnyPins ||
+                    selectedFriendId.value != null ||
+                    selectedDeviceId.value != null) return;
+                animateCameraTo(LatLng(event.latitude, event.longitude), 10);
+              });
+            }
+          },
+          onError: (Object error, StackTrace stack) {
+            _logWarn("FindMy position stream error", error: error, trace: stack);
+          },
+          cancelOnError: true,
+        );
+      }
+    } catch (e, s) {
+      _logWarn("Failed to fetch initial FindMy location", error: e, trace: s);
+    } finally {
+      _fetchingUserLocation = false;
+    }
   }
 
   Future<void> recenterToUser({double zoom = 14.5}) async {
@@ -593,12 +927,14 @@ class FindMyController extends GetxController {
       animateCameraTo(LatLng(current.latitude, current.longitude), _targetFocusZoom(zoom));
       return;
     }
-    if (!autoFetch || (Platform.isLinux && !kIsWeb)) return;
+    if (!_interactive || (Platform.isLinux && !kIsWeb)) return;
     try {
-      final pos = await _fetchCurrentPosition();
+      final pos = await _performFetchCurrentPosition();
+      if (!_isAlive) return;
       if (pos != null) {
         location.value = pos;
         buildLocationMarker(pos);
+        hasMovedToCurrentLocation.value = true;
         animateCameraTo(LatLng(pos.latitude, pos.longitude), zoom);
       }
     } catch (e, s) {
@@ -606,7 +942,9 @@ class FindMyController extends GetxController {
     }
   }
 
-  void fitAllPins({EdgeInsets padding = const EdgeInsets.fromLTRB(48, 96, 48, 120)}) {
+  static const EdgeInsets defaultFitAllPinsPadding = EdgeInsets.fromLTRB(48, 96, 48, 120);
+
+  void fitAllPins({EdgeInsets? padding}) {
     final pts = <LatLng>[];
     for (final f in friendsWithLocation) {
       final key = f.stableId ?? f.title ?? 'friend';
@@ -626,16 +964,24 @@ class FindMyController extends GetxController {
     if (bounds == null) return;
     if (pts.length == 1 ||
         (bounds.north == bounds.south && bounds.east == bounds.west)) {
-      animateCameraTo(bounds.center, 14.0);
+      final offsetY = detailSheetOffsetProvider?.call() ?? 0;
+      animateCameraTo(bounds.center, 14.0, offset: Offset(0, -offsetY));
       return;
     }
     try {
+      final camera = mapController.camera;
+      if (camera.nonRotatedSize.width <= 0 || camera.nonRotatedSize.height <= 0) {
+        animateCameraTo(bounds.center, 12.0);
+        return;
+      }
+      final rawPadding = padding ?? fitAllPinsPaddingProvider?.call() ?? defaultFitAllPinsPadding;
+      final resolvedPadding = clampFindMyFitPadding(rawPadding, camera.nonRotatedSize);
       final fitted = CameraFit.bounds(
         bounds: bounds,
-        padding: padding,
+        padding: resolvedPadding,
         maxZoom: 15.0,
-      ).fit(mapController.camera);
-      animateCameraTo(fitted.center, fitted.zoom);
+      ).fit(camera);
+      animateCameraTo(fitted.center, fitted.zoom.isFinite ? fitted.zoom : 12.0);
     } catch (_) {
       animateCameraTo(bounds.center, 12.0);
     }
@@ -698,7 +1044,7 @@ class FindMyController extends GetxController {
         clearSelection();
       }
     }
-    if (!autoFetch) return;
+    if (!_interactive) return;
     if (index == 0) {
       refreshOnView(refreshFriends: true, refreshDevices: false);
     } else if (index == 1 || index == 2) {
@@ -708,13 +1054,15 @@ class FindMyController extends GetxController {
 
   double? distanceMetersTo(double? lat, double? lng) {
     final userPos = location.value;
-    if (userPos == null || lat == null || lng == null || (lat == 0 && lng == 0)) return null;
-    return distanceMetersBetween(LatLng(userPos.latitude, userPos.longitude), LatLng(lat, lng));
+    if (userPos == null || !_hasValidFriendCoords(userPos.latitude, userPos.longitude) || !_hasValidFriendCoords(lat, lng)) {
+      return null;
+    }
+    return haversineDistanceMeters(userPos.latitude, userPos.longitude, lat!, lng!);
   }
 
   String proximityLabelForFriend(FindMyFriend friend) {
     if (shouldRedactFindMyContactInfo()) return "";
-    return formatFindMyProximity(distanceMetersTo(friend.latitude, friend.longitude));
+    return formatFindMyFriendDistance(distanceMetersTo(friend.latitude, friend.longitude));
   }
 
   String proximityLabelForDevice(FindMyDevice device) {
@@ -733,6 +1081,7 @@ class FindMyController extends GetxController {
 
   void onAppPaused() {
     _isForeground = false;
+    _stopStalenessTimer();
     _liveHeartbeatTimer?.cancel();
     _liveHeartbeatTimer = null;
     if (locationSub?.isPaused == false) locationSub!.pause();
@@ -743,6 +1092,9 @@ class FindMyController extends GetxController {
 
   void onAppResumed() {
     _isForeground = true;
+    if (_isAlive && (_interactive || isBackgroundShared)) {
+      _startStalenessTimer();
+    }
     locationSub?.resume();
     final friendId = selectedFriendId.value;
     final handle = _selectedFriendHandle() ?? _selectedFriendTargetHandle;
@@ -754,7 +1106,7 @@ class FindMyController extends GetxController {
       unawaited(_startLiveFriendStream(friendId: friendId, handle: handle));
     }
     _syncLiveHeartbeat();
-    if (autoFetch) {
+    if (_interactive) {
       refreshOnView(
         refreshFriends: true,
         refreshDevices: true,
@@ -862,10 +1214,7 @@ class FindMyController extends GetxController {
       }
 
       if (anyUpdated) {
-        friendsWithLocation.value =
-            friends.where((item) => (item.latitude ?? 0) != 0 && (item.longitude ?? 0) != 0).toList();
-        friendsWithoutLocation.value =
-            friends.where((item) => (item.latitude ?? 0) == 0 && (item.longitude ?? 0) == 0).toList();
+        _resortFriendsLists();
 
         final toBuild = targeted
             ? incomingList.where((item) => (item.latitude ?? 0) != 0 && (item.longitude ?? 0) != 0)
@@ -875,6 +1224,10 @@ class FindMyController extends GetxController {
           unawaited(resolveFriendAddress(e));
         }
         livePulseNonce.value++;
+        _applyPendingFocusIfReady();
+        if (_pageActivated) {
+          _scheduleInitialAutoFitIfNeeded();
+        }
       }
       fetching2.value = false;
       refreshing2.value = false;
@@ -884,6 +1237,262 @@ class FindMyController extends GetxController {
       fetching2.value = null;
       refreshing2.value = false;
     }
+  }
+
+  void _resortFriendsLists() {
+    final userPos = location.value;
+    friendsWithLocation.value = sortFindMyFriends(
+      friends.where((item) => (item.latitude ?? 0) != 0 && (item.longitude ?? 0) != 0),
+      isFriendPinned,
+      userLatitude: userPos?.latitude,
+      userLongitude: userPos?.longitude,
+    );
+    friendsWithoutLocation.value = sortFindMyFriends(
+      friends.where((item) => (item.latitude ?? 0) == 0 && (item.longitude ?? 0) == 0),
+      isFriendPinned,
+      userLatitude: userPos?.latitude,
+      userLongitude: userPos?.longitude,
+    );
+  }
+
+  void _applyPendingFocusIfReady() {
+    final pendingId = _pendingFocusFriendId;
+    if (pendingId == null || !_pageActivated) return;
+    final match = friends.firstWhereOrNull((f) => f.stableId == pendingId);
+    if (match == null) return;
+    _pendingFocusFriendId = null;
+    if ((match.latitude ?? 0) != 0 && (match.longitude ?? 0) != 0) {
+      _runWhenMapReady(() {
+        if (!_isAlive) return;
+        focusFriend(match);
+      });
+    }
+  }
+
+  void consumePendingFocus() => _applyPendingFocusIfReady();
+
+  List<String> _readPrefList(String key) {
+    if (_readPrefListFn != null) {
+      return _readPrefListFn(key) ?? const [];
+    }
+    if (!GetIt.I.isRegistered<SharedPreferencesService>()) return const [];
+    try {
+      final raw = PrefsSvc.admin.get(key);
+      if (raw is String && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          return decoded.whereType<String>().toList();
+        }
+      }
+    } catch (_) {}
+    return const [];
+  }
+
+  Future<void> _writePrefList(String key, List<String> values) async {
+    if (_writePrefListFn != null) {
+      await _writePrefListFn(key, values);
+      return;
+    }
+    if (!GetIt.I.isRegistered<SharedPreferencesService>()) return;
+    try {
+      await PrefsSvc.admin.setString(key, jsonEncode(values));
+    } catch (_) {}
+  }
+
+  void _loadPinPrefs() {
+    _explicitlyPinnedKeys.assignAll(_readPrefList(kFindMyPinnedFriendsPrefKey));
+    _explicitlyUnpinnedKeys.assignAll(_readPrefList(kFindMyUnpinnedFriendsPrefKey));
+    pinVersion.value++;
+  }
+
+  String pinKeyForFriend(FindMyFriend friend) {
+    final candidate = friend.handle?.address ?? friend.handleAddress ?? friend.stableId ?? '';
+    final normalized = normalizeFindMyHandle(candidate);
+    if (normalized.isNotEmpty) return normalized;
+    return (friend.stableId ?? '').trim().toLowerCase();
+  }
+
+  Iterable<String> _pinnedChatHandles() {
+    if (_pinnedChatHandlesProvider != null) {
+      return _pinnedChatHandlesProvider();
+    }
+    if (!GetIt.I.isRegistered<ChatsService>()) return const [];
+    return ChatsSvc.allChats
+        .where((c) => !c.isGroup && (c.isPinned ?? false))
+        .expand((c) => <String>[
+              if ((c.chatIdentifier ?? '').trim().isNotEmpty) c.chatIdentifier!,
+              ...c.participants.map((h) => h.address),
+            ]);
+  }
+
+  bool _isFriendPinnedByChat(FindMyFriend friend) {
+    final friendCandidates = <String?>[
+      friend.handle?.address,
+      friend.handleAddress,
+      friend.stableId,
+    ];
+    for (final chatHandle in _pinnedChatHandles()) {
+      for (final fc in friendCandidates) {
+        if (findMyHandlesMatch(fc, chatHandle)) return true;
+      }
+    }
+    return false;
+  }
+
+  bool isFriendPinned(FindMyFriend friend) {
+    pinVersion.value;
+    final key = pinKeyForFriend(friend);
+    if (key.isEmpty) return false;
+    if (_explicitlyUnpinnedKeys.contains(key)) return false;
+    if (_explicitlyPinnedKeys.contains(key)) return true;
+    return _isFriendPinnedByChat(friend);
+  }
+
+  Future<void> setFriendPinned(FindMyFriend friend, bool pinned) async {
+    final key = pinKeyForFriend(friend);
+    if (key.isEmpty) return;
+    if (pinned) {
+      _explicitlyUnpinnedKeys.remove(key);
+      _explicitlyPinnedKeys.add(key);
+    } else {
+      _explicitlyPinnedKeys.remove(key);
+      _explicitlyUnpinnedKeys.add(key);
+    }
+    pinVersion.value++;
+    _resortFriendsLists();
+    await Future.wait([
+      _writePrefList(kFindMyPinnedFriendsPrefKey, _explicitlyPinnedKeys.toList()..sort()),
+      _writePrefList(kFindMyUnpinnedFriendsPrefKey, _explicitlyUnpinnedKeys.toList()..sort()),
+    ]);
+  }
+
+  Future<void> toggleFriendPin(FindMyFriend friend) {
+    return setFriendPinned(friend, !isFriendPinned(friend));
+  }
+
+  /// Quietly ensures friend locations are loaded in the background without
+  /// showing any error snackbars (for conversation header & details lookup).
+  Future<void> ensureFriendsLoaded({Duration maxAge = const Duration(minutes: 2)}) async {
+    if (!_isAlive || _refreshFriendsInFlight) return;
+    if (friends.isNotEmpty &&
+        _lastFriendsRefreshAt != null &&
+        _now().difference(_lastFriendsRefreshAt!) < maxAge) {
+      return;
+    }
+    if (_refreshFriendsFn == null && !GetIt.I.isRegistered<HttpService>()) return;
+
+    if (!(Platform.isLinux && !kIsWeb) &&
+        location.value == null &&
+        !_fetchingUserLocation &&
+        (_fetchCurrentPositionFn != null || GetIt.I.isRegistered<HttpService>())) {
+      unawaited(_initUserLocation(requestPermission: false, startStream: _pageActivated));
+    }
+
+    _refreshFriendsInFlight = true;
+    try {
+      final res = _refreshFriendsFn != null
+          ? await _refreshFriendsFn(force: false, live: false)
+          : await HttpSvc.icloud.getFriends();
+      if (!_isAlive) return;
+      final data = res.data?['data'];
+      if (res.statusCode == 200 && data is List) {
+        _lastFriendsRefreshAt = _now();
+        _applyFriendsList(data);
+      }
+    } catch (e, s) {
+      _logWarn("Quiet Find My friend load failed", error: e, trace: s);
+    } finally {
+      _refreshFriendsInFlight = false;
+    }
+  }
+
+  FindMyFriend? friendForChat(Chat? chat) {
+    if (chat == null || chat.isGroup) return null;
+    final chatCandidates = <String>[
+      if ((chat.chatIdentifier ?? '').trim().isNotEmpty) chat.chatIdentifier!,
+      ...chat.participants.map((h) => h.address),
+      if (chat.guid.contains(';-;')) chat.guid.split(';-;').last,
+    ];
+    for (final f in friends) {
+      final friendCandidates = <String?>[
+        f.handle?.address,
+        f.handleAddress,
+        f.stableId,
+      ];
+      for (final cc in chatCandidates) {
+        for (final fc in friendCandidates) {
+          if (findMyHandlesMatch(cc, fc)) return f;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Reactive lookup of accessible Find My location for a 1:1 [chat].
+  /// Returns `null` for group chats, redacted mode, unmatched contacts, or zero/invalid coords.
+  FindMyChatLocation? locationForChat(Chat? chat) {
+    friends.length;
+    friendAddresses.length;
+    freshnessTick.value;
+    location.value;
+    if (chat == null || chat.isGroup || shouldRedactFindMyContactInfo()) return null;
+
+    final friend = friendForChat(chat);
+    if (friend == null) return null;
+
+    final lat = friend.latitude;
+    final lng = friend.longitude;
+    if (lat == null || lng == null || (lat == 0 && lng == 0) || !lat.isFinite || !lng.isFinite) {
+      return null;
+    }
+
+    final resolvedShort = addressForFriend(friend, preferLong: false);
+    final resolvedLong = addressForFriend(friend, preferLong: true);
+    if (resolvedLong == null || !hasStreetAddressLine(resolvedLong)) {
+      unawaited(resolveFriendAddress(friend));
+    }
+
+    final now = _now();
+    final distanceLabel = proximityLabelForFriend(friend);
+    return FindMyChatLocation(
+      friend: friend,
+      shortLabel: (resolvedShort != null && resolvedShort.isNotEmpty)
+          ? resolvedShort
+          : '${lat.toStringAsFixed(4)}, ${lng.toStringAsFixed(4)}',
+      fullAddress: resolvedLong ?? resolvedShort ?? '',
+      freshness: friend.displayFreshness(now),
+      isLive: friend.isLiveFresh(now),
+      latitude: lat,
+      longitude: lng,
+      distanceLabel: distanceLabel.isEmpty ? null : distanceLabel,
+    );
+  }
+
+  Future<void> openForFriend(BuildContext context, FindMyFriend friend) async {
+    _pendingFocusFriendId = friend.stableId;
+    final tc = tabController;
+    if (tc != null && tc.index != 0) {
+      tc.animateTo(0);
+    }
+    tabIndex.value = 0;
+    await Navigator.of(context).push(
+      ThemeSwitcher.buildPageRoute(
+        builder: (_) => FindMyPage(),
+      ),
+    );
+  }
+
+  Future<void> openForChat(BuildContext context, Chat chat) async {
+    final friend = friendForChat(chat);
+    if (friend != null) {
+      await openForFriend(context, friend);
+      return;
+    }
+    await Navigator.of(context).push(
+      ThemeSwitcher.buildPageRoute(
+        builder: (_) => FindMyPage(),
+      ),
+    );
   }
 
   void _syncLiveHeartbeat() {
@@ -943,7 +1552,7 @@ class FindMyController extends GetxController {
       return;
     }
 
-    if (!autoFetch) return;
+    if (!_interactive) return;
     final deviceId = selectedDeviceId.value;
     if (deviceId != null) {
       final device = devices.firstWhereOrNull((e) => e.id == deviceId);
@@ -1056,19 +1665,32 @@ class FindMyController extends GetxController {
   String _addressKeyForFriend(FindMyFriend friend) =>
       friend.stableId ?? friend.title ?? '${friend.latitude},${friend.longitude}';
 
-  /// The friend's display address: the payload's own address when present, otherwise
-  /// a reverse-geocoded one once [resolveFriendAddress] has populated it.
-  String? addressForFriend(FindMyFriend friend, {bool preferLong = false}) {
-    final own = preferLong
-        ? friend.longAddress ?? friend.shortAddress
-        : friend.shortAddress ?? friend.longAddress;
-    return own ?? friendAddresses[_addressKeyForFriend(friend)];
+  /// The friend's display address: prefers a granular street address when present,
+  /// otherwise falls back to a cached reverse-geocoded street address from
+  /// [resolveFriendAddress], or the payload's short city/state label.
+  String? addressForFriend(FindMyFriend friend, {bool preferLong = true}) {
+    final longAddr = friend.longAddress?.trim();
+    final shortAddr = friend.shortAddress?.trim();
+    final geocoded = friendAddresses[_addressKeyForFriend(friend)]?.trim();
+    final cleanLong = (longAddr != null && longAddr.isNotEmpty) ? longAddr : null;
+    final cleanShort = (shortAddr != null && shortAddr.isNotEmpty) ? shortAddr : null;
+    final cleanGeocoded = (geocoded != null && geocoded.isNotEmpty) ? geocoded : null;
+
+    if (preferLong) {
+      if (cleanLong != null && hasStreetAddressLine(cleanLong)) return cleanLong;
+      if (cleanGeocoded != null) return cleanGeocoded;
+      return cleanLong ?? cleanShort;
+    }
+    return cleanShort ?? cleanLong ?? cleanGeocoded;
   }
 
-  /// Reverse-geocodes a friend's coordinates when the server sent no address.
-  /// Best-effort: unsupported platforms and geocoder failures leave the map empty.
+  /// Reverse-geocodes a friend's coordinates when the server sent no granular
+  /// street address. Best-effort and cached quietly.
   Future<void> resolveFriendAddress(FindMyFriend friend) async {
-    if (friend.shortAddress != null || friend.longAddress != null) return;
+    if (hasStreetAddressLine(friend.longAddress) ||
+        (friend.longAddress == null && hasStreetAddressLine(friend.shortAddress))) {
+      return;
+    }
     if (shouldRedactFindMyContactInfo()) return;
     final lat = friend.latitude;
     final lng = friend.longitude;
@@ -1184,7 +1806,11 @@ class FindMyController extends GetxController {
       _logInfo("Received new location for ${friend.handle?.address}");
       if ((friend.latitude ?? 0) == 0 && (friend.longitude ?? 0) == 0) return;
 
-      final existingFriendIndex = friends.indexWhere((e) => e.stableId != null && e.stableId == friend.stableId);
+      final existingFriendIndex = friends.indexWhere(
+        (e) =>
+            (e.stableId != null && e.stableId == friend.stableId) ||
+            findMyHandlesMatch(e.handleAddress ?? e.handle?.address, friend.handleAddress ?? friend.handle?.address),
+      );
       final existingFriend = existingFriendIndex == -1 ? null : friends[existingFriendIndex];
 
       if (shouldSupersedeFriendLocation(existingFriend, friend)) {
@@ -1195,10 +1821,7 @@ class FindMyController extends GetxController {
           friends[existingFriendIndex] = friend;
         }
 
-        friendsWithLocation.value =
-            friends.where((item) => (item.latitude ?? 0) != 0 && (item.longitude ?? 0) != 0).toList();
-        friendsWithoutLocation.value =
-            friends.where((item) => (item.latitude ?? 0) == 0 && (item.longitude ?? 0) == 0).toList();
+        _resortFriendsLists();
 
         buildFriendMarker(friend);
         livePulseNonce.value++;
@@ -1270,113 +1893,117 @@ class FindMyController extends GetxController {
   }) async {
     if (!_isAlive) return;
 
-    if (!(Platform.isLinux && !kIsWeb) && locationSub == null && location.value == null) {
-      _fetchCurrentPosition().then((loc) {
-        if (loc == null) return;
-        location.value = loc;
-        buildLocationMarker(loc);
-        if (!kIsDesktop) {
-          locationSub = Geolocator.getPositionStream().listen((event) {
-            if (!_isAlive) return;
-            buildLocationMarker(event);
-
-            if (!hasMovedToCurrentLocation.value) {
-              mapController.move(LatLng(event.latitude, event.longitude), 10);
-              hasMovedToCurrentLocation.value = true;
-            }
-          });
-        }
-      });
+    if (!(Platform.isLinux && !kIsWeb) &&
+        locationSub == null &&
+        !_fetchingUserLocation) {
+      unawaited(_initUserLocation());
     }
 
-    // Fetch friends data
-    if (refreshFriends || !skipFetchWhenNotRefreshing) {
-      if (refreshFriends) _refreshFriendsInFlight = true;
-      final friendSeq = _friendRefreshSeq;
-      Response response2;
-      try {
-        response2 = refreshFriends
-            ? await _performRefreshFriends(
-                handle: focusedHandle,
-                force: force,
-                live: focusedHandle != null && liveTrackingEnabled.value,
-              ).catchError((_) async {
-                if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                refreshing2.value = false;
-                showSnackbar("Error", "Something went wrong refreshing FindMy Friends data!", type: SnackbarType.error);
-                return Response(requestOptions: RequestOptions(path: ''));
-              })
-            : await HttpSvc.icloud.getFriends().catchError((_) async {
-                if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                fetching2.value = null;
-                return Response(requestOptions: RequestOptions(path: ''));
-              });
-      } finally {
-        if (refreshFriends && friendSeq == _friendRefreshSeq) {
-          _refreshFriendsInFlight = false;
-          _lastFriendsRefreshAt = _now();
-        }
-      }
-      if (!_isAlive) return;
-
-      _applyRefreshedFriendsResponse(
-        response2,
-        targeted: focusedHandle != null || friendSeq != _friendRefreshSeq,
-      );
-    }
-
-    // Fetch devices data
-    if (refreshDevices || !skipFetchWhenNotRefreshing) {
-      if (refreshDevices) _refreshDevicesInFlight = true;
-      Response response;
-      try {
-        response = refreshDevices
-            ? await HttpSvc.icloud.refreshDevices(deviceId: focusedDeviceId, force: force).catchError((_) async {
-                if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                refreshing.value = false;
-                showSnackbar("Error", "Something went wrong refreshing FindMy Devices data!", type: SnackbarType.error);
-                return Response(requestOptions: RequestOptions(path: ''));
-              })
-            : await HttpSvc.icloud.getDevices().catchError((_) async {
-                if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
-                fetching.value = null;
-                return Response(requestOptions: RequestOptions(path: ''));
-              });
-      } finally {
-        if (refreshDevices) {
-          _refreshDevicesInFlight = false;
-          _lastDevicesRefreshAt = _now();
-        }
-      }
-      if (!_isAlive) return;
-
-      if (response.statusCode == 200 && response.data['data'] != null) {
+    try {
+      // Fetch friends data
+      if (refreshFriends || !skipFetchWhenNotRefreshing) {
+        if (refreshFriends) _refreshFriendsInFlight = true;
+        final friendSeq = _friendRefreshSeq;
+        Response response2;
         try {
-          devices.value =
-              (response.data['data'] as List).map((e) => FindMyDevice.fromJson(e)).toList().cast<FindMyDevice>();
+          response2 = refreshFriends
+              ? await _performRefreshFriends(
+                  handle: focusedHandle,
+                  force: force,
+                  live: focusedHandle != null && liveTrackingEnabled.value,
+                ).catchError((_) async {
+                  if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
+                  refreshing2.value = false;
+                  showSnackbar("Error", "Something went wrong refreshing FindMy Friends data!", type: SnackbarType.error);
+                  return Response(requestOptions: RequestOptions(path: ''));
+                })
+              : await HttpSvc.icloud.getFriends().catchError((_) async {
+                  if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
+                  fetching2.value = null;
+                  return Response(requestOptions: RequestOptions(path: ''));
+                });
+        } finally {
+          if (refreshFriends && friendSeq == _friendRefreshSeq) {
+            _refreshFriendsInFlight = false;
+            _lastFriendsRefreshAt = _now();
+          }
+        }
+        if (!_isAlive) return;
 
-          // Apply safe location name as the display label once, here rather than during build.
-          for (final device in devices) {
-            if (device.safeLocations.isNotEmpty && device.safeLocations.first.name != null) {
-              device.address?.label = device.safeLocations.first.name;
+        _applyRefreshedFriendsResponse(
+          response2,
+          targeted: focusedHandle != null || friendSeq != _friendRefreshSeq,
+        );
+      }
+
+      // Fetch devices data
+      if (refreshDevices || !skipFetchWhenNotRefreshing) {
+        if (refreshDevices) _refreshDevicesInFlight = true;
+        Response response;
+        try {
+          if (refreshDevices && _refreshDevicesFn != null) {
+            response = await _refreshDevicesFn(deviceId: focusedDeviceId, force: force).catchError((_) async {
+              if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
+              refreshing.value = false;
+              showSnackbar("Error", "Something went wrong refreshing FindMy Devices data!", type: SnackbarType.error);
+              return Response(requestOptions: RequestOptions(path: ''));
+            });
+          } else if (_refreshDevicesFn == null && !GetIt.I.isRegistered<HttpService>()) {
+            response = Response(requestOptions: RequestOptions(path: ''));
+          } else {
+            response = refreshDevices
+                ? await HttpSvc.icloud.refreshDevices(deviceId: focusedDeviceId, force: force).catchError((_) async {
+                    if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
+                    refreshing.value = false;
+                    showSnackbar("Error", "Something went wrong refreshing FindMy Devices data!", type: SnackbarType.error);
+                    return Response(requestOptions: RequestOptions(path: ''));
+                  })
+                : await HttpSvc.icloud.getDevices().catchError((_) async {
+                    if (!_isAlive) return Response(requestOptions: RequestOptions(path: ''));
+                    fetching.value = null;
+                    return Response(requestOptions: RequestOptions(path: ''));
+                  });
+          }
+        } finally {
+          if (refreshDevices) {
+            _refreshDevicesInFlight = false;
+            _lastDevicesRefreshAt = _now();
+          }
+        }
+        if (!_isAlive) return;
+
+        if (response.statusCode == 200 && response.data['data'] != null) {
+          try {
+            devices.value =
+                (response.data['data'] as List).map((e) => FindMyDevice.fromJson(e)).toList().cast<FindMyDevice>();
+
+            // Apply safe location name as the display label once, here rather than during build.
+            for (final device in devices) {
+              if (device.safeLocations.isNotEmpty && device.safeLocations.first.name != null) {
+                device.address?.label = device.safeLocations.first.name;
+              }
             }
-          }
 
-          for (FindMyDevice e in devices.where((e) => e.location?.latitude != null && e.location?.longitude != null)) {
-            buildDeviceMarker(e);
+            for (FindMyDevice e in devices.where((e) => e.location?.latitude != null && e.location?.longitude != null)) {
+              buildDeviceMarker(e);
+            }
+            fetching.value = false;
+            refreshing.value = false;
+            _syncLiveHeartbeat();
+          } catch (e, s) {
+            _logWarn("Failed to parse FindMy Devices location data!", error: e, trace: s);
+            fetching.value = null;
+            refreshing.value = false;
+            return;
           }
+        } else {
           fetching.value = false;
           refreshing.value = false;
-          _syncLiveHeartbeat();
-        } catch (e, s) {
-          _logWarn("Failed to parse FindMy Devices location data!", error: e, trace: s);
-          fetching.value = null;
-          refreshing.value = false;
-          return;
         }
-      } else {
-        fetching.value = false;
-        refreshing.value = false;
+      }
+    } finally {
+      if (_isAlive) {
+        _scheduleInitialAutoFitIfNeeded();
       }
     }
   }
@@ -1492,26 +2119,57 @@ class FindMyController extends GetxController {
                     ),
                   ),
                 ),
-              Container(
-                width: 24,
-                height: 24,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.25),
-                      blurRadius: 6,
+              Builder(
+                builder: (_) {
+                  final hasSelfAvatar = GetIt.I.isRegistered<SettingsService>() &&
+                      (SettingsSvc.settings.userAvatarPath.value != null ||
+                          SettingsSvc.userAvatarBytes.value != null ||
+                          SettingsSvc.effectiveUserName != 'You');
+                  if (hasSelfAvatar && GetIt.I.isRegistered<ThemesService>()) {
+                    return Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(2),
+                      child: const ContactAvatarWidget(
+                        handle: null,
+                        size: 22,
+                        borderThickness: 0,
+                        editable: false,
+                      ),
+                    );
+                  }
+                  return Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 6,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                padding: const EdgeInsets.all(4.5),
-                child: Container(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: primary,
-                  ),
-                ),
+                    padding: const EdgeInsets.all(4.5),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: primary,
+                      ),
+                    ),
+                  );
+                },
               ),
             ],
           );
@@ -1526,7 +2184,7 @@ class FindMyController extends GetxController {
     unawaited(_stopLiveFriendStream());
     _hardRefreshDebounceTimer?.cancel();
     _refreshFeedbackTimer?.cancel();
-    _stalenessTimer?.cancel();
+    _stopStalenessTimer();
     _liveHeartbeatTimer?.cancel();
     _liveHeartbeatTimer = null;
     _redactedModeListener?.cancel();
@@ -1542,4 +2200,49 @@ class FindMyController extends GetxController {
     friendsController.dispose();
     super.onClose();
   }
+}
+
+/// Clamps fit padding so [CameraFit.bounds] always has positive interior space.
+EdgeInsets clampFindMyFitPadding(EdgeInsets padding, Size viewportSize) {
+  final maxHoriz = (viewportSize.width - 80.0).clamp(0.0, double.infinity);
+  final maxVert = (viewportSize.height - 80.0).clamp(0.0, double.infinity);
+  double left = padding.left.clamp(0.0, maxHoriz);
+  double right = padding.right.clamp(0.0, maxHoriz);
+  if (left + right > maxHoriz && (left + right) > 0) {
+    final scale = maxHoriz / (left + right);
+    left *= scale;
+    right *= scale;
+  }
+  double top = padding.top.clamp(0.0, maxVert);
+  double bottom = padding.bottom.clamp(0.0, maxVert);
+  if (top + bottom > maxVert && (top + bottom) > 0) {
+    final scale = maxVert / (top + bottom);
+    top *= scale;
+    bottom *= scale;
+  }
+  return EdgeInsets.fromLTRB(left, top, right, bottom);
+}
+
+/// Computes [fitAllPins] padding accounting for marker extents (116x92), top
+/// map controls, and on phone viewports the sliding bottom sheet height.
+EdgeInsets computeFindMyFitAllPadding({
+  required Size viewportSize,
+  EdgeInsets viewPadding = EdgeInsets.zero,
+  required bool isPhone,
+  double bottomSheetHeight = 0.0,
+}) {
+  if (!isPhone) {
+    return clampFindMyFitPadding(
+      FindMyController.defaultFitAllPinsPadding,
+      viewportSize,
+    );
+  }
+  // Markers are 116x92 (58px horizontal half, 46px vertical half); right controls sit at 14+44=58px.
+  final raw = EdgeInsets.fromLTRB(
+    64.0,
+    viewPadding.top + 76.0,
+    72.0,
+    bottomSheetHeight + 52.0,
+  );
+  return clampFindMyFitPadding(raw, viewportSize);
 }

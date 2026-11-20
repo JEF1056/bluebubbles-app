@@ -9,6 +9,7 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:google_mlkit_entity_extraction/google_mlkit_entity_extraction.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
@@ -83,7 +84,46 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   /// True while any route is pushed on top of the conversation view route (e.g.
   /// ConversationDetails). Used by onAppResume to skip keyboard auto-focus on mobile.
   bool showingSubRoute = false;
+  Timer? _interactionDebounce;
   bool _subjectWasLastFocused = false; // If this is false, then message field was last focused (default)
+
+  /// Marks the active chat read on explicit user interaction (gesture, scroll, typing)
+  /// when the UI is interactive and not obscured by a sub-route.
+  void onUserChatInteraction({bool immediate = false}) {
+    if (showingSubRoute) return;
+    if (GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isUiInteractive) return;
+    if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.isChatActive(chat.guid)) return;
+
+    final hasUnread = chat.hasUnreadMessage == true ||
+        (GetIt.I.isRegistered<ChatsService>() &&
+            (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
+    if (!hasUnread) return;
+
+    _interactionDebounce?.cancel();
+    if (immediate) {
+      _markChatReadOnInteraction();
+    } else {
+      _interactionDebounce = Timer(const Duration(milliseconds: 250), _markChatReadOnInteraction);
+    }
+  }
+
+  void _markChatReadOnInteraction() {
+    _interactionDebounce = null;
+    if (isClosed || showingSubRoute) return;
+    if (GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isUiInteractive) return;
+    if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.isChatActive(chat.guid)) return;
+
+    final hasUnread = chat.hasUnreadMessage == true ||
+        (GetIt.I.isRegistered<ChatsService>() &&
+            (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
+    if (!hasUnread) return;
+
+    if (GetIt.I.isRegistered<ChatsService>()) {
+      unawaited(ChatsSvc.setChatHasUnread(chat, false, privateMark: true));
+    } else {
+      unawaited(chat.toggleHasUnreadAsync(false, privateMark: true));
+    }
+  }
 
   FocusNode get lastFocusedNode => _subjectWasLastFocused ? subjectFocusNode : focusNode;
   SpellCheckTextEditingController get lastFocusedTextController =>
@@ -236,6 +276,8 @@ class ConversationViewController extends StatefulController with GetSingleTicker
 
   @override
   void onClose() {
+    _interactionDebounce?.cancel();
+    _interactionDebounce = null;
     messageListGate.dispose();
     updatePillRowLayout(visible: false, height: 0);
     for (PlayerController a in audioPlayers.values) {

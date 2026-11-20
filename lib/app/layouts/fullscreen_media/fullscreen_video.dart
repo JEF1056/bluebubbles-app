@@ -73,11 +73,26 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
   }
 
   void _setFullscreen(bool fullscreen) {
+    if (kIsWeb) return;
     if (fullscreen) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
     } else {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     }
+  }
+
+  void _saveVideo() {
+    if (kIsWeb && (_file.bytes == null || _file.bytes!.isEmpty) && widget.attachment.guid != null) {
+      AttachmentsSvc.redownloadAttachment(
+        widget.attachment,
+        onComplete: (downloaded) {
+          if (mounted) setState(() => _file = downloaded);
+          AttachmentsSvc.saveToDisk(downloaded);
+        },
+      );
+      return;
+    }
+    AttachmentsSvc.saveToDisk(_file);
   }
 
   void initControllers() async {
@@ -407,7 +422,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                           opacity: visible ? 1.0 : 0.0,
                           duration: const Duration(milliseconds: 125),
                           child: Container(
-                            height: kIsDesktop ? 80 : 100.0,
+                            height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 100.0),
                             width: NavigationSvc.width(context),
                             color: context.theme.colorScheme.shadow.withValues(alpha: samsung ? 1 : 0.65),
                             child: SafeArea(
@@ -415,7 +430,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                               right: false,
                               bottom: false,
                               child: SizedBox(
-                                height: kIsDesktop ? 80 : 50,
+                                height: kIsWeb ? 64.0 : (kIsDesktop ? 80.0 : 50.0),
                                 child: Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
@@ -490,7 +505,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                               top: false,
                               child: Center(
                                 child: FullscreenMediaActionPill(
-                                  onSave: () => AttachmentsSvc.saveToDisk(widget.file),
+                                  onSave: _saveVideo,
                                   onShare: (!kIsWeb && !kIsDesktop)
                                       ? () {
                                           if (widget.file.path != null) {
@@ -533,7 +548,7 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                                   CupertinoIcons.cloud_download,
                                   color: samsung ? Colors.white : context.theme.colorScheme.primary,
                                 ),
-                                onPressed: () => AttachmentsSvc.saveToDisk(widget.file),
+                                onPressed: _saveVideo,
                               ),
                               IconButton(
                                 icon: Icon(

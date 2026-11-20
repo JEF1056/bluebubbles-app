@@ -108,7 +108,7 @@ void main() {
     controller.samsungScrollController.dispose();
   });
 
-  testWidgets('MaterialConversationTile applies 20dp->42dp pill radius, 11sp unread badge, and 8dp unread dot',
+  testWidgets('MaterialConversationTile applies 20dp->9999 pill radius, 11sp unread badge, and 8dp unread dot',
       (tester) async {
     final chat = Chat(guid: 'chat-tile-1', chatIdentifier: 'chat-tile-1', displayName: 'Alice')
       ..hasUnreadMessage = true;
@@ -145,7 +145,7 @@ void main() {
 
     final selectedContainer = tester.widget<AnimatedContainer>(find.byType(AnimatedContainer).first);
     final selectedDecoration = selectedContainer.decoration! as BoxDecoration;
-    expect(selectedDecoration.borderRadius, const BorderRadius.all(Radius.circular(42)));
+    expect(selectedDecoration.borderRadius, const BorderRadius.all(Radius.circular(9999)));
     expect(find.byIcon(Icons.check_circle_rounded), findsOneWidget);
 
     listController.materialScrollController.dispose();

@@ -150,7 +150,7 @@ class AttachmentsService extends GetxService {
           return AttachmentDownloader.startDownload(attachment, onComplete: onComplete);
         }
         // No GUID and no bytes — return a PlatformFile with whatever path is available.
-        return PlatformFile(name: attachment.transferName!, path: path, size: attachment.totalBytes ?? 0);
+        return PlatformFile(name: attachment.transferName ?? 'attachment', path: path, size: attachment.totalBytes ?? 0);
       } else {
         if (kIsWeb && attachment.bytes == null && attachment.guid != null && attachment.isDownloaded == true) {
           final guid = attachment.guid!;
@@ -158,7 +158,7 @@ class AttachmentsService extends GetxService {
             if (cached != null && cached.isNotEmpty) {
               attachment.bytes = cached;
               onComplete?.call(PlatformFile(
-                name: attachment.transferName!,
+                name: attachment.transferName ?? 'attachment',
                 path: path,
                 size: cached.length,
                 bytes: cached,
@@ -169,7 +169,7 @@ class AttachmentsService extends GetxService {
           }));
         }
         return PlatformFile(
-          name: attachment.transferName!,
+          name: attachment.transferName ?? 'attachment',
           path: path,
           size: attachment.totalBytes ?? 0,
           bytes: attachment.bytes,
@@ -198,7 +198,7 @@ class AttachmentsService extends GetxService {
         compatiblePath = convertedPath;
       }
 
-      return PlatformFile(name: attachment.transferName!, path: compatiblePath, size: attachment.totalBytes ?? 0);
+      return PlatformFile(name: attachment.transferName ?? 'attachment', path: compatiblePath, size: attachment.totalBytes ?? 0);
       // Check for existing download controller
     } else if (AttachmentDownloader.getController(attachment.guid) != null) {
       return AttachmentDownloader.getController(attachment.guid);
@@ -270,7 +270,7 @@ class AttachmentsService extends GetxService {
       // Web (deprecated) can only hand the browser one download per file.
       for (final attachment in list) {
         final file = await _resolveForSave(attachment);
-        if (file != null) await saveToDisk(file, isDocument: _isDocument(attachment));
+        if (file != null) await saveToDisk(file, isDocument: _isDocument(attachment), attachment: attachment);
       }
       return;
     }
@@ -458,12 +458,48 @@ class AttachmentsService extends GetxService {
     return savePath;
   }
 
-  Future<void> saveToDisk(PlatformFile file, {bool isAutoDownload = false, bool isDocument = false}) async {
+  Future<void> saveToDisk(
+    PlatformFile file, {
+    bool isAutoDownload = false,
+    bool isDocument = false,
+    Attachment? attachment,
+  }) async {
     if (kIsWeb) {
-      if (file.bytes == null || file.bytes!.isEmpty) {
+      var bytes = file.bytes;
+      final guid = attachment?.guid;
+      if ((bytes == null || bytes.isEmpty) && guid != null) {
+        try {
+          bytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, guid);
+        } catch (e, s) {
+          Logger.warn('WebMediaCache lookup failed during saveToDisk for $guid', error: e, trace: s);
+        }
+      }
+      if ((bytes == null || bytes.isEmpty) && guid != null && !guid.startsWith('temp')) {
+        try {
+          final response = await HttpSvc.attachment.download(guid, mimeType: attachment?.mimeType);
+          if (response.data is Uint8List) {
+            bytes = response.data as Uint8List;
+          } else if (response.data is List<int>) {
+            bytes = Uint8List.fromList(response.data as List<int>);
+          }
+          if (bytes != null && bytes.isNotEmpty) {
+            attachment?.bytes = bytes;
+            unawaited(WebMediaCache.instance.put(WebMediaCache.attachmentsStore, guid, bytes).catchError((e, s) {
+              Logger.warn('WebMediaCache put failed during saveToDisk for $guid', error: e, trace: s);
+            }));
+          }
+        } catch (e, s) {
+          Logger.warn('Server fetch failed during saveToDisk for $guid', error: e, trace: s);
+        }
+      }
+      if (bytes == null || bytes.isEmpty) {
         return showSnackbar('Error', 'That attachment has no data to save!', type: SnackbarType.error);
       }
-      downloadBytes(file.bytes!, file.name);
+      downloadBytes(
+        bytes,
+        file.name,
+        mimeType: attachment?.mimeType ?? 'application/octet-stream',
+      );
     } else if (kIsDesktop) {
       if (file.path == null && file.bytes == null) {
         return showSnackbar('Error', 'That attachment has no data to save!', type: SnackbarType.error);
@@ -524,7 +560,7 @@ class AttachmentsService extends GetxService {
   /// [requestStoragePermission] is for in-conversation downloads. The pin-grid
   /// preview path passes false so a list tile never pops a permission dialog.
   Future<bool> canAutoDownload({bool requestStoragePermission = true}) async {
-    if (requestStoragePermission) {
+    if (!kIsWeb && requestStoragePermission) {
       final canSave = (await Permission.storage.request()).isGranted;
       if (!canSave) return false;
     }
@@ -560,7 +596,13 @@ class AttachmentsService extends GetxService {
       Get.find<ConversationViewController>(tag: chatGuid).invalidateVideoPlayer(attachment.guid!);
     }
 
-    if (!kIsWeb) {
+    if (kIsWeb) {
+      try {
+        await WebMediaCache.instance.delete(WebMediaCache.attachmentsStore, attachment.guid!);
+      } catch (e, s) {
+        Logger.warn('Failed to delete cached web attachment ${attachment.guid}', error: e, trace: s);
+      }
+    } else {
       // Both conversion paths, since a file converted by an older build still
       // sits at the legacy `.png` location.
       final derived = {
@@ -656,7 +698,7 @@ class AttachmentsService extends GetxService {
   static const _thumbnailFilter =
       'thumbnail,scale=iw*sar:ih,setsar=1,scale=512:512:force_original_aspect_ratio=decrease';
 
-  static final _useSystemFfmpeg = Platform.isLinux && Platform.version.contains('linux_arm64');
+  static final _useSystemFfmpeg = !kIsWeb && Platform.isLinux && Platform.version.contains('linux_arm64');
 
   /// Generates (or reuses) a video thumbnail and returns the path to it on disk -- never loads
   /// the decoded thumbnail into memory as bytes, so callers must render it via [Image.file].

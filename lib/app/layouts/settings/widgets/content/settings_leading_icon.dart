@@ -1,4 +1,5 @@
 import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
+import 'package:bluebubbles/app/layouts/settings/widgets/content/settings_tile.dart';
 import 'package:bluebubbles/helpers/types/constants.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
@@ -24,33 +25,39 @@ class SettingsLeadingIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isActive = SettingsTile.isActiveOf(context);
+    final cs = context.theme.colorScheme;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Obx(() {
           if (SettingsSvc.settings.skin.value == Skins.Material) {
-            final accent = containerColor ?? context.theme.colorScheme.primary;
+            final fg = isActive ? cs.onPrimary : (containerColor ?? cs.primary);
+            final bg = isActive ? cs.onPrimary.withValues(alpha: 0.18) : fg.withValues(alpha: 0.15);
             return Container(
               width: boxSize ?? 40,
               height: boxSize ?? 40,
               decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.15),
+                color: bg,
                 borderRadius: const BorderRadius.all(Radius.circular(M3EShapes.md)),
               ),
               child: Center(
-                child: Icon(materialIcon, color: accent, size: iconSizeMaterial ?? 22),
+                child: Icon(materialIcon, color: fg, size: iconSizeMaterial ?? 22),
               ),
             );
           }
 
+          final accent = containerColor ?? cs.outline;
+          final boxColor = isActive ? cs.onPrimary.withValues(alpha: 0.22) : accent;
+          final iconColor = isActive ? cs.onPrimary : Colors.white;
           return Material(
             shape: SettingsSvc.settings.skin.value == Skins.Samsung
                 ? SquircleBorder(
-                    side: BorderSide(color: containerColor ?? context.theme.colorScheme.outline, width: 3.0),
+                    side: BorderSide(color: isActive ? cs.onPrimary : accent, width: 3.0),
                   )
                 : null,
             color: SettingsSvc.settings.skin.value != Skins.Material
-                ? containerColor ?? context.theme.colorScheme.outline
+                ? boxColor
                 : Colors.transparent,
             borderRadius: SettingsSvc.settings.skin.value == Skins.iOS ? BorderRadius.circular(6) : null,
             child: SizedBox(
@@ -59,9 +66,7 @@ class SettingsLeadingIcon extends StatelessWidget {
               child: Center(
                 child: Icon(
                   SettingsSvc.settings.skin.value == Skins.iOS ? iosIcon : materialIcon,
-                  color: SettingsSvc.settings.skin.value != Skins.Material
-                      ? Colors.white
-                      : context.theme.colorScheme.outline,
+                  color: SettingsSvc.settings.skin.value != Skins.Material ? iconColor : cs.outline,
                   size: SettingsSvc.settings.skin.value != Skins.Material ? iconSize ?? 21 : iconSizeMaterial ?? 28,
                 ),
               ),

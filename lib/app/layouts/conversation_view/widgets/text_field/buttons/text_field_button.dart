@@ -30,7 +30,7 @@ const Map<TextFieldButton, (bool, bool, bool, bool)> _buttonPlatformSupport = {
   TextFieldButton.Schedule: (false, true, true, true),
   TextFieldButton.Location: (false, true, false, true),
   TextFieldButton.Gif: (false, true, true, true),
-  TextFieldButton.Emoji: (false, false, false, false),
+  TextFieldButton.Emoji: (false, true, true, true),
 };
 
 const Map<TextFieldButton, String> _buttonToText = {

@@ -463,6 +463,7 @@ class StartupTasks {
     // Error handling is inside refreshServerDetails(); no need to catch here.
     Logger.info("Refreshing server details in background...");
     unawaited(SettingsSvc.refreshServerDetails());
+    unawaited(SettingsSvc.refreshIcloudProfile());
 
     // Only register FCM device on startup
     // Don't await. Let this happen in background
@@ -570,7 +571,9 @@ class StartupTasks {
             ? GetIt.I<IntentsService>().pendingOpenChatGuid
             : null;
         final redirectingAway = pendingGuid != null && pendingGuid != activeChat.chat.guid;
-        if (!redirectingAway) {
+        if ((lifecycle?.isForeground ?? true) &&
+            !redirectingAway &&
+            !(activeChat.controller?.showingSubRoute ?? false)) {
           ChatsSvc.setChatHasUnread(activeChat.chat, false);
         }
 

@@ -26,6 +26,8 @@ class FindMySharedTile extends StatelessWidget {
   final bool showLiveDotInRow;
   final VoidCallback? onTapRow;
   final VoidCallback? onLongPress;
+  final bool isPinned;
+  final VoidCallback? onTogglePin;
 
   const FindMySharedTile({
     super.key,
@@ -53,6 +55,8 @@ class FindMySharedTile extends StatelessWidget {
     required this.showLiveDotInRow,
     required this.onTapRow,
     required this.onLongPress,
+    this.isPinned = false,
+    this.onTogglePin,
   });
 
   @override
@@ -62,7 +66,7 @@ class FindMySharedTile extends StatelessWidget {
 
     if (isSelected) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
         child: Material(
           key: cardKey,
           color: cs.surfaceContainerHigh,
@@ -90,11 +94,21 @@ class FindMySharedTile extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              displayName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                                if (isPinned) ...[
+                                  const SizedBox(width: 5),
+                                  Icon(Icons.push_pin_rounded, size: 13, color: cs.primary),
+                                ],
+                              ],
                             ),
                             if (modelSubtitle != null) ...[
                               const SizedBox(height: 1),
@@ -158,7 +172,25 @@ class FindMySharedTile extends StatelessWidget {
                           ),
                         ),
                       ],
-                      const SizedBox(width: 8),
+                      if (onTogglePin != null) ...[
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 34,
+                          height: 34,
+                          child: IconButton.filledTonal(
+                            key: const ValueKey('findmy-inline-pin'),
+                            padding: EdgeInsets.zero,
+                            tooltip: isPinned ? 'Unpin' : 'Pin',
+                            onPressed: onTogglePin,
+                            icon: Icon(
+                              isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                              size: 17,
+                              color: isPinned ? cs.primary : null,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 6),
                       SizedBox(
                         width: 34,
                         height: 34,
@@ -206,13 +238,23 @@ class FindMySharedTile extends StatelessWidget {
 
     return ListTile(
       mouseCursor: MouseCursor.defer,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       leading: leadingCollapsed,
-      title: Text(
-        displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          if (isPinned) ...[
+            const SizedBox(width: 5),
+            Icon(Icons.push_pin_rounded, size: 13, color: cs.primary),
+          ],
+        ],
       ),
       subtitle: Text(
         rowSubtitle,

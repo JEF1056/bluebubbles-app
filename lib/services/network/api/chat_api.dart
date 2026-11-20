@@ -1,7 +1,10 @@
+import 'dart:typed_data';
+
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:bluebubbles/services/network/api/message_api.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:dio/dio.dart';
+import 'package:path/path.dart' show basename;
 
 class ChatApi {
   final BaseApi _svc;
@@ -266,11 +269,14 @@ class ChatApi {
   Future<Response> setIcon(
     String guid,
     String path, {
+    Uint8List? bytes,
     void Function(int, int)? onSendProgress,
     CancelToken? cancelToken,
   }) async {
     final formData = FormData.fromMap({
-      "icon": await MultipartFile.fromFile(path),
+      "icon": bytes != null
+          ? MultipartFile.fromBytes(bytes, filename: basename(path))
+          : await MultipartFile.fromFile(path),
     });
     return _svc.runApiGuarded(() async {
       final response = await _svc.dio.post(

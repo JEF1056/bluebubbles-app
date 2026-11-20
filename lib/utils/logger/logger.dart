@@ -64,8 +64,14 @@ class BaseLogger {
   }();
 
   LoggerFactory.LogOutput get defaultOutput {
-    List<LogOutput> outputs = kDebugMode ? [DebugConsoleOutput()] : [];
-    if (!kIsWeb) outputs.add(fileOutput);
+    List<LogOutput> outputs = [
+      if (kDebugMode)
+        DebugConsoleOutput()
+      else if (kIsWeb)
+        // Web has no file logger, so keep warnings/errors visible in DevTools.
+        DebugConsoleOutput(minLevel: LoggerFactory.Level.warning),
+      if (!kIsWeb) fileOutput,
+    ];
     return LoggerFactory.MultiOutput(outputs);
   }
 

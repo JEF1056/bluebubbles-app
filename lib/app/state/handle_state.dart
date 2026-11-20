@@ -2,7 +2,6 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:faker/faker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 
 /// State wrapper for [Handle] that provides granular reactivity for UI components.
@@ -90,7 +89,6 @@ class HandleState {
   // These operate on raw handle data only — no redaction logic.
 
   static String? _resolveAvatarPath(Handle h) {
-    if (kIsWeb) return null;
     // The server can return the same person twice (Contacts record and chat.db card), only one with a photo.
     return h.contactsV2.map((c) => c.avatarPath).nonNulls.firstOrNull;
   }

@@ -407,7 +407,7 @@ class ChatStatsController extends GetxController {
   Future<void> _resolveParticipants() async {
     final ids = await runAsync(() => ChatStatsQueries.participantIds(chat, _resolver));
     final resolved = <int, ParticipantInfo>{
-      kMeParticipantId: const ParticipantInfo(id: kMeParticipantId, displayName: 'You'),
+      kMeParticipantId: ParticipantInfo(id: kMeParticipantId, displayName: SettingsSvc.effectiveUserName),
     };
     for (final id in ids) {
       final handle = await runAsync(() => Database.handles.get(id));

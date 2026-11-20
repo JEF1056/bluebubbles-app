@@ -16,6 +16,12 @@ interface ChatDao {
     )
     fun getAllChats(): Flow<List<ChatEntity>>
 
+    @Query(
+        "SELECT * FROM chats " +
+            "ORDER BY isPinned DESC, CASE WHEN pinIndex IS NULL THEN 999999 ELSE pinIndex END ASC, lastMessageDate DESC"
+    )
+    suspend fun getAllChatsOnce(): List<ChatEntity>
+
     @Query("SELECT * FROM chats WHERE guid = :guid")
     suspend fun getChat(guid: String): ChatEntity?
 

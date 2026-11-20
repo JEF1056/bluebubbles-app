@@ -534,14 +534,18 @@ class ContactServiceV2 {
           if (!isNullOrEmpty(map['avatar'])) {
             try {
               final bytes = base64Decode(map['avatar'].toString());
-              final avatarsDir = Directory(FilesystemSvc.contactAvatarsPath);
-              if (!avatarsDir.existsSync()) avatarsDir.createSync(recursive: true);
-              // Sanitized — the ID comes from the server (macOS IDs look like
-              // `<uuid>:ABPerson`) and may carry characters that are reserved in a
-              // file name. Must match the naming in ContactV2Actions._saveContactAvatar.
-              final file = File('${avatarsDir.path}/${sanitizeFileName(c.nativeContactId)}.jpg');
-              await file.writeAsBytes(bytes);
-              c.avatarPath = file.path;
+              if (kIsWeb) {
+                c.avatarPath = await FilesystemSvc.saveWebContactAvatar(c.nativeContactId, bytes);
+              } else {
+                final avatarsDir = Directory(FilesystemSvc.contactAvatarsPath);
+                if (!avatarsDir.existsSync()) avatarsDir.createSync(recursive: true);
+                // Sanitized — the ID comes from the server (macOS IDs look like
+                // `<uuid>:ABPerson`) and may carry characters that are reserved in a
+                // file name. Must match the naming in ContactV2Actions._saveContactAvatar.
+                final file = File('${avatarsDir.path}/${sanitizeFileName(c.nativeContactId)}.jpg');
+                await file.writeAsBytes(bytes);
+                c.avatarPath = file.path;
+              }
             } catch (_) {}
           }
 

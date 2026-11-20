@@ -551,72 +551,74 @@ List<Widget> buildSettingItemList({
 
         // Notification Providers Tile. Desktop gets notifications over the socket and only uses Firebase to find
         // the server, so it goes straight to the Firebase page.
-        SearchableSettingItem(
-          title: kIsDesktop ? "Google Firebase" : "Notification Providers", // Title to search
-          searchTags: kIsDesktop
-              ? ["Google Firebase"]
-              : ["Google Firebase (FCM)", "Background Service", "Unified Push"], // Search tags
-          onTap: () async {
-            ns.pushAndRemoveSettingsUntil(
-              context,
-              kIsDesktop ? const FirebasePanel() : const NotificationProvidersPanel(),
-              (Route route) => route.isFirst,
-            );
-          }, // On tap to search
-          child: SettingsTile(
-            backgroundColor: tileColor,
+        if (!kIsWeb)
+          SearchableSettingItem(
+            title: kIsDesktop ? "Google Firebase" : "Notification Providers", // Title to search
+            searchTags: kIsDesktop
+                ? ["Google Firebase"]
+                : ["Google Firebase (FCM)", "Background Service", "Unified Push"], // Search tags
             onTap: () async {
               ns.pushAndRemoveSettingsUntil(
                 context,
                 kIsDesktop ? const FirebasePanel() : const NotificationProvidersPanel(),
                 (Route route) => route.isFirst,
               );
-            },
-            leading: kIsDesktop
-                ? const SettingsLeadingIcon(
-                    iosIcon: CupertinoIcons.cloud,
-                    materialIcon: Icons.cloud_outlined,
-                    containerColor: Colors.cyan,
-                  )
-                : const SettingsLeadingIcon(
-                    iosIcon: CupertinoIcons.bell,
-                    materialIcon: Icons.notifications,
-                    containerColor: Colors.cyan,
-                  ),
-            title: kIsDesktop ? "Google Firebase" : "Notification Providers",
-            activePage: kIsDesktop ? FirebasePanel : NotificationProvidersPanel,
-            trailing: const NextButton(),
+            }, // On tap to search
+            child: SettingsTile(
+              backgroundColor: tileColor,
+              onTap: () async {
+                ns.pushAndRemoveSettingsUntil(
+                  context,
+                  kIsDesktop ? const FirebasePanel() : const NotificationProvidersPanel(),
+                  (Route route) => route.isFirst,
+                );
+              },
+              leading: kIsDesktop
+                  ? const SettingsLeadingIcon(
+                      iosIcon: CupertinoIcons.cloud,
+                      materialIcon: Icons.cloud_outlined,
+                      containerColor: Colors.cyan,
+                    )
+                  : const SettingsLeadingIcon(
+                      iosIcon: CupertinoIcons.bell,
+                      materialIcon: Icons.notifications,
+                      containerColor: Colors.cyan,
+                    ),
+              title: kIsDesktop ? "Google Firebase" : "Notification Providers",
+              activePage: kIsDesktop ? FirebasePanel : NotificationProvidersPanel,
+              trailing: const NextButton(),
+            ),
           ),
-        ),
 
-        // Contacts Management Tile
-        SearchableSettingItem(
-          title: "Contacts Management",
-          searchTags: const [
-            "Contacts Permission",
-            "Refresh Contacts",
-            "Sync From Account",
-            "Contact Accounts",
-            "GrapheneOS",
-          ],
-          onTap: () {
-            ns.pushAndRemoveSettingsUntil(context, const ContactsManagementPanel(), (Route route) => route.isFirst);
-          },
-          child: SettingsTile(
-            backgroundColor: tileColor,
+        // Contacts Management Tile (Android-only permissions & account sync)
+        if (!kIsWeb)
+          SearchableSettingItem(
+            title: "Contacts Management",
+            searchTags: const [
+              "Contacts Permission",
+              "Refresh Contacts",
+              "Sync From Account",
+              "Contact Accounts",
+              "GrapheneOS",
+            ],
             onTap: () {
               ns.pushAndRemoveSettingsUntil(context, const ContactsManagementPanel(), (Route route) => route.isFirst);
             },
-            leading: const SettingsLeadingIcon(
-              iosIcon: CupertinoIcons.person_crop_circle_badge_checkmark,
-              materialIcon: Icons.contacts_rounded,
-              containerColor: Colors.green,
+            child: SettingsTile(
+              backgroundColor: tileColor,
+              onTap: () {
+                ns.pushAndRemoveSettingsUntil(context, const ContactsManagementPanel(), (Route route) => route.isFirst);
+              },
+              leading: const SettingsLeadingIcon(
+                iosIcon: CupertinoIcons.person_crop_circle_badge_checkmark,
+                materialIcon: Icons.contacts_rounded,
+                containerColor: Colors.green,
+              ),
+              title: "Contacts Management",
+              activePage: ContactsManagementPanel,
+              trailing: const NextButton(),
             ),
-            title: "Contacts Management",
-            activePage: ContactsManagementPanel,
-            trailing: const NextButton(),
           ),
-        ),
 
         // Storage Analyzer Tile
         SearchableSettingItem(

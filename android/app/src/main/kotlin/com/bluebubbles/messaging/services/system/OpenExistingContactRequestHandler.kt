@@ -20,7 +20,10 @@ class OpenExistingContactRequestHandler: MethodCallHandlerImpl() {
         result: MethodChannel.Result,
         context: Context
     ) {
-        val contactId: String = call.argument("id")!!
+        val contactId: String = call.argument<String>("id") ?: run {
+            result.error("400", "Missing contact id", null)
+            return
+        }
         // perform a manual lookup even though we have a contact ID because there is no guarantee the actual content URI will be based off the ID
         val cursor = ContentResolverCompat.query(
             context.contentResolver,
@@ -32,16 +35,21 @@ class OpenExistingContactRequestHandler: MethodCallHandlerImpl() {
             null as android.os.CancellationSignal?
         )
         if (cursor != null) {
-            cursor.moveToFirst()
-            val contactIdLong: Long = cursor.getLong(cursor.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
-            val lookupId: String = cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.Contacts.LOOKUP_KEY))
-            val uri = ContactsContract.Contacts.getLookupUri(contactIdLong, lookupId)
-            val intent = Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, ContactsContract.Contacts.CONTENT_ITEM_TYPE)
-                // Problem in Android 4.0+ (https://developer.android.com/training/contacts-provider/modify-data#add-the-navigation-flag)
-                .putExtra("finishActivityOnSaveCompleted", true)
-            context.startActivity(intent)
-            result.success(null)
+            cursor.use {
+                if (it.moveToFirst()) {
+                    val contactIdLong: Long = it.getLong(it.getColumnIndexOrThrow(ContactsContract.Contacts._ID))
+                    val lookupId: String = it.getString(it.getColumnIndexOrThrow(ContactsContract.Contacts.LOOKUP_KEY))
+                    val uri = ContactsContract.Contacts.getLookupUri(contactIdLong, lookupId)
+                    val intent = Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(uri, ContactsContract.Contacts.CONTENT_ITEM_TYPE)
+                        // Problem in Android 4.0+ (https://developer.android.com/training/contacts-provider/modify-data#add-the-navigation-flag)
+                        .putExtra("finishActivityOnSaveCompleted", true)
+                    context.startActivity(intent)
+                    result.success(null)
+                } else {
+                    result.error("404", "Failed to find contact!", null)
+                }
+            }
         } else {
             result.error("500", "Failed to find contact!", null)
         }

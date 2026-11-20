@@ -177,6 +177,7 @@ class NotificationsService {
   /// Returns false when the reminder couldn't be scheduled.
   Future<bool> createReminder(Chat? chat, Message? message, DateTime time,
       {String? chatTitle, String? messageText}) async {
+    if (kIsWeb) return false;
     final int id = Random().nextInt(_reminderIdRange) + _reminderIdBase;
     final String title = chatTitle ?? 'Reminder: ${chat!.getTitle()}';
     final String body = messageText ?? (hideContent ? "iMessage" : message!.getNotificationText());
@@ -243,17 +244,19 @@ class NotificationsService {
     final text = hideContent ? "iMessage" : message.getNotificationText();
     final isReaction = message.isReaction;
 
-    if (kIsWeb && webNotificationPermission == "granted") {
+    if (kIsWeb) {
+      if (webNotificationPermission != "granted") return;
       final chatIcon = await avatarAsBytes(chat: chat, quality: 256);
       await showWebNotificationEx(
         title: title,
         body: text,
-        icon: "data:image/png;base64,${base64Encode(chatIcon)}",
+        icon: chatIcon.isNotEmpty ? "data:image/png;base64,${base64Encode(chatIcon)}" : null,
         tag: message.guid,
         onClick: () async {
           await IntentsSvc.openChat(guid, isInitialIntent: false);
         },
       );
+      return;
     } else if (kIsDesktop) {
       // Avatar loading is deferred to _buildAndShowToast — don't load it here.
       _lock.synchronized(
@@ -418,13 +421,13 @@ class NotificationsService {
     // Set some notification defaults
     String title = caller;
     String text = "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
-    chatIcon ??= (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
 
-    if (kIsWeb && webNotificationPermission == "granted") {
+    if (kIsWeb) {
+      if (webNotificationPermission != "granted") return false;
       await showWebNotificationEx(
         title: title,
         body: text,
-        icon: "data:image/png;base64,${base64Encode(chatIcon)}",
+        icon: chatIcon != null && chatIcon.isNotEmpty ? "data:image/png;base64,${base64Encode(chatIcon)}" : null,
         tag: callUuid,
         onClick: callUuid != null
             ? () async {
@@ -433,15 +436,17 @@ class NotificationsService {
             : null,
       );
       return false;
-    } else if (kIsDesktop) {
+    }
+
+    chatIcon ??= (await rootBundle.load("assets/images/person64.png")).buffer.asUint8List();
+
+    if (kIsDesktop) {
       _lock.synchronized(() async => await showPersistentDesktopFaceTimeNotif(callUuid, caller, chatIcon, isAudio));
       return false;
     } else {
-      final numeric = callUuid?.numericOnly();
       return await MethodChannelSvc.actions.createIncomingFaceTimeNotification(
         channelId: FACETIME_CHANNEL,
-        notificationId:
-            numeric != null ? int.parse(numeric.substring(0, min(8, numeric.length))) : Random().nextInt(9998) + 1,
+        notificationId: faceTimeNotificationId(callUuid),
         title: title,
         body: text,
         callerAvatar: chatIcon,
@@ -453,6 +458,18 @@ class NotificationsService {
     }
   }
 
+  @visibleForTesting
+  static int faceTimeNotificationId(String? callUuid) {
+    final numeric = callUuid?.numericOnly();
+    if (numeric != null && numeric.isNotEmpty) {
+      return int.tryParse(numeric.substring(0, min(8, numeric.length))) ?? (callUuid!.hashCode & 0x7fffffff);
+    }
+    if (callUuid != null) {
+      return callUuid.hashCode & 0x7fffffff;
+    }
+    return Random().nextInt(9998) + 1;
+  }
+
   Future<void> clearFaceTimeNotification(String callUuid) async {
     if (kIsDesktop) {
       await clearDesktopFaceTimeNotif(callUuid);
@@ -460,9 +477,8 @@ class NotificationsService {
       if (Platform.isAndroid) {
         await MethodChannelSvc.actions.endFaceTimeCall(callUuid: callUuid);
       }
-      final numeric = callUuid.numericOnly();
-      MethodChannelSvc.actions.deleteNotification(
-        notificationId: int.parse(numeric.substring(0, min(8, numeric.length))),
+      await MethodChannelSvc.actions.deleteNotification(
+        notificationId: faceTimeNotificationId(callUuid),
         tag: NEW_FACETIME_TAG,
         callUuid: callUuid,
       );
@@ -543,7 +559,8 @@ class NotificationsService {
     oldTimer?.cancel();
     debounceTimers[guid] = Timer(
       const Duration(milliseconds: 300),
-      () async => await _buildAndShowToast(chat, title, message),
+      // Serialize against clearDesktopNotificationsForChat across the await points inside _buildAndShowToast.
+      () async => await _lock.synchronized(() => _buildAndShowToast(chat, title, message)),
     );
   }
 
@@ -705,6 +722,9 @@ class NotificationsService {
 
     _cleanNotificationState(data.chatGuid);
     if (interaction.reply != null) {
+      if (chat.hasUnreadMessage == true) {
+        unawaited(ChatsSvc.setChatHasUnread(chat, false, privateMark: true));
+      }
       final Message reply = Message(
         dateCreated: DateTime.now(),
         handleId: 0,
@@ -778,6 +798,7 @@ class NotificationsService {
   }
 
   Future<void> createAliasesRemovedNotification(List<String> aliases) async {
+    if (kIsWeb) return;
     const title = "iMessage alias deregistered!";
     const notifId = -3;
     final text = aliases.length == 1
@@ -830,6 +851,7 @@ class NotificationsService {
   }
 
   Future<void> createFailedToSend(Chat chat, {bool scheduled = false}) async {
+    if (kIsWeb) return;
     final title = 'Failed to send${scheduled ? " scheduled" : ""} message';
     final subtitle = scheduled ? 'Tap to open scheduled messages list' : 'Tap to see more details or retry';
     if (kIsDesktop) {
@@ -882,6 +904,7 @@ class NotificationsService {
   }
 
   Future<void> clearFailedToSend(int id) async {
+    if (kIsWeb) return;
     if (kIsDesktop) {
       final int? toastId = failedToast;
       failedToast = null;

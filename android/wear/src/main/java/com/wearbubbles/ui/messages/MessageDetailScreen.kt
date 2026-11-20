@@ -56,7 +56,6 @@ import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -71,11 +70,13 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -87,6 +88,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
@@ -94,10 +99,9 @@ import androidx.wear.compose.material.ListHeader
 import androidx.wear.compose.material.Text
 import androidx.wear.input.RemoteInputIntentHelper
 import androidx.wear.input.wearableExtender
+import coil.Coil
 import coil.ImageLoader
 import coil.compose.SubcomposeAsyncImage
-import coil.decode.GifDecoder
-import coil.decode.ImageDecoderDecoder
 import coil.request.ImageRequest
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
@@ -161,26 +165,36 @@ fun MessageDetailScreen(
         (screenWidthDp * 0.78f).coerceIn(136f, 180f).dp
     }
 
+    val layoutDirection = LocalLayoutDirection.current
+    val baseColumnPadding = ScalingLazyColumnDefaults.padding(
+        first = ScalingLazyColumnDefaults.ItemType.Text,
+        last = ScalingLazyColumnDefaults.ItemType.MultiButton
+    )
     val columnState = rememberResponsiveColumnState(
-        contentPadding = ScalingLazyColumnDefaults.padding(
-            first = ScalingLazyColumnDefaults.ItemType.Text,
-            last = ScalingLazyColumnDefaults.ItemType.MultiButton
-        ),
+        contentPadding = {
+            val base = baseColumnPadding()
+            PaddingValues(
+                start = base.calculateLeftPadding(layoutDirection),
+                top = base.calculateTopPadding(),
+                end = base.calculateRightPadding(layoutDirection),
+                bottom = base.calculateBottomPadding() + 24.dp
+            )
+        },
         verticalArrangement = Arrangement.spacedBy(0.dp)
     )
 
-    val chatTitle by viewModel.chatTitle.collectAsState()
-    val participants by viewModel.participants.collectAsState()
-    val messages by viewModel.messages.collectAsState()
-    val isSending by viewModel.isSending.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val isLoadingMore by viewModel.isLoadingMore.collectAsState()
-    val isTyping by viewModel.isTyping.collectAsState()
-    val isRecordingVoiceMemo by viewModel.isRecording.collectAsState()
-    val recordingSeconds by viewModel.recordingSeconds.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val chatTitle by viewModel.chatTitle.collectAsStateWithLifecycle()
+    val participants by viewModel.participants.collectAsStateWithLifecycle()
+    val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val isSending by viewModel.isSending.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val isLoadingMore by viewModel.isLoadingMore.collectAsStateWithLifecycle()
+    val isTyping by viewModel.isTyping.collectAsStateWithLifecycle()
+    val isRecordingVoiceMemo by viewModel.isRecording.collectAsStateWithLifecycle()
+    val recordingSeconds by viewModel.recordingSeconds.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
     val sendFailedCount = remember(messages) { messages.count { it.sendFailed } }
-    val playingMessageGuid by viewModel.playingMessageGuid.collectAsState()
+    val playingMessageGuid by viewModel.playingMessageGuid.collectAsStateWithLifecycle()
 
     val grouping = remember(messages) {
         computeBubbleGrouping(
@@ -189,17 +203,7 @@ fun MessageDetailScreen(
         )
     }
 
-    val imageLoader = remember(context) {
-        ImageLoader.Builder(context)
-            .components {
-                add(ImageDecoderDecoder.Factory())
-                add(GifDecoder.Factory())
-            }
-            .build()
-    }
-    DisposableEffect(imageLoader) {
-        onDispose { imageLoader.shutdown() }
-    }
+    val imageLoader = remember(context) { Coil.imageLoader(context) }
 
     var reactionTargetMsg by remember { mutableStateOf<MessageUi?>(null) }
     var failedActionMsg by remember { mutableStateOf<MessageUi?>(null) }
@@ -215,6 +219,17 @@ fun MessageDetailScreen(
 
     LaunchedEffect(chatGuid) {
         viewModel.init(chatGuid)
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, chatGuid) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.onScreenResumed()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Only auto-scroll when the thread first populates or a new message arrives at the bottom;
@@ -296,11 +311,28 @@ fun MessageDetailScreen(
         return
     }
 
+    LaunchedEffect(columnState.state) {
+        snapshotFlow { columnState.state.isScrollInProgress }
+            .collect { scrolling ->
+                if (scrolling) {
+                    viewModel.onUserInteraction()
+                }
+            }
+    }
+
     ScreenScaffold(
         scrollState = columnState,
         modifier = Modifier
             .fillMaxSize()
             .background(palette.canvas)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent(PointerEventPass.Initial)
+                        viewModel.onUserInteraction()
+                    }
+                }
+            }
     ) {
         ScalingLazyColumn(
             columnState = columnState,
@@ -362,11 +394,15 @@ fun MessageDetailScreen(
                     },
                     onFailedClick = { failedActionMsg = msg },
                     onImageClick = {
-                        fullscreenImage = ViewerImageSource(
-                            localPath = msg.localAttachmentPath,
-                            remoteUrl = msg.attachmentUrl,
-                            headers = msg.customHeaders
-                        )
+                        if (msg.localAttachmentPath == null && msg.attachmentUrl == null) {
+                            viewModel.retryAttachment(msg.attachmentGuid)
+                        } else {
+                            fullscreenImage = ViewerImageSource(
+                                localPath = msg.localAttachmentPath,
+                                remoteUrl = msg.attachmentUrl,
+                                headers = msg.customHeaders
+                            )
+                        }
                     },
                     onPlayAudioClick = { viewModel.toggleAudioPlayback(msg) }
                 )
@@ -820,7 +856,10 @@ private fun VoiceRecordingBar(
 private fun TypingIndicatorBubble() {
     val palette = LocalWearPalette.current
     val reducedMotion = rememberReducedMotion()
-    val alphas = if (reducedMotion) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    val animateTyping = !reducedMotion && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+    val alphas = if (!animateTyping) {
         listOf(0.7f, 0.7f, 0.7f)
     } else {
         val transition = rememberInfiniteTransition(label = "typing")
@@ -1035,7 +1074,7 @@ internal fun TapbackPickerOverlay(
     onSelect: (TapbackType) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val tapbacks = TapbackType.entries
+    val tapbacks = TapbackType.pickerEntries
 
     WearModalScaffold(
         showDialog = showDialog,
@@ -1147,6 +1186,30 @@ private fun MessageBubble(
     val palette = LocalWearPalette.current
     val alignment = if (message.isFromMe) Alignment.CenterEnd else Alignment.CenterStart
     val bubbleShape = remember(meta.corners) { meta.corners.toShape() }
+    var showExpandedDetail by remember(message.guid) { mutableStateOf(false) }
+    val detailStatus = remember(
+        message.isFromMe,
+        message.sendFailed,
+        message.guid,
+        message.dateCreated,
+        message.dateDelivered,
+        message.dateRead,
+        message.isLatestOutgoing,
+        message.isLastReadOutgoing,
+        message.isLatestIncoming
+    ) {
+        resolveMessageDetailStatus(
+            isFromMe = message.isFromMe,
+            sendFailed = message.sendFailed,
+            isPending = MessageDao.isTempPlaceholderGuid(message.guid),
+            dateCreated = message.dateCreated,
+            dateDelivered = message.dateDelivered,
+            dateRead = message.dateRead,
+            isLatestOutgoing = message.isLatestOutgoing,
+            isLastReadOutgoing = message.isLastReadOutgoing,
+            isLatestIncoming = message.isLatestIncoming
+        )
+    }
 
     val bubbleColor = when {
         message.sendFailed -> ErrorContainer
@@ -1161,7 +1224,7 @@ private fun MessageBubble(
     val isImageAttachment = message.attachmentMimeType?.startsWith("image/") == true
     val isAudioAttachment = message.attachmentMimeType?.startsWith("audio/") == true
     val imageModelData: Any? = remember(message.localAttachmentPath, message.attachmentUrl) {
-        message.localAttachmentPath?.let { File(it) }?.takeIf { it.exists() } ?: message.attachmentUrl
+        message.localAttachmentPath?.let(::File) ?: message.attachmentUrl
     }
 
     val topGap = when {
@@ -1212,6 +1275,7 @@ private fun MessageBubble(
             Column(
                 horizontalAlignment = if (message.isFromMe) Alignment.End else Alignment.Start
             ) {
+                val hasImagePreview = isImageAttachment && (imageModelData != null || !message.attachmentGuid.isNullOrBlank())
                 if (isImageAttachment && imageModelData != null) {
                     val reqBuilder = ImageRequest.Builder(context)
                         .data(imageModelData)
@@ -1270,10 +1334,61 @@ private fun MessageBubble(
                                 onLongClick = onLongPress
                             )
                     )
+                } else if (hasImagePreview) {
+                    if (message.isAttachmentLoading) {
+                        Box(
+                            modifier = Modifier
+                                .size(116.dp)
+                                .clip(bubbleShape)
+                                .background(palette.surfaceContainer)
+                                .combinedClickable(
+                                    onClick = { if (message.sendFailed) onFailedClick() },
+                                    onLongClick = onLongPress
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                indicatorColor = palette.primary
+                            )
+                        }
+                    } else {
+                        val chipLabel = when {
+                            message.isAttachmentFetchFailed -> "Retry photo"
+                            !message.isPhoneConnected -> "Offline"
+                            else -> "Tap to load"
+                        }
+                        Row(
+                            modifier = Modifier
+                                .clip(bubbleShape)
+                                .background(palette.surfaceContainer)
+                                .combinedClickable(
+                                    role = Role.Button,
+                                    onClick = if (message.sendFailed) onFailedClick else onImageClick,
+                                    onLongClick = onLongPress
+                                )
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Refresh,
+                                contentDescription = chipLabel,
+                                tint = palette.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = chipLabel,
+                                style = centeredTextStyle(12.sp, 15.sp),
+                                color = palette.onSurface
+                            )
+                        }
+                    }
                 }
 
                 if (isAudioAttachment) {
-                    if (isImageAttachment && imageModelData != null) {
+                    if (hasImagePreview) {
                         Spacer(modifier = Modifier.height(3.dp))
                     }
                     Row(
@@ -1334,7 +1449,7 @@ private fun MessageBubble(
                     } else null
 
                 if (displayText != null) {
-                    if ((isImageAttachment && imageModelData != null) || isAudioAttachment) {
+                    if (hasImagePreview || isAudioAttachment) {
                         Spacer(modifier = Modifier.height(3.dp))
                     }
                     Box(
@@ -1343,7 +1458,14 @@ private fun MessageBubble(
                             .clip(bubbleShape)
                             .background(bubbleColor)
                             .combinedClickable(
-                                onClick = { if (message.sendFailed) onFailedClick() },
+                                onClick = {
+                                    when {
+                                        message.sendFailed -> onFailedClick()
+                                        detailStatus != null && !detailStatus.showAlways -> {
+                                            showExpandedDetail = !showExpandedDetail
+                                        }
+                                    }
+                                },
                                 onLongClick = onLongPress
                             )
                             .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -1374,7 +1496,7 @@ private fun MessageBubble(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = badge.type.emoji,
+                                    text = badge.displayEmoji,
                                     style = centeredTextStyle(11.sp, 13.sp),
                                     textAlign = TextAlign.Center
                                 )
@@ -1393,7 +1515,7 @@ private fun MessageBubble(
             }
         }
 
-        if (message.sendFailed) {
+        if (detailStatus != null && detailStatus.kind == MessageDetailKind.FAILED) {
             Row(
                 modifier = Modifier
                     .padding(end = 2.dp, top = 2.dp)
@@ -1410,36 +1532,36 @@ private fun MessageBubble(
                     modifier = Modifier.size(12.dp)
                 )
                 Text(
-                    text = "Not sent · Tap",
+                    text = detailStatus.label,
                     style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
                     color = ErrorColor
                 )
             }
-        } else if (message.isLatestOutgoing) {
-            val timeStr = remember(message.dateCreated) {
-                formatReceiptTime(message.dateCreated)
+        } else if (detailStatus != null && (detailStatus.showAlways || showExpandedDetail)) {
+            val detailColor = if (detailStatus.kind == MessageDetailKind.READ && message.isLatestOutgoing) {
+                palette.onSurface.copy(alpha = 0.88f)
+            } else {
+                palette.subtleText
             }
             Row(
-                modifier = Modifier.padding(end = 6.dp, top = 4.dp),
+                modifier = Modifier.padding(
+                    start = if (message.isFromMe) 0.dp else 10.dp,
+                    end = if (message.isFromMe) 6.dp else 0.dp,
+                    top = 4.dp
+                ),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                when {
-                    message.guid.startsWith("temp-") -> {
-                        Text(
-                            text = "Sending...",
-                            style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                            color = palette.subtleText
-                        )
-                    }
-                    message.dateRead > 0L -> {
-                        if (timeStr.isNotBlank()) {
-                            Text(
-                                text = "$timeStr ·",
-                                style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                                color = palette.onSurface
-                            )
-                        }
+                Text(
+                    text = detailStatus.label,
+                    style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
+                    color = detailColor,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = if (message.isFromMe) TextAlign.End else TextAlign.Start
+                )
+                when (detailStatus.kind) {
+                    MessageDetailKind.READ -> {
                         Box(
                             modifier = Modifier
                                 .size(15.dp)
@@ -1455,14 +1577,7 @@ private fun MessageBubble(
                             )
                         }
                     }
-                    message.dateDelivered > 0L -> {
-                        if (timeStr.isNotBlank()) {
-                            Text(
-                                text = "$timeStr ·",
-                                style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                                color = palette.subtleText
-                            )
-                        }
+                    MessageDetailKind.DELIVERED -> {
                         Icon(
                             imageVector = Icons.Rounded.Done,
                             contentDescription = "Delivered",
@@ -1470,13 +1585,7 @@ private fun MessageBubble(
                             modifier = Modifier.size(13.dp)
                         )
                     }
-                    timeStr.isNotBlank() -> {
-                        Text(
-                            text = timeStr,
-                            style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                            color = palette.subtleText
-                        )
-                    }
+                    else -> {}
                 }
             }
         }
@@ -1496,7 +1605,7 @@ private fun FullscreenImageViewer(
     var offsetY by remember { mutableFloatStateOf(0f) }
 
     val modelData: Any? = remember(source.localPath, source.remoteUrl) {
-        source.localPath?.let { File(it) }?.takeIf { it.exists() } ?: source.remoteUrl
+        source.localPath?.let(::File) ?: source.remoteUrl
     }
     val reqBuilder = ImageRequest.Builder(context)
         .data(modelData)

@@ -5,6 +5,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -16,7 +20,6 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.dto.TapbackType
 import com.wearbubbles.api.dto.TapbackUtils
 import com.wearbubbles.data.ContactRepository
-import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.CallNotificationHelper
@@ -27,8 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 class MessageListenerService : Service() {
 
@@ -48,6 +51,13 @@ class MessageListenerService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var eventJob: Job? = null
     private var connectJob: Job? = null
+    private var hapticJob: Job? = null
+    private var relayJob: Job? = null
+    @Volatile
+    private var hapticEnabled: Boolean = true
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val validatedNetworks = ConcurrentHashMap.newKeySet<Network>()
 
     override fun onCreate() {
         super.onCreate()
@@ -99,12 +109,30 @@ class MessageListenerService : Service() {
     }
 
     private fun startListening() {
+        connectJob?.cancel()
+        eventJob?.cancel()
+        hapticJob?.cancel()
+        relayJob?.cancel()
         val app = applicationContext as WearBubblesApp
         val settings = SettingsDataStore(this)
         val db = AppDatabase.getInstance(this)
         val relay = app.phoneRelayClient
         val contactRepo = ContactRepository(this, db.contactDao(), settings, relay)
-        val messageRepo = MessageRepository(db.messageDao(), db.chatDao(), settings, relay)
+
+        hapticJob = scope.launch {
+            settings.hapticEnabled.collect { hapticEnabled = it }
+        }
+
+        relayJob = scope.launch {
+            relay.isPhoneConnected.collect { connected ->
+                if (connected) {
+                    app.socketManager.disconnect()
+                    stopSelf()
+                }
+            }
+        }
+
+        registerNetworkCallback(app, relay)
 
         connectJob = scope.launch {
             if (relay.refreshPhoneConnected()) {
@@ -129,8 +157,6 @@ class MessageListenerService : Service() {
                 when (event) {
                     is SocketEvent.NewMessage -> {
                         val msg = event.message
-                        messageRepo.handleIncomingSocketMessage(msg)
-
                         val chatGuid = msg.chats?.firstOrNull()?.guid ?: return@collect
                         if (!msg.isFromMe && !TapbackUtils.isTapbackCode(msg.associatedMessageType)) {
                             val chat = db.chatDao().getChat(chatGuid)
@@ -151,7 +177,6 @@ class MessageListenerService : Service() {
                                     }
                                 } ?: "New message"
 
-                            val haptic = settings.hapticEnabled.first()
                             NotificationHelper.showMessageNotification(
                                 context = this@MessageListenerService,
                                 chatGuid = chatGuid,
@@ -159,7 +184,7 @@ class MessageListenerService : Service() {
                                 messageText = bodyText,
                                 isGroup = chat?.isGroup ?: false,
                                 groupTitle = chat?.displayName,
-                                hapticEnabled = haptic,
+                                hapticEnabled = hapticEnabled,
                                 timestamp = msg.dateCreated,
                                 senderAddress = senderAddr,
                                 senderAvatarPath = senderAvatar,
@@ -168,13 +193,17 @@ class MessageListenerService : Service() {
                                 attachmentMimeType = firstAttachment?.mimeType
                             )
                         } else if (!msg.isFromMe && TapbackUtils.isTapbackCode(msg.associatedMessageType)) {
-                            val reactionLabel = TapbackType.fromAddCode(msg.associatedMessageType)?.label
+                            val tapback = TapbackType.fromAddCode(msg.associatedMessageType)
+                            val reactionLabel = if (tapback == TapbackType.EMOJI && !msg.associatedMessageEmoji.isNullOrBlank()) {
+                                "Reacted ${msg.associatedMessageEmoji} to"
+                            } else {
+                                tapback?.label
+                            }
                             if (reactionLabel != null) {
                                 val chat = db.chatDao().getChat(chatGuid)
                                 val senderAddr = msg.handle?.address ?: chat?.chatIdentifier ?: "Someone"
                                 val senderName = contactRepo.resolveDisplayName(senderAddr)
                                 val senderAvatar = contactRepo.resolveAvatarPath(senderAddr)
-                                val haptic = settings.hapticEnabled.first()
                                 NotificationHelper.showMessageNotification(
                                     context = this@MessageListenerService,
                                     chatGuid = chatGuid,
@@ -182,7 +211,7 @@ class MessageListenerService : Service() {
                                     messageText = "$reactionLabel a message",
                                     isGroup = chat?.isGroup ?: false,
                                     groupTitle = chat?.displayName,
-                                    hapticEnabled = haptic,
+                                    hapticEnabled = hapticEnabled,
                                     timestamp = msg.dateCreated,
                                     senderAddress = senderAddr,
                                     senderAvatarPath = senderAvatar,
@@ -192,9 +221,7 @@ class MessageListenerService : Service() {
                         }
                     }
 
-                    is SocketEvent.UpdatedMessage -> {
-                        messageRepo.handleIncomingSocketMessage(event.message)
-                    }
+                    is SocketEvent.UpdatedMessage -> {}
 
                     is SocketEvent.IncomingFaceTime -> {
                         val resolvedName = if (event.callerAddress.isNotBlank()) {
@@ -223,14 +250,67 @@ class MessageListenerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val app = applicationContext as WearBubblesApp
+        if (connectJob?.isActive != true && !app.socketManager.isConnected.value) {
+            startListening()
+        }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun registerNetworkCallback(app: WearBubblesApp, relay: com.wearbubbles.relay.PhoneRelayClient) {
+        if (networkCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        connectivityManager = cm
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                val hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                if (hasInternet) {
+                    val wasEmpty = validatedNetworks.isEmpty()
+                    validatedNetworks.add(network)
+                    if (wasEmpty && !relay.isPhoneConnected.value) {
+                        app.socketManager.reconnectIfConfigured()
+                    }
+                } else {
+                    validatedNetworks.remove(network)
+                    if (validatedNetworks.isEmpty()) {
+                        app.socketManager.disconnect()
+                    }
+                }
+            }
+
+            override fun onLost(network: Network) {
+                validatedNetworks.remove(network)
+                if (validatedNetworks.isEmpty()) {
+                    app.socketManager.disconnect()
+                }
+            }
+        }
+        networkCallback = callback
+        try {
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            cm.registerNetworkCallback(request, callback)
+        } catch (_: Exception) {
+            networkCallback = null
+        }
+    }
+
     override fun onDestroy() {
+        networkCallback?.let { cb ->
+            try {
+                connectivityManager?.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {
+            }
+        }
+        networkCallback = null
         eventJob?.cancel()
         connectJob?.cancel()
+        hapticJob?.cancel()
+        relayJob?.cancel()
         scope.cancel()
         super.onDestroy()
     }

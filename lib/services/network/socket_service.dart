@@ -449,8 +449,8 @@ class SocketService {
   void resumeConnection() {
     _setConnectionDesired(true);
     _cancelUrlDiscovery();
-    // No connectivity events arrive while backgrounded.
-    _networkAvailable = true;
+    // Reset so _checkConnectivity takes the immediate startSocket() path when online.
+    _networkAvailable = false;
     _checkConnectivity();
   }
 
@@ -724,11 +724,13 @@ class SocketService {
           if (authFailed.value) unawaited(_clearAuthFailureIfAccepted());
         }
       case SocketState.reconnecting:
+        _stopHeartbeat();
         if (stateChanged) {
           Logger.info("Reconnecting to socket at $serverAddress");
           state.value = SocketState.reconnecting;
         }
       case SocketState.disconnected:
+        _stopHeartbeat();
         if (stateChanged) {
           Logger.info("Disconnected from socket at $serverAddress");
           state.value = SocketState.disconnected;
@@ -746,6 +748,7 @@ class SocketService {
           state.value = SocketState.connecting;
         }
       case SocketState.error:
+        _stopHeartbeat();
         if (data is SocketException) {
           handleSocketException(data);
         } else {

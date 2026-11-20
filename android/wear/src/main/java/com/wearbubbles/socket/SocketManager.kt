@@ -85,7 +85,7 @@ class SocketManager {
                 .setReconnection(true)
                 .setReconnectionAttempts(Int.MAX_VALUE)
                 .setReconnectionDelay(2000)
-                .setReconnectionDelayMax(30000)
+                .setReconnectionDelayMax(120_000)
                 .setTimeout(15000)
                 .setExtraHeaders(extraHeaders)
                 .build()
@@ -216,6 +216,13 @@ class SocketManager {
             null
         }
         else -> null
+    }
+
+    @Synchronized
+    fun reconnectIfConfigured() {
+        if (currentUrl.isNotBlank() && currentPassword.isNotBlank() && socket?.connected() != true) {
+            connect(currentUrl, currentPassword, currentHeaders)
+        }
     }
 
     @Synchronized

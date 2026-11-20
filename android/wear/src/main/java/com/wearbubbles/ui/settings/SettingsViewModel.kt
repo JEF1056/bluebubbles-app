@@ -7,6 +7,7 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.service.MessageListenerService
+import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -66,7 +67,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun syncFromPhone() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSyncing = true)
-            if (relay.refreshPhoneConnected()) {
+            if (relay.refreshPhoneConnected(force = true)) {
                 relay.requestCredentials()
                 relay.requestChatsSync()
                 relay.requestContactsSync()
@@ -78,6 +79,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun resetSetup() {
         viewModelScope.launch {
             app.socketManager.disconnect()
+            MessageSyncWorker.cancel(getApplication())
             MessageListenerService.stop(getApplication())
             settings.clearAll()
             withContext(Dispatchers.IO) {

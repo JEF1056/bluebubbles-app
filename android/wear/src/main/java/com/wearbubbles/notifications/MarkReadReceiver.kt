@@ -26,14 +26,17 @@ class MarkReadReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 withTimeout(5_000L) {
-                    if (intent.action == NotificationHelper.ACTION_DISMISS) {
-                        if (relay.refreshPhoneConnected()) {
-                            relay.sendDismissNotificationAwait(chatGuid)
+                    when (intent.action) {
+                        NotificationHelper.ACTION_DISMISS -> {
+                            if (relay.refreshPhoneConnected()) {
+                                relay.sendDismissNotificationAwait(chatGuid)
+                            }
                         }
-                    } else {
-                        val db = AppDatabase.getInstance(context)
-                        val chatRepo = ChatRepository(db.chatDao(), SettingsDataStore(context), relay)
-                        chatRepo.markChatRead(chatGuid)
+                        NotificationHelper.ACTION_MARK_READ -> {
+                            val db = AppDatabase.getInstance(context)
+                            val chatRepo = ChatRepository(db.chatDao(), SettingsDataStore(context), relay)
+                            chatRepo.markChatRead(chatGuid)
+                        }
                     }
                 }
             } catch (e: Exception) {

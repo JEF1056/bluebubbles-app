@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/address_picker.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/setup/pages/sync/server_credentials.dart';
@@ -156,6 +158,17 @@ void main() {
         Uri(scheme: 'tel', path: '+15551234567'),
         Uri(scheme: 'mailto', path: 'alice@example.com'),
       ]);
+    });
+  });
+
+  group('Cloudflare Pages web/_headers', () {
+    test('allows cross-origin map tile referrer and disables stale caching for deferred JS parts', () {
+      final file = File('web/_headers');
+      expect(file.existsSync(), isTrue);
+      final contents = file.readAsStringSync();
+      expect(contents, contains('Referrer-Policy: strict-origin-when-cross-origin'));
+      expect(contents, isNot(contains('Referrer-Policy: no-referrer')));
+      expect(contents, contains('/main.dart.js_*.part.js\n  Cache-Control: no-cache'));
     });
   });
 }

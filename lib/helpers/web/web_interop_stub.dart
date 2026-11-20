@@ -8,11 +8,15 @@ void downloadBytes(
 
 String createObjectUrlFromBytes(Uint8List bytes) => '';
 
+void suppressBrowserContextMenu() {}
+
 Future<void> preventNextContextMenu() async {}
 
 void suppressBrowserFindShortcut() {}
 
 bool get isWebDocumentHidden => false;
+
+bool get isWebDocumentFocused => true;
 
 String get webNotificationPermission => 'denied';
 

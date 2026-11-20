@@ -172,13 +172,14 @@ class SyncSettings extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 CupertinoIcons.cloud_download,
-                color: Colors.white,
+                color: context.theme.colorScheme.onPrimary,
               ),
               const SizedBox(width: 10),
               Text("Start Sync",
-                  style: context.theme.textTheme.bodyLarge!.apply(fontSizeFactor: 1.1, color: Colors.white)),
+                  style: context.theme.textTheme.bodyLarge!
+                      .apply(fontSizeFactor: 1.1, color: context.theme.colorScheme.onPrimary)),
             ],
           ),
         ),

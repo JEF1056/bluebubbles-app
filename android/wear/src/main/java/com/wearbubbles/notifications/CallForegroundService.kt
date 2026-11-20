@@ -33,8 +33,9 @@ class CallForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = pendingNotification
-            ?: CallNotificationHelper.buildFallbackOngoingCallNotification(this)
+        val notif = pendingNotification
+        pendingNotification = null
+        val notification = notif ?: CallNotificationHelper.buildFallbackOngoingCallNotification(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(
                 NotificationHelper.CALL_NOTIFICATION_ID,
@@ -43,6 +44,10 @@ class CallForegroundService : Service() {
             )
         } else {
             startForeground(NotificationHelper.CALL_NOTIFICATION_ID, notification)
+        }
+        if (notif == null && CallNotificationHelper.activeCallState.value == null) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
         return START_NOT_STICKY
     }

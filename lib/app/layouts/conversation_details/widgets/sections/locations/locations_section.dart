@@ -8,7 +8,6 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/intera
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:get/get.dart';
@@ -98,8 +97,10 @@ class _LocationsSectionState extends State<LocationsSection> {
         child: Center(
           child: UrlPreview(
             data: UrlPreviewData(
-              title:
-                  "Location from ${DateFormat.yMd().format(_displayedLocations[index].message.target!.dateCreated!)}",
+              title: () {
+                final date = _displayedLocations[index].message.target?.dateCreated;
+                return date != null ? "Location from ${DateFormat.yMd().format(date)}" : "Shared Location";
+              }(),
               siteName: "Tap to open",
             ),
             file: AttachmentsSvc.getContent(_displayedLocations[index]),
@@ -111,10 +112,6 @@ class _LocationsSectionState extends State<LocationsSection> {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-
     final hideWhenEmpty = !widget.fullPage && !widget.isLoading && _displayedLocations.isEmpty;
 
     return SliverMainAxisGroup(

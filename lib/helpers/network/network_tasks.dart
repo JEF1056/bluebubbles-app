@@ -50,6 +50,8 @@ class NetworkTasks {
       unawaited(ContactsSvcV2.syncContactsToHandles(wait: false));
     }
 
+    unawaited(SettingsSvc.refreshIcloudProfile());
+
     // When we re-connect, try an incremental sync. The sync's cooldown keeps it from running several times in quick
     // succession. Without pushes this one is a catch-up: a sync that started before the socket connected (the one on
     // resume) may have missed what reached the server in between, so it runs once the cooldown is over instead of

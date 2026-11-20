@@ -12,6 +12,7 @@ import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -125,28 +126,40 @@ class _ConversationAttachmentsState extends State<ConversationAttachments> with 
       child: Obx(() {
         final chatDetailTheme = ChatDetailTheme.resolve(context, widget.chat);
 
+        final scaffold = SettingsScaffold(
+          headerColor: chatDetailTheme.headerColor,
+          title: widget.section.pageTitle,
+          tileColor: chatDetailTheme.tileColor,
+          initialHeader: null,
+          iosSubtitle: iosSubtitle,
+          materialSubtitle: materialSubtitle,
+          actions: _buildAppBarActions(context, chatDetailTheme.tileColor),
+          bodySlivers: [
+            if (isLoadingAttachments)
+              SliverToBoxAdapter(
+                child: AttachmentsLoader(
+                  chat: widget.chat,
+                  onAttachmentsLoaded: onAttachmentsLoaded,
+                ),
+              ),
+            ..._buildSectionSlivers(),
+            const SliverPadding(padding: EdgeInsets.only(top: 50)),
+          ],
+        );
+
         return Theme(
           data: chatDetailTheme.theme,
-          child: SettingsScaffold(
-            headerColor: chatDetailTheme.headerColor,
-            title: widget.section.pageTitle,
-            tileColor: chatDetailTheme.tileColor,
-            initialHeader: null,
-            iosSubtitle: iosSubtitle,
-            materialSubtitle: materialSubtitle,
-            actions: _buildAppBarActions(context, chatDetailTheme.tileColor),
-            bodySlivers: [
-              if (isLoadingAttachments)
-                SliverToBoxAdapter(
-                  child: AttachmentsLoader(
-                    chat: widget.chat,
-                    onAttachmentsLoaded: onAttachmentsLoaded,
+          child: kIsWeb
+              ? ColoredBox(
+                  color: chatDetailTheme.headerColor,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 820),
+                      child: scaffold,
+                    ),
                   ),
-                ),
-              ..._buildSectionSlivers(),
-              const SliverPadding(padding: EdgeInsets.only(top: 50)),
-            ],
-          ),
+                )
+              : scaffold,
         );
       }),
     );
@@ -231,7 +244,7 @@ class _ConversationAttachmentsState extends State<ConversationAttachments> with 
                 icon: Icon(iOS ? CupertinoIcons.cloud_download : Icons.file_download,
                     color: context.theme.colorScheme.onSurface),
                 onPressed: () {
-                  AttachmentsSvc.saveAllToDisk(media.where((e) => selected.contains(e.guid!)));
+                  AttachmentsSvc.saveAllToDisk(media.where((e) => e.guid != null && selected.contains(e.guid)));
                 },
               );
             }

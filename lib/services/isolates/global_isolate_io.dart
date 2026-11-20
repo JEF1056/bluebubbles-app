@@ -399,14 +399,18 @@ class GlobalIsolate {
 
   /// Fire-and-forget send (no response expected)
   void broadcast(IsolateRequestType type, dynamic input) {
+    if (_shutdownPending) return;
     _ensureStarted().then((_) {
+      if (_shutdownPending) return;
+      final port = _sendPort;
+      if (port == null) return;
       _scheduleIdleShutdown();
 
       // Create a standard request message with empty UUID since no response is expected
       final message = IsolateRequest(uuid: '', type: type, data: input).toMap();
 
-      _sendPort!.send(message);
-    });
+      port.send(message);
+    }).catchError((_) {});
   }
 
   void _handleIsolateMessage(dynamic message) {

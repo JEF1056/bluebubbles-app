@@ -1,14 +1,17 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show Size;
 
 import 'package:bluebubbles/app/state/attachment_state.dart';
 import 'package:bluebubbles/app/state/handle_state.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/helpers/ui/reaction_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 
 /// State wrapper for Message that provides granular reactivity for UI components.
@@ -121,6 +124,15 @@ class MessageState extends StatefulController {
   /// with [dateDelivered] != null or [isDelivered] == true.  Drives the
   /// "Delivered" indicator.
   final RxBool showDeliveredIndicator = false.obs;
+
+  /// Set by [MessagesService] when this outgoing message is the newest visible
+  /// sent-only message (without read or delivery receipt) newer than both the
+  /// last read and last delivered messages.  Drives the "Sent" indicator.
+  final RxBool showSentIndicator = false.obs;
+
+  /// Set by [MessagesService] when this incoming message is the newest visible
+  /// non-event message.  Drives the "Received" indicator.
+  final RxBool showReceivedIndicator = false.obs;
 
   /// Set when an audio message is kept; triggers delivered indicator
   final Rxn<DateTime> audioWasKept = Rxn<DateTime>(null);
@@ -238,8 +250,11 @@ class MessageState extends StatefulController {
   /// least one reactive dependency (prevents the GetX "improper use" warning
   /// even for outgoing group-event messages).
   String get senderDisplayName {
-    if (isFromMe.value || sender == null) return 'You';
-    return sender?.displayName.value ?? message.handleRelation.target?.displayName ?? 'Unknown';
+    if (isFromMe.value) return SettingsSvc.effectiveUserName;
+    return sender?.displayName.value ??
+        message.handle?.displayName ??
+        message.handleRelation.target?.displayName ??
+        'Unknown';
   }
 
   /// Adjacent messages for layout context (set by MessageHolder in initState)
@@ -254,6 +269,16 @@ class MessageState extends StatefulController {
   bool _partsCached = false;
 
   static const maxBubbleSizeFactor = 0.75;
+
+  /// Caps message bubble width at 520px on web/desktop (GMsg Web spec) while preserving
+  /// responsive inset spacing on narrow viewports.
+  static double maxBubbleWidth(BuildContext context, {double inset = 0}) {
+    final width = NavigationSvc.width(context);
+    if (kIsWeb || kIsDesktop) {
+      return math.min(width * 0.72 - inset, 520.0).clamp(120.0, double.infinity);
+    }
+    return (width * maxBubbleSizeFactor - inset).clamp(120.0, double.infinity);
+  }
 
   // ========== End Widget Controller Fields ==========
 
@@ -601,6 +626,16 @@ class MessageState extends StatefulController {
   /// Called by [MessagesService] — do not invoke from UI code.
   void updateShowDeliveredIndicatorInternal(bool value) {
     if (showDeliveredIndicator.value != value) showDeliveredIndicator.value = value;
+  }
+
+  /// Called by [MessagesService] — do not invoke from UI code.
+  void updateShowSentIndicatorInternal(bool value) {
+    if (showSentIndicator.value != value) showSentIndicator.value = value;
+  }
+
+  /// Called by [MessagesService] — do not invoke from UI code.
+  void updateShowReceivedIndicatorInternal(bool value) {
+    if (showReceivedIndicator.value != value) showReceivedIndicator.value = value;
   }
 
   /// Update thread reply count (computed from thread messages)

@@ -1,29 +1,58 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="backCrescentGrad" x1="18%" y1="12%" x2="72%" y2="84%">
-      <stop offset="0%" stop-color="#336EF3"/>
+    <linearGradient id="backGrad" x1="15%" y1="10%" x2="78%" y2="88%">
+      <stop offset="0%" stop-color="#3B77F6"/>
+      <stop offset="48%" stop-color="#336EF3"/>
       <stop offset="100%" stop-color="#2356D8"/>
     </linearGradient>
-    <linearGradient id="frontBubbleGrad" x1="20%" y1="14%" x2="78%" y2="88%">
-      <stop offset="0%" stop-color="#A8A8FF"/>
-      <stop offset="32%" stop-color="#7599FF"/>
-      <stop offset="65%" stop-color="#458CFF"/>
+    <linearGradient id="frontGrad" x1="16%" y1="10%" x2="82%" y2="90%">
+      <stop offset="0%" stop-color="#A3A6FF"/>
+      <stop offset="32%" stop-color="#7B9BFF"/>
+      <stop offset="68%" stop-color="#5490FF"/>
       <stop offset="100%" stop-color="#3186FF"/>
     </linearGradient>
-    <linearGradient id="dotGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="100%" stop-color="#EDF4FF"/>
+    <radialGradient id="glassSheen" cx="46%" cy="18%" r="58%" fx="44%" fy="14%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="55%" stop-color="#FFFFFF" stop-opacity="0.09"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.0"/>
+    </radialGradient>
+    <linearGradient id="glassRim" x1="18%" y1="0%" x2="82%" y2="75%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.54"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.0"/>
     </linearGradient>
+    <clipPath id="backClip">
+      <path d="M 357.00,248.00 L 581.00,248.00 A 198.00,198.00 0 0,1 581.00,644.00 L 357.00,644.00 A 198.00,198.00 0 0,1 357.00,248.00 Z"/>
+    </clipPath>
+    <clipPath id="frontClip">
+      <path d="M 429.00,328.00 L 661.00,328.00 A 204.00,204.00 0 0,1 661.00,736.00 L 412.00,736.00 C 356.00,736.00 270.00,778.00 208.00,768.00 C 252.00,724.00 248.10,655.42 228.10,567.42 A 204.00,204.00 0 0,1 429.00,328.00 Z"/>
+    </clipPath>
+    <filter id="overlapShadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="-8" dy="-8" stdDeviation="16" flood-color="#102D8A" flood-opacity="0.35"/>
+    </filter>
+    <filter id="squircleShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#0A192F" flood-opacity="0.12"/>
+    </filter>
+    <filter id="dotShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#102D8A" flood-opacity="0.24"/>
+    </filter>
   </defs>
   <rect id="background" width="1024" height="1024" fill="#FFFFFF"/>
-  <g id="mark" transform="translate(512.00,512.00) scale(1.120000) translate(-514.00,-510.00)">
-    <path id="back-crescent" d="M 476.000,216.000 C 699.790,216.000 754.000,262.800 754.000,456.000 C 754.000,649.200 699.790,696.000 476.000,696.000 C 252.210,696.000 198.000,649.200 198.000,456.000 C 198.000,262.800 252.210,216.000 476.000,216.000 Z" fill="url(#backCrescentGrad)"/>
-    <path id="front-bubble" d="M 532.000,252.000 C 771.890,252.000 830.000,302.700 830.000,512.000 C 830.000,721.300 771.890,772.000 532.000,772.000 C 450.437,772.000 389.889,766.139 345.493,750.176 C 299.493,772.176 270.000,808.000 212.000,804.000 C 256.000,776.000 268.437,707.996 250.382,652.878 C 238.556,616.774 234.000,570.604 234.000,512.000 C 234.000,302.700 292.110,252.000 532.000,252.000 Z" fill="url(#frontBubbleGrad)"/>
-    <g id="typing-dots">
-      <circle cx="400.00" cy="512.00" r="42.00" fill="url(#dotGrad)"/>
-      <circle cx="532.00" cy="512.00" r="42.00" fill="url(#dotGrad)"/>
-      <circle cx="664.00" cy="512.00" r="42.00" fill="url(#dotGrad)"/>
+  <g id="mark">
+    <path id="back-pill" d="M 357.00,248.00 L 581.00,248.00 A 198.00,198.00 0 0,1 581.00,644.00 L 357.00,644.00 A 198.00,198.00 0 0,1 357.00,248.00 Z" fill="url(#backGrad)"/>
+    <g clip-path="url(#backClip)">
+      <path d="M 429.00,328.00 L 661.00,328.00 A 204.00,204.00 0 0,1 661.00,736.00 L 412.00,736.00 C 356.00,736.00 270.00,778.00 208.00,768.00 C 252.00,724.00 248.10,655.42 228.10,567.42 A 204.00,204.00 0 0,1 429.00,328.00 Z" fill="#102D8A" filter="url(#overlapShadow)"/>
+    </g>
+    <path id="front-pill" d="M 429.00,328.00 L 661.00,328.00 A 204.00,204.00 0 0,1 661.00,736.00 L 412.00,736.00 C 356.00,736.00 270.00,778.00 208.00,768.00 C 252.00,724.00 248.10,655.42 228.10,567.42 A 204.00,204.00 0 0,1 429.00,328.00 Z" fill="url(#frontGrad)"/>
+    <g id="liquid-glass" clip-path="url(#frontClip)">
+      <rect x="200" y="310" width="700" height="230" fill="url(#glassSheen)"/>
+      <path d="M 429.00,328.00 L 661.00,328.00 A 204.00,204.00 0 0,1 661.00,736.00 L 412.00,736.00 C 356.00,736.00 270.00,778.00 208.00,768.00 C 252.00,724.00 248.10,655.42 228.10,567.42 A 204.00,204.00 0 0,1 429.00,328.00 Z" fill="none" stroke="url(#glassRim)" stroke-width="5"/>
+    </g>
+    <g id="typing-dots" filter="url(#dotShadow)">
+      <circle cx="392.00" cy="532.00" r="51.00" fill="#FFFFFF" fill-opacity="0.97"/>
+      <circle cx="545.00" cy="532.00" r="51.00" fill="#FFFFFF" fill-opacity="0.97"/>
+      <circle cx="698.00" cy="532.00" r="51.00" fill="#FFFFFF" fill-opacity="0.97"/>
     </g>
   </g>
 </svg>

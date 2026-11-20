@@ -4,7 +4,9 @@ import android.content.Context
 import android.util.Log
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.CapabilityClient
+import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -14,15 +16,20 @@ import com.wearbubbles.api.ApiClient
 import com.wearbubbles.api.dto.ChatRelayDto
 import com.wearbubbles.api.dto.ContactRelayDto
 import com.wearbubbles.api.dto.MessageRelayDto
+import com.wearbubbles.api.dto.TapbackType
+import com.wearbubbles.api.dto.TapbackUtils
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.db.MessageDao
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.db.entities.MessageEntity
+import com.wearbubbles.notifications.NotificationHelper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,18 +40,21 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 data class SendResultPayload(
     val requestId: String,
     val tempGuid: String? = null,
     val success: Boolean = false,
     val error: String? = null,
-    val message: MessageRelayDto? = null
+    val message: MessageRelayDto? = null,
+    val timedOut: Boolean = false
 )
 
 sealed class RelayEvent {
@@ -54,12 +64,111 @@ sealed class RelayEvent {
     data class AttachmentDownloaded(val attachmentGuid: String, val file: File) : RelayEvent()
 }
 
+internal class NodeConnectionCache(
+    private val ttlMs: Long = PhoneRelayClient.NODE_CACHE_TTL_MS,
+    private val nowMs: () -> Long = System::currentTimeMillis
+) {
+    @Volatile
+    private var hasCachedValue: Boolean = false
+    @Volatile
+    var nodeId: String? = null
+        private set
+    @Volatile
+    private var cachedAtMs: Long = 0L
+
+    fun isValid(now: Long = nowMs()): Boolean =
+        hasCachedValue && (now - cachedAtMs) in 0 until ttlMs
+
+    fun cachedConnected(now: Long = nowMs()): Boolean? =
+        if (isValid(now)) nodeId != null else null
+
+    fun record(nodeId: String?, now: Long = nowMs()) {
+        this.nodeId = nodeId
+        this.cachedAtMs = now
+        this.hasCachedValue = true
+    }
+
+    fun invalidate() {
+        hasCachedValue = false
+        nodeId = null
+        cachedAtMs = 0L
+    }
+
+    suspend fun getOrRefreshConnected(
+        force: Boolean = false,
+        fetchNodeId: suspend () -> String?
+    ): Boolean {
+        if (!force) {
+            cachedConnected()?.let { return it }
+        }
+        val fetched = fetchNodeId()
+        record(fetched)
+        return fetched != null
+    }
+}
+
 class PhoneRelayClient(private val context: Context) {
 
     companion object {
         private const val TAG = "PhoneRelayClient"
         const val PHONE_CAPABILITY = "bluebubbles_phone_app"
         internal const val SEND_TIMEOUT_MS = 130_000L
+        internal const val SYNC_TIMEOUT_MS = 12_000L
+        internal const val NODE_CACHE_TTL_MS = 15_000L
+        internal const val PRUNE_INTERVAL_MS = 30_000L
+        internal const val PRUNE_WRITE_THRESHOLD = 20
+        internal const val MAX_ATTACHMENTS_BYTES = 40L * 1024 * 1024
+        internal const val MAX_ATTACHMENTS_FILES = 200
+        internal const val MAX_AVATARS_BYTES = 10L * 1024 * 1024
+        internal const val MAX_AVATARS_FILES = 150
+
+        internal fun selectRelayNode(
+            nodes: Collection<Node>,
+            hasStandaloneCredentials: Boolean
+        ): Node? {
+            nodes.firstOrNull { it.isNearby }?.let { return it }
+            return if (!hasStandaloneCredentials) nodes.firstOrNull() else null
+        }
+
+        internal suspend fun requestAttachmentDeduped(
+            attachmentGuid: String,
+            pending: ConcurrentHashMap<String, CompletableDeferred<File?>>,
+            cachedFile: () -> File?,
+            sendRequest: suspend () -> Boolean,
+            timeoutMs: Long = 20_000L
+        ): File? {
+            cachedFile()?.let { return it }
+            val fresh = CompletableDeferred<File?>()
+            val existing = pending.putIfAbsent(attachmentGuid, fresh)
+            if (existing != null) {
+                return withTimeoutOrNull(timeoutMs) { existing.await() }
+            }
+            if (!sendRequest()) {
+                pending.remove(attachmentGuid, fresh)
+                fresh.complete(null)
+                return null
+            }
+            return try {
+                withTimeoutOrNull(timeoutMs) { fresh.await() }
+            } finally {
+                pending.remove(attachmentGuid, fresh)
+            }
+        }
+
+        internal fun pruneDirectory(dir: File, maxBytes: Long, maxFiles: Int) {
+            val files = dir.listFiles()?.filter { it.isFile } ?: return
+            var totalBytes = files.sumOf { it.length() }
+            var count = files.size
+            if (totalBytes <= maxBytes && count <= maxFiles) return
+            for (file in files.sortedBy { it.lastModified() }) {
+                if (totalBytes <= maxBytes && count <= maxFiles) break
+                val len = file.length()
+                if (file.delete()) {
+                    totalBytes -= len
+                    count--
+                }
+            }
+        }
 
         internal fun orTimedOutResult(
             result: SendResultPayload?,
@@ -69,7 +178,8 @@ class PhoneRelayClient(private val context: Context) {
             requestId = requestId,
             tempGuid = tempGuid,
             success = false,
-            error = "Phone relay timed out"
+            error = "Phone relay timed out",
+            timedOut = true
         )
 
         internal suspend fun reconcileOrphanedSendResult(
@@ -84,6 +194,8 @@ class PhoneRelayClient(private val context: Context) {
                 } else {
                     messageDao.deleteByGuid(tempGuid)
                 }
+            } else if (tempGuid.startsWith("temp-react-")) {
+                messageDao.deleteByGuid(tempGuid)
             } else {
                 messageDao.markSendFailed(tempGuid)
             }
@@ -117,8 +229,10 @@ class PhoneRelayClient(private val context: Context) {
         const val PATH_SEND_REACTION = "/bb/send-reaction"
         const val PATH_SEND_RESULT = "/bb/send-result"
         const val PATH_SEND_AUDIO_PREFIX = "/bb/send-audio/"
+        const val PATH_AUDIO_FAILED = "/bb/audio-failed"
         const val PATH_REQUEST_ATTACHMENT = "/bb/request-attachment"
         const val PATH_ATTACHMENT_PREFIX = "/bb/attachment/"
+        const val PATH_ATTACHMENT_FAILED = "/bb/attachment-failed"
         const val PATH_AVATAR_PREFIX = "/bb/avatar/"
         const val PATH_MARK_READ = "/bb/mark-read"
         const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
@@ -160,9 +274,27 @@ class PhoneRelayClient(private val context: Context) {
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val ingestionDispatcher = Dispatchers.IO.limitedParallelism(2)
     private val gson = Gson()
     private val db by lazy { AppDatabase.getInstance(context) }
     private val settings by lazy { SettingsDataStore(context) }
+
+    @Volatile
+    private var cachedIsConfigured: Boolean? = null
+    private val nodeCache = NodeConnectionCache()
+    @Volatile
+    private var lastAvatarPruneMs: Long = 0L
+    private val avatarWriteCount = AtomicInteger(0)
+    @Volatile
+    private var lastAttachPruneMs: Long = 0L
+    private val attachWriteCount = AtomicInteger(0)
+
+    init {
+        scope.launch {
+            settings.isConfigured.collect { cachedIsConfigured = it }
+        }
+    }
 
     private val _isPhoneConnected = MutableStateFlow(false)
     val isPhoneConnected: StateFlow<Boolean> = _isPhoneConnected.asStateFlow()
@@ -170,8 +302,16 @@ class PhoneRelayClient(private val context: Context) {
     private val _events = MutableSharedFlow<RelayEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<RelayEvent> = _events.asSharedFlow()
 
+    private data class PendingReplyMeta(
+        val chatGuid: String,
+        val senderName: String?,
+        val text: String
+    )
+
     private val pendingResults = ConcurrentHashMap<String, CompletableDeferred<SendResultPayload>>()
     private val pendingAttachments = ConcurrentHashMap<String, CompletableDeferred<File?>>()
+    private val pendingSyncs = ConcurrentHashMap<String, CompletableDeferred<Int>>()
+    private val pendingReplies = ConcurrentHashMap<String, PendingReplyMeta>()
 
     private val attachmentsDir: File
         get() = File(context.cacheDir, "attachments").apply { mkdirs() }
@@ -179,38 +319,51 @@ class PhoneRelayClient(private val context: Context) {
     private val avatarsDir: File
         get() = File(context.filesDir, "avatars").apply { mkdirs() }
 
-    suspend fun refreshPhoneConnected(): Boolean {
+    fun invalidateNodeCache() {
+        nodeCache.invalidate()
+    }
+
+    suspend fun refreshPhoneConnected(force: Boolean = false): Boolean {
         return try {
-            val info = Wearable.getCapabilityClient(context)
-                .getCapability(PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                .await()
-            val connected = info.nodes.isNotEmpty()
+            val connected = nodeCache.getOrRefreshConnected(force = force) {
+                val info = Wearable.getCapabilityClient(context)
+                    .getCapability(PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
+                    .await()
+                val hasCreds = cachedIsConfigured ?: settings.isConfigured.first()
+                selectRelayNode(info.nodes, hasCreds)?.id
+            }
             _isPhoneConnected.value = connected
             connected
         } catch (e: Exception) {
             Log.w(TAG, "refreshPhoneConnected failed: ${e.message}")
+            invalidateNodeCache()
             _isPhoneConnected.value = false
             false
         }
     }
 
     fun updatePhoneConnected(connected: Boolean) {
+        if (!connected || nodeCache.nodeId == null) {
+            invalidateNodeCache()
+        }
         _isPhoneConnected.value = connected
     }
 
     suspend fun getPhoneNodeId(): String? {
+        if (nodeCache.isValid()) {
+            return nodeCache.nodeId
+        }
         return try {
             val info = Wearable.getCapabilityClient(context)
                 .getCapability(PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
                 .await()
-            val nearby = info.nodes.firstOrNull { it.isNearby } ?: info.nodes.firstOrNull()
-            if (nearby != null) {
-                _isPhoneConnected.value = true
-                return nearby.id
-            }
-            _isPhoneConnected.value = false
-            null
+            val hasCreds = cachedIsConfigured ?: settings.isConfigured.first()
+            val selected = selectRelayNode(info.nodes, hasCreds)
+            nodeCache.record(selected?.id)
+            _isPhoneConnected.value = selected != null
+            selected?.id
         } catch (_: Exception) {
+            invalidateNodeCache()
             _isPhoneConnected.value = false
             null
         }
@@ -232,8 +385,9 @@ class PhoneRelayClient(private val context: Context) {
                         val pass = map.getString("password") ?: ""
                         val headers = map.getString("customHeadersJson") ?: "{}"
                         val privateApi = map.getBoolean("privateApiSend", false)
+                        val privateMarkChatAsRead = map.getBoolean("privateMarkChatAsRead", false)
                         if (url.isNotBlank() && pass.isNotBlank()) {
-                            settings.saveCredentials(url, pass, headers, privateApi)
+                            settings.saveCredentials(url, pass, headers, privateApi, privateMarkChatAsRead)
                             ApiClient.configureHeaders(url, settings.parseHeaders(headers))
                             found = true
                         }
@@ -253,6 +407,9 @@ class PhoneRelayClient(private val context: Context) {
         return sendToPhone(PATH_REQUEST_SYNC, payload)
     }
 
+    suspend fun requestChatsSyncAwait(): Boolean =
+        awaitSync("chats") { requestChatsSync() } != null
+
     suspend fun requestMessagesSync(chatGuid: String, before: Long? = null): Boolean {
         val payload = JsonObject().apply {
             addProperty("type", "messages")
@@ -262,12 +419,50 @@ class PhoneRelayClient(private val context: Context) {
         return sendToPhone(PATH_REQUEST_SYNC, payload)
     }
 
+    suspend fun requestMessagesSyncAwait(chatGuid: String, before: Long? = null): Int? =
+        awaitSync("messages:$chatGuid") { requestMessagesSync(chatGuid, before) }
+
     suspend fun requestContactsSync(): Boolean {
         val payload = JsonObject().apply { addProperty("type", "contacts") }.toString().toByteArray()
         return sendToPhone(PATH_REQUEST_SYNC, payload)
     }
 
-    suspend fun sendMessage(chatGuid: String, text: String, tempGuid: String): SendResultPayload? {
+    suspend fun requestContactsSyncAwait(): Boolean =
+        awaitSync("contacts") { requestContactsSync() } != null
+
+    /**
+     * Awaits sync completion up to [SYNC_TIMEOUT_MS].
+     * Returns `null` only if sending the request failed; returns `-1` if sent but timed out
+     * (so callers do not fall back to direct HTTP while tethered); otherwise returns item count.
+     */
+    private suspend fun awaitSync(key: String, send: suspend () -> Boolean): Int? {
+        val deferred = CompletableDeferred<Int>()
+        pendingSyncs.put(key, deferred)?.complete(-1)
+        if (!send()) {
+            pendingSyncs.remove(key, deferred)
+            return null
+        }
+        return try {
+            withTimeoutOrNull(SYNC_TIMEOUT_MS) { deferred.await() } ?: -1
+        } finally {
+            pendingSyncs.remove(key, deferred)
+        }
+    }
+
+    fun registerPendingReply(tempGuid: String, chatGuid: String, senderName: String?, text: String) {
+        pendingReplies[tempGuid] = PendingReplyMeta(chatGuid, senderName, text)
+    }
+
+    fun clearPendingReply(tempGuid: String) {
+        pendingReplies.remove(tempGuid)
+    }
+
+    suspend fun sendMessage(
+        chatGuid: String,
+        text: String,
+        tempGuid: String,
+        timeoutMs: Long = SEND_TIMEOUT_MS
+    ): SendResultPayload? {
         val requestId = UUID.randomUUID().toString()
         val deferred = CompletableDeferred<SendResultPayload>()
         pendingResults[requestId] = deferred
@@ -288,7 +483,7 @@ class PhoneRelayClient(private val context: Context) {
             // Once the phone accepted tempGuid, never return null on timeout: falling back to
             // direct server with the same tempGuid hits HTTP 400 (already queued).
             orTimedOutResult(
-                withTimeoutOrNull(SEND_TIMEOUT_MS) { deferred.await() },
+                withTimeoutOrNull(timeoutMs) { deferred.await() },
                 requestId = requestId,
                 tempGuid = tempGuid
             )
@@ -301,6 +496,7 @@ class PhoneRelayClient(private val context: Context) {
         chatGuid: String,
         selectedMessageGuid: String,
         reaction: String,
+        tempGuid: String = "temp-react-${UUID.randomUUID()}",
         partIndex: Int = 0
     ): SendResultPayload? {
         val requestId = UUID.randomUUID().toString()
@@ -313,6 +509,7 @@ class PhoneRelayClient(private val context: Context) {
             addProperty("reaction", reaction)
             addProperty("partIndex", partIndex)
             addProperty("requestId", requestId)
+            addProperty("tempGuid", tempGuid)
         }.toString().toByteArray()
 
         if (!sendToPhone(PATH_SEND_REACTION, payload)) {
@@ -321,7 +518,11 @@ class PhoneRelayClient(private val context: Context) {
         }
 
         return try {
-            withTimeoutOrNull(60_000L) { deferred.await() }
+            orTimedOutResult(
+                withTimeoutOrNull(60_000L) { deferred.await() },
+                requestId = requestId,
+                tempGuid = tempGuid
+            )
         } finally {
             pendingResults.remove(requestId)
         }
@@ -367,18 +568,38 @@ class PhoneRelayClient(private val context: Context) {
         return if (file.exists() && file.length() > 0) file else null
     }
 
-    suspend fun getOrRequestAttachment(attachmentGuid: String): File? {
-        getCachedAttachmentFile(attachmentGuid)?.let { return it }
-        val deferred = pendingAttachments.getOrPut(attachmentGuid) { CompletableDeferred() }
-        val payload = JsonObject().apply { addProperty("attachmentGuid", attachmentGuid) }.toString().toByteArray()
-        if (!sendToPhone(PATH_REQUEST_ATTACHMENT, payload)) {
-            pendingAttachments.remove(attachmentGuid)
-            return null
-        }
-        return try {
-            withTimeoutOrNull(20_000L) { deferred.await() }
-        } finally {
-            pendingAttachments.remove(attachmentGuid)
+    suspend fun getOrRequestAttachment(attachmentGuid: String): File? =
+        requestAttachmentDeduped(
+            attachmentGuid = attachmentGuid,
+            pending = pendingAttachments,
+            cachedFile = { getCachedAttachmentFile(attachmentGuid) },
+            sendRequest = {
+                val payload = JsonObject().apply {
+                    addProperty("attachmentGuid", attachmentGuid)
+                }.toString().toByteArray()
+                sendToPhone(PATH_REQUEST_ATTACHMENT, payload)
+            }
+        )
+
+    fun failAttachmentRequest(attachmentGuid: String) {
+        pendingAttachments.remove(attachmentGuid)?.complete(null)
+    }
+
+    fun failAudioRequest(tempGuid: String, reason: String?) {
+        val result = SendResultPayload(
+            requestId = tempGuid,
+            tempGuid = tempGuid,
+            success = false,
+            error = reason ?: "Audio upload failed"
+        )
+        if (pendingResults.remove(tempGuid)?.complete(result) != true && tempGuid.isNotBlank()) {
+            scope.launch {
+                try {
+                    reconcileOrphanedSendResult(result, db.messageDao())
+                } catch (e: Exception) {
+                    Log.w(TAG, "failAudioRequest reconcile failed: ${e.message}")
+                }
+            }
         }
     }
 
@@ -436,8 +657,9 @@ class PhoneRelayClient(private val context: Context) {
             val pass = obj.str("password") ?: return
             val headers = obj.str("customHeadersJson") ?: "{}"
             val privateApi = obj.has("privateApiSend") && obj.get("privateApiSend").asBoolean
+            val privateMarkChatAsRead = obj.has("privateMarkChatAsRead") && obj.get("privateMarkChatAsRead").asBoolean
             if (url.isNotBlank() && pass.isNotBlank()) {
-                settings.saveCredentials(url, pass, headers, privateApi)
+                settings.saveCredentials(url, pass, headers, privateApi, privateMarkChatAsRead)
                 ApiClient.configureHeaders(url, settings.parseHeaders(headers))
             }
         } catch (e: Exception) {
@@ -447,28 +669,53 @@ class PhoneRelayClient(private val context: Context) {
 
     suspend fun handleChatsSyncJson(json: String) {
         try {
-            val (entities, pinsAuthoritative) = parseRelayChatsPayload(json) ?: return
+            val parsed = parseRelayChatsPayload(json)
+            if (parsed == null) {
+                pendingSyncs["chats"]?.complete(-1)
+                return
+            }
+            val (entities, pinsAuthoritative) = parsed
             db.chatDao().replaceAndPrune(entities, preservePins = !pinsAuthoritative)
+            pendingSyncs["chats"]?.complete(entities.size)
         } catch (e: Exception) {
             Log.e(TAG, "handleChatsSyncJson error: ${e.message}")
+            pendingSyncs["chats"]?.complete(-1)
         }
     }
 
     suspend fun handleMessagesSyncJson(json: String) {
+        var parsedChatGuid: String? = null
         try {
             val root = JsonParser.parseString(json).asJsonObject
+            parsedChatGuid = root.str("chatGuid")
             val type = object : TypeToken<List<MessageRelayDto>>() {}.type
-            val list: List<MessageRelayDto> = gson.fromJson(root.get("messages"), type) ?: return
+            val list: List<MessageRelayDto>? = gson.fromJson(root.get("messages"), type)
+            if (list == null) {
+                if (parsedChatGuid != null) {
+                    pendingSyncs["messages:$parsedChatGuid"]?.complete(-1)
+                }
+                return
+            }
             val entities = list.map { it.toEntity() }
-            val chatGuid = root.str("chatGuid") ?: entities.firstOrNull()?.chatGuid
+            val chatGuid = parsedChatGuid ?: entities.firstOrNull()?.chatGuid
+            parsedChatGuid = chatGuid
             if (chatGuid != null) {
                 val staleCutoff = System.currentTimeMillis() - MessageDao.STALE_PENDING_TIMEOUT_MS
                 db.messageDao().upsertAndReconcileBatch(chatGuid, entities, staleCutoff)
+                pendingSyncs["messages:$chatGuid"]?.complete(entities.size)
             } else {
                 db.messageDao().upsertAndPrune(entities)
             }
         } catch (e: Exception) {
             Log.e(TAG, "handleMessagesSyncJson error: ${e.message}")
+            val guid = parsedChatGuid
+            if (guid != null) {
+                pendingSyncs["messages:$guid"]?.complete(-1)
+            } else {
+                pendingSyncs.entries.forEach { (key, deferred) ->
+                    if (key.startsWith("messages:")) deferred.complete(-1)
+                }
+            }
         }
     }
 
@@ -476,7 +723,11 @@ class PhoneRelayClient(private val context: Context) {
         try {
             val root = JsonParser.parseString(json).asJsonObject
             val type = object : TypeToken<List<ContactRelayDto>>() {}.type
-            val list: List<ContactRelayDto> = gson.fromJson(root.get("contacts"), type) ?: return
+            val list: List<ContactRelayDto>? = gson.fromJson(root.get("contacts"), type)
+            if (list == null) {
+                pendingSyncs["contacts"]?.complete(-1)
+                return
+            }
             val entities = list.map { dto ->
                 val cached = getAvatarFile(dto.normalizedAddress)?.absolutePath
                 ContactEntity(
@@ -487,8 +738,10 @@ class PhoneRelayClient(private val context: Context) {
                 )
             }
             db.contactDao().upsertAll(entities)
+            pendingSyncs["contacts"]?.complete(entities.size)
         } catch (e: Exception) {
             Log.e(TAG, "handleContactsSyncJson error: ${e.message}")
+            pendingSyncs["contacts"]?.complete(-1)
         }
     }
 
@@ -497,6 +750,52 @@ class PhoneRelayClient(private val context: Context) {
             val dto = gson.fromJson(json, MessageRelayDto::class.java) ?: return
             val entity = dto.toEntity()
             db.messageDao().upsertAndReconcile(entity, tempGuid = dto.tempGuid)
+            if (!isUpdate) {
+                val displayText = if (TapbackUtils.isTapbackCode(entity.associatedMessageType)) {
+                    val reactionName = TapbackType.fromAddCode(entity.associatedMessageType)?.label ?: "Reacted"
+                    "$reactionName to a message"
+                } else {
+                    entity.text?.takeIf { it.isNotBlank() } ?: entity.attachmentMimeType?.let { mime ->
+                        when {
+                            mime.startsWith("image/") -> "Image"
+                            mime.startsWith("video/") -> "Video"
+                            mime.startsWith("audio/") -> "Audio Message"
+                            else -> "Attachment"
+                        }
+                    } ?: if (!entity.attachmentGuid.isNullOrBlank()) "Attachment" else null
+                }
+                val unread = !entity.isFromMe && NotificationHelper.activeChatGuid.value != entity.chatGuid
+                val existingChat = db.chatDao().getChat(entity.chatGuid)
+                if (existingChat != null) {
+                    val isNewerOrEqual = entity.dateCreated >= existingChat.lastMessageDate
+                    db.chatDao().upsert(
+                        existingChat.copy(
+                            lastMessageText = if (isNewerOrEqual) (displayText ?: existingChat.lastMessageText) else existingChat.lastMessageText,
+                            lastMessageDate = maxOf(existingChat.lastMessageDate, entity.dateCreated),
+                            lastMessageIsFromMe = if (isNewerOrEqual) entity.isFromMe else existingChat.lastMessageIsFromMe,
+                            hasUnreadMessage = if (unread) true else existingChat.hasUnreadMessage,
+                            lastMessageAttachmentGuid = if (isNewerOrEqual) entity.attachmentGuid else existingChat.lastMessageAttachmentGuid,
+                            lastMessageAttachmentMimeType = if (isNewerOrEqual) entity.attachmentMimeType else existingChat.lastMessageAttachmentMimeType
+                        )
+                    )
+                } else {
+                    val identifier = entity.chatGuid.substringAfterLast(";").ifBlank { entity.chatGuid }
+                    db.chatDao().upsert(
+                        ChatEntity(
+                            guid = entity.chatGuid,
+                            chatIdentifier = identifier,
+                            displayName = null,
+                            participantAddresses = entity.handleAddress ?: identifier,
+                            lastMessageText = displayText,
+                            lastMessageDate = entity.dateCreated,
+                            lastMessageIsFromMe = entity.isFromMe,
+                            hasUnreadMessage = unread,
+                            lastMessageAttachmentGuid = entity.attachmentGuid,
+                            lastMessageAttachmentMimeType = entity.attachmentMimeType
+                        )
+                    )
+                }
+            }
             if (isUpdate) {
                 _events.tryEmit(RelayEvent.UpdatedMessage(entity))
             } else {
@@ -522,13 +821,25 @@ class PhoneRelayClient(private val context: Context) {
             val result = gson.fromJson(json, SendResultPayload::class.java) ?: return
             val handledByRequest = pendingResults[result.requestId]?.complete(result) == true
             val handledByTemp = result.tempGuid?.let { pendingResults[it]?.complete(result) } == true
-            if (!handledByRequest && !handledByTemp && !result.tempGuid.isNullOrBlank()) {
-                // Late result after timeout, screen exit, or process death — reconcile Room directly.
-                scope.launch {
-                    try {
-                        reconcileOrphanedSendResult(result, db.messageDao())
-                    } catch (e: Exception) {
-                        Log.w(TAG, "reconcileOrphanedSendResult failed: ${e.message}")
+            val tempGuid = result.tempGuid
+            if (!tempGuid.isNullOrBlank()) {
+                val replyMeta = pendingReplies.remove(tempGuid)
+                if (!handledByRequest && !handledByTemp) {
+                    if (replyMeta != null && !result.success) {
+                        NotificationHelper.showReplyFailureNotification(
+                            context = context,
+                            chatGuid = replyMeta.chatGuid,
+                            senderName = replyMeta.senderName,
+                            replyText = replyMeta.text
+                        )
+                    }
+                    // Late result after timeout, screen exit, or process death — reconcile Room directly.
+                    scope.launch {
+                        try {
+                            reconcileOrphanedSendResult(result, db.messageDao())
+                        } catch (e: Exception) {
+                            Log.w(TAG, "reconcileOrphanedSendResult failed: ${e.message}")
+                        }
                     }
                 }
             }
@@ -536,17 +847,54 @@ class PhoneRelayClient(private val context: Context) {
         }
     }
 
-    suspend fun handleAvatarAsset(key: String, asset: Asset) {
+    suspend fun handleAvatarAsset(key: String, asset: Asset) = withContext(ingestionDispatcher) {
         try {
             val fd = Wearable.getDataClient(context).getFdForAsset(asset).await()
             val outFile = File(avatarsDir, "${safeFileName(key)}.img")
-            fd.inputStream.use { input ->
-                outFile.outputStream().use { output -> input.copyTo(output) }
+            try {
+                fd.inputStream.use { input ->
+                    outFile.outputStream().use { output -> input.copyTo(output) }
+                }
+            } finally {
+                fd.release()
             }
-            fd.release()
             db.contactDao().updateAvatarPath(key, outFile.absolutePath)
+            val now = System.currentTimeMillis()
+            if (avatarWriteCount.incrementAndGet() >= PRUNE_WRITE_THRESHOLD || now - lastAvatarPruneMs >= PRUNE_INTERVAL_MS) {
+                avatarWriteCount.set(0)
+                lastAvatarPruneMs = now
+                pruneDirectory(avatarsDir, MAX_AVATARS_BYTES, MAX_AVATARS_FILES)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "handleAvatarAsset failed for $key: ${e.message}")
+        }
+    }
+
+    fun streamAttachmentFromChannel(channel: ChannelClient.Channel, attachmentGuid: String) {
+        scope.launch {
+            val channelClient = Wearable.getChannelClient(context)
+            var tempFile: File? = null
+            try {
+                val tmp = File.createTempFile("tmp_att_", ".tmp", context.cacheDir)
+                tempFile = tmp
+                val input = channelClient.getInputStream(channel).await()
+                input.use { inStream ->
+                    tmp.outputStream().use { outStream ->
+                        inStream.copyTo(outStream)
+                    }
+                }
+                saveStreamedAttachment(attachmentGuid, tmp)
+            } catch (e: Exception) {
+                Log.e(TAG, "streamAttachmentFromChannel failed: ${e.message}")
+                tempFile?.delete()
+            } finally {
+                withContext(NonCancellable) {
+                    try {
+                        channelClient.close(channel).await()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
         }
     }
 
@@ -558,6 +906,12 @@ class PhoneRelayClient(private val context: Context) {
         }
         pendingAttachments[attachmentGuid]?.complete(target)
         _events.tryEmit(RelayEvent.AttachmentDownloaded(attachmentGuid, target))
+        val now = System.currentTimeMillis()
+        if (attachWriteCount.incrementAndGet() >= PRUNE_WRITE_THRESHOLD || now - lastAttachPruneMs >= PRUNE_INTERVAL_MS) {
+            attachWriteCount.set(0)
+            lastAttachPruneMs = now
+            pruneDirectory(attachmentsDir, MAX_ATTACHMENTS_BYTES, MAX_ATTACHMENTS_FILES)
+        }
     }
 
     private suspend fun sendToPhone(path: String, payload: ByteArray): Boolean {
@@ -566,6 +920,7 @@ class PhoneRelayClient(private val context: Context) {
             Wearable.getMessageClient(context).sendMessage(nodeId, path, payload).await()
             true
         } catch (e: Exception) {
+            invalidateNodeCache()
             Log.w(TAG, "sendToPhone($path) failed: ${e.message}")
             false
         }

@@ -422,13 +422,15 @@ class IncomingMessageHandler {
 
       // 10. Refresh chat-list ordering and subtitle.
 
-      // Guard: addMessage() may have set hasUnreadMessage = true in the DB even
-      // when this chat is the one currently open.  Clear it on the in-memory
-      // object before propagating to the UI so the badge never increments for
-      // the active chat, then persist the read state asynchronously.
-      if (ChatsSvc.isChatActive(c.guid)) {
+      // Incoming !isFromMe messages always keep hasUnreadMessage = true even when
+      // the chat is active, until explicit user interaction marks it read.
+      if (ChatsSvc.isChatActive(c.guid) && (saved.isFromMe ?? false)) {
         c.hasUnreadMessage = false;
-        unawaited(ChatsSvc.setChatHasUnread(c, false, force: true));
+        unawaited(ChatsSvc.setChatHasUnread(
+          c,
+          false,
+          privateMark: false,
+        ));
       }
 
       // The latest message is linked on the guarded sync path (Chat.addMessage,

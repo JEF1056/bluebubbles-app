@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/theming/avatar/avatar_crop.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
@@ -30,26 +28,29 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
   @override
   void initState() {
     super.initState();
+    if (SettingsSvc.iCloudAccountInfo.isNotEmpty) {
+      accountInfo.addAll(SettingsSvc.iCloudAccountInfo);
+    }
+    if (SettingsSvc.iCloudContactInfo.isNotEmpty) {
+      accountContact.addAll(SettingsSvc.iCloudContactInfo);
+    }
     getDetails();
   }
 
   void getDetails() async {
     try {
-      final result = await HttpSvc.icloud.getAccountInfo();
-      if (!isNullOrEmpty(result.data.isNotEmpty)) {
-        accountInfo.addAll(result.data['data']);
+      await SettingsSvc.refreshIcloudProfile(force: true);
+      if (SettingsSvc.iCloudAccountInfo.isNotEmpty) {
+        accountInfo.assignAll(SettingsSvc.iCloudAccountInfo);
       }
       opacity.value = 1.0;
-      if (SettingsSvc.serverDetails.isMinBigSur) {
-        final result2 = await HttpSvc.icloud.getAccountContact();
-        if (!isNullOrEmpty(result2.data.isNotEmpty)) {
-          accountContact.addAll(result2.data['data']);
-        }
+      if (SettingsSvc.iCloudContactInfo.isNotEmpty) {
+        accountContact.assignAll(SettingsSvc.iCloudContactInfo);
       }
     } catch (e, s) {
       Logger.warn("Failed to fetch account profile info", error: e, trace: s, tag: 'ProfilePanel');
     }
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   Future<void> updateName() async {
@@ -88,6 +89,7 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
       }
     }
     SettingsSvc.settings.userAvatarPath.value = null;
+    SettingsSvc.userAvatarBytes.value = null;
     await SettingsSvc.settings.saveOneAsync("userAvatarPath");
   }
 
@@ -377,8 +379,10 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                           title: "Start Chats Using",
                           initial: accountInfo['active_alias'],
                           clampWidth: false,
-                          options:
-                              accountInfo['vetted_aliases'].map((e) => e['Alias'].toString()).toList().cast<String>(),
+                          options: (accountInfo['vetted_aliases'] as List<dynamic>? ?? [])
+                              .map((e) => e['Alias'].toString())
+                              .toList()
+                              .cast<String>(),
                           secondaryColor: headerColor,
                           useCupertino: false,
                           textProcessing: (str) => str,
@@ -403,12 +407,15 @@ class _ProfilePanelState extends State<ProfilePanel> with WidgetsBindingObserver
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         SettingsTile(
-                          leading: !isNullOrEmpty(accountContact['avatar'])
-                              ? CircleAvatar(
-                                  backgroundImage: MemoryImage(base64Decode(accountContact['avatar'].toString())),
-                                  radius: 20,
-                                )
-                              : const CircleAvatar(),
+                          leading: () {
+                            final avatarBytes = SettingsService.decodeAvatarBase64(accountContact['avatar']?.toString());
+                            return avatarBytes != null
+                                ? CircleAvatar(
+                                    backgroundImage: MemoryImage(avatarBytes),
+                                    radius: 20,
+                                  )
+                                : const CircleAvatar();
+                          }(),
                           title: accountContact['name'],
                           subtitle: "Your sharable iMessage contact card",
                         ),

@@ -13,6 +13,7 @@ import 'package:defer_pointer/defer_pointer.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 
@@ -372,54 +373,74 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
     final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
     final blurDisabled = kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled;
 
-    return BBScaffold(
-      backgroundColor: blurDisabled ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9) : Colors.transparent,
-      safeAreaTop: false,
-      safeAreaBottom: false,
-      safeAreaLeft: false,
-      safeAreaRight: false,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _dismiss,
-            child: BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: blurDisabled ? 0 : 30,
-                sigmaY: blurDisabled ? 0 : 30,
-              ),
-              child: Container(
-                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-              ),
-            ),
-          ),
-          SafeArea(
-            left: false,
-            right: false,
-            child: Column(
-              children: [
-                if (_isInteractiveThread) _buildHeader(context, theme, isIOS),
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onTap: _dismiss,
-                    child: Center(
-                      child: SingleChildScrollView(
-                        controller: _scrollController,
-                        padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 5.0),
-                        child: _isInteractiveThread
-                            ? Obx(() => _buildMessageList(context, _resolveMessages()))
-                            : _buildMessageList(context, widget.initialMessages),
-                      ),
-                    ),
+    Widget constrainDesktop(Widget child) {
+      if (!kIsWeb && !kIsDesktop) return child;
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 760),
+          child: child,
+        ),
+      );
+    }
+
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): _dismiss,
+      },
+      child: Focus(
+        autofocus: true,
+        child: BBScaffold(
+          backgroundColor: blurDisabled ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9) : Colors.transparent,
+          safeAreaTop: false,
+          safeAreaBottom: false,
+          safeAreaLeft: false,
+          safeAreaRight: false,
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _dismiss,
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(
+                    sigmaX: blurDisabled ? 0 : 30,
+                    sigmaY: blurDisabled ? 0 : 30,
+                  ),
+                  child: Container(
+                    color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
                   ),
                 ),
-                if (_isInteractiveThread) _buildComposer(context, theme, isIOS),
-              ],
-            ),
+              ),
+              SafeArea(
+                left: false,
+                right: false,
+                child: Column(
+                  children: [
+                    if (_isInteractiveThread) constrainDesktop(_buildHeader(context, theme, isIOS)),
+                    Expanded(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: _dismiss,
+                        child: Center(
+                          child: SingleChildScrollView(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 5.0),
+                            child: constrainDesktop(
+                              _isInteractiveThread
+                                  ? Obx(() => _buildMessageList(context, _resolveMessages()))
+                                  : _buildMessageList(context, widget.initialMessages),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (_isInteractiveThread) constrainDesktop(_buildComposer(context, theme, isIOS)),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -495,10 +516,11 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
           replyPart: index == 0 ? widget.originatorPart : null,
         );
 
-        // Reply thread views stay in place on dismiss; only bookmarks jump to a message on tap.
+        // Interactive reply threads keep bubbles interactive (links, selection, taps) while preventing background dismiss.
         if (_isInteractiveThread) {
-          return IgnorePointer(
-            ignoring: true,
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {},
             child: messageHolder,
           );
         }
@@ -548,30 +570,47 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
                       ? Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.65), width: 1)
                       : null,
                 ),
-                child: TextField(
-                  controller: _textController,
-                  focusNode: _focusNode,
-                  minLines: 1,
-                  maxLines: 4,
-                  textCapitalization: TextCapitalization.sentences,
-                  textInputAction: TextInputAction.send,
-                  textAlignVertical: TextAlignVertical.center,
-                  onSubmitted: (_) => _sendReply(),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    height: 1.25,
-                    leadingDistribution: TextLeadingDistribution.even,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  decoration: InputDecoration(
-                    hintText: isIOS ? 'Reply in thread...' : 'Reply...',
-                    hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                child: Focus(
+                  skipTraversal: true,
+                  onKeyEvent: (node, event) {
+                    if ((kIsWeb || kIsDesktop) &&
+                        event is KeyDownEvent &&
+                        (event.logicalKey == LogicalKeyboardKey.enter ||
+                            event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+                      final hw = HardwareKeyboard.instance;
+                      if (!hw.isShiftPressed && !hw.isControlPressed && !hw.isMetaPressed && !hw.isAltPressed) {
+                        _sendReply();
+                        return KeyEventResult.handled;
+                      }
+                    }
+                    return KeyEventResult.ignored;
+                  },
+                  child: TextField(
+                    controller: _textController,
+                    focusNode: _focusNode,
+                    minLines: 1,
+                    maxLines: 4,
+                    keyboardType: TextInputType.multiline,
+                    textCapitalization: TextCapitalization.sentences,
+                    textInputAction: (kIsWeb || kIsDesktop) ? TextInputAction.newline : TextInputAction.send,
+                    textAlignVertical: TextAlignVertical.center,
+                    onSubmitted: (kIsWeb || kIsDesktop) ? null : (_) => _sendReply(),
+                    style: theme.textTheme.bodyMedium?.copyWith(
                       height: 1.25,
                       leadingDistribution: TextLeadingDistribution.even,
-                      color: theme.colorScheme.onSurfaceVariant,
+                      color: theme.colorScheme.onSurface,
                     ),
-                    isDense: true,
-                    border: InputBorder.none,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: InputDecoration(
+                      hintText: isIOS ? 'Reply in thread...' : 'Reply...',
+                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                        height: 1.25,
+                        leadingDistribution: TextLeadingDistribution.even,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      isDense: true,
+                      border: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    ),
                   ),
                 ),
               ),

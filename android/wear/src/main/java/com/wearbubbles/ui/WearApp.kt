@@ -6,8 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,15 +38,19 @@ private fun decodeGuid(encoded: String): String =
 
 @OptIn(ExperimentalHorologistApi::class)
 @Composable
-fun WearApp(initialChatGuid: String? = null) {
+fun WearApp(
+    initialChatGuid: String? = null,
+    initialChatNonce: Long = 0L,
+    onInitialChatHandled: () -> Unit = {}
+) {
     val context = LocalContext.current
     val settings = remember { SettingsDataStore(context) }
     val app = remember { context.applicationContext as WearBubblesApp }
-    var checkedConfig by remember { mutableStateOf(false) }
+    var initialStartDestination by remember { mutableStateOf<String?>(null) }
     var configured by remember { mutableStateOf(false) }
 
-    val isConfiguredFlow by settings.isConfigured.collectAsState(initial = null)
-    val isPhoneConnected by app.phoneRelayClient.isPhoneConnected.collectAsState()
+    val isConfiguredFlow by settings.isConfigured.collectAsStateWithLifecycle(initialValue = null)
+    val isPhoneConnected by app.phoneRelayClient.isPhoneConnected.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
         val phoneConnected = app.phoneRelayClient.refreshPhoneConnected()
@@ -58,12 +62,16 @@ fun WearApp(initialChatGuid: String? = null) {
 
     LaunchedEffect(isConfiguredFlow, isPhoneConnected) {
         if (isConfiguredFlow != null) {
-            configured = (isConfiguredFlow == true) || isPhoneConnected
-            checkedConfig = true
+            val isReady = (isConfiguredFlow == true) || isPhoneConnected
+            configured = isReady
+            if (initialStartDestination == null) {
+                initialStartDestination = if (isReady) "conversations" else "setup"
+            }
         }
     }
 
-    if (!checkedConfig) {
+    val startDestination = initialStartDestination
+    if (startDestination == null) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -74,12 +82,13 @@ fun WearApp(initialChatGuid: String? = null) {
 
     WearBubblesTheme {
         val navController = rememberSwipeDismissableNavController()
-        val startDestination = if (configured) "conversations" else "setup"
 
-        LaunchedEffect(initialChatGuid, configured) {
+        LaunchedEffect(initialChatGuid, initialChatNonce, configured) {
             if (configured && !initialChatGuid.isNullOrBlank()) {
                 val encoded = encodeGuid(initialChatGuid)
+                onInitialChatHandled()
                 navController.navigate("messages/$encoded") {
+                    popUpTo("conversations") { inclusive = false }
                     launchSingleTop = true
                 }
             }

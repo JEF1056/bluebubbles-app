@@ -122,9 +122,16 @@ class FindMyDetailSheet extends StatelessWidget {
     final subtitle = (!redacted && addressHandle != null && addressHandle != title) ? addressHandle : null;
     final now = controller.currentTime;
     final isLive = friend.isLiveFresh(now);
+    final isPinned = controller.isFriendPinned(friend);
     final isLocating = friend.locatingInProgress ||
         (friend.stableId != null && controller.locatingFriendId.value == friend.stableId);
-    final statusText = friend.displayFreshness(now);
+    final statusText = formatFindMyFreshness(
+      isLiveFresh: isLive,
+      locatingInProgress: isLocating,
+      isOld: friend.isOld,
+      lastUpdated: friend.lastUpdated,
+      now: now,
+    );
     final hasCoords = (friend.latitude ?? 0) != 0 && (friend.longitude ?? 0) != 0;
     final displayAddress = redacted
         ? 'Location hidden'
@@ -175,7 +182,12 @@ class FindMyDetailSheet extends StatelessWidget {
         else
           _CenteredPill(
             icon: isLocating ? Icons.sync : Icons.access_time,
-            label: isLocating ? 'Locating...' : (statusText.isEmpty ? 'Offline' : statusText),
+            label: statusText.isEmpty ? 'Offline' : statusText,
+          ),
+        if (isPinned)
+          const _CenteredPill(
+            icon: Icons.push_pin_rounded,
+            label: 'Pinned',
           ),
         if (isLive && isLocating)
           const _CenteredPill(
@@ -199,6 +211,12 @@ class FindMyDetailSheet extends StatelessWidget {
         ),
         _RefreshActionTile(controller: controller),
         _LiveToggleTile(controller: controller),
+        _ActionTile(
+          icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+          label: isPinned ? 'Unpin' : 'Pin',
+          selected: isPinned,
+          onTap: () => controller.toggleFriendPin(friend),
+        ),
         if (!redacted && addressHandle != null && addressHandle.isNotEmpty) ...[
           _ActionTile(
             icon: Icons.chat_bubble_outline,
@@ -328,10 +346,8 @@ class FindMyDetailSheet extends StatelessWidget {
 
   String? _distanceLabel(LatLng? target, {required bool redacted}) {
     if (redacted || target == null) return null;
-    final userPos = controller.location.value;
-    if (userPos == null) return null;
-    final meters = distanceMetersBetween(LatLng(userPos.latitude, userPos.longitude), target);
-    final formatted = formatFindMyDistance(meters);
+    final meters = controller.distanceMetersTo(target.latitude, target.longitude);
+    final formatted = formatFindMyFriendDistance(meters);
     return formatted.isEmpty ? null : formatted;
   }
 
@@ -425,7 +441,7 @@ class _DetailSheetFrame extends StatelessWidget {
     final tt = context.theme.textTheme;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

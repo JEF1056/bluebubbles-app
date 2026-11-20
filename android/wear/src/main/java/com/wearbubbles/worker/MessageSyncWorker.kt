@@ -52,15 +52,22 @@ class MessageSyncWorker(
 
     override suspend fun doWork(): Result {
         val app = applicationContext as WearBubblesApp
+        if (app.socketManager.isConnected.value) {
+            return Result.success()
+        }
         if (app.phoneRelayClient.refreshPhoneConnected()) {
-            // Tethered to phone: avoid redundant standalone server polling.
+            // Tethered to phone: cancel periodic polling so watch doesn't wake every 15m.
+            cancel(applicationContext)
             return Result.success()
         }
 
         val settings = SettingsDataStore(applicationContext)
         val url = settings.getServerUrl()
         val password = settings.getPassword()
-        if (url.isBlank() || password.isBlank()) return Result.success()
+        if (url.isBlank() || password.isBlank()) {
+            cancel(applicationContext)
+            return Result.success()
+        }
 
         return try {
             val db = AppDatabase.getInstance(applicationContext)
@@ -77,50 +84,39 @@ class MessageSyncWorker(
             val newLastTime = chatDao.getLastMessageTime() ?: 0L
             if (prevChats > 0 && newLastTime > prevLastTime) {
                 Log.d(TAG, "New messages detected via background sync")
-                val latestChat = chatDao.getAllChats()
-                var notified = false
-                latestChat.collect { chats ->
-                    if (!notified) {
-                        notified = true
-                        val haptic = settings.hapticEnabled.first()
-                        chats.filter { it.hasUnreadMessage && it.lastMessageDate > prevLastTime }
-                            .take(3)
-                            .forEach { chat ->
-                                val title = contactRepo.resolveChatTitle(
-                                    chat.displayName,
-                                    chat.chatIdentifier,
-                                    chat.participantAddresses
-                                )
-                                val avatarPath = contactRepo.resolveAvatarForChat(
-                                    chat.guid,
-                                    chat.participantAddresses
-                                )
-                                NotificationHelper.showMessageNotification(
-                                    context = applicationContext,
-                                    chatGuid = chat.guid,
-                                    senderName = title,
-                                    messageText = chat.lastMessageText ?: "New message",
-                                    isGroup = chat.isGroup,
-                                    groupTitle = chat.displayName,
-                                    hapticEnabled = haptic,
-                                    timestamp = chat.lastMessageDate,
-                                    senderAddress = chat.chatIdentifier,
-                                    senderAvatarPath = avatarPath
-                                )
-                            }
+                val chats = chatDao.getAllChatsOnce()
+                val haptic = settings.hapticEnabled.first()
+                chats.filter { it.hasUnreadMessage && it.lastMessageDate > prevLastTime }
+                    .take(3)
+                    .forEach { chat ->
+                        val title = contactRepo.resolveChatTitle(
+                            chat.displayName,
+                            chat.chatIdentifier,
+                            chat.participantAddresses
+                        )
+                        val avatarPath = contactRepo.resolveAvatarForChat(
+                            chat.guid,
+                            chat.participantAddresses
+                        )
+                        NotificationHelper.showMessageNotification(
+                            context = applicationContext,
+                            chatGuid = chat.guid,
+                            senderName = title,
+                            messageText = chat.lastMessageText ?: "New message",
+                            isGroup = chat.isGroup,
+                            groupTitle = chat.displayName,
+                            hapticEnabled = haptic,
+                            timestamp = chat.lastMessageDate,
+                            senderAddress = chat.chatIdentifier,
+                            senderAvatarPath = avatarPath
+                        )
                     }
-                    throw StopCollect()
-                }
             }
 
-            Result.success()
-        } catch (_: StopCollect) {
             Result.success()
         } catch (e: Exception) {
             Log.w(TAG, "Background sync failed: ${e.message}")
             Result.retry()
         }
     }
-
-    private class StopCollect : Exception()
 }

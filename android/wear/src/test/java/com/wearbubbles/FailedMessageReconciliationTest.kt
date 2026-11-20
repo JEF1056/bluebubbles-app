@@ -1,8 +1,11 @@
 package com.wearbubbles
 
 import com.google.gson.Gson
+import com.wearbubbles.api.dto.ChatDto
 import com.wearbubbles.api.dto.MessageDto
 import com.wearbubbles.api.dto.MessageRelayDto
+import com.wearbubbles.api.dto.TapbackUtils
+import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.db.MessageDao
 import com.wearbubbles.db.entities.MessageEntity
 import com.wearbubbles.relay.PhoneRelayClient
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -178,6 +182,203 @@ class FailedMessageReconciliationTest {
         assertEquals("temp-1", relayDto.tempGuid)
     }
 
+    @Test
+    fun `temp-react row reconciles on real tapback despite clock skew so removal leaves no ghost badge`() = runBlocking {
+        val dao = FakeMessageDao()
+        val targetGuid = "target-msg-1"
+        // Watch clock is 20s ahead of Mac server clock.
+        dao.upsert(
+            MessageEntity(
+                guid = "temp-react-add",
+                chatGuid = chat,
+                text = null,
+                isFromMe = true,
+                dateCreated = 2_020_000L,
+                handleAddress = null,
+                associatedMessageGuid = "p:0/$targetGuid",
+                associatedMessageType = "2000"
+            )
+        )
+
+        val realAdd = MessageEntity(
+            guid = "real-react-add",
+            chatGuid = chat,
+            text = null,
+            isFromMe = true,
+            dateCreated = 2_000_000L,
+            handleAddress = null,
+            associatedMessageGuid = "p:0/$targetGuid",
+            associatedMessageType = "2000"
+        )
+        dao.upsertAndReconcile(realAdd)
+        assertFalse(dao.rows.containsKey("temp-react-add"))
+        assertTrue(dao.rows.containsKey("real-react-add"))
+
+        // Removing the tapback at Mac time 2_010_000L (earlier than watch's 2_020_000L) must yield 0 badges.
+        val realRemove = MessageEntity(
+            guid = "real-react-remove",
+            chatGuid = chat,
+            text = null,
+            isFromMe = true,
+            dateCreated = 2_010_000L,
+            handleAddress = null,
+            associatedMessageGuid = "p:0/$targetGuid",
+            associatedMessageType = "3000"
+        )
+        dao.upsertAndReconcile(realRemove)
+
+        val badges = TapbackUtils.computeReactions(dao.rows.values.toList())[targetGuid].orEmpty()
+        assertTrue(badges.isEmpty())
+    }
+
+    @Test
+    fun `upsertAndReconcileBatch cleans matching and stale temp-react rows`() = runBlocking {
+        val dao = FakeMessageDao()
+        val targetGuid = "target-msg-2"
+        dao.upsert(
+            MessageEntity(
+                guid = "temp-react-match",
+                chatGuid = chat,
+                text = null,
+                isFromMe = true,
+                dateCreated = 1_000_000L,
+                handleAddress = null,
+                associatedMessageGuid = "p:0/$targetGuid",
+                associatedMessageType = "2001"
+            )
+        )
+        dao.upsert(
+            MessageEntity(
+                guid = "temp-react-stale",
+                chatGuid = chat,
+                text = null,
+                isFromMe = true,
+                dateCreated = 500_000L,
+                handleAddress = null,
+                associatedMessageGuid = "p:0/$targetGuid",
+                associatedMessageType = "2002"
+            )
+        )
+
+        val incoming = listOf(
+            MessageEntity(
+                guid = "real-like",
+                chatGuid = chat,
+                text = null,
+                isFromMe = true,
+                dateCreated = 1_003_000L,
+                handleAddress = null,
+                associatedMessageGuid = "bp:0/$targetGuid",
+                associatedMessageType = "2001"
+            )
+        )
+        dao.upsertAndReconcileBatch(chat, incoming, stalePendingCutoffMs = 800_000L)
+
+        assertFalse(dao.rows.containsKey("temp-react-match"))
+        assertFalse(dao.rows.containsKey("temp-react-stale"))
+        assertTrue(dao.rows.containsKey("real-like"))
+    }
+
+    @Test
+    fun `late orphaned temp-react failure deletes temp row instead of marking sendFailed`() = runBlocking {
+        val dao = FakeMessageDao()
+        dao.upsert(
+            MessageEntity(
+                guid = "temp-react-fail",
+                chatGuid = chat,
+                text = null,
+                isFromMe = true,
+                dateCreated = 1_000_000L,
+                handleAddress = null,
+                associatedMessageGuid = "p:0/msg-1",
+                associatedMessageType = "2000"
+            )
+        )
+
+        PhoneRelayClient.reconcileOrphanedSendResult(
+            SendResultPayload(requestId = "req-react", tempGuid = "temp-react-fail", success = false, error = "timeout"),
+            dao
+        )
+
+        assertFalse(dao.rows.containsKey("temp-react-fail"))
+    }
+
+    @Test
+    fun `notification reply wait window fits inside goAsync and distinguishes timeout from failure`() {
+        assertTrue(MessageRepository.NOTIFICATION_REPLY_WAIT_MS in 5_000L..8_500L)
+
+        val timedOut = PhoneRelayClient.orTimedOutResult(
+            result = null,
+            requestId = "req-notif",
+            tempGuid = "temp-notif"
+        )
+        assertTrue(timedOut.timedOut)
+        assertFalse(timedOut.success)
+
+        val serverFailure = SendResultPayload(
+            requestId = "req-notif-2",
+            tempGuid = "temp-notif-2",
+            success = false,
+            error = "HTTP 500"
+        )
+        assertFalse(serverFailure.timedOut)
+    }
+
+    @Test
+    fun `extractDmRecipientIfNewChatError matches DM missing-chat errors and skips group or unrelated errors`() {
+        assertEquals(
+            "+15551234567",
+            MessageRepository.extractDmRecipientIfNewChatError("iMessage;-;+15551234567", 404, null)
+        )
+        assertEquals(
+            "+15551234567",
+            MessageRepository.extractDmRecipientIfNewChatError(
+                "SMS;-;+15551234567",
+                400,
+                """{"status":400,"error":{"message":"Chat does not exist"}}"""
+            )
+        )
+        assertEquals(
+            "alice@example.com",
+            MessageRepository.extractDmRecipientIfNewChatError(
+                "iMessage;-;alice@example.com",
+                500,
+                "Chat does not exist"
+            )
+        )
+        assertNull(
+            MessageRepository.extractDmRecipientIfNewChatError("iMessage;+;chat123456", 404, "Chat does not exist")
+        )
+        assertNull(
+            MessageRepository.extractDmRecipientIfNewChatError("iMessage;-;+15551234567", 401, "Unauthorized")
+        )
+        assertNull(
+            MessageRepository.extractDmRecipientIfNewChatError("iMessage;-;+15551234567", 400, "Message text blank")
+        )
+        assertNull(
+            MessageRepository.extractDmRecipientIfNewChatError("iMessage;-;", 404, "Chat does not exist")
+        )
+    }
+
+    @Test
+    fun `hasMoreRelayedMessages treats timeout sentinel as maybe more and checks 40-page threshold`() {
+        assertTrue(MessageRepository.hasMoreRelayedMessages(-1))
+        assertFalse(MessageRepository.hasMoreRelayedMessages(0))
+        assertFalse(MessageRepository.hasMoreRelayedMessages(39))
+        assertTrue(MessageRepository.hasMoreRelayedMessages(40))
+    }
+
+    @Test
+    fun `chat dto deserializes messages list from chat new response`() {
+        val dto = Gson().fromJson(
+            """{"guid":"SMS;-;+15551234567","chatIdentifier":"+15551234567","messages":[{"guid":"real-first","text":"Hey","isFromMe":true,"dateCreated":12345}]}""",
+            ChatDto::class.java
+        )
+        assertEquals("SMS;-;+15551234567", dto.guid)
+        assertEquals(1, dto.messages?.size)
+        assertEquals("real-first", dto.messages?.firstOrNull()?.guid)
+    }
+
     private class FakeMessageDao : MessageDao {
         val rows = linkedMapOf<String, MessageEntity>()
         private val flow = MutableStateFlow<List<MessageEntity>>(emptyList())
@@ -209,6 +410,11 @@ class FailedMessageReconciliationTest {
                 it.chatGuid == chatGuid &&
                     (it.sendFailed || it.guid.startsWith("temp-") || it.guid.startsWith("sent-temp-"))
             }
+
+        override suspend fun existsByGuid(guid: String): Boolean = rows.containsKey(guid)
+
+        override suspend fun countForChat(chatGuid: String): Int =
+            rows.values.count { it.chatGuid == chatGuid }
 
         override suspend fun deleteByGuid(guid: String) {
             rows.remove(guid)

@@ -16,6 +16,7 @@ import android.media.AudioAttributes
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.collection.LruCache
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -57,8 +58,14 @@ object NotificationHelper {
     private val _activeChatGuid = MutableStateFlow<String?>(null)
     val activeChatGuid: StateFlow<String?> = _activeChatGuid.asStateFlow()
 
+    // Null until MainActivity reports lifecycle so unit tests without an activity remain unaffected.
+    private val _isAppResumed = MutableStateFlow<Boolean?>(null)
+    @Volatile
+    private var pendingLaunchChatGuid: String? = null
+
     private val messageHistory = ConcurrentHashMap<String, MutableList<NotificationCompat.MessagingStyle.Message>>()
     private val chatMetadata = ConcurrentHashMap<String, ChatNotifMeta>()
+    private val personIconCache = LruCache<String, IconCompat>(24)
 
     private data class ChatNotifMeta(
         val senderName: String,
@@ -67,6 +74,28 @@ object NotificationHelper {
         val isGroup: Boolean,
         val groupTitle: String?
     )
+
+    fun setAppResumed(resumed: Boolean) {
+        _isAppResumed.value = resumed
+    }
+
+    fun setPendingLaunchChatGuid(chatGuid: String?) {
+        pendingLaunchChatGuid = chatGuid?.takeIf { it.isNotBlank() }
+    }
+
+    internal fun isAppResumedOrUnbound(): Boolean = _isAppResumed.value != false
+
+    internal fun shouldActivateChat(chatGuid: String): Boolean {
+        if (!isAppResumedOrUnbound()) return false
+        val pending = pendingLaunchChatGuid
+        return pending == null || pending == chatGuid
+    }
+
+    internal fun shouldMarkChatReadOnIncoming(
+        activeChatGuid: String?,
+        targetChatGuid: String,
+        isFromMe: Boolean
+    ): Boolean = !isFromMe && activeChatGuid == targetChatGuid
 
     fun setActiveChat(chatGuid: String?, context: Context? = null) {
         _activeChatGuid.value = chatGuid
@@ -476,7 +505,7 @@ object NotificationHelper {
             .extend(
                 NotificationCompat.WearableExtender()
                     .setBridgeTag(chatGuid)
-                    .setDismissalId("$chatGuid:$timestamp")
+                    .setDismissalId(chatGuid)
             )
             .build()
 
@@ -551,7 +580,14 @@ object NotificationHelper {
             .setKey(address?.takeIf { it.isNotBlank() } ?: name)
             .setImportant(important)
         buildPersonUri(address)?.let { builder.setUri(it) }
-        val icon = decodeAvatarIcon(avatarPath) ?: buildMonogramAvatarIcon(name, address ?: name)
+        val avatarMtime = avatarPath?.takeIf { it.isNotBlank() }?.let {
+            File(it).takeIf { f -> f.exists() && f.length() > 0L }?.lastModified()
+        } ?: 0L
+        val iconKey = "${avatarPath.orEmpty()}|$avatarMtime|${address ?: name}|$name"
+        val icon = personIconCache.get(iconKey)
+            ?: (decodeAvatarIcon(avatarPath) ?: buildMonogramAvatarIcon(name, address ?: name))?.also {
+                personIconCache.put(iconKey, it)
+            }
         icon?.let { builder.setIcon(it) }
         return builder.build()
     }

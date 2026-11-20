@@ -67,16 +67,20 @@ class _NotificationPanelState extends State<NotificationPanel> with SingleTicker
                 ),
               if (kIsWeb)
                 SettingsTile(
-                  onTap: () async {
-                    String res = await requestWebNotificationPermission();
-                    setState(() {});
-                    showSnackbar("Notice", "Notification permission $res");
-                  },
+                  onTap: webNotificationPermission == "unsupported"
+                      ? null
+                      : () async {
+                          String res = await requestWebNotificationPermission();
+                          setState(() {});
+                          showSnackbar("Notice", "Notification permission $res");
+                        },
                   title: webNotificationPermission == "granted"
                       ? "Notifications enabled"
                       : webNotificationPermission == "denied"
                           ? "Notifications denied, please update your browser settings to re-enable notifications"
-                          : "Click to enable notifications",
+                          : webNotificationPermission == "unsupported"
+                              ? "Notifications are not supported in this browser"
+                              : "Click to enable notifications",
                   backgroundColor: tileColor,
                 ),
               // Matches the chat-list toggle above: no leading divider on desktop where that toggle is hidden.

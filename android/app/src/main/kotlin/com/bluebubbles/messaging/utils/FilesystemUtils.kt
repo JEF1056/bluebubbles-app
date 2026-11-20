@@ -96,8 +96,12 @@ object FilesystemUtils {
                     val columnIndex = cursor.getColumnIndexOrThrow(column)
                     val fileName = cursor.getString(columnIndex)
                     PersistentLog.i(context, "FileDirectory", "File name: $fileName")
-                    if (fileName != null) {
-                        targetFile = File(context.cacheDir, fileName)
+                    val safeName = sanitizeCacheFileName(fileName)
+                    if (safeName != null) {
+                        val candidate = File(context.cacheDir, safeName)
+                        if (candidate.canonicalFile.parentFile == context.cacheDir.canonicalFile) {
+                            targetFile = candidate
+                        }
                     }
                 }
             } finally {
@@ -139,6 +143,13 @@ object FilesystemUtils {
             cursor?.close()
         }
         return null
+    }
+
+    internal fun sanitizeCacheFileName(rawName: String?): String? {
+        if (rawName.isNullOrBlank()) return null
+        val baseName = File(rawName.replace('\\', '/')).name.trim()
+        if (baseName.isEmpty() || baseName == "." || baseName == "..") return null
+        return baseName
     }
 
     private fun isExternalStorageDocument(uri: Uri): Boolean {

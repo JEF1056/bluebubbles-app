@@ -20,6 +20,7 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/media_kit_hot_restart_fix.dart'
     if (dart.library.js_interop) 'package:bluebubbles/utils/media_kit_hot_restart_fix_web.dart';
 import 'package:bluebubbles/utils/window_effects.dart';
+import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
 import 'package:bluebubbles/app/layouts/settings/settings_page.dart';
@@ -28,6 +29,8 @@ import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/layouts/startup/splash_screen.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/backend/notifications/web_notifications_interop_stub.dart'
+    if (dart.library.js_interop) 'package:bluebubbles/services/backend/notifications/web_notifications_interop_web.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:collection/collection.dart';
 import 'package:easy_debounce/easy_debounce.dart';
@@ -143,6 +146,14 @@ Future<Null> initApp(bool bubble, List<String> arguments) async {
                   backgroundColor:
                       PlatformDispatcher.instance.platformBrightness == Brightness.dark ? Colors.black : Colors.white),
             )));
+      }
+
+      /* ----- WEB CONTEXT MENU SUPPRESSION ----- */
+      if (kIsWeb) {
+        suppressBrowserContextMenu();
+        try {
+          await BrowserContextMenu.disableContextMenu();
+        } catch (_) {}
       }
 
       /* ----- TIME ZONE INITIALIZATION ----- */
@@ -274,6 +285,7 @@ class DesktopWindowListener extends WindowListener {
 
   @override
   void onWindowFocus() {
+    LifecycleSvc.windowFocused = true;
     LifecycleSvc.open();
   }
 
@@ -364,23 +376,34 @@ class Main extends StatelessWidget {
         ),
         home: const Home(),
         shortcuts: {
-          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.comma): const OpenSettingsIntent(),
+          if (!kIsWeb) LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.comma): const OpenSettingsIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.comma): const OpenSettingsIntent(),
+          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.comma): const OpenSettingsIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyN): const OpenNewChatCreatorIntent(),
-          if (kIsDesktop)
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyK): const OpenNewChatCreatorIntent(),
+          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyK): const OpenNewChatCreatorIntent(),
+          if (kIsDesktop || kIsWeb)
             LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyN): const OpenNewChatCreatorIntent(),
+          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyN): const OpenNewChatCreatorIntent(),
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyF): const OpenSearchIntent(),
+          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.keyF): const OpenSearchIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyF): const OpenSearchIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyR): const ReplyRecentIntent(),
           if (kIsDesktop) LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyR): const ReplyRecentIntent(),
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.arrowDown): const OpenNextChatIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.arrowDown): const OpenNextChatIntent(),
-          if (kIsDesktop) LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.tab): const OpenNextChatIntent(),
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.period): const OpenNextChatIntent(),
+          if (kIsDesktop || kIsWeb)
+            LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.tab): const OpenNextChatIntent(),
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.arrowUp): const OpenPreviousChatIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.arrowUp): const OpenPreviousChatIntent(),
-          if (kIsDesktop)
+          if (kIsWeb)
+            LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.comma): const OpenPreviousChatIntent(),
+          if (kIsDesktop || kIsWeb)
             LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.tab):
                 const OpenPreviousChatIntent(),
+          LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.slash): const _ShowKeyboardShortcutsIntent(),
+          LogicalKeySet(LogicalKeyboardKey.meta, LogicalKeyboardKey.slash): const _ShowKeyboardShortcutsIntent(),
           LogicalKeySet(LogicalKeyboardKey.alt, LogicalKeyboardKey.keyI): const ToggleInspectorIntent(),
           LogicalKeySet(LogicalKeyboardKey.escape): const GoBackIntent(),
         },
@@ -399,7 +422,7 @@ class Main extends StatelessWidget {
           // SecureGate below) throws MissingPluginException on every lifecycle
           // event, which breaks window close/hide once the app is past setup.
           // Bypass the secure wrapper entirely on Linux.
-          child: Platform.isLinux
+          child: (kIsWeb || Platform.isLinux)
               ? TitleBarWrapper(
                   child: Stack(
                     fit: StackFit.expand,
@@ -518,6 +541,10 @@ class ToggleInspectorIntent extends Intent {
   const ToggleInspectorIntent();
 }
 
+class _ShowKeyboardShortcutsIntent extends Intent {
+  const _ShowKeyboardShortcutsIntent();
+}
+
 class Home extends StatefulWidget {
   const Home({super.key});
 
@@ -530,7 +557,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   bool fullyLoaded = false;
   Worker? _chatUrlWorker;
   Worker? _settingsUrlWorker;
+  Worker? _webBadgeWorker;
   bool _syncingFromUrl = false;
+  bool _handledShareTarget = false;
   String? _lastPushedHashPath;
 
   void _pushWebHashRoute({bool replace = false}) {
@@ -633,12 +662,36 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
           });
         }
 
-        /* ----- CTRL-F OVERRIDE ----- */
+        /* ----- CTRL-F & CONTEXT MENU OVERRIDE ----- */
         suppressBrowserFindShortcut();
+        suppressBrowserContextMenu();
 
         /* ----- HASH URL SYNC ----- */
         _chatUrlWorker = ever(ChatsSvc.activeChatGuid, (_) => _pushWebHashRoute());
         _settingsUrlWorker = ever(NavigationSvc.isSettingsOpen, (_) => _pushWebHashRoute());
+        updateWebTitleAndBadge(ChatsSvc.unreadCount.value);
+        _webBadgeWorker = ever<int>(ChatsSvc.unreadCount, updateWebTitleAndBadge);
+
+        // Handle PWA share_target (title/text/url) without touching setup/auth params.
+        final qp = Uri.base.queryParameters;
+        final sharedText = [qp['title'], qp['text'], qp['url']]
+            .where((v) => v != null && v.trim().isNotEmpty)
+            .map((v) => v!.trim())
+            .join('\n');
+        if (sharedText.isNotEmpty && !_handledShareTarget && SettingsSvc.settings.finishedSetup.value) {
+          _handledShareTarget = true;
+          unawaited(ChatsSvc.loadedAllChats.future.then((_) {
+            if (!mounted) return;
+            final navContext = NavigationSvc.key.currentContext ?? context;
+            if (!navContext.mounted) return;
+            NavigationSvc.pushAndRemoveUntil(
+              navContext,
+              NewChatCreator(initialText: sharedText),
+              (route) => route.isFirst,
+            );
+          }));
+        }
+
         final initialFragment = Uri.base.fragment;
         if (initialFragment.isNotEmpty) {
           unawaited(ChatsSvc.loadedAllChats.future.then((_) async {
@@ -707,6 +760,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   void dispose() {
     _chatUrlWorker?.dispose();
     _settingsUrlWorker?.dispose();
+    _webBadgeWorker?.dispose();
     // Clean up observer when app is fully closed
     WidgetsBinding.instance.removeObserver(this);
     windowManager.removeListener(DesktopWindowListener.instance);
@@ -739,6 +793,93 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     }
   }
 
+  void _showKeyboardShortcutsDialog(BuildContext context) {
+    final navContext = NavigationSvc.key.currentContext ?? context;
+    if (!navContext.mounted) return;
+    showDialog<void>(
+      context: navContext,
+      builder: (dlgContext) {
+        final cs = Theme.of(dlgContext).colorScheme;
+        final tt = Theme.of(dlgContext).textTheme;
+        Widget row(String keys, String label) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 5),
+              child: Row(
+                children: [
+                  Expanded(child: Text(label, style: tt.bodyMedium)),
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      keys,
+                      style: tt.labelSmall?.copyWith(fontWeight: FontWeight.w600, color: cs.onSurface),
+                    ),
+                  ),
+                ],
+              ),
+            );
+        return AlertDialog(
+          title: const Text('Keyboard shortcuts'),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: SingleChildScrollView(
+              child: LayoutBuilder(
+                builder: (_, constraints) {
+                  final twoCol = constraints.maxWidth >= 460;
+                  final navCol = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Navigation', style: tt.titleSmall?.copyWith(color: cs.primary)),
+                      const SizedBox(height: 8),
+                      row('Ctrl/Cmd + K', 'New conversation'),
+                      row('Ctrl + . / Ctrl + Tab', 'Next conversation'),
+                      row(
+                        kIsWeb ? 'Ctrl + , / Ctrl + Shift + Tab' : 'Ctrl + Shift + Tab',
+                        'Previous conversation',
+                      ),
+                      row('Ctrl/Cmd + F', 'Search messages'),
+                    ],
+                  );
+                  final actCol = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Messaging & Actions', style: tt.titleSmall?.copyWith(color: cs.primary)),
+                      const SizedBox(height: 8),
+                      row('Alt + R', 'Reply to recent message'),
+                      row('Alt + I', 'Toggle chat details'),
+                      row('Alt + ,', 'Open settings'),
+                      row('Ctrl/Cmd + /', 'Show keyboard shortcuts'),
+                      row('Esc', 'Close / Go back'),
+                    ],
+                  );
+                  if (!twoCol) {
+                    return Column(mainAxisSize: MainAxisSize.min, children: [navCol, const SizedBox(height: 16), actCol]);
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: navCol),
+                      const SizedBox(width: 24),
+                      Expanded(child: actCol),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(dlgContext).pop(), child: const Text('Close')),
+          ],
+        );
+      },
+    );
+  }
+
   /// Render
   @override
   Widget build(BuildContext context) {
@@ -749,6 +890,21 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         OpenSearchIntent: OpenSearchAction(context),
         OpenNextChatIntent: OpenNextChatAction(context),
         OpenPreviousChatIntent: OpenPreviousChatAction(context),
+        ReplyRecentIntent: CallbackAction<ReplyRecentIntent>(
+          onInvoke: (intent) {
+            final guid = ChatsSvc.activeChatGuid.value;
+            if (guid != null && SettingsSvc.settings.enablePrivateAPI.value) {
+              return ReplyRecentAction(guid).invoke(intent);
+            }
+            return null;
+          },
+        ),
+        _ShowKeyboardShortcutsIntent: CallbackAction<_ShowKeyboardShortcutsIntent>(
+          onInvoke: (_) {
+            _showKeyboardShortcutsDialog(context);
+            return null;
+          },
+        ),
         ToggleInspectorIntent: CallbackAction<ToggleInspectorIntent>(
           onInvoke: (_) {
             NavigationSvc.toggleInspectorDrawer();
@@ -775,8 +931,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 } else {
                   return PopScope(
                     canPop: false,
-                    child: TitleBarWrapper(
-                        child: kIsWeb || kIsDesktop ? const SetupView() : SplashScreen(shouldNavigate: fullyLoaded)),
+                    child: kIsWeb || kIsDesktop ? const SetupView() : SplashScreen(shouldNavigate: fullyLoaded),
                   );
                 }
               },

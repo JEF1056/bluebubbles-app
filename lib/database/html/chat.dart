@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:bluebubbles/database/html/attachment.dart';
 import 'package:bluebubbles/database/html/custom_group.dart';
@@ -10,8 +11,10 @@ import 'package:bluebubbles/models/models.dart' show HandleLookupKey, MessageSav
 import 'package:bluebubbles/services/backend/interfaces/chat_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:dio/dio.dart';
 import 'package:faker/faker.dart';
-import 'package:get/get.dart' hide Condition;
+import 'package:get/get.dart' hide Condition, Response;
+import 'package:get_it/get_it.dart';
 
 class Chat {
   int? id;
@@ -360,7 +363,9 @@ class Chat {
     await saveAsync(updateHasUnreadMessage: true);
 
     try {
-      if (privateMark && (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value)) {
+      if (privateMark &&
+          SettingsSvc.settings.enablePrivateAPI.value &&
+          (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value)) {
         if (!hasUnread) {
           HttpSvc.chat.markRead(guid);
         } else {
@@ -415,7 +420,7 @@ class Chat {
     if (checkForMessageText && changeUnreadStatus && isNewer) {
       if (message.isFromMe ?? false) {
         await toggleHasUnreadAsync(false, clearLocalNotifications: clearNotificationsIfFromMe, privateMark: false);
-      } else {
+      } else if (message.dateRead == null) {
         await toggleHasUnreadAsync(true, privateMark: false);
       }
     }
@@ -636,7 +641,8 @@ class Chat {
     if (id == null) return this;
     this.autoSendReadReceipts = autoSendReadReceipts;
     await saveAsync(updateAutoSendReadReceipts: true);
-    if (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value) {
+    if (SettingsSvc.settings.enablePrivateAPI.value &&
+        (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value)) {
       HttpSvc.chat.markRead(guid);
     }
     return this;
@@ -794,13 +800,114 @@ class Chat {
     return -aDate.compareTo(bDate);
   }
 
-  static Future<void> getIcon(Chat c, {bool force = false}) async {}
+  static Future<void> getIcon(Chat c, {bool force = false}) async {
+    if (!force && c.lockChatIcon) return;
+    final response = await HttpSvc.chat.getIcon(c.guid).catchError((err, stack) async {
+      Logger.debug("Failed to get chat icon for chat ${c.getTitle()}: $err");
+      return Response(statusCode: 500, requestOptions: RequestOptions(path: ""));
+    });
+    final status = response.statusCode ?? 500;
+    if (status != 200 || isNullOrEmpty(response.data)) {
+      if ((status == 404 || status == 204) && c.customAvatarPath != null) {
+        if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.headless) {
+          await (ChatsSvc as dynamic).setChatCustomAvatarPath(c, null);
+        } else {
+          await FilesystemSvc.deleteWebAvatar(c.customAvatarPath!);
+          c.customAvatarPath = null;
+          await c.saveAsync(updateCustomAvatarPath: true);
+        }
+      }
+      return;
+    }
 
-  static String? cachedServerBackgroundGuid(String guid) => null;
+    final raw = response.data;
+    final bytes = raw is Uint8List ? raw : Uint8List.fromList((raw as List).cast<int>());
+    if (bytes.isEmpty) return;
+    final path = await FilesystemSvc.saveWebAvatar('chat_${FilesystemService.sanitizeGuid(c.guid)}', bytes);
+    if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.headless) {
+      await (ChatsSvc as dynamic).setChatCustomAvatarPath(c, path);
+    } else {
+      c.customAvatarPath = path;
+      await c.saveAsync(updateCustomAvatarPath: true);
+    }
+    if (!isNullOrEmpty(c.serverGroupPhotoGuid) && c.knownGroupPhotoGuid != c.serverGroupPhotoGuid) {
+      c.knownGroupPhotoGuid = c.serverGroupPhotoGuid;
+      await c.saveAsync(updateKnownGroupPhotoGuid: true);
+    }
+  }
 
-  static void invalidateServerBackgroundGuidCache(String guid, [String? bgGuid]) {}
+  static final Map<String, String?> _cachedServerBgGuids = {};
+  static final Map<String, Future<void>> _inFlightBgSyncs = {};
 
-  static Future<void> syncBackground(Chat c, {Chat? targetChat}) async {}
+  static String? cachedServerBackgroundGuid(String guid, {String? fallbackStoredPath}) {
+    if (_cachedServerBgGuids.containsKey(guid)) {
+      return _cachedServerBgGuids[guid];
+    }
+    final bgGuid = serverBackgroundGuidFromPath(
+      FilesystemSvc.getExistingChatBackgroundPath(guid, fallbackStoredPath: fallbackStoredPath),
+    );
+    _cachedServerBgGuids[guid] = bgGuid;
+    return bgGuid;
+  }
+
+  static void invalidateServerBackgroundGuidCache(String guid, [String? bgGuid]) {
+    _cachedServerBgGuids[guid] = bgGuid;
+  }
+
+  static Future<void> syncBackground(Chat c, {Chat? targetChat}) {
+    final existing = _inFlightBgSyncs[c.guid];
+    if (existing != null) return existing;
+    final future = _syncBackgroundImpl(c, targetChat: targetChat).whenComplete(() {
+      _inFlightBgSyncs.remove(c.guid);
+    });
+    _inFlightBgSyncs[c.guid] = future;
+    return future;
+  }
+
+  static Future<void> _syncBackgroundImpl(Chat c, {Chat? targetChat}) async {
+    final serverGuid = c.serverBackgroundGuid;
+    final target = targetChat ?? c;
+    final existingPath = FilesystemSvc.getExistingChatBackgroundPath(
+      c.guid,
+      fallbackStoredPath: target.customBackgroundPath,
+    );
+    final currentWallpaperType = ChatsSvc.getChatState(target.guid)?.wallpaperType.value.name ?? target.wallpaperType;
+
+    if (!shouldSyncServerBackground(
+      serverGuid: serverGuid,
+      hasServerProperties: c.hasServerProperties,
+      existingPath: existingPath,
+      wallpaperType: currentWallpaperType,
+    )) {
+      _cachedServerBgGuids[c.guid] = serverBackgroundGuidFromPath(existingPath);
+      return;
+    }
+
+    if (serverGuid == null) {
+      await (ChatsSvc as dynamic).clearChatWallpaper(target);
+      _cachedServerBgGuids[c.guid] = null;
+      return;
+    }
+
+    final response = await HttpSvc.chat.getBackground(c.guid).catchError((err, stack) {
+      Logger.debug("Failed to fetch chat background for ${c.guid}: $err");
+      return Response(statusCode: 500, requestOptions: RequestOptions(path: ""));
+    });
+    if (response.statusCode != 200 || isNullOrEmpty(response.data)) return;
+
+    final raw = response.data;
+    final bytes = raw is Uint8List ? raw : Uint8List.fromList((raw as List).cast<int>());
+    if (bytes.isEmpty) return;
+
+    final contentType = response.headers.value('content-type')?.toLowerCase() ?? '';
+    final ext = contentType.contains('png') ? 'png' : 'jpg';
+    if (existingPath != null) {
+      ThemesService.clearAdaptiveThemeCache(existingPath);
+    }
+    final path = await FilesystemSvc.saveServerChatBackground(c.guid, serverGuid, bytes, ext: ext);
+    await (ChatsSvc as dynamic).setChatCustomBackgroundPath(target, path);
+    _cachedServerBgGuids[c.guid] = serverGuid;
+  }
 
   Map<String, dynamic> toMap() {
     final participants = handles.isEmpty ? this.participants : handles.toList();

@@ -5,6 +5,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -80,13 +81,13 @@ class NotificationsSilencedBanner extends StatelessWidget {
                           fontFamily: moonIcon.fontFamily,
                           package: moonIcon.fontPackage,
                           fontSize: context.theme.textTheme.bodyMedium!.fontSize,
-                          color: context.theme.colorScheme.tertiaryContainer,
+                          color: context.theme.colorScheme.tertiary,
                         ),
                       ),
                       Text(
                         " ${chat.getTitle()} has notifications silenced",
                         style: context.theme.textTheme.bodyMedium!
-                            .copyWith(color: context.theme.colorScheme.tertiaryContainer),
+                            .copyWith(color: context.theme.colorScheme.tertiary),
                       ),
                     ],
                   ),
@@ -115,7 +116,7 @@ class _NotifyAnywayButton extends StatelessWidget {
       return TextButton(
         child: Text(
           "Notify Anyway",
-          style: context.theme.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.tertiaryContainer),
+          style: context.theme.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.tertiary),
         ),
         onPressed: () async {
           await HttpSvc.message.notify(latestMessage!.guid!);
@@ -226,14 +227,72 @@ class ConversationPillsRow extends StatelessWidget {
   }
 }
 
-/// Extracted widget for scroll down button
-class ScrollDownButton extends StatelessWidget {
+/// Extracted widget for scroll down button & GMsg "New messages" pill
+class ScrollDownButton extends StatefulWidget {
   const ScrollDownButton({
     super.key,
     required this.controller,
+    this.unreadWhileScrolledCount,
   });
 
   final ConversationViewController controller;
+  final ValueNotifier<int>? unreadWhileScrolledCount;
+
+  @override
+  State<ScrollDownButton> createState() => _ScrollDownButtonState();
+}
+
+class _ScrollDownButtonState extends State<ScrollDownButton> {
+  bool _scrolledUp = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.scrollController.addListener(_onScroll);
+    widget.unreadWhileScrolledCount?.addListener(_onUnreadChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant ScrollDownButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller.scrollController != widget.controller.scrollController) {
+      oldWidget.controller.scrollController.removeListener(_onScroll);
+      widget.controller.scrollController.addListener(_onScroll);
+    }
+    if (oldWidget.unreadWhileScrolledCount != widget.unreadWhileScrolledCount) {
+      oldWidget.unreadWhileScrolledCount?.removeListener(_onUnreadChanged);
+      widget.unreadWhileScrolledCount?.addListener(_onUnreadChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.scrollController.removeListener(_onScroll);
+    widget.unreadWhileScrolledCount?.removeListener(_onUnreadChanged);
+    super.dispose();
+  }
+
+  void _onUnreadChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onScroll() {
+    final sc = widget.controller.scrollController;
+    if (!sc.hasClients || sc.positions.length != 1) return;
+    final offset = sc.offset;
+    if (offset < 120 && (widget.unreadWhileScrolledCount?.value ?? 0) > 0) {
+      widget.unreadWhileScrolledCount!.value = 0;
+    }
+    final up = offset >= 250;
+    if (up != _scrolledUp && mounted) {
+      setState(() => _scrolledUp = up);
+    }
+  }
+
+  void _jumpToBottom() {
+    widget.unreadWhileScrolledCount?.value = 0;
+    widget.controller.scrollToBottom();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -241,49 +300,99 @@ class ScrollDownButton extends StatelessWidget {
       alignment: iOS ? Alignment.bottomRight : Alignment.bottomCenter,
       child: Padding(
         padding: const EdgeInsets.only(bottom: 10, right: 10, left: 10),
-        child: Obx(
-          () => IgnorePointer(
-            ignoring: !controller.showScrollDown.value,
-            child: AnimatedOpacity(
-              opacity: controller.showScrollDown.value ? 1 : 0,
-              duration: const Duration(milliseconds: 300),
-              child: iOS
-                  ? TextButton(
-                      style: TextButton.styleFrom(
-                        backgroundColor: context.theme.colorScheme.secondary,
-                        shape: const CircleBorder(),
-                        padding: const EdgeInsets.all(0),
-                        maximumSize: const Size(32, 32),
-                        minimumSize: const Size(32, 32),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      onPressed: controller.scrollToBottom,
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 32, minWidth: 32),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
+        child: Obx(() {
+          final unreadCount = widget.unreadWhileScrolledCount?.value ?? 0;
+          final showScrollDown = widget.controller.showScrollDown.value;
+          final showDesktopOrWeb = (kIsWeb || kIsDesktop) && (_scrolledUp || unreadCount > 0);
+          final visible = showDesktopOrWeb || showScrollDown || unreadCount > 0;
+          final cs = context.theme.colorScheme;
+
+          Widget button;
+          if (unreadCount > 0) {
+            button = Material(
+              color: cs.inverseSurface,
+              elevation: 4,
+              borderRadius: BorderRadius.circular(9999),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(9999),
+                onTap: _jumpToBottom,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 36),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.arrow_downward_rounded, size: 16, color: cs.onInverseSurface),
+                        const SizedBox(width: 6),
+                        Text(
+                          unreadCount == 1 ? "New messages" : "$unreadCount new messages",
+                          style: context.textTheme.labelMedium?.copyWith(
+                            color: cs.onInverseSurface,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
-                        padding: const EdgeInsets.only(top: 3, left: 1),
-                        alignment: Alignment.center,
-                        child: Icon(
-                          CupertinoIcons.chevron_down,
-                          color: context.theme.colorScheme.onSecondary,
-                          size: 20,
-                        ),
-                      ),
-                    )
-                  : FloatingActionButton.small(
-                      heroTag: null,
-                      onPressed: controller.scrollToBottom,
-                      backgroundColor: context.theme.colorScheme.secondary,
-                      child: Icon(
-                        Icons.arrow_downward,
-                        color: context.theme.colorScheme.onSecondary,
-                      ),
+                      ],
                     ),
+                  ),
+                ),
+              ),
+            );
+          } else if (iOS) {
+            button = TextButton(
+              style: TextButton.styleFrom(
+                backgroundColor: cs.secondary,
+                shape: const CircleBorder(),
+                padding: EdgeInsets.zero,
+                maximumSize: const Size(32, 32),
+                minimumSize: const Size(32, 32),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: _jumpToBottom,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 32, minWidth: 32),
+                decoration: const BoxDecoration(shape: BoxShape.circle),
+                padding: const EdgeInsets.only(top: 3, left: 1),
+                alignment: Alignment.center,
+                child: Icon(
+                  CupertinoIcons.chevron_down,
+                  color: cs.onSecondary,
+                  size: 20,
+                ),
+              ),
+            );
+          } else {
+            final bg = (kIsWeb || kIsDesktop) ? cs.surfaceContainerHigh : cs.secondary;
+            final fg = (kIsWeb || kIsDesktop) ? cs.onSurface : cs.onSecondary;
+            button = Material(
+              color: bg,
+              elevation: 3,
+              shape: const CircleBorder(),
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: _jumpToBottom,
+                child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Icon(Icons.arrow_downward_rounded, color: fg, size: 22),
+                ),
+              ),
+            );
+          }
+
+          return IgnorePointer(
+            ignoring: !visible,
+            child: AnimatedOpacity(
+              opacity: visible ? 1 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: AnimatedScale(
+                scale: visible ? 1.0 : 0.85,
+                duration: const Duration(milliseconds: 150),
+                child: button,
+              ),
             ),
-          ),
-        ),
+          );
+        }),
       ),
     );
   }
@@ -300,28 +409,51 @@ class DragDropOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = context.theme.colorScheme;
     return Obx(
-      () => AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        color: context.theme.colorScheme.surface.withValues(alpha: dragging.value ? 0.4 : 0),
-        child: dragging.value
-            ? Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      iOS ? CupertinoIcons.paperclip : Icons.attach_file,
-                      color: context.theme.colorScheme.primary,
-                      size: 50,
+      () => IgnorePointer(
+        ignoring: !dragging.value,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          color: cs.surface.withValues(alpha: dragging.value ? 0.72 : 0),
+          child: dragging.value
+              ? Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                    decoration: BoxDecoration(
+                      color: cs.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: cs.primary, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.12),
+                          blurRadius: 16,
+                          offset: const Offset(0, 6),
+                        ),
+                      ],
                     ),
-                    Text(
-                      "Attach Files(s)",
-                      style: context.theme.textTheme.headlineLarge!.copyWith(color: context.theme.colorScheme.primary),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          iOS ? CupertinoIcons.paperclip : Icons.upload_file_rounded,
+                          color: cs.primary,
+                          size: 44,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          "Drop files to attach",
+                          style: context.theme.textTheme.titleLarge?.copyWith(
+                            color: cs.onSurface,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              )
-            : const SizedBox.shrink(),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
       ),
     );
   }

@@ -100,4 +100,73 @@ class WearPinnedSyncTest {
 
         assertEquals(listOf("pin-a", "pin-b", "unpinned"), result.map { it.get("guid").asString })
     }
+
+    @Test
+    fun `buildWatchChatSyncList truncates lastMessageText to 300 chars`() {
+        val longText = "a".repeat(450)
+        val chat = serverChat("iMessage;-;+15551234567", dateCreated = 1000L).apply {
+            getAsJsonObject("lastMessage").addProperty("text", longText)
+        }
+
+        val result = WearSyncManager.buildWatchChatSyncList(
+            recentChats = listOf(chat),
+            extraPinnedChats = emptyList(),
+            pinnedGuids = null
+        )
+
+        assertEquals(300, result.single().get("lastMessageText").asString.length)
+        assertEquals("a".repeat(300), result.single().get("lastMessageText").asString)
+    }
+
+    @Test
+    fun `shouldUseDataAsset switches at 60KB threshold`() {
+        assertFalse(WearSyncManager.shouldUseDataAsset(ByteArray(WearSyncManager.PAYLOAD_MESSAGE_MAX_BYTES)))
+        assertTrue(WearSyncManager.shouldUseDataAsset(ByteArray(WearSyncManager.PAYLOAD_MESSAGE_MAX_BYTES + 1)))
+    }
+
+    @Test
+    fun `extractDmRecipientIfNewChatError detects 1-to-1 DM missing chat errors only`() {
+        assertEquals(
+            "+15551234567",
+            WearSyncManager.extractDmRecipientIfNewChatError("iMessage;-;+15551234567", 404, null)
+        )
+        assertEquals(
+            "+15551234567",
+            WearSyncManager.extractDmRecipientIfNewChatError("SMS;-;+15551234567", 400, """{"message":"Chat does not exist"}""")
+        )
+        assertEquals(
+            "user@example.com",
+            WearSyncManager.extractDmRecipientIfNewChatError("iMessage;-;user@example.com", 500, "Chat does not exist")
+        )
+        assertNull(WearSyncManager.extractDmRecipientIfNewChatError("iMessage;+;chat12345", 404, "does not exist"))
+        assertNull(WearSyncManager.extractDmRecipientIfNewChatError("iMessage;-;+15551234567", 500, "Internal error"))
+    }
+
+    @Test
+    fun `parseNewChatMessageResult extracts created chatGuid and first message`() {
+        val response = """
+            {
+              "status": 200,
+              "data": {
+                "guid": "iMessage;-;+15551234567",
+                "messages": [
+                  {
+                    "guid": "msg-real-1",
+                    "tempGuid": "temp-1",
+                    "text": "Hello!",
+                    "isFromMe": true,
+                    "dateCreated": 1234567890
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val parsed = WearSyncManager.parseNewChatMessageResult(response, "any;-;+15551234567")
+        assertEquals("iMessage;-;+15551234567", parsed?.get("chatGuid")?.asString)
+        assertEquals("msg-real-1", parsed?.get("guid")?.asString)
+        assertEquals("temp-1", parsed?.get("tempGuid")?.asString)
+        assertEquals("Hello!", parsed?.get("text")?.asString)
+        assertNull(WearSyncManager.parseNewChatMessageResult("""{"status":200,"data":{"guid":"x","messages":[]}}""", "x"))
+    }
 }

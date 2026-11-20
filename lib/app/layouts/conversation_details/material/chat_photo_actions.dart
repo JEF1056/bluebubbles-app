@@ -3,6 +3,7 @@ import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
@@ -64,20 +65,34 @@ Future<void> updatePhoto(BuildContext context, Chat chat) async {
       barrierDismissible: false,
       builder: (BuildContext dialogContext) => const BBProgressDialog(title: "Updating group photo..."),
     );
-    final response = await HttpSvc.chat.setIcon(chat.guid, result);
+    final webBytes = kIsWeb ? FilesystemSvc.getCachedWebAvatarByPath(result) : null;
+    if (kIsWeb && webBytes == null) {
+      if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+      showSnackbar("Error", "Failed to read cropped avatar!", type: SnackbarType.error);
+      return;
+    }
+    final response = await HttpSvc.chat.setIcon(chat.guid, result, bytes: webBytes);
     if (response.statusCode == 200) {
       await ChatsSvc.setChatCustomAvatarPath(chat, result);
       if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
     } else {
       try {
-        await File(result).delete();
+        if (kIsWeb) {
+          await FilesystemSvc.deleteWebAvatar(result);
+        } else {
+          await File(result).delete();
+        }
       } catch (_) {}
       if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
       showSnackbar("Error", "Failed to update group photo!", type: SnackbarType.error);
     }
   } else if (usePrivateApi) {
     try {
-      await File(result).delete();
+      if (kIsWeb) {
+        await FilesystemSvc.deleteWebAvatar(result);
+      } else {
+        await File(result).delete();
+      }
     } catch (_) {}
     showSnackbar("Error", "Failed to update group photo!", type: SnackbarType.error);
   }

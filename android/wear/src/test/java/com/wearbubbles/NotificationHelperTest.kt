@@ -5,6 +5,7 @@ import com.wearbubbles.notifications.CallPhase
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -75,5 +76,45 @@ class NotificationHelperTest {
         assertTrue(CallNotificationHelper.ACTION_DECLINE_CALL.isNotBlank())
         assertTrue(CallNotificationHelper.ACTION_END_CALL.isNotBlank())
         assertEquals(2, CallPhase.entries.size)
+    }
+
+    @Test
+    fun `shouldMarkChatReadOnIncoming requires active matching chat and non-fromMe`() {
+        val chat = "iMessage;-;+15551234567"
+        assertTrue(NotificationHelper.shouldMarkChatReadOnIncoming(chat, chat, isFromMe = false))
+        assertFalse(NotificationHelper.shouldMarkChatReadOnIncoming(null, chat, isFromMe = false))
+        assertFalse(NotificationHelper.shouldMarkChatReadOnIncoming("iMessage;-;+15550000000", chat, isFromMe = false))
+        assertFalse(NotificationHelper.shouldMarkChatReadOnIncoming(chat, chat, isFromMe = true))
+    }
+
+    @Test
+    fun `isAppResumedOrUnbound blocks activation only while explicitly paused`() {
+        assertTrue(NotificationHelper.isAppResumedOrUnbound())
+        NotificationHelper.setAppResumed(false)
+        assertFalse(NotificationHelper.isAppResumedOrUnbound())
+        NotificationHelper.setAppResumed(true)
+        assertTrue(NotificationHelper.isAppResumedOrUnbound())
+    }
+
+    @Test
+    fun `shouldActivateChat blocks stale chat while another launch target is pending`() {
+        val chatA = "iMessage;-;+15551111111"
+        val chatB = "iMessage;-;+15552222222"
+        try {
+            NotificationHelper.setAppResumed(true)
+            NotificationHelper.setPendingLaunchChatGuid(chatB)
+            assertFalse(NotificationHelper.shouldActivateChat(chatA))
+            assertTrue(NotificationHelper.shouldActivateChat(chatB))
+
+            NotificationHelper.setAppResumed(false)
+            assertFalse(NotificationHelper.shouldActivateChat(chatB))
+
+            NotificationHelper.setAppResumed(true)
+            NotificationHelper.setPendingLaunchChatGuid(null)
+            assertTrue(NotificationHelper.shouldActivateChat(chatA))
+        } finally {
+            NotificationHelper.setPendingLaunchChatGuid(null)
+            NotificationHelper.setAppResumed(true)
+        }
     }
 }

@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+
+import 'package:path/path.dart' show join;
 
 import 'package:bluebubbles/app/layouts/settings/pages/advanced/private_api_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/settings_page.dart';
@@ -43,8 +46,25 @@ class SettingsService {
   /// getter; use [_serverDetails] within this class for reactive ([Obx]) access.
   final Rx<ServerDetails> _serverDetails = const ServerDetails.empty().obs;
 
+  /// Cross-platform cached self-avatar bytes (populated on Web & IO when
+  /// fetching `/icloud/contact` or hydrating from `WebMediaCache`).
+  final Rxn<Uint8List> userAvatarBytes = Rxn<Uint8List>();
+  final RxList<String> iCloudAliases = <String>[].obs;
+  final RxString iCloudActiveAlias = ''.obs;
+  final RxMap<String, dynamic> iCloudAccountInfo = <String, dynamic>{}.obs;
+  final RxMap<String, dynamic> iCloudContactInfo = <String, dynamic>{}.obs;
+
+  Future<void>? _icloudProfileRefreshFuture;
+  DateTime? _lastIcloudProfileRefresh;
+
+  /// Returns the user's configured display name, falling back to `'You'`.
+  String get effectiveUserName {
+    final name = settings.userName.value.trim();
+    return name.isNotEmpty ? name : 'You';
+  }
+
   bool get canAuthenticate =>
-      _canAuthenticate && (Platform.isWindows || (FilesystemSvc.androidInfo?.version.sdkInt ?? 0) > 28);
+      _canAuthenticate && !kIsWeb && (Platform.isWindows || (FilesystemSvc.androidInfo?.version.sdkInt ?? 0) > 28);
 
   Future<void> init({bool headless = false}) async {
     settings = Settings.getSettings();
@@ -210,6 +230,184 @@ class SettingsService {
       await updateServerDetails(await ServerInterface.getServerDetails());
     } catch (e, s) {
       Logger.warn("Failed to refresh server details", error: e, trace: s, tag: 'SettingsService');
+    }
+  }
+
+  /// Decodes base64 avatar data (stripping optional `data:image/...;base64,` URI prefix).
+  static Uint8List? decodeAvatarBase64(String? raw) {
+    if (raw == null) return null;
+    var trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+    final commaIdx = trimmed.indexOf(',');
+    if (trimmed.startsWith('data:') && commaIdx != -1) {
+      trimmed = trimmed.substring(commaIdx + 1).trim();
+    }
+    if (trimmed.isEmpty) return null;
+    try {
+      final bytes = base64Decode(trimmed);
+      return bytes.isEmpty ? null : bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Extracts a non-generic display name from an iCloud account or contact payload.
+  static String? extractDisplayName(Map<String, dynamic>? map) {
+    if (map == null || map.isEmpty) return null;
+    for (final key in const ['name', 'full_name', 'fullName', 'display_name', 'displayName', 'account_name', 'accountName']) {
+      final val = map[key]?.toString().trim();
+      if (val != null && val.isNotEmpty && val != 'You') return val;
+    }
+    final first = (map['first_name'] ?? map['firstName'])?.toString().trim() ?? '';
+    final last = (map['last_name'] ?? map['lastName'])?.toString().trim() ?? '';
+    final combined = '$first $last'.trim();
+    if (combined.isNotEmpty && combined != 'You') return combined;
+    return null;
+  }
+
+  /// Fetches `/api/v1/icloud/account` and `/api/v1/icloud/contact` on all platforms
+  /// (including Web) and populates `userName`, `iCloudAccount`, aliases, and self avatar.
+  /// Errors are silently swallowed without snackbars.
+  Future<void> refreshIcloudProfile({bool force = false}) {
+    if (_icloudProfileRefreshFuture != null) return _icloudProfileRefreshFuture!;
+    final future = _refreshIcloudProfileImpl(force: force).whenComplete(() {
+      _icloudProfileRefreshFuture = null;
+    });
+    _icloudProfileRefreshFuture = future;
+    return future;
+  }
+
+  Future<void> _refreshIcloudProfileImpl({bool force = false}) async {
+    if (!force && !settings.finishedSetup.value) return;
+    final now = DateTime.now();
+    if (!force && _lastIcloudProfileRefresh != null && now.difference(_lastIcloudProfileRefresh!).inSeconds < 60) {
+      return;
+    }
+
+    // Hydrate in-memory web avatar bytes if already cached from a prior session.
+    if (kIsWeb && userAvatarBytes.value == null && settings.userAvatarPath.value != null) {
+      userAvatarBytes.value = FilesystemSvc.getCachedWebAvatarByPath(settings.userAvatarPath.value!);
+    }
+
+    Map<String, dynamic>? accountData;
+    Map<String, dynamic>? contactData;
+
+    try {
+      final res = await HttpSvc.icloud.getAccountInfo();
+      final data = res.data is Map ? res.data['data'] : null;
+      if (data is Map) {
+        accountData = Map<String, dynamic>.from(data);
+      }
+    } catch (_) {
+      // Silently swallow per requirement (no snackbar on startup/socket connect).
+    }
+
+    try {
+      final res = await HttpSvc.icloud.getAccountContact();
+      final data = res.data is Map ? res.data['data'] : null;
+      if (data is Map) {
+        contactData = Map<String, dynamic>.from(data);
+      }
+    } catch (_) {
+      // Silently swallow per requirement.
+    }
+
+    if (accountData != null || contactData != null) {
+      _lastIcloudProfileRefresh = now;
+      await applyIcloudProfileData(account: accountData, contact: contactData);
+    }
+  }
+
+  /// Applies fetched `/icloud/account` and `/icloud/contact` payloads into [settings]
+  /// and reactive profile fields, persisting `userName`, `iCloudAccount`, and `userAvatarPath`.
+  Future<void> applyIcloudProfileData({
+    Map<String, dynamic>? account,
+    Map<String, dynamic>? contact,
+    bool persist = true,
+  }) async {
+    final List<String> toSave = [];
+
+    if (account != null && account.isNotEmpty) {
+      iCloudAccountInfo.assignAll(account);
+      final activeAlias =
+          (account['active_alias'] ?? account['activeAlias'] ?? contact?['active_alias'] ?? contact?['activeAlias'])
+                  ?.toString()
+                  .trim() ??
+              '';
+      if (activeAlias.isNotEmpty) {
+        iCloudActiveAlias.value = activeAlias;
+      }
+      final rawAliases = account['vetted_aliases'] ??
+          account['vettedAliases'] ??
+          account['aliases'] ??
+          account['active_aliases'] ??
+          contact?['aliases'] ??
+          contact?['active_aliases'];
+      if (rawAliases is List) {
+        final parsed = rawAliases
+            .map((e) => e is Map ? (e['Alias'] ?? e['alias'])?.toString().trim() : e?.toString().trim())
+            .whereType<String>()
+            .where((e) => e.isNotEmpty)
+            .toList();
+        iCloudAliases.assignAll(parsed);
+      }
+      final appleId =
+          (account['apple_id'] ?? account['appleId'] ?? account['email'] ?? contact?['apple_id'] ?? contact?['appleId'])
+                  ?.toString()
+                  .trim() ??
+              '';
+      final preferredAccount = appleId.isNotEmpty ? appleId : activeAlias;
+      if (preferredAccount.isNotEmpty && settings.iCloudAccount.value != preferredAccount) {
+        settings.iCloudAccount.value = preferredAccount;
+        toSave.add('iCloudAccount');
+      }
+    }
+
+    if (contact != null && contact.isNotEmpty) {
+      iCloudContactInfo.assignAll(contact);
+    }
+
+    final fetchedName = extractDisplayName(contact) ?? extractDisplayName(account);
+    final currentName = settings.userName.value.trim();
+    if (fetchedName != null && (currentName.isEmpty || currentName == 'You')) {
+      settings.userName.value = fetchedName;
+      toSave.add('userName');
+    }
+
+    final avatarBytes = decodeAvatarBase64((contact?['avatar'] ?? account?['avatar'])?.toString());
+    if (avatarBytes != null) {
+      userAvatarBytes.value = avatarBytes;
+      final existingPath = settings.userAvatarPath.value;
+      final bool hasExistingAvatar = existingPath != null &&
+          existingPath.isNotEmpty &&
+          (kIsWeb ? FilesystemSvc.getCachedWebAvatarByPath(existingPath) != null : File(existingPath).existsSync());
+      if (!hasExistingAvatar && persist) {
+        if (kIsWeb) {
+          if (GetIt.I.isRegistered<FilesystemService>()) {
+            final webPath = await FilesystemSvc.saveWebAvatar('you', avatarBytes);
+            settings.userAvatarPath.value = webPath;
+            toSave.add('userAvatarPath');
+          }
+        } else if (GetIt.I.isRegistered<FilesystemService>()) {
+          try {
+            final file = File(join(FilesystemSvc.avatarsPath, 'you', 'avatar-icloud.jpg'));
+            await file.create(recursive: true);
+            await file.writeAsBytes(avatarBytes, flush: true);
+            settings.userAvatarPath.value = file.path;
+            toSave.add('userAvatarPath');
+          } catch (e, s) {
+            Logger.warn("Failed to persist iCloud avatar file", error: e, trace: s, tag: 'SettingsService');
+          }
+        }
+      }
+    }
+
+    if (persist && toSave.isNotEmpty) {
+      try {
+        await settings.saveManyAsync(toSave);
+      } catch (_) {
+        // Silently ignore persistence errors when isolate/DB is not initialized (e.g. unit tests).
+      }
     }
   }
 
@@ -485,7 +683,7 @@ class SettingsService {
         !(element.isDraft ?? false) &&
         !(element.isPrerelease ?? false) &&
         element.tagName != null &&
-        !(Platform.isAndroid && element.tagName!.split('+').last.contains('desktop')) &&
+        !(!kIsWeb && Platform.isAndroid && element.tagName!.split('+').last.contains('desktop')) &&
         !(kIsDesktop && element.tagName!.split('+').last.contains('android')));
     final version = release.tagName!.split("+").first.replaceAll("v", "");
     // The build after the "+", without a platform prefix: v2.1.5+95 and v2.1.5+android.95 are both 95
@@ -493,7 +691,7 @@ class SettingsService {
     final isDesktopRelease = release.tagName!.split('+').last.contains('desktop');
 
     String buildNumber = "";
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       buildNumber =
           FilesystemSvc.packageInfo.buildNumber.lastChars(min(4, FilesystemSvc.packageInfo.buildNumber.length));
       if (int.parse(code) <= int.parse(buildNumber) || PrefsSvc.server.getClientUpdateCheckCode() == code) {

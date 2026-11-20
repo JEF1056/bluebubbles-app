@@ -52,11 +52,14 @@ class HttpService implements BaseApi {
 
   /// Get the URL origin from the current server address
   @override
-  String get origin =>
-      originOverride ??
-      (Uri.parse(SettingsSvc.settings.serverAddress.value).hasScheme
-          ? Uri.parse(SettingsSvc.settings.serverAddress.value).origin
-          : '');
+  String get origin {
+    if (originOverride != null) return originOverride!;
+    final raw = SettingsSvc.settings.serverAddress.value.trim();
+    if (raw.isEmpty) return '';
+    final parsed = Uri.tryParse(raw);
+    if (parsed == null || !parsed.hasScheme || parsed.host.isEmpty) return '';
+    return parsed.origin;
+  }
   @override
   String get apiRoot => "$origin/api/v1";
   @override
@@ -211,9 +214,13 @@ class HttpService implements BaseApi {
     if (response.statusCode == 200) {
       try {
         final Uint8List data = response.data;
-        final file = File(join(FilesystemSvc.fontPath, 'apple.ttf'));
-        await file.create(recursive: true);
-        await file.writeAsBytes(data);
+        if (kIsWeb) {
+          await WebMediaCache.instance.put(WebMediaCache.fontsStore, 'iosFont', data);
+        } else {
+          final file = File(join(FilesystemSvc.fontPath, 'apple.ttf'));
+          await file.create(recursive: true);
+          await file.writeAsBytes(data);
+        }
         FilesystemSvc.fontExistsOnDisk.value = true;
         final fontLoader = FontLoader("Apple Color Emoji");
         final cachedFontBytes = ByteData.view(data.buffer);

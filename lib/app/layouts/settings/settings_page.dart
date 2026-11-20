@@ -121,9 +121,20 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
           actions: {
             GoBackIntent: GoBackAction(context),
           },
-          child: Obx(() => Container(
-                color: context.theme.colorScheme.surface.themeOpacity(context),
-                child: TabletModeWrapper(
+          child: kIsDesktop
+              ? Obx(() => Container(
+                    color: context.theme.colorScheme.surface.themeOpacity(context),
+                    child: _buildSplitSettings(context),
+                  ))
+              : Container(
+                  color: context.theme.colorScheme.surface,
+                  child: _buildSplitSettings(context),
+                )),
+    );
+  }
+
+  Widget _buildSplitSettings(BuildContext context) {
+    return TabletModeWrapper(
                   initialRatio: 0.4,
                   minRatio: kIsDesktop || kIsWeb ? 0.2 : 0.33,
                   maxRatio: 0.5,
@@ -270,40 +281,43 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                   ),
                   right: LayoutBuilder(builder: (context, constraints) {
                     NavigationSvc.maxWidthSettings = constraints.maxWidth;
-                    return PopScope(
-                      canPop: false,
-                      onPopInvokedWithResult: <T>(bool _, T? _) async {
-                        Get.until((route) {
-                          if (route.settings.name == "initial") {
-                            Get.back();
-                          } else {
-                            Get.back(id: 3);
-                          }
-                          return true;
-                        }, id: 3);
-                      },
-                      child: Navigator(
-                        key: Get.nestedKey(3),
-                        observers: [_paneObserver],
-                        onPopPage: (route, _) {
-                          route.didPop(false);
-                          return false;
+                    // Isolate nested Navigator's ModalBarrier BlockSemantics from hiding the left pane.
+                    return Semantics(
+                      container: true,
+                      explicitChildNodes: true,
+                      child: PopScope(
+                        canPop: false,
+                        onPopInvokedWithResult: <T>(bool _, T? _) async {
+                          Get.until((route) {
+                            if (route.settings.name == "initial") {
+                              Get.back();
+                            } else {
+                              Get.back(id: 3);
+                            }
+                            return true;
+                          }, id: 3);
                         },
-                        pages: [
-                          MaterialPage(
-                              name: "initial",
-                              child: BBScaffold(
-                                  backgroundColor: headerColor,
-                                  body: Center(
-                                    child: Text("Select a settings page from the list",
-                                        style: context.theme.textTheme.bodyLarge),
-                                  ))),
-                        ],
+                        child: Navigator(
+                          key: Get.nestedKey(3),
+                          observers: [_paneObserver],
+                          onPopPage: (route, _) {
+                            route.didPop(false);
+                            return false;
+                          },
+                          pages: [
+                            MaterialPage(
+                                name: "initial",
+                                child: BBScaffold(
+                                    backgroundColor: headerColor,
+                                    body: Center(
+                                      child: Text("Select a settings page from the list",
+                                          style: context.theme.textTheme.bodyLarge),
+                                    ))),
+                          ],
+                        ),
                       ),
                     );
                   }),
-                ),
-              ))),
-    );
+                );
   }
 }

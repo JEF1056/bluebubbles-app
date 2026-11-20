@@ -1,4 +1,5 @@
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
@@ -22,14 +23,25 @@ String createObjectUrlFromBytes(Uint8List bytes) {
   return web.URL.createObjectURL(blob);
 }
 
+bool _contextMenuSuppressed = false;
+
+void suppressBrowserContextMenu() {
+  if (_contextMenuSuppressed) return;
+  _contextMenuSuppressed = true;
+  web.EventStreamProviders.contextMenuEvent.forTarget(web.document).listen((web.MouseEvent event) {
+    event.preventDefault();
+  });
+}
+
 Future<void> preventNextContextMenu() async {
-  final event = await web.EventStreamProviders.contextMenuEvent.forTarget(web.document).first;
-  event.preventDefault();
+  // Suppress globally instead of awaiting `.first` inside onSecondaryTapUp:
+  // macOS browsers fire `contextmenu` on mousedown before Flutter's tap-up.
+  suppressBrowserContextMenu();
 }
 
 void suppressBrowserFindShortcut() {
   web.EventStreamProviders.keyDownEvent.forTarget(web.document).listen((web.KeyboardEvent e) {
-    if (e.key == 'F3' || (e.ctrlKey && (e.key == 'f' || e.key == 'F'))) {
+    if (e.key == 'F3' || ((e.ctrlKey || e.metaKey) && (e.key == 'f' || e.key == 'F'))) {
       e.preventDefault();
     }
   });
@@ -37,9 +49,31 @@ void suppressBrowserFindShortcut() {
 
 bool get isWebDocumentHidden => web.document.hidden;
 
-String get webNotificationPermission => web.Notification.permission;
+bool get isWebDocumentFocused => web.document.hasFocus();
+
+bool get _hasWebNotificationApi {
+  try {
+    return globalContext.has('Notification');
+  } catch (_) {
+    return false;
+  }
+}
+
+String get webNotificationPermission {
+  if (!_hasWebNotificationApi) return 'unsupported';
+  try {
+    return web.Notification.permission;
+  } catch (_) {
+    return 'unsupported';
+  }
+}
 
 Future<String> requestWebNotificationPermission() async {
-  final result = await web.Notification.requestPermission().toDart;
-  return result.toDart;
+  if (!_hasWebNotificationApi) return 'unsupported';
+  try {
+    final result = await web.Notification.requestPermission().toDart;
+    return result.toDart;
+  } catch (_) {
+    return 'unsupported';
+  }
 }

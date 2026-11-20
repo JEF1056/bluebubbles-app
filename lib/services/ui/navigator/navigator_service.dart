@@ -35,7 +35,8 @@ class NavigatorService {
   final RxBool isSettingsOpen = false.obs;
 
   /// Optional right-side chat inspector drawer on wide (>1024px) desktop/web layouts.
-  final RxBool showInspectorDrawer = true.obs;
+  /// Hidden by default on web so the chat canvas stays focused until toggled.
+  final RxBool showInspectorDrawer = (!kIsWeb).obs;
 
   void toggleInspectorDrawer() => showInspectorDrawer.value = !showInspectorDrawer.value;
 
@@ -78,7 +79,7 @@ class NavigatorService {
   bool isTabletMode(BuildContext context) =>
       (!context.isPhone || context.width / context.height > 0.8) &&
       SettingsSvc.settings.tabletMode.value &&
-      context.width > 600;
+      context.width > (kIsWeb ? 680 : 600);
 
   /// grab the available screen width, returning the split screen width if applicable
   /// this should *always* be used in place of context.width or similar

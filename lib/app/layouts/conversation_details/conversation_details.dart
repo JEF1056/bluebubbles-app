@@ -4,6 +4,7 @@ import 'package:bluebubbles/app/layouts/conversation_details/material/material_c
 import 'package:bluebubbles/app/layouts/conversation_details/material/material_participants_section.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/attachments_loader.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_info.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/widgets/findmy_location_card.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/chat_options.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/widgets/sections/documents/documents_section.dart';
@@ -16,6 +17,7 @@ import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -74,69 +76,82 @@ class _ConversationDetailsState extends State<ConversationDetails> with WidgetsB
       child: Obx(() {
         final chatDetailTheme = ChatDetailTheme.resolve(context, chat);
 
+        final scaffold = SettingsScaffold(
+          headerColor: chatDetailTheme.headerColor,
+          title: "Details",
+          tileColor: chatDetailTheme.tileColor,
+          initialHeader: null,
+          iosSubtitle: iosSubtitle,
+          materialSubtitle: materialSubtitle,
+          minimalAppBar: true,
+          actions: [
+            Obx(() {
+              if (selected.isNotEmpty) {
+                return IconButton(
+                  icon: Icon(iOS ? CupertinoIcons.xmark : Icons.close, color: context.theme.colorScheme.onSurface),
+                  onPressed: () {
+                    selected.clear();
+                  },
+                );
+              } else {
+                return const SizedBox.shrink();
+              }
+            }),
+            Obx(() {
+              if (selected.isNotEmpty) {
+                return IconButton(
+                  icon: Icon(
+                    iOS ? CupertinoIcons.cloud_download : Icons.file_download,
+                    color: context.theme.colorScheme.onSurface,
+                  ),
+                  onPressed: () {
+                    AttachmentsSvc.saveAllToDisk(media.where((e) => e.guid != null && selected.contains(e.guid)));
+                  },
+                );
+              } else {
+                return const SizedBox.shrink();
+              }
+            }),
+          ],
+          bodySlivers: [
+            SliverToBoxAdapter(
+              child: SettingsSvc.settings.skin.value == Skins.iOS
+                  ? ChatInfo(chat: chat)
+                  : ExpressiveChatHeader(chat: chat),
+            ),
+            SliverToBoxAdapter(child: FindMyLocationCard(chat: chat)),
+            SettingsSvc.settings.skin.value == Skins.iOS
+                ? ParticipantsList(chat: chat)
+                : ExpressiveParticipantsSection(chat: chat),
+            // Hidden widget that loads attachments in the background
+            SliverToBoxAdapter(
+              child: AttachmentsLoader(chat: chat, onAttachmentsLoaded: onAttachmentsLoaded),
+            ),
+            SliverPadding(padding: EdgeInsets.symmetric(vertical: SettingsSvc.settings.skin.value == Skins.iOS ? 0 : 5)),
+            SettingsSvc.settings.skin.value == Skins.iOS
+                ? ChatOptions(chat: chat)
+                : ExpressiveChatOptions(chat: chat),
+            MediaGridSection(chat: chat, media: media, selected: selected, isLoading: isLoadingAttachments),
+            LinksSection(chat: chat),
+            LocationsSection(chat: chat, locations: locations, isLoading: isLoadingAttachments),
+            DocumentsSection(chat: chat, docs: docs, isLoading: isLoadingAttachments),
+            const SliverPadding(padding: EdgeInsets.only(top: 50)),
+          ],
+        );
+
         return Theme(
           data: chatDetailTheme.theme,
-          child: SettingsScaffold(
-            headerColor: chatDetailTheme.headerColor,
-            title: "Details",
-            tileColor: chatDetailTheme.tileColor,
-            initialHeader: null,
-            iosSubtitle: iosSubtitle,
-            materialSubtitle: materialSubtitle,
-            minimalAppBar: true,
-            actions: [
-              Obx(() {
-                if (selected.isNotEmpty) {
-                  return IconButton(
-                    icon: Icon(iOS ? CupertinoIcons.xmark : Icons.close, color: context.theme.colorScheme.onSurface),
-                    onPressed: () {
-                      selected.clear();
-                    },
-                  );
-                } else {
-                  return const SizedBox.shrink();
-                }
-              }),
-              Obx(() {
-                if (selected.isNotEmpty) {
-                  return IconButton(
-                    icon: Icon(
-                      iOS ? CupertinoIcons.cloud_download : Icons.file_download,
-                      color: context.theme.colorScheme.onSurface,
+          child: kIsWeb
+              ? ColoredBox(
+                  color: chatDetailTheme.headerColor,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 820),
+                      child: scaffold,
                     ),
-                    onPressed: () {
-                      AttachmentsSvc.saveAllToDisk(media.where((e) => selected.contains(e.guid!)));
-                    },
-                  );
-                } else {
-                  return const SizedBox.shrink();
-                }
-              }),
-            ],
-            bodySlivers: [
-              SliverToBoxAdapter(
-                child: SettingsSvc.settings.skin.value == Skins.iOS
-                    ? ChatInfo(chat: chat)
-                    : ExpressiveChatHeader(chat: chat),
-              ),
-              SettingsSvc.settings.skin.value == Skins.iOS
-                  ? ParticipantsList(chat: chat)
-                  : ExpressiveParticipantsSection(chat: chat),
-              // Hidden widget that loads attachments in the background
-              SliverToBoxAdapter(
-                child: AttachmentsLoader(chat: chat, onAttachmentsLoaded: onAttachmentsLoaded),
-              ),
-              SliverPadding(padding: EdgeInsets.symmetric(vertical: SettingsSvc.settings.skin.value == Skins.iOS ? 0 : 5)),
-              SettingsSvc.settings.skin.value == Skins.iOS
-                  ? ChatOptions(chat: chat)
-                  : ExpressiveChatOptions(chat: chat),
-              MediaGridSection(chat: chat, media: media, selected: selected, isLoading: isLoadingAttachments),
-              LinksSection(chat: chat),
-              LocationsSection(chat: chat, locations: locations, isLoading: isLoadingAttachments),
-              DocumentsSection(chat: chat, docs: docs, isLoading: isLoadingAttachments),
-              const SliverPadding(padding: EdgeInsets.only(top: 50)),
-            ],
-          ),
+                  ),
+                )
+              : scaffold,
         );
       }),
     );

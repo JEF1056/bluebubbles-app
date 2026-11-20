@@ -97,6 +97,10 @@ class ChatsService {
   /// Timer for debouncing chatListVersion updates to prevent rapid UI rebuilds
   Timer? _listVersionUpdateTimer;
 
+  /// Monotonic guard so overlapping [init] calls never double-insert into [_sortedChats].
+  int _initGeneration = 0;
+  Future<void>? _activeInit;
+
   /// Listeners for redacted mode settings to update all ChatStates
   StreamSubscription? _redactedModeListener;
   StreamSubscription? _hideContactInfoListener;
@@ -313,7 +317,13 @@ class ChatsService {
     Logger.info("Fetching chats...", tag: "ChatBloc");
 
     reset();
+    final generation = _initGeneration;
+    final future = _performInit(generation);
+    _activeInit = future;
+    await future;
+  }
 
+  Future<void> _performInit(int generation) async {
     // Preload the saved default filter selection (if any) — independent of
     // chat count, so set this up unconditionally.
     _loadDefaultChatListFilters();
@@ -326,18 +336,24 @@ class ChatsService {
         }))
             .data['data']['total'] ??
         0;
+    if (generation != _initGeneration) {
+      final newer = _activeInit;
+      if (newer != null) await newer;
+      return;
+    }
 
     loadedAllChats = Completer();
     if (currentCount != 0) {
       hasChats.value = true;
     } else {
       loadedFirstChatBatch.value = true;
+      if (!loadedAllChats.isCompleted) loadedAllChats.complete();
       initDbWatchers();
       return;
     }
 
     // Clear existing chats to avoid duplicates on re-init
-    if (chatStates.isNotEmpty) {
+    if (chatStates.isNotEmpty || _sortedChats.isNotEmpty) {
       chatStates.clear();
       _sortedChats.clear();
     }
@@ -345,6 +361,11 @@ class ChatsService {
     final batches = (currentCount / batchSize).ceil();
     for (int i = 0; i < batches; i++) {
       final chatBatch = await Chat.getChatsAsync(limit: batchSize, offset: i * batchSize);
+      if (generation != _initGeneration) {
+        final newer = _activeInit;
+        if (newer != null) await newer;
+        return;
+      }
       if (kIsWeb) {
         webCachedHandles.addAll(chatBatch.map((e) => e.handles).flattened.toList());
         final ids = webCachedHandles.map((e) => e.address).toSet();
@@ -360,7 +381,8 @@ class ChatsService {
 
         if (activeChatGuid.value == c.guid) {
           _activeChat = state;
-          state.updateActiveAndAliveInternal(true);
+          state.updateActiveInternal(true);
+          state.updateAliveInternal(_isAppForeground);
         }
 
         // Add to sorted list
@@ -373,7 +395,7 @@ class ChatsService {
       _scheduleListVersionUpdate();
     }
 
-    loadedAllChats.complete();
+    if (!loadedAllChats.isCompleted) loadedAllChats.complete();
     Logger.info("Finished fetching chats (${chatStates.length}).", tag: "ChatBloc");
 
     // Calculate initial unread count now that all chat states are populated.
@@ -710,6 +732,7 @@ class ChatsService {
 
   /// Insert a chat into the sorted list at the correct position
   void _insertChatSorted(Chat chat) {
+    _sortedChats.removeWhere((c) => c.guid == chat.guid);
     final index = _findInsertionIndex(chat);
     _sortedChats.insert(index, chat);
   }
@@ -827,6 +850,8 @@ class ChatsService {
               notificationId: id,
               tag: NotificationsService.NEW_MESSAGE_TAG,
             );
+          } else if (kIsDesktop) {
+            unawaited(NotificationsSvc.clearDesktopNotificationsForChat(state.chat.guid));
           }
         }
       }
@@ -1030,24 +1055,38 @@ class ChatsService {
     setActiveChatSync(chat, clearNotifications: clearNotifications, save: false);
   }
 
+  bool get _isAppForeground =>
+      !(GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isForeground);
+
+  bool get _isUiInteractive =>
+      !(GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isUiInteractive);
+
   /// Set a chat as the active chat synchronously
-  void setActiveChatSync(Chat chat, {bool clearNotifications = true, bool save = true}) {
+  void setActiveChatSync(
+    Chat chat, {
+    bool clearNotifications = true,
+    bool save = true,
+    bool alive = true,
+  }) {
     Logger.debug('Setting active chat to ${chat.guid} (${chat.displayName})');
+
+    final foreground = _isAppForeground;
 
     // Get or create the chat state
     final chatState = getOrCreateChatState(chat);
 
     // Set this chat as active
     activeChat = chatState;
-    chatState.updateActiveAndAliveInternal(true);
+    chatState.updateActiveInternal(true);
+    chatState.updateAliveInternal(alive && foreground);
 
     // Clear all other chats to inactive
     setAllInactiveSync(save: false, clearActive: false);
 
-    if (clearNotifications) {
+    if (clearNotifications && alive && _isUiInteractive) {
       // Defer the observable update to avoid updating during build phase
       Future.microtask(() {
-        setChatHasUnread(chatState.chat, false, force: true);
+        setChatHasUnread(chatState.chat, false);
       });
     }
 
@@ -1065,6 +1104,7 @@ class ChatsService {
 
   /// Set the active chat to alive
   void setActiveToAlive() {
+    if (!_isAppForeground) return;
     Logger.info('Setting active chat to alive: ${activeChat?.chat.guid}');
     activeChat?.updateAliveInternal(true);
     _syncLocusContext(activeChat?.chat.guid);
@@ -1073,7 +1113,10 @@ class ChatsService {
   /// Check if a chat is currently active (both active and alive)
   bool isChatActive(String guid) {
     final state = getChatState(guid);
-    return state?.isChatActive ?? false;
+    if (state == null || !state.isChatActive) return false;
+    if (!_isAppForeground) return false;
+    if (state.controller?.showingSubRoute == true) return false;
+    return true;
   }
 
   /// Get the chat controller for a specific chat
@@ -1249,13 +1292,6 @@ class ChatsService {
     bool actualPrivateMark = privateMark;
     bool actualForce = force;
 
-    if (isActive) {
-      // Force mark as read locally if chat is active, but respect explicit
-      // privateMark: false (e.g. server chat-read-status-changed echo) to avoid
-      // a POST /read ping-pong loop.
-      actualForce = true;
-    }
-
     // Perform DB operation with adjusted parameters
     await chat.toggleHasUnreadAsync(hasUnread,
         force: actualForce,
@@ -1264,6 +1300,7 @@ class ChatsService {
         readBefore: readBefore);
 
     // Update service state
+    chatStates[chat.guid]?.updateHasUnreadInternal(hasUnread);
     updateChat(chat);
 
     return chat;
@@ -1293,15 +1330,16 @@ class ChatsService {
 
     // Handle unread status with active chat awareness
     if (checkForMessageText && changeUnreadStatus && isNewer) {
-      final isActive = isChatActive(chat.guid);
+      final isFromMe = message.isFromMe ?? false;
 
-      if (message.isFromMe! || isActive) {
-        // Mark as read if from me or chat is active
+      if (isFromMe) {
+        // Outgoing echo: clear local unread state without sending a read receipt
         await _toggleChatHasUnread(chat, false,
-            clearLocalNotifications: clearNotificationsIfFromMe, force: isActive, privateMark: isActive);
-      } else {
-        // Mark as unread if not from me and chat is not active
-        await _toggleChatHasUnread(chat, true, privateMark: false);
+            clearLocalNotifications: clearNotificationsIfFromMe,
+            privateMark: false);
+      } else if (message.dateRead == null) {
+        // Incoming !isFromMe messages always leave/set hasUnreadMessage = true until explicit user interaction
+        await _toggleChatHasUnread(chat, true, force: true, privateMark: false);
       }
     }
 
@@ -1437,8 +1475,20 @@ class ChatsService {
             state.chat.serviceName != serverServiceName;
         if (raw.containsKey('properties')) {
           final parsedChat = Chat.fromMap(raw);
-          if (Chat.cachedServerBackgroundGuid(guid) != parsedChat.serverBackgroundGuid) {
+          if (Chat.cachedServerBackgroundGuid(guid, fallbackStoredPath: state.chat.customBackgroundPath) !=
+              parsedChat.serverBackgroundGuid) {
             unawaited(Chat.syncBackground(parsedChat, targetChat: state.chat).catchError((_) {}));
+          }
+          if (state.chat.isGroup &&
+              state.chat.lockChatIcon != true &&
+              !isNullOrEmpty(parsedChat.serverGroupPhotoGuid)) {
+            final currentAvatar = state.customAvatarPath.value;
+            final missingAvatar = isNullOrEmpty(currentAvatar) ||
+                (kIsWeb && FilesystemSvc.getCachedWebAvatarByPath(currentAvatar!) == null);
+            if (missingAvatar || state.chat.knownGroupPhotoGuid != parsedChat.serverGroupPhotoGuid) {
+              state.chat.serverGroupPhotoGuid = parsedChat.serverGroupPhotoGuid;
+              unawaited(Chat.getIcon(state.chat).catchError((_) {}));
+            }
           }
         }
         if (!archiveNeedsUpdate && !readReceiptsNeedsUpdate && !serviceNameNeedsUpdate) continue;
@@ -1730,12 +1780,13 @@ class ChatsService {
     }
 
     final chatToUpdate = state?.chat ?? chat;
+    chatToUpdate.customBackgroundPath = resolvedPath;
     chatToUpdate.wallpaperType = newWallpaperType == ChatWallpaperType.none ? null : newWallpaperType.name;
     if (newWallpaperType == ChatWallpaperType.image) {
       chatToUpdate.dynamicWallpaperId = null;
       chatToUpdate.dynamicWallpaperConfig = null;
     }
-    await chatToUpdate.saveAsync(updateWallpaperSettings: true);
+    await chatToUpdate.saveAsync(updateWallpaperSettings: true, updateCustomBackgroundPath: true);
     Chat.invalidateServerBackgroundGuidCache(chatToUpdate.guid);
   }
 
@@ -1765,9 +1816,13 @@ class ChatsService {
 
     if (existingImagePath != null) {
       ThemesService.clearAdaptiveThemeCache(existingImagePath);
-      final file = File(existingImagePath);
-      if (await file.exists()) {
-        await file.delete();
+      if (kIsWeb) {
+        await FilesystemSvc.deleteChatBackground(chat.guid);
+      } else {
+        final file = File(existingImagePath);
+        if (await file.exists()) {
+          await file.delete();
+        }
       }
     }
 
@@ -1776,10 +1831,11 @@ class ChatsService {
     state?.updateDynamicWallpaperInternal(null, null);
 
     final chatToUpdate = state?.chat ?? chat;
+    chatToUpdate.customBackgroundPath = null;
     chatToUpdate.wallpaperType = null;
     chatToUpdate.dynamicWallpaperId = null;
     chatToUpdate.dynamicWallpaperConfig = null;
-    await chatToUpdate.saveAsync(updateWallpaperSettings: true);
+    await chatToUpdate.saveAsync(updateWallpaperSettings: true, updateCustomBackgroundPath: true);
     Chat.invalidateServerBackgroundGuidCache(chatToUpdate.guid);
   }
 
@@ -1911,6 +1967,8 @@ class ChatsService {
   // ========== End Chat Operations ==========
 
   void reset({bool reinitWatchers = false}) {
+    _initGeneration++;
+    _activeInit = null;
     currentCount = 0;
     hasChats.value = false;
     _activeChat = null;

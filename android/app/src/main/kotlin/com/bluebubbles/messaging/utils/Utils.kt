@@ -12,29 +12,46 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 object Utils {
-    fun getAdaptiveIconFromByteArray(data: ByteArray): IconCompat {
-        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
-        // Scale the bitmap to 108x108dp to comply with adaptive icon guidelines
-        // Start by scaling the inner image to 72x72dp
-        var width = bitmap.width
-        var height = bitmap.height
-        // Float division — integer division truncates to 0 for portrait images,
-        // which then causes a divide-by-zero when computing the other dimension.
-        val aspectRatio = width.toFloat() / height.toFloat()
-        if (aspectRatio > 1f) {
-            width = (72 * Resources.getSystem().displayMetrics.density).toInt()
-            height = (width / aspectRatio).toInt()
-        } else {
-            height = (72 * Resources.getSystem().displayMetrics.density).toInt()
-            width = (height * aspectRatio).toInt()
+    fun getAdaptiveIconFromByteArray(data: ByteArray): IconCompat? {
+        if (data.isEmpty()) return null
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size) ?: return null
+        var scaledBitmap: Bitmap? = null
+        return try {
+            // Scale the bitmap to 108x108dp to comply with adaptive icon guidelines
+            // Start by scaling the inner image to 72x72dp
+            var width = bitmap.width
+            var height = bitmap.height
+            if (width <= 0 || height <= 0) return null
+            // Float division — integer division truncates to 0 for portrait images,
+            // which then causes a divide-by-zero when computing the other dimension.
+            val aspectRatio = width.toFloat() / height.toFloat()
+            val density = Resources.getSystem().displayMetrics.density
+            if (aspectRatio > 1f) {
+                width = (72 * density).toInt().coerceAtLeast(1)
+                height = (width / aspectRatio).toInt().coerceAtLeast(1)
+            } else {
+                height = (72 * density).toInt().coerceAtLeast(1)
+                width = (height * aspectRatio).toInt().coerceAtLeast(1)
+            }
+            scaledBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
+            // Add transparent padding to achieve 108x108dp
+            val padding = ((108 - 72) * density).toInt()
+            val adaptiveBitmap = Bitmap.createBitmap(
+                scaledBitmap.width + padding,
+                scaledBitmap.height + padding,
+                Bitmap.Config.ARGB_8888
+            )
+            val tempCanvas = Canvas(adaptiveBitmap)
+            tempCanvas.drawBitmap(scaledBitmap, (padding / 2).toFloat(), (padding / 2).toFloat(), null)
+            IconCompat.createWithAdaptiveBitmap(adaptiveBitmap)
+        } finally {
+            if (scaledBitmap != null && scaledBitmap !== bitmap && !scaledBitmap.isRecycled) {
+                scaledBitmap.recycle()
+            }
+            if (!bitmap.isRecycled) {
+                bitmap.recycle()
+            }
         }
-        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true)
-        // Add transparent padding to achieve 108x108dp
-        val padding = ((108 - 72) * Resources.getSystem().displayMetrics.density).toInt();
-        val adaptiveBitmap = Bitmap.createBitmap(scaledBitmap.width + padding, scaledBitmap.height + padding, Bitmap.Config.ARGB_8888)
-        val tempCanvas = Canvas(adaptiveBitmap)
-        tempCanvas.drawBitmap(scaledBitmap, (padding / 2).toFloat(), (padding / 2).toFloat(), null)
-        return IconCompat.createWithAdaptiveBitmap(adaptiveBitmap)
     }
 
     fun getServerUrl(context: Context, result: MethodChannel.Result) {

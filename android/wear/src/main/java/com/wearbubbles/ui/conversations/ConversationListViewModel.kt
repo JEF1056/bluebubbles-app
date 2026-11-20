@@ -12,13 +12,17 @@ import com.wearbubbles.data.UpdateChecker
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.service.MessageListenerService
-import com.wearbubbles.socket.SocketEvent
+import com.wearbubbles.worker.MessageSyncWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class ChatItemUi(
     val guid: String,
@@ -58,13 +62,16 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
 
     init {
         viewModelScope.launch {
-            contactRepo.loadFromDb()
+            withContext(Dispatchers.IO) { contactRepo.loadFromDb() }
             combine(
                 chatRepo.getChats(),
                 contactRepo.getContactsFlow()
-            ) { entities, _ -> entities }.collect { entities ->
-                _chats.value = entities.map { it.toUi() }
-            }
+            ) { entities, _ -> entities }
+                .map { entities -> entities.map { it.toUi() } }
+                .flowOn(Dispatchers.IO)
+                .collect { uiItems ->
+                    _chats.value = uiItems
+                }
         }
 
         viewModelScope.launch {
@@ -79,32 +86,19 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
             if (!phoneConnected) {
                 val configured = settings.isConfigured.first()
                 if (configured) {
+                    MessageSyncWorker.schedule(application)
                     MessageListenerService.start(application)
+                } else {
+                    MessageSyncWorker.cancel(application)
                 }
             } else {
+                MessageSyncWorker.cancel(application)
                 MessageListenerService.stop(application)
             }
             refresh()
-            checkUpdates()
             if (!phoneConnected) {
+                checkUpdates()
                 prefetchRecentImages()
-            }
-        }
-
-        viewModelScope.launch {
-            app.socketManager.events.collect { event ->
-                when (event) {
-                    is SocketEvent.NewMessage -> {
-                        messageRepo.handleIncomingSocketMessage(event.message)
-                    }
-                    is SocketEvent.UpdatedMessage -> {
-                        messageRepo.handleIncomingSocketMessage(event.message)
-                    }
-                    is SocketEvent.PinnedChatsUpdated -> {
-                        chatRepo.updatePinnedOrder(event.pinnedChatGuids)
-                    }
-                    else -> {}
-                }
             }
         }
     }
@@ -149,13 +143,13 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     }
 
     private fun prefetchRecentImages() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val url = settings.getServerUrl()
                 val pass = settings.getPassword()
                 val headers = settings.getCustomHeaders()
                 if (url.isBlank() || pass.isBlank()) return@launch
-                val recent = db.messageDao().getRecentImageMessages(15)
+                val recent = db.messageDao().getRecentImageMessages(5)
                 val loader = coil.Coil.imageLoader(getApplication())
                 for (msg in recent) {
                     val attGuid = msg.attachmentGuid ?: continue

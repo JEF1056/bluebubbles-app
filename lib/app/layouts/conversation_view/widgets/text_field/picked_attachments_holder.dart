@@ -60,7 +60,7 @@ class _PickedAttachmentsHolderState extends State<PickedAttachmentsHolder> with 
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         return PickedAttachment(
-                          key: ValueKey(pickedAttachments[index].name),
+                          key: ObjectKey(pickedAttachments[index]),
                           data: pickedAttachments[index],
                           controller: widget.controller,
                           onRemove: (file) {

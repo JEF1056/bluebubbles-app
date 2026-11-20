@@ -29,12 +29,14 @@ class DropZoneManager {
 
   void onDropLeave(DropEventDetails event) {
     dragging.value = false;
+    numFiles.value = 0;
   }
 
   Future<void> onPerformDrop(
     DropDoneDetails event,
     ConversationViewController controller,
   ) async {
+    numFiles.value = event.files.length;
     try {
       for (final DropItem item in event.files) {
         String fileName = item.name;
@@ -69,6 +71,7 @@ class DropZoneManager {
       }
     } finally {
       dragging.value = false;
+      numFiles.value = 0;
     }
   }
 }

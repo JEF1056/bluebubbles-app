@@ -12,7 +12,7 @@ import 'package:get/get.dart';
 import 'package:bluebubbles/platform/shims/native_misc.dart' show OpenFilex, ResultType;
 import 'package:pasteboard/pasteboard.dart';
 import 'package:path/path.dart' hide context;
-import 'package:url_launcher/url_launcher_string.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 Future<void> downloadAttachment(MessagePopupActionContext ctx) async {
   try {
@@ -40,8 +40,26 @@ Future<void> downloadAttachment(MessagePopupActionContext ctx) async {
   }
 }
 
+@visibleForTesting
+Uri? buildAttachmentWebUri(String? rawUrl, String guidAuthKey) {
+  if (rawUrl == null || rawUrl.isEmpty) return null;
+  final parsed = Uri.tryParse(rawUrl);
+  if (parsed == null) return null;
+  return parsed.replace(
+    queryParameters: {
+      ...parsed.queryParameters,
+      'guid': guidAuthKey,
+    },
+  );
+}
+
 Future<void> openAttachmentWeb(MessagePopupActionContext ctx) async {
-  await launchUrlString("${ctx.part.attachments.first.webUrl!}?guid=${SettingsSvc.settings.guidAuthKey}");
+  final uri = buildAttachmentWebUri(
+    ctx.part.attachments.firstOrNull?.webUrl,
+    SettingsSvc.settings.guidAuthKey.value,
+  );
+  if (uri == null) return;
+  await launchUrl(uri);
   ctx.popDetails();
 }
 
@@ -75,8 +93,29 @@ Future<void> openInImageViewer(MessagePopupActionContext ctx) async {
   }
 }
 
-void copyAttachment(MessagePopupActionContext ctx) {
-  Pasteboard.writeFiles(ctx.part.attachments.map((element) => element.path).toList()).then((_) {
+Future<void> copyAttachment(MessagePopupActionContext ctx) async {
+  if (kIsWeb) {
+    final att = ctx.part.attachments.firstOrNull;
+    final content = att != null ? AttachmentsSvc.getContent(att, autoDownload: false) : null;
+    if (att?.mimeStart == 'image' && content is PlatformFile && content.bytes != null) {
+      try {
+        await Pasteboard.writeImage(content.bytes);
+        ctx.popDetails();
+        showCopiedToast("Attachment copied to clipboard");
+        return;
+      } catch (e) {
+        Logger.warn("Web clipboard image write failed: $e");
+      }
+    }
+    ctx.showSnack("Copy Unavailable", "Use Save or Open In New Tab on web.", type: SnackbarType.error);
+    return;
+  }
+  final paths = ctx.part.attachments.map((element) => element.path).whereType<String>().toList();
+  if (paths.isEmpty) {
+    ctx.showSnack("Copy Error", "Attachment file not downloaded yet!", type: SnackbarType.error);
+    return;
+  }
+  Pasteboard.writeFiles(paths).then((_) {
     ctx.popDetails();
     showCopiedToast(
         ctx.part.attachments.length > 1 ? "Attachments copied to clipboard" : "Attachment copied to clipboard");

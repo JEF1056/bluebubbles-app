@@ -8,12 +8,13 @@ import androidx.core.app.RemoteInput
 import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.data.ChatRepository
 import com.wearbubbles.data.MessageRepository
+import com.wearbubbles.data.NotificationReplyResult
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.worker.ReplySendWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 
 class ReplyReceiver : BroadcastReceiver() {
 
@@ -35,14 +36,23 @@ class ReplyReceiver : BroadcastReceiver() {
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val sendResult = withTimeout(10_000L) {
-                    messageRepo.sendMessage(chatGuid, replyText)
+                when (val outcome = messageRepo.sendNotificationReply(chatGuid, replyText, senderName)) {
+                    is NotificationReplyResult.Sent -> {
+                        app.applicationScope.launch { runCatching { chatRepo.markChatRead(chatGuid) } }
+                        NotificationHelper.appendOutgoingReply(appContext, chatGuid, replyText)
+                    }
+                    is NotificationReplyResult.AcceptedPending -> {
+                        app.applicationScope.launch { runCatching { chatRepo.markChatRead(chatGuid) } }
+                        NotificationHelper.appendOutgoingReply(appContext, chatGuid, replyText)
+                    }
+                    is NotificationReplyResult.Failed -> {
+                        Log.w("ReplyReceiver", "Failed to send reply for $chatGuid: ${outcome.error}")
+                        NotificationHelper.showReplyFailureNotification(appContext, chatGuid, senderName, replyText)
+                    }
+                    NotificationReplyResult.NeedsStandaloneWorker -> {
+                        ReplySendWorker.enqueue(appContext, chatGuid, senderName, replyText)
+                    }
                 }
-                if (sendResult.isFailure) {
-                    throw sendResult.exceptionOrNull() ?: IllegalStateException("Send failed")
-                }
-                runCatching { chatRepo.markChatRead(chatGuid) }
-                NotificationHelper.appendOutgoingReply(appContext, chatGuid, replyText)
             } catch (e: Exception) {
                 Log.w("ReplyReceiver", "Failed to send reply for $chatGuid", e)
                 NotificationHelper.showReplyFailureNotification(appContext, chatGuid, senderName, replyText)

@@ -81,10 +81,11 @@ class _ImageViewerState extends State<ImageViewer> with AutomaticKeepAliveClient
   Future<Uint8List?> _loadGifBytes() async {
     if (file.bytes != null) return file.bytes;
     final path = file.path;
-    if (path != null) {
+    if (!kIsWeb && path != null) {
       final f = File(path);
       if (await f.exists()) return f.readAsBytes();
     }
+    if (kIsWeb) return _loadWebThumbnail();
     return null;
   }
 
@@ -199,11 +200,11 @@ class _ImageViewerState extends State<ImageViewer> with AutomaticKeepAliveClient
       }
     }
 
-    // Reduce Motion (desktop): keep GIFs paused on their first frame and only
+    // Reduce Motion (desktop/web): keep GIFs paused on their first frame and only
     // animate while hovered. GifView decodes every frame up front, so the native
     // (streaming) Image path stays the default — routing all GIFs through GifView
     // stalls the UI on large/many GIFs. Only opt in when Reduce Motion is on.
-    if (_isGif && kIsDesktop) {
+    if (_isGif && (kIsDesktop || kIsWeb)) {
       return Obx(() {
         if (!SettingsSvc.settings.reduceMotion.value) return _buildStandardImage(context);
         return FutureBuilder<Uint8List?>(
@@ -284,7 +285,7 @@ class _ImageViewerState extends State<ImageViewer> with AutomaticKeepAliveClient
   /// given this exact size, and [AttachmentHolder] reserves the same box for the
   /// download/not-loaded placeholders — see [Attachment.displayBox].
   ({double width, double height}) _displaySize(BuildContext context) =>
-      attachment.displayBox(NavigationSvc.width(context) * 0.5, context.height * 0.6);
+      attachment.displayBox(min(NavigationSvc.width(context) * 0.5, 440.0), context.height * 0.6);
 
   Widget _buildStandardImage(BuildContext context) {
     // Build the appropriate image widget based on platform and file availability

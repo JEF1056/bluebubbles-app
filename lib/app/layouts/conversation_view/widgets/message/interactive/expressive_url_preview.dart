@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/intera
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
@@ -66,7 +67,7 @@ class ExpressiveUrlPreview extends StatelessWidget {
           body = _buildBare(context, inReply: inReply);
       }
 
-      return InkWell(
+      final content = InkWell(
         onTap: controller.file != null && (data.originalUrl ?? data.url) != null
             ? () async {
                 await launchUrl(Uri.parse(data.originalUrl ?? data.url!), mode: LaunchMode.externalApplication);
@@ -74,6 +75,7 @@ class ExpressiveUrlPreview extends StatelessWidget {
             : null,
         child: body,
       );
+      return kIsWeb ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: content) : content;
     });
   }
 

@@ -12,7 +12,7 @@ import com.wearbubbles.db.entities.MessageEntity
 
 @Database(
     entities = [ChatEntity::class, MessageEntity::class, ContactEntity::class],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,6 +31,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN associatedMessageEmoji TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -38,7 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "wearbubbles.db"
                 )
-                    .addMigrations(MIGRATION_8_9)
+                    .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/sending_opacity_wrapper.dart';
@@ -167,7 +168,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
     if (isInReply || hideAttachments || widget.fill) return null;
     if (attachment.mimeStart != "image") return null;
     if (!attachment.hasValidSize) return null;
-    return attachment.displayBox(NavigationSvc.width(context) * 0.5, context.height * 0.6);
+    return attachment.displayBox(min(NavigationSvc.width(context) * 0.5, 440.0), context.height * 0.6);
   }
 
   EdgeInsetsGeometry _computePadding(
@@ -400,7 +401,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
               color: transparentCard ? Colors.transparent : context.theme.colorScheme.surfaceContainerHighest,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
-                  maxWidth: NavigationSvc.width(context) * 0.5,
+                  maxWidth: min(NavigationSvc.width(context) * 0.5, 440.0),
                   maxHeight: isInReply ? double.infinity : context.height * 0.6,
                   minHeight: isInReply ? 0 : 40,
                   minWidth: isInReply ? 0 : 100,

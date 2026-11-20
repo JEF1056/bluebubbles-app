@@ -19,6 +19,7 @@ data class MessageEntity(
     val attachmentMimeType: String? = null,
     val associatedMessageGuid: String? = null,
     val associatedMessageType: String? = null,
+    val associatedMessageEmoji: String? = null,
     val sendFailed: Boolean = false,
     val dateDelivered: Long? = null,
     val dateRead: Long? = null

@@ -10,7 +10,6 @@ import 'package:bluebubbles/app/layouts/conversation_list/pages/search/conversat
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -98,10 +97,6 @@ class _DocumentsSectionState extends State<DocumentsSection> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-
     final hideWhenEmpty = !widget.fullPage && !widget.isLoading && _displayedDocs.isEmpty;
 
     return SliverMainAxisGroup(

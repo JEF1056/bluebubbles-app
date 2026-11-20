@@ -13,6 +13,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:defer_pointer/defer_pointer.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/tapback_icon.dart';
@@ -23,6 +24,7 @@ class ReactionWidget extends StatefulWidget {
     super.key,
     required this.reaction,
     this.reactions,
+    this.groupedReactions,
     this.chatGuid,
     this.tailDirection,
     this.tailType = ReactionTailType.standard,
@@ -30,6 +32,7 @@ class ReactionWidget extends StatefulWidget {
 
   final Message reaction;
   final List<Message>? reactions;
+  final List<Message>? groupedReactions;
 
   /// Explicit chat GUID used when outside a [MessageStateScope] (e.g. pinned tile context).
   /// Allows [ReactionWidgetState] to resolve MessageState from the correct
@@ -158,7 +161,108 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
     return FittedBox(
       child: Text(ReactionTypes.emojiFor(reaction),
           style: const TextStyle(
-              height: 1, leadingDistribution: TextLeadingDistribution.even, fontFamily: 'Apple Color Emoji')),
+            height: 1,
+            leadingDistribution: TextLeadingDistribution.even,
+            fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
+          )),
+    );
+  }
+
+  String _reactorTooltip(List<Message> group) {
+    final names = <String>[];
+    for (final m in group) {
+      if (m.isFromMe ?? false) {
+        names.add(SettingsSvc.effectiveUserName);
+      } else {
+        final handle = m.handleRelation.target;
+        final name = handle != null ? (HandleSvc.getOrCreateHandleState(handle).reactionDisplayName.value ?? "") : "";
+        names.add(name.isNotEmpty ? name : "Someone");
+      }
+    }
+    return names.toSet().join(", ");
+  }
+
+  void _toggleOwnReactionOff(BuildContext context, Message ownReaction) {
+    final parent = _parentMessage;
+    if (parent == null) return;
+    final chat = ChatStateScope.maybeChatOf(context) ??
+        ChatsSvc.getChatState(widget.chatGuid ?? parent.chat.target?.guid ?? '')?.chat ??
+        ChatsSvc.activeChat?.chat;
+    if (chat == null) return;
+    if (Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+      Get.find<ConversationViewController>(tag: chat.guid).onUserChatInteraction(immediate: true);
+    }
+    final rawType = ownReaction.associatedMessageType ?? '';
+    final isEmoji = ReactionTypes.isEmojiTapback(rawType);
+    final removalType = isEmoji
+        ? ReactionTypes.REMOVED_EMOJI
+        : (rawType.startsWith('-') ? rawType : '-$rawType');
+    OutgoingMsgHandler.queue(
+      OutgoingReaction(
+        chat: chat,
+        message: Message(
+          associatedMessageGuid: parent.guid,
+          associatedMessageType: removalType,
+          associatedMessageEmoji: isEmoji ? ownReaction.associatedMessageEmoji : null,
+          associatedMessagePart: ownReaction.associatedMessagePart,
+          dateCreated: DateTime.now(),
+          hasAttachments: false,
+          isFromMe: true,
+          handleId: 0,
+        ),
+        selectedMessage: parent,
+        reaction: removalType,
+      ),
+    );
+  }
+
+  void _openReactionDetails(BuildContext context) {
+    final list = reactions;
+    if (list == null) return;
+    // Capture the conversation's theme before pushing — if adaptive
+    // theming is active, context.theme is already the per-chat theme.
+    final capturedTheme = context.theme;
+    final capturedIsM3 = ThemeSvc.isMaterialYouActive(context);
+    final capturedBubbleExt = capturedTheme.extensions[BubbleColors] as BubbleColors?;
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        transitionDuration: M3EMotion.spatialDefault.duration,
+        reverseTransitionDuration: M3EMotion.spatialFast.duration,
+        pageBuilder: (routeCtx, animation, secondaryAnimation) {
+          return SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0.0, 1.0),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(
+              parent: animation,
+              curve: M3EMotion.spatialDefault.curve,
+              reverseCurve: M3EMotion.effectsFast.curve,
+            )),
+            child: Theme(
+              data: capturedTheme.copyWith(
+                primaryColor: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
+                colorScheme: capturedTheme.colorScheme.copyWith(
+                  primary: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
+                  onPrimary: capturedBubbleExt?.oniMessageBubbleColor ?? capturedTheme.colorScheme.onPrimary,
+                  surface: capturedIsM3 ? null : capturedBubbleExt?.receivedBubbleColor,
+                  onSurface: capturedIsM3 ? null : capturedBubbleExt?.onReceivedBubbleColor,
+                ),
+              ),
+              child: Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  GestureDetector(onTap: () => Navigator.of(routeCtx).pop()),
+                  Positioned(bottom: 10, left: 15, right: 15, child: ReactionDetails(reactions: list)),
+                ],
+              ),
+            ),
+          );
+        },
+        fullscreenDialog: true,
+        opaque: false,
+        barrierDismissible: true,
+      ),
     );
   }
 
@@ -192,109 +296,127 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
 
       if (SettingsSvc.settings.skin.value != Skins.iOS) {
         final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
+        final group = widget.groupedReactions ?? [current];
+        final ownReaction = group.firstWhereOrNull((m) => m.isFromMe ?? false);
+        final hasOwn = ownReaction != null;
+        final count = group.length;
+        final badgeColor = hasOwn
+            ? (isMaterial
+                ? context.theme.colorScheme.primaryContainer
+                : context.theme.colorScheme.primary)
+            : (isMaterial
+                ? (context.isDarkMode ? const Color(0xFF1F1F1F) : Colors.white)
+                : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
+                    context.theme.colorScheme.surfaceContainerHighest));
+        final glyph = Builder(builder: (context) {
+          if (ReactionTypes.isStickerTapback(reactionType)) {
+            return isMaterial
+                ? SizedBox(width: 18, height: 18, child: _customGlyph(reaction)!)
+                : _customGlyph(reaction)!;
+          }
+          final text = Text(
+            ReactionTypes.emojiFor(reaction),
+            style: const TextStyle(
+              fontSize: 15,
+              fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
+            ),
+            textAlign: TextAlign.center,
+          );
+          // rotate thumbs down to match iOS
+          if (reactionType == "dislike") {
+            return Transform(
+              transform: Matrix4.identity()..rotateY(pi),
+              alignment: FractionalOffset.center,
+              child: text,
+            );
+          }
+          return text;
+        });
+
+        Widget pill = Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: badgeColor,
+            border: Border.all(
+              color: context.theme.colorScheme.surface,
+              width: isMaterial ? 1.5 : 1.0,
+            ),
+            shape: BoxShape.circle,
+            boxShadow: isMaterial
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.14),
+                      blurRadius: 6,
+                      offset: const Offset(0, 1.5),
+                    ),
+                  ]
+                : null,
+          ),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if ((kIsWeb || kIsDesktop) && ownReaction != null) {
+                _toggleOwnReactionOff(context, ownReaction);
+              } else {
+                _openReactionDetails(context);
+              }
+            },
+            onSecondaryTap: reactions != null ? () => _openReactionDetails(context) : null,
+            child: Center(child: glyph),
+          ),
+        );
+
+        if (isMaterial && count > 1) {
+          pill = Stack(
+            clipBehavior: Clip.none,
+            children: [
+              pill,
+              Positioned(
+                right: -3,
+                top: -3,
+                child: Container(
+                  width: 14,
+                  height: 14,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: hasOwn
+                        ? context.theme.colorScheme.primary
+                        : context.theme.colorScheme.surfaceContainerHighest,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: context.theme.colorScheme.surface, width: 1),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1,
+                      color: hasOwn
+                          ? context.theme.colorScheme.onPrimary
+                          : context.theme.colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        }
+
+        if (kIsWeb || kIsDesktop) {
+          pill = MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: Tooltip(
+              message: _reactorTooltip(group),
+              waitDuration: const Duration(milliseconds: 250),
+              child: pill,
+            ),
+          );
+        }
+
         return ScaleTransition(
           scale: _springController,
-          child: Container(
-            width: isMaterial ? null : 30,
-            height: isMaterial ? 26 : 30,
-            constraints: isMaterial ? const BoxConstraints(minWidth: 34) : null,
-            padding: isMaterial ? const EdgeInsets.symmetric(horizontal: 8) : null,
-            decoration: BoxDecoration(
-              color: reactionIsFromMe
-                  ? (isMaterial
-                      ? context.theme.colorScheme.primaryContainer
-                      : context.theme.colorScheme.primary)
-                  : (isMaterial
-                      ? context.theme.colorScheme.surfaceContainerHighest
-                      : ((context.theme.extensions[BubbleColors] as BubbleColors?)?.receivedBubbleColor ??
-                          context.theme.colorScheme.surfaceContainerHighest)),
-              border: Border.all(
-                color: context.theme.colorScheme.surface,
-                width: isMaterial ? 1.5 : 1.0,
-              ),
-              shape: isMaterial ? BoxShape.rectangle : BoxShape.circle,
-              borderRadius: isMaterial ? BorderRadius.circular(999) : null,
-            ),
-            child: GestureDetector(
-              onTap: () {
-                if (reactions == null) return;
-                // Capture the conversation's theme before pushing \u2014 if adaptive
-                // theming is active, context.theme is already the per-chat theme.
-                final capturedTheme = context.theme;
-                final capturedIsM3 = ThemeSvc.isMaterialYouActive(context);
-                final capturedBubbleExt = capturedTheme.extensions[BubbleColors] as BubbleColors?;
-                Navigator.push(
-                  context,
-                  PageRouteBuilder(
-                    transitionDuration: M3EMotion.spatialDefault.duration,
-                    reverseTransitionDuration: M3EMotion.spatialFast.duration,
-                    pageBuilder: (routeCtx, animation, secondaryAnimation) {
-                      return SlideTransition(
-                        position: Tween<Offset>(
-                          begin: const Offset(0.0, 1.0),
-                          end: Offset.zero,
-                        ).animate(CurvedAnimation(
-                          parent: animation,
-                          curve: M3EMotion.spatialDefault.curve,
-                          reverseCurve: M3EMotion.effectsFast.curve,
-                        )),
-                        child: Theme(
-                          data: capturedTheme.copyWith(
-                            // in case some components still use legacy theming
-                            primaryColor: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
-                            colorScheme: capturedTheme.colorScheme.copyWith(
-                              primary: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
-                              onPrimary:
-                                  capturedBubbleExt?.oniMessageBubbleColor ?? capturedTheme.colorScheme.onPrimary,
-                              surface: capturedIsM3 ? null : capturedBubbleExt?.receivedBubbleColor,
-                              onSurface: capturedIsM3 ? null : capturedBubbleExt?.onReceivedBubbleColor,
-                            ),
-                          ),
-                          child: Stack(
-                            alignment: Alignment.bottomCenter,
-                            children: [
-                              GestureDetector(
-                                onTap: () {
-                                  Navigator.of(routeCtx).pop();
-                                },
-                              ),
-                              Positioned(
-                                  bottom: 10, left: 15, right: 15, child: ReactionDetails(reactions: reactions!)),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                    fullscreenDialog: true,
-                    opaque: false,
-                    barrierDismissible: true,
-                  ),
-                );
-              },
-              child: Center(
-                child: Builder(builder: (context) {
-                  if (ReactionTypes.isStickerTapback(reactionType)) {
-                    return isMaterial
-                        ? SizedBox(width: 18, height: 18, child: _customGlyph(reaction)!)
-                        : _customGlyph(reaction)!;
-                  }
-                  final text = Text(
-                    ReactionTypes.emojiFor(reaction),
-                    style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),
-                    textAlign: TextAlign.center,
-                  );
-                  // rotate thumbs down to match iOS
-                  if (reactionType == "dislike") {
-                    return Transform(
-                      transform: Matrix4.identity()..rotateY(pi),
-                      alignment: FractionalOffset.center,
-                      child: text,
-                    );
-                  }
-                  return text;
-                }),
-              ),
-            )),
+          child: pill,
         );
       }
       return ScaleTransition(
@@ -457,7 +579,10 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
             }
             final text = Text(
               ReactionTypes.emojiFor(reaction),
-              style: const TextStyle(fontSize: 15, fontFamily: 'Apple Color Emoji'),
+              style: const TextStyle(
+                fontSize: 15,
+                fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
+              ),
               textAlign: TextAlign.center,
             );
             if (rType == "dislike") {

@@ -26,11 +26,13 @@ class WebAudioController extends ChangeNotifier {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _hasError = false;
+  double _playbackRate = 1.0;
 
   bool get isPlaying => _isPlaying;
   Duration get position => _position;
   Duration get duration => _duration;
   bool get hasError => _hasError;
+  double get playbackRate => _playbackRate;
 
   void _init(PlatformFile file, Attachment? attachment) {
     _audio = web.HTMLAudioElement()..preload = 'metadata';
@@ -144,6 +146,13 @@ class WebAudioController extends ChangeNotifier {
     final secs = position.inMilliseconds / 1000.0;
     _audio.currentTime = secs;
     _position = position;
+    _notify();
+  }
+
+  void setPlaybackRate(double rate) {
+    if (_disposed) return;
+    _playbackRate = rate;
+    _audio.playbackRate = rate;
     _notify();
   }
 

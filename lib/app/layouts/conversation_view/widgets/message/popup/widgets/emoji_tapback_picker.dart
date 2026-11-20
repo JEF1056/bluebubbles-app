@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart' hide Emoji;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -9,14 +10,8 @@ import 'package:get/get.dart';
 Future<String?> showEmojiTapbackPicker(BuildContext context) {
   final colors = context.theme.colorScheme;
   const background = Colors.transparent;
-  final height = min(400.0, MediaQuery.sizeOf(context).height * 0.6);
-  return showBBBottomSheet<String>(
-    context: context,
-    title: "Tapback",
-    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-    builder: (sheetContext) => SizedBox(
-      height: height,
-      child: EmojiPicker(
+
+  Widget buildPicker(BuildContext sheetContext, double height) => EmojiPicker(
         onEmojiSelected: (_, emoji) => Navigator.of(sheetContext).pop(emoji.emoji),
         config: Config(
           height: height,
@@ -59,7 +54,38 @@ Future<String?> showEmojiTapbackPicker(BuildContext context) {
             inputTextStyle: context.textTheme.bodyLarge!.copyWith(color: colors.onSurface),
           ),
         ),
+      );
+
+  if (kIsWeb || kIsDesktop) {
+    final size = MediaQuery.sizeOf(context);
+    final width = min(360.0, size.width - 32);
+    final height = min(380.0, size.height - 48);
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: colors.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        insetPadding: const EdgeInsets.all(16),
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+            child: buildPicker(dialogContext, height - 16),
+          ),
+        ),
       ),
+    );
+  }
+
+  final height = min(400.0, MediaQuery.sizeOf(context).height * 0.6);
+  return showBBBottomSheet<String>(
+    context: context,
+    title: "Tapback",
+    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+    builder: (sheetContext) => SizedBox(
+      height: height,
+      child: buildPicker(sheetContext, height),
     ),
   );
 }

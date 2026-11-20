@@ -3,6 +3,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/descriptors/attachment_query_descriptor.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:universal_io/io.dart';
 
 /// A file or directory to move once the transaction that renamed its attachment has committed
@@ -31,7 +32,7 @@ class AttachmentActions {
       final current = findOne(newGuid);
       if (current != null) {
         // Keep the old row's file and message when the new row has none
-        if (!File(current.path).existsSync()) moves.add((from: row.path, to: current.path));
+        if (!kIsWeb && !File(current.path).existsSync()) moves.add((from: row.path, to: current.path));
         if (!current.message.hasValue && row.message.hasValue) {
           current.message.target = row.message.target;
           Database.attachments.put(current);
@@ -39,9 +40,11 @@ class AttachmentActions {
         Database.attachments.remove(row.id!);
         continue;
       }
-      final from = row.directory;
+      final from = kIsWeb ? null : row.directory;
       row.guid = newGuid;
-      moves.add((from: from, to: row.directory));
+      if (!kIsWeb && from != null) {
+        moves.add((from: from, to: row.directory));
+      }
       Database.attachments.put(row);
     }
     return moves;

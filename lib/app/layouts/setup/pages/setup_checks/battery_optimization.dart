@@ -131,16 +131,16 @@ class _BatteryOptimizationCheckState extends State<BatteryOptimizationCheck> wit
                       }
                     },
                     child: Shimmer.fromColors(
-                      baseColor: Colors.white70,
-                      highlightColor: Colors.white,
+                      baseColor: context.theme.colorScheme.onPrimary.withValues(alpha: 0.7),
+                      highlightColor: context.theme.colorScheme.onPrimary,
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text("Go to settings",
-                              style:
-                                  context.theme.textTheme.bodyLarge!.apply(fontSizeFactor: 1.1, color: Colors.white)),
+                              style: context.theme.textTheme.bodyLarge!
+                                  .apply(fontSizeFactor: 1.1, color: context.theme.colorScheme.onPrimary)),
                           const SizedBox(width: 10),
-                          const Icon(Icons.arrow_forward, color: Colors.white, size: 20),
+                          Icon(Icons.arrow_forward, color: context.theme.colorScheme.onPrimary, size: 20),
                         ],
                       ),
                     ),

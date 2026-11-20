@@ -1,20 +1,27 @@
 import 'dart:io';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/hover_action_bar.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/reply_bubble_section.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/message_popup.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/reply_holder.dart';
+import 'package:bluebubbles/app/layouts/settings/widgets/content/settings_tile.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
+import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/message_reply_context.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_messaging_actions.dart';
 import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_theme_actions.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -44,9 +51,17 @@ class _FakePrefsThemeActions extends SharedPreferencesThemeActions {
   String? getSelectedDarkTheme() => null;
 }
 
+class _FakePrefsMessagingActions extends SharedPreferencesMessagingActions {
+  _FakePrefsMessagingActions(super.service);
+
+  @override
+  List<String> getRecentTapbackEmojis({required String chatGuid}) => const [];
+}
+
 class _FakePrefsService extends SharedPreferencesService {
   _FakePrefsService() {
     theme = _FakePrefsThemeActions(this);
+    messaging = _FakePrefsMessagingActions(this);
   }
 }
 
@@ -79,6 +94,12 @@ void _registerTestServices() {
   }
   if (!GetIt.I.isRegistered<CacheService>()) {
     GetIt.I.registerSingleton<CacheService>(CacheService());
+  }
+  if (!GetIt.I.isRegistered<LifecycleService>()) {
+    GetIt.I.registerSingleton<LifecycleService>(LifecycleService());
+  }
+  if (!GetIt.I.isRegistered<SocketService>()) {
+    GetIt.I.registerSingleton<SocketService>(SocketService());
   }
 }
 
@@ -461,7 +482,7 @@ void main() {
       const size = Size(300, 48); // 40dp quoted bubble + 8dp bottom gap
       const quotedH = 40.0;
 
-      // Left-side row replying to right-side bubble: stem at x=18, top arm at midY=20 pointing right.
+      // Left-side row replying to right-side bubble: stem at x=18, top arm at midY=20 pointing right to bubbleLeft - 4.
       final leftToRight = ReplyQuoteHookPainter.buildHookPath(
         size,
         quotedFromMe: true,
@@ -470,11 +491,11 @@ void main() {
         quotedBubbleHeight: quotedH,
       ).getBounds();
       expect(leftToRight.left, closeTo(18.0, 0.01));
-      expect(leftToRight.right, closeTo(18.0 + 28.0, 0.01));
+      expect(leftToRight.right, closeTo(300 - 120 - 4.0, 0.01));
       expect(leftToRight.top, closeTo(quotedH / 2.0, 0.01));
-      expect(leftToRight.bottom, closeTo(size.height, 0.01));
+      expect(leftToRight.bottom, closeTo(size.height + 4.0, 0.01));
 
-      // Narrow width clamping: arm stops 6dp before quoted bubble left edge (300 - 260 - 6 = 34).
+      // Narrow width clamping: arm stops 4dp before quoted bubble left edge (300 - 260 - 4 = 36).
       final clampedLeftToRight = ReplyQuoteHookPainter.buildHookPath(
         size,
         quotedFromMe: true,
@@ -482,9 +503,9 @@ void main() {
         quotedBubbleWidth: 260,
         quotedBubbleHeight: quotedH,
       ).getBounds();
-      expect(clampedLeftToRight.right, lessThanOrEqualTo(300 - 260 - 6.0 + 0.01));
+      expect(clampedLeftToRight.right, lessThanOrEqualTo(300 - 260 - 4.0 + 0.01));
 
-      // Mirrored isFromMe reply: stem at x=300-18, top arm at midY=20 pointing left.
+      // Mirrored isFromMe reply: stem at x=300-18, top arm at midY=20 pointing left to bubbleRight + 4.
       final rightToLeft = ReplyQuoteHookPainter.buildHookPath(
         size,
         quotedFromMe: false,
@@ -493,11 +514,11 @@ void main() {
         quotedBubbleHeight: quotedH,
       ).getBounds();
       expect(rightToLeft.right, closeTo(300 - 18.0, 0.01));
-      expect(rightToLeft.left, closeTo(300 - 18.0 - 28.0, 0.01));
+      expect(rightToLeft.left, closeTo(120 + 4.0, 0.01));
       expect(rightToLeft.top, closeTo(quotedH / 2.0, 0.01));
-      expect(rightToLeft.bottom, closeTo(size.height, 0.01));
+      expect(rightToLeft.bottom, closeTo(size.height + 4.0, 0.01));
 
-      // Narrow width clamping for isFromMe reply: arm stops 6dp after quoted bubble right edge (260 + 6 = 266).
+      // Narrow width clamping for isFromMe reply: arm stops 4dp after quoted bubble right edge (260 + 4 = 264).
       final clampedRightToLeft = ReplyQuoteHookPainter.buildHookPath(
         size,
         quotedFromMe: false,
@@ -505,7 +526,7 @@ void main() {
         quotedBubbleWidth: 260,
         quotedBubbleHeight: quotedH,
       ).getBounds();
-      expect(clampedRightToLeft.left, greaterThanOrEqualTo(260 + 6.0 - 0.01));
+      expect(clampedRightToLeft.left, greaterThanOrEqualTo(260 + 4.0 - 0.01));
 
       // Same-side replies draw a short vertical stem below the quoted bubble on the reply side.
       final sameLeft = ReplyQuoteHookPainter.buildHookPath(
@@ -517,7 +538,7 @@ void main() {
       expect(sameLeft.left, closeTo(18.0, 0.01));
       expect(sameLeft.right, closeTo(18.0, 0.01));
       expect(sameLeft.top, closeTo(quotedH, 0.01));
-      expect(sameLeft.bottom, closeTo(size.height, 0.01));
+      expect(sameLeft.bottom, closeTo(size.height + 4.0, 0.01));
 
       final sameRight = ReplyQuoteHookPainter.buildHookPath(
         size,
@@ -528,7 +549,7 @@ void main() {
       expect(sameRight.left, closeTo(300 - 18.0, 0.01));
       expect(sameRight.right, closeTo(300 - 18.0, 0.01));
       expect(sameRight.top, closeTo(quotedH, 0.01));
-      expect(sameRight.bottom, closeTo(size.height, 0.01));
+      expect(sameRight.bottom, closeTo(size.height + 4.0, 0.01));
     });
 
     testWidgets('Material: right-side quoted reply bubble uses reduced opacity and renders hook box', (tester) async {
@@ -585,7 +606,7 @@ void main() {
       Get.delete<MessagesService>(tag: chat.guid, force: true);
     });
 
-    testWidgets('Tapping out of reply thread view (backdrop, row side, or bubble) dismisses without jumpToMessage',
+    testWidgets('Tapping out of reply thread view (backdrop or row side) dismisses without jumpToMessage while bubble stays interactive',
         (tester) async {
       final chat = Chat(guid: 'iMessage;-;thread-dismiss-nojump', chatIdentifier: 'thread-dismiss-nojump');
       if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
@@ -646,7 +667,7 @@ void main() {
       expect(find.byTooltip('Close thread'), findsNothing);
       expect(jumpedGuids, isEmpty);
 
-      // 2. Tap directly on a message bubble inside the thread view.
+      // 2. Tap directly on a message bubble inside the interactive thread view keeps it open so links/selection stay interactive.
       await tester.tap(find.text('Open Thread'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Close thread'), findsOneWidget);
@@ -655,8 +676,13 @@ void main() {
       await tester.tapAt(origRect.center);
       await tester.pumpAndSettle();
 
-      expect(find.byTooltip('Close thread'), findsNothing);
+      expect(find.byTooltip('Close thread'), findsOneWidget);
       expect(jumpedGuids, isEmpty);
+
+      // Dismiss via row side before step 3.
+      await tester.tapAt(Offset(16, origRect.center.dy));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
 
       // 3. Tap the blurred backdrop above the message list.
       await tester.tap(find.text('Open Thread'));
@@ -718,6 +744,8 @@ void main() {
       }
 
       final service = ensureMessagesSvc(chat.guid);
+      final jumpedGuids = <String>[];
+      service.jumpToMessage = jumpedGuids.add;
       final cvController = cvc(chat);
 
       final t0 = DateTime(2026, 11, 18, 17, 0, 0);
@@ -781,10 +809,22 @@ void main() {
       final directLineBox = find.descendant(of: directHolder, matching: find.byType(ReplyLineBox));
       final directRect = tester.getRect(directLineBox);
 
-      // Tapping empty space in the middle of the row should NOT open thread view.
-      await tester.tapAt(Offset(directRect.center.dx, directRect.center.dy));
+      // Tapping empty space on an unrelated row or above a tall L-hook arm should NOT open thread view.
+      final unrelatedHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'bar-unrelated');
+      final unrelatedRect = tester.getRect(unrelatedHolder);
+      await tester.tapAt(Offset(unrelatedRect.right - 20, unrelatedRect.center.dy));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Close thread'), findsNothing);
+      expect(
+        ReplyLinePainter.hitTestCompactHook(
+          const Offset(300, 10),
+          const Size(600, 100),
+          isFromMe: true,
+          connectUpper: true,
+          bubbleWidth: 120,
+        ),
+        isFalse,
+      );
 
       // Tapping the message bubble itself should NOT open thread view.
       await tester.tap(find.textContaining('Direct reply', findRichText: true).first);
@@ -803,17 +843,19 @@ void main() {
       final quotedHolder = find.byWidgetPredicate((w) => w is MessageHolder && w.message.guid == 'bar-quoted-reply');
       final sectionRect = tester.getRect(find.descendant(of: quotedHolder, matching: find.byType(ReplyBubbleSection)));
 
-      // Tapping empty center of the quote row should NOT open thread view.
-      await tester.tapAt(Offset(sectionRect.center.dx, sectionRect.center.dy));
+      // Tapping empty space below the quote-hook arm should NOT open thread view.
+      await tester.tapAt(Offset(sectionRect.center.dx, sectionRect.bottom - 2));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Close thread'), findsNothing);
 
-      // Tapping the white curved quote hook on the right side opens thread view.
+      // Tapping the curved quote hook opens thread view directly (no jumpToMessage short-circuit).
       await tester.tapAt(Offset(sectionRect.right - 20, sectionRect.bottom - 10));
       await tester.pumpAndSettle();
+      expect(jumpedGuids, isEmpty);
       expect(find.byTooltip('Close thread'), findsOneWidget);
       await tester.tap(find.byTooltip('Close thread'));
       await tester.pumpAndSettle();
+      expect(find.byTooltip('Close thread'), findsNothing);
 
       // 3. In select mode, tapping the L-hook selects the message instead of opening thread view.
       cvController.inSelectMode.value = true;
@@ -932,6 +974,317 @@ void main() {
 
       Get.delete<ConversationViewController>(tag: chat.guid, force: true);
       Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('HoverablePartRow places hover bar on open side without pushing bubbles inward', (tester) async {
+      final chat = Chat(guid: 'iMessage;-;+15550004444', chatIdentifier: '+15550004444');
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+      final received = _msg(
+        guid: 'align-recv',
+        text: 'Received message',
+        createdAt: DateTime(2026, 4, 15, 10, 0),
+        isFromMe: false,
+      );
+      final sent = _msg(
+        guid: 'align-sent',
+        text: 'Sent message',
+        createdAt: DateTime(2026, 4, 15, 10, 1),
+        isFromMe: true,
+      );
+      service.struct.addMessages([received, sent]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: SizedBox(
+            width: 800,
+            child: ListView(
+              children: [
+                MessageHolder(cvController: cvController, message: received, newMessage: sent),
+                MessageHolder(cvController: cvController, message: sent, oldMessage: received),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final recvRow = find.byWidgetPredicate((w) => w is HoverablePartRow && !w.isFromMe);
+      final recvBubbleRect = tester.getRect(find.textContaining('Received message', findRichText: true));
+      final recvBarRect = tester.getRect(find.descendant(of: recvRow, matching: find.byType(MessageHoverBar)));
+      expect(recvBubbleRect.left, lessThan(recvBarRect.left));
+      // Received bubble sits flush near left edge (no ~92px hover-bar gap).
+      expect(recvBubbleRect.left, lessThan(60.0));
+
+      final sentRow = find.byWidgetPredicate((w) => w is HoverablePartRow && w.isFromMe);
+      final sentBubbleRect = tester.getRect(find.textContaining('Sent message', findRichText: true));
+      final sentBarRect = tester.getRect(find.descendant(of: sentRow, matching: find.byType(MessageHoverBar)));
+      expect(sentBarRect.right, lessThanOrEqualTo(sentBubbleRect.left));
+      // Sent bubble sits flush near right edge (800px wide minus small tail/receipt margin).
+      expect(sentBubbleRect.right, greaterThan(720.0));
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('Reply triggers inside SelectionArea open thread on mouse click with slight jitter, not on drag',
+        (tester) async {
+      final chat = Chat(guid: 'iMessage;-;+15550005555', chatIdentifier: '+15550005555');
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+      final t0 = DateTime(2026, 4, 15, 10, 0);
+      final orig = _msg(
+        guid: 'sel-orig',
+        text: 'Parent photo post',
+        createdAt: t0,
+        isFromMe: false,
+      );
+      final reply = _msg(
+        guid: 'sel-reply',
+        text: 'Inline reply inside selection area',
+        createdAt: t0.add(const Duration(minutes: 2)),
+        isFromMe: false,
+        threadOriginatorGuid: 'sel-orig',
+        threadOriginatorPart: '0:0:0',
+      );
+      service.struct.addMessages([orig, reply]);
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: SelectionArea(
+            child: ListView(
+              children: [
+                MessageHolder(cvController: cvController, message: orig),
+                MessageHolder(cvController: cvController, message: reply),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      Future<void> mouseClickWithMove(Offset pos, Offset delta) async {
+        final gesture = await tester.startGesture(pos, kind: PointerDeviceKind.mouse);
+        await tester.pump(const Duration(milliseconds: 16));
+        await gesture.moveTo(pos + delta);
+        await tester.pump(const Duration(milliseconds: 16));
+        await gesture.up();
+        await tester.pumpAndSettle();
+      }
+
+      // Dragging >12px across ReplyBubble must not open the thread.
+      final quoteCenter = tester.getCenter(find.byType(ReplyBubble));
+      await mouseClickWithMove(quoteCenter, const Offset(20, 0));
+      expect(find.byTooltip('Close thread'), findsNothing);
+
+      // Clicking ReplyBubble with 2px mouse jitter opens ReplyThreadView.
+      await mouseClickWithMove(quoteCenter, const Offset(2, 0));
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+
+      // Clicking "1 Reply" pill inside SelectionArea with 2px mouse jitter also opens ReplyThreadView.
+      final pillCenter = tester.getCenter(find.text('1 Reply').first);
+      await mouseClickWithMove(pillCenter, const Offset(2, 0));
+      expect(find.byTooltip('Close thread'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close thread'));
+      await tester.pumpAndSettle();
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('HoverablePartRow with showHoverBar false reserves zero width and aligns bubbles flush',
+        (tester) async {
+      final chat = Chat(guid: 'iMessage;-;+15550006666', chatIdentifier: '+15550006666');
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+      final received = _msg(
+        guid: 'no-bar-recv',
+        text: 'Received no hover bar',
+        createdAt: DateTime(2026, 4, 15, 10, 0),
+        isFromMe: false,
+      );
+      final sent = _msg(
+        guid: 'no-bar-sent',
+        text: 'Sent no hover bar',
+        createdAt: DateTime(2026, 4, 15, 10, 1),
+        isFromMe: true,
+      );
+      service.struct.addMessages([received, sent]);
+
+      final recvState = MessageState(received);
+      final sentState = MessageState(sent);
+      addTearDown(() {
+        recvState.dispose();
+        sentState.dispose();
+      });
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: SizedBox(
+            width: 800,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: HoverablePartRow(
+                    enabled: true,
+                    showHoverBar: false,
+                    isFromMe: false,
+                    controller: recvState,
+                    part: MessagePart(part: 0, text: received.text),
+                    cvController: cvController,
+                    service: service,
+                    isReplyThread: false,
+                    bubbleChild: const SizedBox(
+                      key: ValueKey('recv-bubble'),
+                      width: 620,
+                      height: 40,
+                    ),
+                  ),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: HoverablePartRow(
+                    enabled: true,
+                    showHoverBar: false,
+                    isFromMe: true,
+                    controller: sentState,
+                    part: MessagePart(part: 0, text: sent.text),
+                    cvController: cvController,
+                    service: service,
+                    isReplyThread: false,
+                    bubbleChild: const SizedBox(
+                      key: ValueKey('sent-bubble'),
+                      width: 620,
+                      height: 40,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MessageHoverBar), findsNothing);
+      final recvBubbleRect = tester.getRect(find.byKey(const ValueKey('recv-bubble')));
+      final sentBubbleRect = tester.getRect(find.byKey(const ValueKey('sent-bubble')));
+      expect(recvBubbleRect.left, 0.0);
+      expect(sentBubbleRect.right, 800.0);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets(
+        'Single right-click on MessagePopupHolder inside SelectionArea opens MessagePopup immediately without selection toolbar, while left-drag selects text',
+        (tester) async {
+      final chat = Chat(guid: 'iMessage;-;+15550007777', chatIdentifier: '+15550007777');
+      final service = ensureMessagesSvc(chat.guid);
+      final cvController = cvc(chat);
+      final msg = _msg(
+        guid: 'ctx-msg-1',
+        text: 'Selectable message body for context menu test',
+        createdAt: DateTime(2026, 4, 15, 10, 0),
+        isFromMe: false,
+      );
+      service.struct.addMessages([msg]);
+      String? selectedText;
+
+      await tester.pumpWidget(
+        _wrapApp(
+          chat: chat,
+          skin: Skins.Material,
+          child: SelectionArea(
+            onSelectionChanged: (content) => selectedText = content?.plainText,
+            child: ListView(
+              children: [
+                MessageHolder(cvController: cvController, message: msg),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final bubbleFinder = find.textContaining('Selectable message body', findRichText: true);
+      final bubbleRect = tester.getRect(bubbleFinder);
+
+      // 1. Fast single secondary click opens MessagePopup immediately with no selection toolbar.
+      await tester.tapAt(bubbleRect.center, buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      expect(find.byType(MessagePopup), findsOneWidget);
+      expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+
+      // Dismiss MessagePopup.
+      Navigator.of(tester.element(find.byType(MessagePopup))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(MessagePopup), findsNothing);
+
+      // 2. Held secondary click (> kPressTimeout) must not trigger SelectionArea toolbar before release.
+      final heldSecondary = await tester.startGesture(
+        bubbleRect.center,
+        kind: PointerDeviceKind.mouse,
+        buttons: kSecondaryButton,
+      );
+      await tester.pump(const Duration(milliseconds: 160));
+      expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+      await heldSecondary.up();
+      await tester.pumpAndSettle();
+      expect(find.byType(MessagePopup), findsOneWidget);
+      expect(find.byType(AdaptiveTextSelectionToolbar), findsNothing);
+
+      Navigator.of(tester.element(find.byType(MessagePopup))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(MessagePopup), findsNothing);
+
+      // 3. Left-drag across the bubble text still selects text inside SelectionArea.
+      final drag = await tester.startGesture(
+        Offset(bubbleRect.left + 4, bubbleRect.center.dy),
+        kind: PointerDeviceKind.mouse,
+        buttons: kPrimaryButton,
+      );
+      await tester.pump(const Duration(milliseconds: 16));
+      await drag.moveTo(Offset(bubbleRect.right - 4, bubbleRect.center.dy));
+      await tester.pump(const Duration(milliseconds: 16));
+      await drag.up();
+      await tester.pumpAndSettle();
+      expect(selectedText, isNotNull);
+      expect(selectedText, isNotEmpty);
+
+      Get.delete<ConversationViewController>(tag: chat.guid, force: true);
+      Get.delete<MessagesService>(tag: chat.guid, force: true);
+    });
+
+    testWidgets('SettingsTile secondary tap and preventNextContextMenu fire immediately', (tester) async {
+      await preventNextContextMenu();
+      var longPressCount = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SettingsTile(
+              title: 'Account',
+              onLongPress: () => longPressCount++,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Account'), buttons: kSecondaryButton);
+      await tester.pumpAndSettle();
+      expect(longPressCount, 1);
     });
   });
 }

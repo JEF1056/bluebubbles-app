@@ -28,19 +28,44 @@ class FindMyPage extends StatefulWidget {
 
 class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final FindMyController controller;
+  late final bool _ownsController;
   static const double _detailSnapPoint = 0.48;
+  bool _hasSnappedInitialPhoneSheet = false;
+  bool _pendingInitialPhoneSnap = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    controller = Get.put(FindMyController());
+    final wasRegistered = Get.isRegistered<FindMyController>();
+    _ownsController = !wasRegistered;
+    controller = wasRegistered ? Get.find<FindMyController>() : Get.put(FindMyController(), permanent: true);
     controller.tabController = TabController(vsync: this, length: 3);
     controller.tabController!.addListener(_handleTabChange);
     controller.onRequestDetailSheetOpen = _openDetailSheet;
     controller.detailSheetOffsetProvider = _detailSheetOffsetPx;
-    // Start at the mid snap point (~46%) like iOS Find My so rows show above the floating tab bar.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _openDetailSheet());
+    controller.fitAllPinsPaddingProvider = _fitAllPinsPadding;
+    if (wasRegistered) {
+      if (controller.isBackgroundShared) {
+        controller.activatePage();
+      }
+      controller.consumePendingFocus();
+    }
+    // Start at the mid snap point (48%) like iOS Find My so rows show above the floating tab bar.
+    _scheduleInitialPhoneSheetSnap();
+  }
+
+  void _scheduleInitialPhoneSheetSnap() {
+    if (_hasSnappedInitialPhoneSheet || _pendingInitialPhoneSnap) return;
+    _pendingInitialPhoneSnap = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pendingInitialPhoneSnap = false;
+      if (!mounted || !context.isPhone || _hasSnappedInitialPhoneSheet) return;
+      if (controller.panelController.isAttached) {
+        _hasSnappedInitialPhoneSheet = true;
+        controller.panelController.panelPosition = _detailSnapPoint;
+      }
+    });
   }
 
   void _openDetailSheet() {
@@ -58,6 +83,30 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     if (!mounted || !context.isPhone) return 0;
     final h = MediaQuery.of(context).size.height;
     return h * _detailSnapPoint * 0.34;
+  }
+
+  EdgeInsets _fitAllPinsPadding() {
+    if (!mounted) return FindMyController.defaultFitAllPinsPadding;
+    final mq = MediaQuery.of(context);
+    if (!context.isPhone) {
+      return computeFindMyFitAllPadding(
+        viewportSize: mq.size,
+        viewPadding: mq.padding,
+        isPhone: false,
+      );
+    }
+    final minHeight = 146.0 + mq.padding.bottom;
+    final maxHeight = mq.size.height * 0.78;
+    final effectivePos = (_hasSnappedInitialPhoneSheet && controller.panelController.isAttached)
+        ? controller.panelController.panelPosition
+        : _detailSnapPoint;
+    final sheetHeight = minHeight + (maxHeight - minHeight) * effectivePos.clamp(0.0, 1.0);
+    return computeFindMyFitAllPadding(
+      viewportSize: mq.size,
+      viewPadding: mq.padding,
+      isPhone: true,
+      bottomSheetHeight: sheetHeight,
+    );
   }
 
   void _handleTabChange() {
@@ -85,8 +134,16 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     WidgetsBinding.instance.removeObserver(this);
     controller.onRequestDetailSheetOpen = null;
     controller.detailSheetOffsetProvider = null;
+    controller.fitAllPinsPaddingProvider = null;
     controller.tabController?.removeListener(_handleTabChange);
-    Get.delete<FindMyController>();
+    if (_ownsController || !controller.isBackgroundShared) {
+      Get.delete<FindMyController>(force: true);
+    } else {
+      controller.tabController?.dispose();
+      controller.tabController = null;
+      controller.clearSelection();
+      controller.deactivatePage();
+    }
     super.dispose();
   }
 
@@ -95,8 +152,10 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         if (context.isPhone) {
+          _scheduleInitialPhoneSheetSnap();
           return _buildNormalLayout(context);
         }
+        _hasSnappedInitialPhoneSheet = false;
         return _buildTabletLayout(context);
       },
     );
@@ -141,44 +200,65 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
               ConstrainedBox(
                 constraints:
                     BoxConstraints(minWidth: 300, maxWidth: max(300, min(500, NavigationSvc.width(context) / 3))),
-                child: Column(
-                  children: [
-                    if (!context.samsung)
-                      Row(
-                        children: [
-                          Container(
-                            width: 48,
-                            height: 48,
-                            margin: const EdgeInsets.symmetric(horizontal: 8),
-                            child: buildBackButton(context),
-                          ),
-                          Expanded(child: Text("Find My", style: context.theme.textTheme.titleLarge)),
-                        ],
-                      ),
-                    if (!context.samsung) _buildDesktopTabBar(),
-                    Expanded(
-                      child: SizedBox(
-                        width: 500,
-                        child: Column(
-                          children: [
-                            _buildSheetHeader(context),
-                            Expanded(
-                              child: TabBarView(
-                                key: const ValueKey('tabs-view'),
-                                controller: controller.tabController,
-                                children: [
-                                  _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
-                                  _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
-                                  _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border(
+                      right: BorderSide(
+                        color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                        width: 1,
                       ),
                     ),
-                    if (context.samsung) _buildDesktopTabBar(),
-                  ],
+                  ),
+                  child: Column(
+                    children: [
+                      if (!context.samsung)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 8, 16, 4),
+                          child: SizedBox(
+                            height: 48,
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 44,
+                                  height: 44,
+                                  child: buildBackButton(context),
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    "Find My",
+                                    style: context.theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      if (!context.samsung) _buildDesktopTabBar(),
+                      Expanded(
+                        child: SizedBox(
+                          width: 500,
+                          child: Column(
+                            children: [
+                              _buildSheetHeader(context),
+                              Expanded(
+                                child: TabBarView(
+                                  key: const ValueKey('tabs-view'),
+                                  controller: controller.tabController,
+                                  children: [
+                                    _buildTab(context, controller.friendsController, "FindMy Friends", FindMyFriendsTabView(controller: controller)),
+                                    _buildTab(context, controller.devicesController, "FindMy Devices", FindMyDevicesTabView(controller: controller)),
+                                    _buildTab(context, controller.itemsController, "FindMy Items", FindMyItemsTabView(controller: controller)),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (context.samsung) _buildDesktopTabBar(),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -221,36 +301,42 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
   }
 
   Widget _buildDesktopTabBar() {
+    final cs = context.theme.colorScheme;
     return TabBar(
       controller: controller.tabController,
-      dividerColor: context.theme.dividerColor.withValues(alpha: 0.2),
+      dividerHeight: 1,
+      dividerColor: cs.outlineVariant.withValues(alpha: 0.45),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 8),
       tabs: [
-        Container(
-          padding: const EdgeInsets.only(top: 8),
+        Tab(
+          height: 54,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(context.iOS ? CupertinoIcons.person_2 : Icons.people_outline),
+              Icon(context.iOS ? CupertinoIcons.person_2 : Icons.people_outline, size: 20),
+              const SizedBox(height: 3),
               const Text("People"),
             ],
           ),
         ),
-        Container(
-          padding: const EdgeInsets.only(top: 8),
+        Tab(
+          height: 54,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(context.iOS ? CupertinoIcons.device_desktop : Icons.devices),
+              Icon(context.iOS ? CupertinoIcons.device_desktop : Icons.devices, size: 20),
+              const SizedBox(height: 3),
               const Text("Devices"),
             ],
           ),
         ),
-        Container(
-          padding: const EdgeInsets.only(top: 8),
+        Tab(
+          height: 54,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(context.iOS ? CupertinoIcons.tag : Icons.adjust_rounded),
+              Icon(context.iOS ? CupertinoIcons.tag : Icons.adjust_rounded, size: 20),
+              const SizedBox(height: 3),
               const Text("Items"),
             ],
           ),
@@ -343,8 +429,8 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
               ),
               if (!context.samsung)
                 Positioned(
-                  top: 10 + (kIsDesktop ? appWindow.titleBarHeight : MediaQuery.of(context).padding.top),
-                  left: 14,
+                  top: 12 + (kIsDesktop ? appWindow.titleBarHeight : MediaQuery.of(context).padding.top),
+                  left: 16,
                   child: ClipOval(
                     child: Builder(builder: (context) {
                       final button = Container(
@@ -406,7 +492,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
       final isRefreshing = controller.refreshing.value || controller.refreshing2.value;
       final title = _sheetTitleForTab(controller.tabIndex.value);
       return Padding(
-        padding: const EdgeInsets.fromLTRB(20, 4, 16, 8),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
         child: Row(
           children: [
             Expanded(
@@ -414,14 +500,14 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                 title,
                 style: tt.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w700,
-                  fontSize: 26,
+                  fontSize: 24,
                   letterSpacing: -0.3,
                 ),
               ),
             ),
             SizedBox(
-              width: 38,
-              height: 38,
+              width: 36,
+              height: 36,
               child: IconButton.filledTonal(
                 key: const ValueKey('findmy-sheet-refresh'),
                 padding: EdgeInsets.zero,
@@ -430,12 +516,12 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                 icon: isRefreshing
                     ? Center(
                         child: SizedBox(
-                          width: 18,
-                          height: 18,
+                          width: 16,
+                          height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2, color: cs.primary),
                         ),
                       )
-                    : const Icon(Icons.refresh_rounded, size: 20),
+                    : const Icon(Icons.refresh_rounded, size: 18),
               ),
             ),
           ],

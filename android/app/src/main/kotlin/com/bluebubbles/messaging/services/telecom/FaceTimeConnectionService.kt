@@ -17,6 +17,7 @@ import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import androidx.core.content.ContextCompat
 import com.bluebubbles.messaging.services.network.HttpService
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import java.util.concurrent.ConcurrentHashMap
 
@@ -40,6 +41,33 @@ class FaceTimeConnectionService : ConnectionService() {
 
         internal fun unregisterActiveConnection(callUuid: String, connection: FaceTimeConnection) {
             activeConnections.remove(callUuid, connection)
+        }
+
+        internal fun handleOutgoingCallSuccess(
+            uuid: String?,
+            isEnded: () -> Boolean,
+            failOutgoing: (String) -> Unit,
+            bindCallUuid: (String) -> Unit,
+            unregisterActive: (String) -> Unit,
+            leaveCall: (String) -> Unit,
+            activateAndStart: () -> Unit
+        ) {
+            if (uuid.isNullOrBlank()) {
+                failOutgoing("Server did not return a call UUID")
+                return
+            }
+            if (isEnded()) {
+                leaveCall(uuid)
+                unregisterActive(uuid)
+                return
+            }
+            bindCallUuid(uuid)
+            if (isEnded()) {
+                unregisterActive(uuid)
+                leaveCall(uuid)
+                return
+            }
+            activateAndStart()
         }
 
         fun endCall(callUuid: String): Boolean {
@@ -215,7 +243,11 @@ class FaceTimeConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ) {
-        PersistentLog.e(applicationContext, TAG, "onCreateIncomingConnectionFailed: ${request?.extras?.getString(EXTRA_CALL_UUID)}")
+        val callUuid = request?.extras?.getString(EXTRA_CALL_UUID)
+        PersistentLog.e(applicationContext, TAG, "onCreateIncomingConnectionFailed: $callUuid")
+        if (!callUuid.isNullOrBlank()) {
+            WearSyncManager.notifyCallEnded(applicationContext, callUuid)
+        }
     }
 
     override fun onCreateOutgoingConnection(
@@ -252,14 +284,19 @@ class FaceTimeConnectionService : ConnectionService() {
             video = false,
             isTelephony = isTelephony,
             onSuccess = { uuid ->
-                if (uuid.isNullOrBlank()) {
-                    connection.failOutgoing("Server did not return a call UUID")
-                    return@placeFaceTimeCall
-                }
-                connection.bindCallUuid(uuid)
-                // shortcut: marks call active when Mac dials; upgrade to await status_id == 1 for real remote-answer timing
-                connection.setActive()
-                connection.startAudioBridge(answerCall = false)
+                handleOutgoingCallSuccess(
+                    uuid = uuid,
+                    isEnded = { connection.isEnded },
+                    failOutgoing = connection::failOutgoing,
+                    bindCallUuid = connection::bindCallUuid,
+                    unregisterActive = { unregisterActiveConnection(it, connection) },
+                    leaveCall = { HttpService(applicationContext).leaveFaceTimeCall(it) },
+                    activateAndStart = {
+                        // shortcut: marks call active when Mac dials; upgrade to await status_id == 1 for real remote-answer timing
+                        connection.setActive()
+                        connection.startAudioBridge(answerCall = false)
+                    }
+                )
             },
             onError = { err ->
                 connection.failOutgoing(err)

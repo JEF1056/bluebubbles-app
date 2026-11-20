@@ -16,6 +16,37 @@ import 'package:url_launcher/url_launcher.dart';
 
 export 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart' show FindMyLiveBadge;
 
+/// Sorts markers bottom-to-top so active-tab pins paint above inactive-tab pins
+/// and the selected pin always renders highest.
+List<Marker> orderFindMyMarkers(
+  Iterable<Marker> markers, {
+  required int tabIndex,
+  String? selectedKey,
+  Set<String> accessoryIds = const {},
+}) {
+  int rank(Marker marker) {
+    final key = marker.key;
+    if (key is! ValueKey<String>) return 0;
+    final keyStr = key.value;
+    if (selectedKey != null && keyStr == selectedKey) return 3;
+    if (keyStr == 'current') return 1;
+    if (keyStr.startsWith('friend-')) return tabIndex == 0 ? 2 : 0;
+    if (keyStr.startsWith('device-')) {
+      final deviceId = keyStr.substring('device-'.length);
+      final targetTab = accessoryIds.contains(deviceId) ? 2 : 1;
+      return tabIndex == targetTab ? 2 : 0;
+    }
+    return 0;
+  }
+
+  final indexed = markers.toList().asMap().entries.toList();
+  indexed.sort((a, b) {
+    final cmp = rank(a.value).compareTo(rank(b.value));
+    return cmp != 0 ? cmp : a.key.compareTo(b.key);
+  });
+  return [for (final entry in indexed) entry.value];
+}
+
 class FindMyMapWidget extends StatefulWidget {
   final FindMyController controller;
   final void Function(FindMyFriend friend)? onSelectFriend;
@@ -257,7 +288,7 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
           }),
           SafeArea(
             child: Padding(
-              padding: EdgeInsets.only(top: 10 + desktopTop, left: 76, right: 76),
+              padding: EdgeInsets.only(top: 12 + desktopTop, left: 76, right: 76),
               child: Align(
                 alignment: Alignment.topCenter,
                 child: _buildStatusPill(context),
@@ -268,7 +299,7 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
             child: Align(
               alignment: Alignment.topRight,
               child: Padding(
-                padding: EdgeInsets.only(top: 10 + desktopTop, right: 16),
+                padding: EdgeInsets.only(top: 12 + desktopTop, right: 16),
                 child: _FloatingMapControls(controller: controller),
               ),
             ),
@@ -336,19 +367,19 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
   }
 
   List<Marker> _orderedMarkers() {
-    final all = controller.markers.values.toList();
     final selectedKey = controller.selectedFriendId.value != null
         ? 'friend-${controller.selectedFriendId.value}'
         : (controller.selectedDeviceId.value != null ? 'device-${controller.selectedDeviceId.value}' : null);
-    if (selectedKey == null) return all;
-    // Paint the selected pin last so its pill and badge stay above overlapping pins.
-    all.sort((a, b) {
-      final aSelected = a.key is ValueKey<String> && (a.key as ValueKey<String>).value == selectedKey;
-      final bSelected = b.key is ValueKey<String> && (b.key as ValueKey<String>).value == selectedKey;
-      if (aSelected == bSelected) return 0;
-      return aSelected ? 1 : -1;
-    });
-    return all;
+    final accessoryIds = <String>{
+      for (final device in controller.devices)
+        if (device.isConsideredAccessory && (device.id ?? '').isNotEmpty) device.id!,
+    };
+    return orderFindMyMarkers(
+      controller.markers.values,
+      tabIndex: controller.tabIndex.value,
+      selectedKey: selectedKey,
+      accessoryIds: accessoryIds,
+    );
   }
 
   List<CircleMarker> _buildSelectedAccuracyCircles(BuildContext context) {

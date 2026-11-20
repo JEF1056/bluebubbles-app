@@ -13,7 +13,7 @@ import 'package:get/get.dart';
 
 /// Inline message editing field with keyboard shortcuts
 /// Extracted from MessageHolder to improve maintainability
-class MessageEditField extends StatelessWidget {
+class MessageEditField extends StatefulWidget {
   const MessageEditField({
     super.key,
     required this.part,
@@ -27,14 +27,27 @@ class MessageEditField extends StatelessWidget {
   final ConversationViewController cvController;
   final void Function(String text, int part) onComplete;
 
-  MessageState _getController(Message message) => MessagesSvc(cvController.chat.guid).getOrCreateState(message);
+  @override
+  State<MessageEditField> createState() => _MessageEditFieldState();
+}
+
+class _MessageEditFieldState extends State<MessageEditField> {
+  final FocusNode _shortcutFocusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _shortcutFocusNode.dispose();
+    super.dispose();
+  }
+
+  MessageState _getController(Message message) => MessagesSvc(widget.cvController.chat.guid).getOrCreateState(message);
 
   void _cancelEdit(Message message) {
-    cvController.editing.removeWhere((e2) => e2.message.guid == message.guid! && e2.part.part == part);
-    if (cvController.editing.isEmpty) {
-      cvController.lastFocusedNode.requestFocus();
+    widget.cvController.editing.removeWhere((e2) => e2.message.guid == message.guid! && e2.part.part == widget.part);
+    if (widget.cvController.editing.isEmpty) {
+      widget.cvController.lastFocusedNode.requestFocus();
     } else {
-      cvController.editing.last.controller.focusNode?.requestFocus();
+      widget.cvController.editing.last.controller.focusNode?.requestFocus();
     }
   }
 
@@ -48,7 +61,7 @@ class MessageEditField extends StatelessWidget {
 
     // Enter without shift = submit
     if (ev.logicalKey == LogicalKeyboardKey.enter && !HardwareKeyboard.instance.isShiftPressed) {
-      onComplete(editController.text, part);
+      widget.onComplete(widget.editController.text, widget.part);
       return KeyEventResult.handled;
     }
 
@@ -83,18 +96,18 @@ class MessageEditField extends StatelessWidget {
                   : context.theme.colorScheme.surface,
             ),
             constraints: BoxConstraints(
-              maxWidth: NavigationSvc.width(context) * 0.75 - 40,
+              maxWidth: MessageState.maxBubbleWidth(context, inset: 40),
               minHeight: 40,
             ),
             padding: EdgeInsets.only(right: iOS ? 10 : 0).add(const EdgeInsets.all(5)),
             child: Focus(
-              focusNode: FocusNode(),
+              focusNode: _shortcutFocusNode,
               onKeyEvent: (_, ev) => _handleKeyEvent(ev, message),
               child: TextField(
                 textCapitalization: TextCapitalization.sentences,
                 autocorrect: true,
-                controller: editController,
-                focusNode: editController.focusNode,
+                controller: widget.editController,
+                focusNode: widget.editController.focusNode,
                 scrollPhysics: const CustomBouncingScrollPhysics(),
                 style: context.theme.extension<BubbleText>()!.bubbleText.apply(
                       fontSizeFactor: message.isBigEmoji ? 3 : 1,
@@ -102,7 +115,7 @@ class MessageEditField extends StatelessWidget {
                 keyboardType: TextInputType.multiline,
                 maxLines: 14,
                 minLines: 1,
-                autofocus: !(kIsDesktop || kIsWeb),
+                autofocus: true,
                 enableIMEPersonalizedLearning: !SettingsSvc.settings.incognitoKeyboard.value,
                 textInputAction: SettingsSvc.settings.sendWithReturn.value && !kIsWeb && !kIsDesktop
                     ? TextInputAction.send
@@ -153,12 +166,12 @@ class MessageEditField extends StatelessWidget {
                       color: context.theme.colorScheme.onSurface,
                       size: 20,
                     ),
-                    onPressed: () => onComplete(editController.text, part),
+                    onPressed: () => widget.onComplete(widget.editController.text, widget.part),
                   ),
                 ),
                 onSubmitted: (value) {
                   if (!SettingsSvc.settings.sendWithReturn.value || kIsWeb || kIsDesktop) return;
-                  onComplete(value, part);
+                  widget.onComplete(value, widget.part);
                 },
               ),
             ), // Container closes

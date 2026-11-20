@@ -85,10 +85,11 @@ class KeyboardShortcutHandler {
       }
     }
 
-    // Desktop/Web: Enter (without modifier) sends message
+    // Desktop/Web: Enter (without Shift/Alt) or Ctrl/Cmd+Enter sends message
     if ((kIsDesktop || kIsWeb) &&
         ev.logicalKey == LogicalKeyboardKey.enter &&
-        !HardwareKeyboard.instance.isShiftPressed) {
+        !HardwareKeyboard.instance.isShiftPressed &&
+        !HardwareKeyboard.instance.isAltPressed) {
       sendMessage();
       controller.focusNode.requestFocus();
       return KeyEventResult.handled;

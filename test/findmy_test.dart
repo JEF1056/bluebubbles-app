@@ -12,11 +12,17 @@ import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_pin_marker.dart';
 import 'package:bluebubbles/database/global/findmy_device.dart';
 import 'package:bluebubbles/database/global/findmy_friend.dart';
 import 'package:bluebubbles/database/io/contact_v2.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/ui/findmy_helpers.dart';
+import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:get/get.dart' hide Response;
+import 'package:get_it/get_it.dart';
 import 'package:latlong2/latlong.dart';
 
 FindMyFriend _friend({
@@ -78,7 +84,7 @@ void main() {
       expect(friend.isLocatingInProgress, isTrue);
     });
 
-    test('isLiveFresh requires live status, age < 60s, and !isOld', () {
+    test('isLiveFresh requires live stream (status == live or isLive == true) and !isOld regardless of age', () {
       final now = DateTime(2026, 11, 17, 12, 0, 0);
       expect(
         _friend(lastUpdated: now.subtract(const Duration(seconds: 30)), status: LocationStatus.live)
@@ -86,9 +92,9 @@ void main() {
         isTrue,
       );
       expect(
-        _friend(lastUpdated: now.subtract(const Duration(seconds: 60)), status: LocationStatus.live)
+        _friend(lastUpdated: now.subtract(const Duration(minutes: 5)), status: LocationStatus.live)
             .isLiveFresh(now),
-        isFalse,
+        isTrue,
       );
       expect(
         _friend(lastUpdated: now.subtract(const Duration(seconds: 10)), status: LocationStatus.live, isOld: true)
@@ -100,13 +106,31 @@ void main() {
             .isLiveFresh(now),
         isFalse,
       );
+      expect(
+        FindMyFriend.fromJson({'status': 'live', 'is_live': false, 'last_updated': now.millisecondsSinceEpoch})
+            .isLiveFresh(now),
+        isFalse,
+      );
+      expect(
+        FindMyFriend.fromJson({'status': 'shallow', 'is_live': true, 'last_updated': now.millisecondsSinceEpoch})
+            .isLiveFresh(now),
+        isTrue,
+      );
     });
 
-    test('displayFreshness formats locating, live, relative age, and old states', () {
+    test('displayFreshness formats locating with real age, live, relative age, and old states', () {
       final now = DateTime(2026, 11, 17, 12, 0, 0);
       expect(
         _friend(locatingInProgress: true, status: LocationStatus.shallow).displayFreshness(now),
-        'Locating...',
+        'Locating…',
+      );
+      expect(
+        _friend(
+          lastUpdated: now.subtract(const Duration(minutes: 5)),
+          locatingInProgress: true,
+          status: LocationStatus.shallow,
+        ).displayFreshness(now),
+        'Locating… · 5m ago',
       );
       expect(
         _friend(lastUpdated: now.subtract(const Duration(seconds: 15)), status: LocationStatus.live)
@@ -114,13 +138,17 @@ void main() {
         'Live',
       );
       expect(
-        _friend(lastUpdated: now.subtract(const Duration(minutes: 5)), status: LocationStatus.live)
+        _friend(lastUpdated: now.subtract(const Duration(minutes: 5)), status: LocationStatus.shallow)
             .displayFreshness(now),
         '5m ago',
       );
       expect(
         _friend(lastUpdated: now.subtract(const Duration(hours: 2)), isOld: true).displayFreshness(now),
         'Old · 2h ago',
+      );
+      expect(
+        _friend(lastUpdated: null, status: LocationStatus.shallow).displayFreshness(now),
+        '',
       );
     });
 
@@ -518,7 +546,7 @@ void main() {
       expect(find.text('Alice'), findsOneWidget);
       expect(find.text('Live'), findsOneWidget);
       expect(find.text('One Apple Park Way, Cupertino, CA'), findsOneWidget);
-      expect(find.textContaining('km away'), findsOneWidget);
+      expect(find.textContaining('mi'), findsOneWidget);
       expect(find.text('±12m'), findsOneWidget);
       expect(find.text('Directions'), findsOneWidget);
       expect(find.text('Refresh'), findsOneWidget);
@@ -986,7 +1014,7 @@ void main() {
       expect(calls.single.force, isTrue);
       expect(calls.single.live, isTrue);
       expect(controller.locatingFriendId.value, alice.stableId);
-      expect(find.text('Locating...'), findsOneWidget);
+      expect(find.text('Locating… · 4m ago'), findsOneWidget);
       expect(find.byKey(ValueKey('findmy-friend-locating-${alice.stableId}')), findsOneWidget);
 
       // Server returns targeted live update for Alice only
@@ -1502,5 +1530,557 @@ void main() {
       controller.onAppResumed();
       expect(controller.locationSub!.isPaused, isFalse);
     });
+
+    test('getLocations catches position errors and auto-fits pins once map is ready when location is null',
+        () async {
+      final cameraCalls = <(LatLng, double)>[];
+      final streamController = StreamController<Position>.broadcast();
+      final controller = FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () async => throw Exception('Geolocation denied'),
+        positionStream: () => streamController.stream,
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+          statusCode: 200,
+          data: {
+            'data': [
+              {
+                'coordinates': [37.3349, -122.009],
+                'long_address': '1 Apple Park Way',
+                'title': 'Alice',
+                'handle': 'alice@example.com',
+                'last_updated': DateTime(2026, 11, 18, 12, 0).millisecondsSinceEpoch,
+                'status': 'shallow',
+              },
+            ],
+          },
+        ),
+      );
+      addTearDown(() async {
+        controller.onClose();
+        await streamController.close();
+      });
+      controller.registerCameraAnimator((center, zoom, {offset = Offset.zero}) {
+        cameraCalls.add((center, zoom));
+      });
+
+      await controller.getLocations(
+        refreshFriends: true,
+        refreshDevices: false,
+        skipFetchWhenNotRefreshing: true,
+      );
+      expect(controller.location.value, isNull);
+      expect(cameraCalls, isEmpty);
+
+      controller.completer.complete();
+      await pumpEventQueue();
+      expect(cameraCalls, hasLength(1));
+      expect(cameraCalls.first.$1.latitude, closeTo(37.3349, 0.001));
+      expect(cameraCalls.first.$1.longitude, closeTo(-122.009, 0.001));
+
+      // Subsequent refreshes do not re-fit the user's map camera.
+      await controller.getLocations(
+        refreshFriends: true,
+        refreshDevices: false,
+        skipFetchWhenNotRefreshing: true,
+      );
+      await pumpEventQueue();
+      expect(cameraCalls, hasLength(1));
+    });
+
+    test('getLocations animates to initial position if no pin selected and catches stream errors', () async {
+      final now = DateTime(2026, 11, 18, 12, 0);
+      final initialPos = Position(
+        longitude: -122.4194,
+        latitude: 37.7749,
+        timestamp: now,
+        accuracy: 10,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      );
+      final cameraCalls = <(LatLng, double)>[];
+      final streamController = StreamController<Position>.broadcast();
+      final controller = FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () async => initialPos,
+        positionStream: () => streamController.stream,
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+      );
+      addTearDown(() async {
+        controller.onClose();
+        await streamController.close();
+      });
+      controller.registerCameraAnimator((center, zoom, {offset = Offset.zero}) {
+        cameraCalls.add((center, zoom));
+      });
+      controller.completer.complete();
+
+      await controller.getLocations(
+        refreshFriends: true,
+        refreshDevices: false,
+        skipFetchWhenNotRefreshing: true,
+      );
+      await pumpEventQueue();
+
+      expect(controller.location.value, isNotNull);
+      expect(cameraCalls, hasLength(1));
+      expect(cameraCalls.first.$1.latitude, closeTo(37.7749, 0.0001));
+      expect(cameraCalls.first.$1.longitude, closeTo(-122.4194, 0.0001));
+      expect(cameraCalls.first.$2, 10);
+
+      // Stream error must not become an unhandled zone error.
+      streamController.addError(Exception('Position unavailable'));
+      await pumpEventQueue();
+    });
+
+    test('getLocations does not animate to initial position when a pin is already selected', () async {
+      final now = DateTime(2026, 11, 18, 12, 0);
+      final initialPos = Position(
+        longitude: -122.4194,
+        latitude: 37.7749,
+        timestamp: now,
+        accuracy: 10,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      );
+      final cameraCalls = <(LatLng, double)>[];
+      final streamController = StreamController<Position>.broadcast();
+      final controller = FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () async => initialPos,
+        positionStream: () => streamController.stream,
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+      );
+      addTearDown(() async {
+        controller.onClose();
+        await streamController.close();
+      });
+      controller.selectedFriendId.value = 'alice@example.com';
+      controller.registerCameraAnimator((center, zoom, {offset = Offset.zero}) {
+        cameraCalls.add((center, zoom));
+      });
+      controller.completer.complete();
+
+      await controller.getLocations(
+        refreshFriends: true,
+        refreshDevices: false,
+        skipFetchWhenNotRefreshing: true,
+      );
+      await pumpEventQueue();
+
+      expect(controller.location.value, isNotNull);
+      expect(cameraCalls, isEmpty);
+    });
   });
+
+  group('Mobile FindMy fitAllPins & initial sheet snap', () {
+    test('computeFindMyFitAllPadding accounts for phone bottom sheet and marker bounds', () {
+      const phoneSize = Size(390, 844);
+      const sheetHeight = 392.0; // 48% snap on 390x844
+      final phonePad = computeFindMyFitAllPadding(
+        viewportSize: phoneSize,
+        viewPadding: const EdgeInsets.only(top: 20),
+        isPhone: true,
+        bottomSheetHeight: sheetHeight,
+      );
+      expect(phonePad.left, greaterThanOrEqualTo(58.0)); // >= half marker width (116/2)
+      expect(phonePad.right, greaterThanOrEqualTo(58.0));
+      expect(phonePad.top, greaterThanOrEqualTo(66.0));
+      expect(phonePad.bottom, greaterThanOrEqualTo(sheetHeight + 46.0)); // >= sheet + half marker height
+      expect(phonePad.horizontal, lessThan(phoneSize.width));
+      expect(phonePad.vertical, lessThan(phoneSize.height));
+
+      final desktopPad = computeFindMyFitAllPadding(
+        viewportSize: const Size(1280, 800),
+        isPhone: false,
+      );
+      expect(desktopPad, FindMyController.defaultFitAllPinsPadding);
+
+      // Tiny viewport clamps without throwing or leaving negative interior bounds.
+      final tinyPad = computeFindMyFitAllPadding(
+        viewportSize: const Size(240, 320),
+        isPhone: true,
+        bottomSheetHeight: 280,
+      );
+      expect(tinyPad.horizontal, lessThanOrEqualTo(160.0));
+      expect(tinyPad.vertical, lessThanOrEqualTo(240.0));
+    });
+
+    testWidgets('fitAllPins places SF and Cupertino markers in unoccluded upper map on 390x844', (tester) async {
+      final sf = _friend(title: 'SF', handleAddress: 'sf@example.com');
+      final cupertino = FindMyFriend(
+        latitude: 37.3349,
+        longitude: -122.0090,
+        longAddress: 'Cupertino, CA',
+        shortAddress: 'Cupertino',
+        title: 'Cupertino',
+        subtitle: null,
+        handle: null,
+        handleAddress: 'cup@example.com',
+        lastUpdated: DateTime(2026, 11, 18, 12),
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      );
+      final sfPin = FindMyFriend(
+        latitude: 37.7749,
+        longitude: -122.4194,
+        longAddress: 'San Francisco, CA',
+        shortAddress: 'SF',
+        title: sf.title,
+        subtitle: null,
+        handle: null,
+        handleAddress: 'sf@example.com',
+        lastUpdated: DateTime(2026, 11, 18, 12),
+        status: LocationStatus.live,
+        locatingInProgress: false,
+      );
+      final controller = FindMyController(autoFetch: false);
+      addTearDown(controller.onClose);
+      controller.friends.addAll([sfPin, cupertino]);
+      controller.friendsWithLocation.addAll([sfPin, cupertino]);
+
+      const sheetHeight = 392.0;
+      controller.fitAllPinsPaddingProvider = () => computeFindMyFitAllPadding(
+            viewportSize: const Size(390, 844),
+            isPhone: true,
+            bottomSheetHeight: sheetHeight,
+          );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 390,
+              height: 844,
+              child: FlutterMap(
+                mapController: controller.mapController,
+                options: const MapOptions(
+                  initialCenter: LatLng(37.5, -122.2),
+                  initialZoom: 8,
+                ),
+                children: const [SizedBox.shrink()],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      controller.fitAllPins();
+      await tester.pump();
+
+      final camera = controller.mapController.camera;
+      final sfOffset = camera.latLngToScreenOffset(const LatLng(37.7749, -122.4194));
+      final cupOffset = camera.latLngToScreenOffset(const LatLng(37.3349, -122.0090));
+      final visibleMapBottom = 844.0 - sheetHeight;
+
+      expect(sfOffset.dy, greaterThanOrEqualTo(46.0));
+      expect(cupOffset.dy + 46.0, lessThanOrEqualTo(visibleMapBottom));
+      expect(sfOffset.dx, inInclusiveRange(58.0, 390.0 - 58.0));
+      expect(cupOffset.dx, inInclusiveRange(58.0, 390.0 - 58.0));
+    });
+
+    testWidgets('FindMyPage on phone snaps bottom sheet to 48% with People rows visible',
+        variant: TargetPlatformVariant.only(TargetPlatform.android), (tester) async {
+      Get.testMode = true;
+      if (!GetIt.I.isRegistered<SettingsService>()) {
+        GetIt.I.registerSingleton<SettingsService>(SettingsService()..settings = Settings());
+      }
+      if (!GetIt.I.isRegistered<NavigatorService>()) {
+        GetIt.I.registerSingleton<NavigatorService>(NavigatorService());
+      }
+      if (!GetIt.I.isRegistered<BaseLogger>()) {
+        GetIt.I.registerSingleton<BaseLogger>(_NoopFindMyLogger());
+      }
+      if (!GetIt.I.isRegistered<ThemesService>()) {
+        GetIt.I.registerSingleton<ThemesService>(ThemesService());
+      }
+      if (!GetIt.I.isRegistered<ChatsService>()) {
+        GetIt.I.registerSingleton<ChatsService>(ChatsService());
+      }
+      if (!GetIt.I.isRegistered<HttpService>()) {
+        GetIt.I.registerSingleton<HttpService>(HttpService());
+      }
+
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() async {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+        Get.reset();
+        await GetIt.I.reset();
+      });
+
+      final ctrl = Get.put(FindMyController(autoFetch: false));
+      final people = [
+        _friend(title: 'Alice Chen', handleAddress: 'alice@example.com'),
+        _friend(title: 'Bob Martinez', handleAddress: 'bob@example.com'),
+      ];
+      ctrl.friends.addAll(people);
+      ctrl.friendsWithLocation.addAll(people);
+      ctrl.fetching2.value = false;
+
+      await tester.pumpWidget(
+        const GetMaterialApp(
+          home: FindMyPage(),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(ctrl.panelController.isAttached, isTrue);
+      expect(ctrl.panelController.panelPosition, closeTo(0.48, 0.01));
+      expect(find.text('Alice Chen'), findsOneWidget);
+      expect(find.text('Bob Martinez'), findsOneWidget);
+      final aliceRect = tester.getRect(find.text('Alice Chen'));
+      expect(aliceRect.bottom, lessThan(844.0));
+    });
+
+    test('P0-1 & B2: shared controller uses one-shot GPS in ensureFriendsLoaded and full interactivity after activatePage',
+        () async {
+      var fakeNow = DateTime(2026, 11, 19, 12, 0);
+      final pos = Position(
+        longitude: -122.4194,
+        latitude: 37.7749,
+        timestamp: fakeNow,
+        accuracy: 10,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      );
+      final streamController = StreamController<Position>.broadcast();
+      int fetchPositionCalls = 0;
+      int streamCalls = 0;
+      int friendRefreshCalls = 0;
+
+      final controller = FindMyController(
+        now: () => fakeNow,
+        autoFetch: false,
+        fetchCurrentPosition: () async {
+          fetchPositionCalls++;
+          return pos;
+        },
+        positionStream: () {
+          streamCalls++;
+          return streamController.stream;
+        },
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async {
+          friendRefreshCalls++;
+          return Response(
+            requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+            statusCode: 200,
+            data: {'data': []},
+          );
+        },
+        refreshDevicesRequest: ({deviceId, force = false}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/devices/refresh'),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+      )..isBackgroundShared = true;
+      addTearDown(() async {
+        controller.onClose();
+        await streamController.close();
+      });
+
+      // B2: ensureFriendsLoaded before FindMyPage opens fetches one-shot position without starting GPS stream.
+      await controller.ensureFriendsLoaded();
+      await pumpEventQueue();
+      expect(fetchPositionCalls, 1);
+      expect(streamCalls, 0);
+      expect(controller.location.value, isNotNull);
+      expect(controller.locationSub, isNull);
+      expect(controller.hasMovedToCurrentLocation.value, isFalse);
+
+      // Before activatePage, tab changes & app resume do not trigger interactive refreshes.
+      final callsBeforeActivate = friendRefreshCalls;
+      controller.onTabChanged(0);
+      controller.onAppResumed();
+      expect(friendRefreshCalls, callsBeforeActivate);
+
+      // P0-1: activatePage unlocks interactive refreshes, tab switches, and page GPS stream.
+      controller.activatePage();
+      await pumpEventQueue();
+      expect(friendRefreshCalls, greaterThan(callsBeforeActivate));
+      expect(streamCalls, 1);
+      expect(controller.locationSub, isNotNull);
+
+      fakeNow = fakeNow.add(const Duration(seconds: 15));
+      final beforeTabSwitch = friendRefreshCalls;
+      controller.onTabChanged(0);
+      await pumpEventQueue();
+      expect(friendRefreshCalls, beforeTabSwitch + 1);
+
+      // Staleness timer pauses in background and restarts on resume.
+      controller.onAppPaused();
+      expect(controller.locationSub!.isPaused, isTrue);
+      fakeNow = fakeNow.add(const Duration(seconds: 15));
+      controller.onAppResumed();
+      await pumpEventQueue();
+      expect(controller.locationSub!.isPaused, isFalse);
+      expect(friendRefreshCalls, beforeTabSwitch + 2);
+    });
+
+    testWidgets('P0-2 & P1-Visual: FindMyPage disposes shared TabController/GPS stream cleanly and fits pre-cached pins above phone sheet',
+        variant: TargetPlatformVariant.only(TargetPlatform.android), (tester) async {
+      Get.testMode = true;
+      if (!GetIt.I.isRegistered<SettingsService>()) {
+        GetIt.I.registerSingleton<SettingsService>(SettingsService()..settings = Settings());
+      }
+      if (!GetIt.I.isRegistered<NavigatorService>()) {
+        GetIt.I.registerSingleton<NavigatorService>(NavigatorService());
+      }
+      if (!GetIt.I.isRegistered<BaseLogger>()) {
+        GetIt.I.registerSingleton<BaseLogger>(_NoopFindMyLogger());
+      }
+      if (!GetIt.I.isRegistered<ThemesService>()) {
+        GetIt.I.registerSingleton<ThemesService>(ThemesService());
+      }
+      if (!GetIt.I.isRegistered<ChatsService>()) {
+        GetIt.I.registerSingleton<ChatsService>(ChatsService());
+      }
+      if (!GetIt.I.isRegistered<HttpService>()) {
+        GetIt.I.registerSingleton<HttpService>(HttpService());
+      }
+
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+
+      final streamController = StreamController<Position>.broadcast();
+      final now = DateTime(2026, 11, 19, 12, 0);
+      final userPos = Position(
+        longitude: -122.4194,
+        latitude: 37.7749,
+        timestamp: now,
+        accuracy: 10,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      );
+      final sfJson = {
+        'coordinates': [37.7749, -122.4194],
+        'long_address': 'San Francisco, CA',
+        'short_address': 'SF',
+        'title': 'SF',
+        'handle': 'sf@example.com',
+        'last_updated': now.millisecondsSinceEpoch,
+        'status': 'live',
+      };
+      final cupJson = {
+        'coordinates': [37.3349, -122.0090],
+        'long_address': 'Cupertino, CA',
+        'short_address': 'Cupertino',
+        'title': 'Cupertino',
+        'handle': 'cup@example.com',
+        'last_updated': now.millisecondsSinceEpoch,
+        'status': 'live',
+      };
+      final ctrl = Get.put(FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () async => userPos,
+        positionStream: () => streamController.stream,
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+          statusCode: 200,
+          data: {
+            'data': [sfJson, cupJson],
+          },
+        ),
+        refreshDevicesRequest: ({deviceId, force = false}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/devices/refresh'),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+      )..isBackgroundShared = true);
+
+      addTearDown(() async {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+        await streamController.close();
+        Get.reset();
+        await GetIt.I.reset();
+      });
+
+      // Pre-populate location + cached pins (simulating chat header ensure() before FindMyPage opens).
+      await ctrl.ensureFriendsLoaded();
+      final sf = ctrl.friends.first;
+
+      await tester.pumpWidget(const GetMaterialApp(home: FindMyPage()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(ctrl.tabController, isNotNull);
+      expect(ctrl.locationSub, isNotNull);
+
+      // P1-Visual: Even with location already set from ensure(), cached pins fit cleanly above the 48% sheet.
+      final camera = ctrl.mapController.camera;
+      final sfOffset = camera.latLngToScreenOffset(const LatLng(37.7749, -122.4194));
+      final cupOffset = camera.latLngToScreenOffset(const LatLng(37.3349, -122.0090));
+      final sheetHeight = 146.0 + (844.0 * 0.78 - 146.0) * 0.48;
+      expect(sfOffset.dy, greaterThanOrEqualTo(46.0));
+      expect(cupOffset.dy + 46.0, lessThanOrEqualTo(844.0 - sheetHeight));
+
+      // P0-2: Disposing FindMyPage cleans up TabController and cancels continuous GPS stream on shared controller.
+      await tester.pumpWidget(const GetMaterialApp(home: Scaffold(body: SizedBox())));
+      await tester.pump();
+      expect(ctrl.tabController, isNull);
+      expect(ctrl.locationSub, isNull);
+      expect(ctrl.completer.isCompleted, isFalse);
+
+      // Re-opening via openForFriend remains null-safe when TabController is disposed and cleanly re-creates state.
+      unawaited(ctrl.openForFriend(tester.element(find.byType(SizedBox)), sf));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(ctrl.tabIndex.value, 0);
+      expect(ctrl.tabController, isNotNull);
+      expect(ctrl.locationSub, isNotNull);
+      expect(ctrl.selectedFriendId.value, sf.stableId);
+
+      // Pop pushed route so FindMyPage disposes cleanly before test teardown.
+      Navigator.of(tester.element(find.byType(FindMyPage))).pop();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      expect(ctrl.tabController, isNull);
+      expect(ctrl.locationSub, isNull);
+
+      Get.delete<FindMyController>(force: true);
+    });
+  });
+}
+
+class _NoopFindMyLogger extends BaseLogger {
+  @override
+  void debug(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+
+  @override
+  void info(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+
+  @override
+  void warn(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+
+  @override
+  void error(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
 }

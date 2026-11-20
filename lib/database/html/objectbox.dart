@@ -779,7 +779,7 @@ class ToOne<T> {
     if (_target != null && box != null) {
       final currentId = box._idOf(_target as T);
       if (currentId == null || currentId <= 0) {
-        _targetId = box.put(_target as T);
+        _targetId = box._resolveUniqueOrPut(_target as T);
       } else {
         _targetId = currentId;
       }
@@ -863,8 +863,11 @@ class ToMany<T> extends ListBase<T> {
     final ids = <int>[];
     for (final item in _items!) {
       int? id = box != null ? box._idOf(item) : _extractEntityId(item);
-      if ((id == null || id <= 0) && autoPut && box != null) {
-        id = box.put(item);
+      if ((id == null || id <= 0) && box != null) {
+        id = box._stampExistingUniqueId(item);
+        if ((id == null || id <= 0) && autoPut) {
+          id = box.put(item);
+        }
       }
       if (id != null && id > 0 && !ids.contains(id)) {
         ids.add(id);
@@ -1242,6 +1245,21 @@ class Box<T> {
     return ids;
   }
 
+  /// If [object] has no ID but matches an existing row's unique key, stamps that ID onto [object].
+  int? _stampExistingUniqueId(T object) {
+    final currentId = _getId(object);
+    if (currentId != null && currentId > 0) return currentId;
+    final uniq = _uniqueKey?.call(object);
+    if (uniq == null || uniq.isEmpty) return null;
+    final existingId = _uniqueIndex[uniq];
+    if (existingId != null) {
+      _setId(object, existingId);
+    }
+    return existingId;
+  }
+
+  int _resolveUniqueOrPut(T object) => _stampExistingUniqueId(object) ?? put(object);
+
   int _putSingle(T object, {PutMode mode = PutMode.put}) {
     int? existingId = _getId(object);
     final isNew = existingId == null || existingId <= 0;
@@ -1510,6 +1528,7 @@ class Store {
           },
           (added, removed) {
             for (final att in added) {
+              attachmentBox._stampExistingUniqueId(att);
               att.message.target = m;
               attachmentBox.put(att);
             }
@@ -1570,6 +1589,7 @@ class Store {
           },
           (added, removed) {
             for (final m in added) {
+              messageBox._stampExistingUniqueId(m);
               m.chat.target = c;
               messageBox.put(m);
             }

@@ -291,51 +291,104 @@ class _WebAudioPlayerState extends State<AudioPlayer>
     super.dispose();
   }
 
+  static const _speeds = [1.0, 1.5, 2.0];
+
+  void _cycleSpeed() {
+    final idx = _speeds.indexOf(_controller.playbackRate);
+    final next = _speeds[(idx + 1) % _speeds.length];
+    _controller.setPlaybackRate(next);
+  }
+
+  String _speedLabel(double rate) {
+    return rate == rate.roundToDouble() ? '${rate.toInt()}x' : '${rate}x';
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final colors = context.theme.colorScheme;
+    if (_controller.hasError) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 20, color: colors.error),
+            const SizedBox(width: 8),
+            Text('Audio unavailable', style: context.theme.textTheme.bodyMedium?.copyWith(color: colors.error)),
+          ],
+        ),
+      );
+    }
+
     final maxSec = _controller.duration.inSeconds.toDouble();
     final posSec = _controller.position.inSeconds.toDouble().clamp(0.0, maxSec > 0 ? maxSec : 0.0);
 
     return Padding(
-      padding: const EdgeInsets.all(5),
-      child: IntrinsicWidth(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton.filledTonal(
                   onPressed: _controller.togglePlayPause,
+                  padding: EdgeInsets.zero,
                   icon: AnimatedIcon(
                     icon: AnimatedIcons.play_pause,
                     progress: animController,
                   ),
-                  color: context.theme.colorScheme.onSurfaceVariant,
-                  visualDensity: VisualDensity.compact,
+                  color: colors.onSecondaryContainer,
                 ),
-                SizedBox(
-                  height: 30,
-                  child: Slider(
-                    value: posSec,
-                    onChanged: maxSec > 0
-                        ? (double value) => _controller.seek(Duration(seconds: value.toInt()))
-                        : null,
-                    min: 0,
-                    max: maxSec > 0 ? maxSec : 1.0,
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 160),
+                  child: SizedBox(
+                    height: 30,
+                    child: Slider(
+                      value: posSec,
+                      onChanged: maxSec > 0
+                          ? (double value) => _controller.seek(Duration(seconds: value.toInt()))
+                          : null,
+                      min: 0,
+                      max: maxSec > 0 ? maxSec : 1.0,
+                    ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 10, right: 16),
-                  child: Text("${prettyDuration(_controller.position)} / ${prettyDuration(_controller.duration)}"),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  "${prettyDuration(_controller.position)} / ${prettyDuration(_controller.duration)}",
+                  style: context.theme.textTheme.labelMedium,
                 ),
-              ],
-            ),
-            if (widget.transcript != null) _NoIntrinsicWidth(child: _Transcript(widget.transcript!)),
-          ],
-        ),
+              ),
+              Material(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+                child: InkWell(
+                  onTap: _cycleSpeed,
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Text(
+                      _speedLabel(_controller.playbackRate),
+                      style: context.theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (widget.transcript != null) _Transcript(widget.transcript!),
+        ],
       ),
     );
   }

@@ -67,7 +67,10 @@ bool get isSideloadMsix => isMsix && !isStoreMsix;
 String get appVersion {
   final info = FilesystemSvc.packageInfo;
   final code = info.buildNumber;
-  final build = Platform.isAndroid ? "+${code.length > 4 ? code.substring(code.length - 4) : code}" : "";
+  final build = !kIsWeb && Platform.isAndroid
+      ? "+${code.length > 4 ? code.substring(code.length - 4) : code}"
+      : "";
+  final os = kIsWeb ? "Web" : Platform.operatingSystem.capitalizeFirst!;
   final distribution = isSnap
       ? "_Snap"
       : isFlatpak
@@ -77,7 +80,7 @@ String get appVersion {
               : isSideloadMsix
                   ? "_Msix_Sideload"
                   : "";
-  return "${info.version}${build}_${Platform.operatingSystem.capitalizeFirst!}$distribution";
+  return "${info.version}${build}_$os$distribution";
 }
 
 /// From https://github.com/modulovalue/dart_intersperse/blob/master/lib/src/intersperse.dart

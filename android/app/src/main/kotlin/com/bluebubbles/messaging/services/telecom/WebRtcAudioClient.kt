@@ -90,6 +90,10 @@ class WebRtcAudioClient(
     @Volatile
     private var muted = false
 
+    private val onConnectListener = Emitter.Listener {
+        flushPendingOutbound()
+    }
+
     private val onAnswerListener = Emitter.Listener { args ->
         val payload = parsePayload(args.getOrNull(0)) ?: return@Listener
         if (payload.optString("callUuid") != callUuid) return@Listener
@@ -131,8 +135,11 @@ class WebRtcAudioClient(
     }
 
     fun setMuted(isMuted: Boolean) {
-        muted = isMuted
-        localAudioTrack?.setEnabled(!isMuted)
+        synchronized(lock) {
+            if (stopped) return
+            muted = isMuted
+            localAudioTrack?.setEnabled(!isMuted)
+        }
         emitEvent(
             "ft-bridge-mute",
             JSONObject().apply {
@@ -194,6 +201,7 @@ class WebRtcAudioClient(
         }
 
         socketToClean?.let { s ->
+            s.off(Socket.EVENT_CONNECT, onConnectListener)
             s.off("ft-bridge-answer", onAnswerListener)
             s.off("ft-bridge-ice", onIceListener)
             s.off("ft-bridge-hangup", onHangupListener)
@@ -227,9 +235,6 @@ class WebRtcAudioClient(
                 reconnection = true
             }
             val newSocket = IO.socket(serverUrl, opts)
-            newSocket.on(Socket.EVENT_CONNECT) {
-                flushPendingOutbound()
-            }
             newSocket.on(Socket.EVENT_CONNECT_ERROR) { args ->
                 PersistentLog.w(context, TAG, "Bridge Socket.IO connect error: ${args.firstOrNull()}")
             }
@@ -238,6 +243,7 @@ class WebRtcAudioClient(
             newSocket.connect()
         }
 
+        socket?.on(Socket.EVENT_CONNECT, onConnectListener)
         socket?.on("ft-bridge-answer", onAnswerListener)
         socket?.on("ft-bridge-ice", onIceListener)
         socket?.on("ft-bridge-hangup", onHangupListener)

@@ -15,12 +15,14 @@ import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.ui.WearApp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private val initialChatGuid = mutableStateOf<String?>(null)
+    private val initialChatNonce = mutableStateOf(0L)
     private var pausedActiveChatGuid: String? = null
     private var activeHeartbeatJob: Job? = null
     private var bridgingObserverJob: Job? = null
@@ -31,12 +33,25 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NotificationHelper.setAppResumed(false)
 
-        initialChatGuid.value = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_GUID)
+        val launchGuid = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_GUID)
+        if (!launchGuid.isNullOrBlank()) {
+            NotificationHelper.setPendingLaunchChatGuid(launchGuid)
+            initialChatGuid.value = launchGuid
+            initialChatNonce.value += 1L
+        }
         requestNotificationPermissionIfNeeded()
 
         setContent {
-            WearApp(initialChatGuid = initialChatGuid.value)
+            WearApp(
+                initialChatGuid = initialChatGuid.value,
+                initialChatNonce = initialChatNonce.value,
+                onInitialChatHandled = {
+                    NotificationHelper.setPendingLaunchChatGuid(null)
+                    initialChatGuid.value = null
+                }
+            )
         }
     }
 
@@ -52,6 +67,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        NotificationHelper.setAppResumed(true)
         val pendingRestore = pausedActiveChatGuid
         pausedActiveChatGuid = null
         if (pendingRestore != null && NotificationHelper.activeChatGuid.value == null) {
@@ -73,14 +89,19 @@ class MainActivity : ComponentActivity() {
         val relay = (applicationContext as WearBubblesApp).phoneRelayClient
         activeHeartbeatJob?.cancel()
         activeHeartbeatJob = lifecycleScope.launch {
-            while (isActive) {
-                relay.notifyWatchActive(true)
-                delay(60_000L)
+            relay.isPhoneConnected.collectLatest { connected ->
+                if (connected) {
+                    while (isActive) {
+                        relay.notifyWatchActive(true)
+                        delay(90_000L)
+                    }
+                }
             }
         }
     }
 
     override fun onPause() {
+        NotificationHelper.setAppResumed(false)
         bridgingObserverJob?.cancel()
         bridgingObserverJob = null
         val currentActive = NotificationHelper.activeChatGuid.value
@@ -92,7 +113,10 @@ class MainActivity : ComponentActivity() {
         }
         activeHeartbeatJob?.cancel()
         activeHeartbeatJob = null
-        (applicationContext as WearBubblesApp).phoneRelayClient.notifyWatchActive(false)
+        val relay = (applicationContext as WearBubblesApp).phoneRelayClient
+        if (relay.isPhoneConnected.value) {
+            relay.notifyWatchActive(false)
+        }
         super.onPause()
     }
 
@@ -100,8 +124,13 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         val guid = intent.getStringExtra(NotificationHelper.EXTRA_CHAT_GUID)
         if (!guid.isNullOrBlank()) {
-            pausedActiveChatGuid = guid
+            // Only keep pausedActiveChatGuid if already paused on that same chat; otherwise let navigation activate it.
+            if (pausedActiveChatGuid != guid) {
+                pausedActiveChatGuid = null
+            }
+            NotificationHelper.setPendingLaunchChatGuid(guid)
             initialChatGuid.value = guid
+            initialChatNonce.value += 1L
         }
     }
 }

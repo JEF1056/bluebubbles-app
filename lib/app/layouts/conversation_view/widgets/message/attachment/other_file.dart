@@ -108,7 +108,25 @@ class OtherFile extends StatelessWidget {
           return;
         }
         if (kIsWeb || file.path == null) {
-          downloadBytes(file.bytes!, file.name);
+          final bytes = file.bytes;
+          if (bytes != null && bytes.isNotEmpty) {
+            downloadBytes(bytes, file.name);
+          } else if (attachment.guid != null) {
+            AttachmentsSvc.redownloadAttachment(
+              attachment,
+              onComplete: (downloaded) {
+                final data = downloaded.bytes;
+                if (data != null && data.isNotEmpty) {
+                  downloadBytes(data, downloaded.name);
+                } else {
+                  showSnackbar('Error', 'Failed to download file!', type: SnackbarType.error);
+                }
+              },
+              onError: () => showSnackbar('Error', 'Failed to download file!', type: SnackbarType.error),
+            );
+          } else {
+            showSnackbar('Error', 'That attachment has no data to save!', type: SnackbarType.error);
+          }
         } else if (kIsDesktop) {
           File _file = File(
               join(FilesystemSvc.sysTempPath, "BlueBubbles", "attachments", attachment.guid, basename(file.path!)));

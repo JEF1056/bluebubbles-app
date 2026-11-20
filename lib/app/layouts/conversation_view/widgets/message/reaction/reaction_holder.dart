@@ -5,6 +5,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:defer_pointer/defer_pointer.dart';
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 
 /// Stateful widget that animates a reaction pop-in only once
 class _ReactionAnimator extends StatefulWidget {
@@ -130,35 +131,54 @@ class _ReactionHolderState extends State<ReactionHolder> {
 
     final isFromMe = MessageStateScope.of(context).isFromMe.value;
     if (CurrentSkin.material) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: _cachedReactions.asMap().entries.map((entry) {
-          final i = entry.key;
-          final e = entry.value;
-          final sender = e.isFromMe! ? 0 : e.handleId ?? 0;
-          final stableKey = '${e.associatedMessageGuid}-${e.associatedMessageType}-$sender';
-          final shouldAnimate = !_seenReactionKeys.contains(stableKey);
-          if (shouldAnimate) {
-            _seenReactionKeys.add(stableKey);
-          }
-          return Padding(
-            key: ValueKey(stableKey),
-            padding: EdgeInsets.only(left: i == 0 ? 0 : 2),
-            child: DeferPointer(
-              child: _ReactionAnimator(
-                key: ValueKey(stableKey),
-                stableKey: stableKey,
-                shouldAnimate: shouldAnimate,
-                child: ReactionWidget(
-                  reaction: e,
-                  reactions: _cachedReactions,
-                  tailType: widget.tailType,
-                  tailDirection: widget.tailDirection,
+      // Group identical reaction types/emojis into 30px badges overlapping by -8px (22px step)
+      final Map<String, List<Message>> grouped = {};
+      for (final r in _cachedReactions) {
+        final type = r.associatedMessageType ?? '';
+        final key = ReactionTypes.isStickerTapback(type)
+            ? 'sticker:${r.guid}'
+            : '${ReactionTypes.emojiFor(r)}:${type == ReactionTypes.DISLIKE ? 'd' : 'g'}';
+        grouped.putIfAbsent(key, () => []).add(r);
+      }
+      final entries = grouped.entries.toList();
+      const double badgeSize = 30.0;
+      const double step = 22.0;
+      return SizedBox(
+        width: badgeSize + (entries.length - 1) * step,
+        height: badgeSize,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: entries.asMap().entries.map((entry) {
+            final i = entry.key;
+            final groupKey = entry.value.key;
+            final group = entry.value.value;
+            final rep = group.firstWhereOrNull((m) => m.isFromMe ?? false) ?? group.first;
+            final stableKey = '${rep.associatedMessageGuid}-$groupKey';
+            final shouldAnimate = !_seenReactionKeys.contains(stableKey);
+            if (shouldAnimate) {
+              _seenReactionKeys.add(stableKey);
+            }
+            return Positioned(
+              key: ValueKey(stableKey),
+              left: i * step,
+              top: 0,
+              child: DeferPointer(
+                child: _ReactionAnimator(
+                  key: ValueKey(stableKey),
+                  stableKey: stableKey,
+                  shouldAnimate: shouldAnimate,
+                  child: ReactionWidget(
+                    reaction: rep,
+                    reactions: _cachedReactions,
+                    groupedReactions: group,
+                    tailType: widget.tailType,
+                    tailDirection: widget.tailDirection,
+                  ),
                 ),
               ),
-            ),
-          );
-        }).toList(),
+            );
+          }).toList(),
+        ),
       );
     }
 

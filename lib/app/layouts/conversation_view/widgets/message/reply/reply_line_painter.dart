@@ -1,9 +1,100 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:bluebubbles/app/state/message_state.dart';
-import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+
+/// Keeps tap targets inside an ancestor [SelectionArea] clickable even when a
+/// pointer click includes slight (>1px) mouse movement that would otherwise let
+/// [SelectableRegion]'s [TapAndHorizontalDragGestureRecognizer] win the arena.
+class SelectionSafeTap extends StatefulWidget {
+  final VoidCallback? onTap;
+  final HitTestBehavior behavior;
+  final Widget? child;
+  final Widget Function(BuildContext context, VoidCallback handleTap)? builder;
+
+  const SelectionSafeTap({
+    super.key,
+    required this.onTap,
+    this.behavior = HitTestBehavior.opaque,
+    required Widget this.child,
+  }) : builder = null;
+
+  const SelectionSafeTap.builder({
+    super.key,
+    required this.onTap,
+    required Widget Function(BuildContext context, VoidCallback handleTap) this.builder,
+  })  : behavior = HitTestBehavior.opaque,
+        child = null;
+
+  @override
+  State<SelectionSafeTap> createState() => _SelectionSafeTapState();
+}
+
+class _SelectionSafeTapState extends State<SelectionSafeTap> {
+  static const double _maxFallbackSlop = 6.0;
+  static const Duration _maxTapDuration = Duration(milliseconds: 450);
+
+  int? _activePointer;
+  Offset? _downPosition;
+  Duration? _downTime;
+  bool _handled = false;
+  int _tapGeneration = 0;
+
+  void _fireOnce() {
+    if (_handled) return;
+    _handled = true;
+    widget.onTap?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final content = widget.builder != null
+        ? widget.builder!(context, _fireOnce)
+        : GestureDetector(
+            behavior: widget.behavior,
+            onTap: _fireOnce,
+            child: widget.child,
+          );
+    return SelectionContainer.disabled(
+      child: Listener(
+        behavior: widget.behavior,
+        onPointerDown: (event) {
+          if (event.kind == PointerDeviceKind.mouse && event.buttons != kPrimaryButton) return;
+          _activePointer = event.pointer;
+          _downPosition = event.position;
+          _downTime = event.timeStamp;
+          _handled = false;
+          _tapGeneration++;
+        },
+        onPointerUp: (event) {
+          if (event.pointer != _activePointer || _handled || _downPosition == null || _downTime == null) {
+            return;
+          }
+          final dist = (event.position - _downPosition!).distance;
+          final elapsed = event.timeStamp - _downTime!;
+          if (dist <= _maxFallbackSlop && elapsed <= _maxTapDuration) {
+            final pointer = event.pointer;
+            final gen = _tapGeneration;
+            scheduleMicrotask(() {
+              if (!mounted || _handled || gen != _tapGeneration || _activePointer != pointer) return;
+              _fireOnce();
+            });
+          }
+        },
+        onPointerCancel: (event) {
+          if (event.pointer == _activePointer) {
+            _activePointer = null;
+            _tapGeneration++;
+          }
+        },
+        child: content,
+      ),
+    );
+  }
+}
 
 /// Intercepts taps only where [containsPoint] matches the painted reply bar,
 /// letting taps on empty row space pass through to parent handlers.
@@ -23,9 +114,10 @@ class ReplyLineHitRegion extends StatelessWidget {
       containsPoint: containsPoint,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
-        child: GestureDetector(
+        child: SelectionSafeTap(
           behavior: HitTestBehavior.opaque,
           onTap: onTap,
+          child: const SizedBox.expand(),
         ),
       ),
     );
@@ -63,9 +155,32 @@ class _RenderConnectorHitRegion extends RenderProxyBox {
   }
 }
 
+/// Marks the actual bubble subtree inside [ReplyLineBox] so [RenderReplyLineBox]
+/// measures only the bubble width, excluding sibling hover action bars.
+class ReplyBubbleBounds extends SingleChildRenderObjectWidget {
+  const ReplyBubbleBounds({super.key, required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => RenderReplyBubbleBounds();
+}
+
+class RenderReplyBubbleBounds extends RenderProxyBox {
+  Size? measuredSize;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    measuredSize = size;
+  }
+}
+
+class _BubbleWidthSlot {
+  double? width;
+}
+
 /// Paints [ReplyLinePainter] behind an [Align] child using the child's actual
 /// rendered bubble width so the horizontal connector reaches the bubble edge.
-class ReplyLineBox extends StatelessWidget {
+class ReplyLineBox extends StatefulWidget {
   final bool enabled;
   final bool isFromMe;
   final bool connectUpper;
@@ -90,8 +205,15 @@ class ReplyLineBox extends StatelessWidget {
   });
 
   @override
+  State<ReplyLineBox> createState() => _ReplyLineBoxState();
+}
+
+class _ReplyLineBoxState extends State<ReplyLineBox> {
+  final _BubbleWidthSlot _bubbleWidthSlot = _BubbleWidthSlot();
+
+  @override
   Widget build(BuildContext context) {
-    final canTap = enabled && (connectUpper || connectLower) && onTapLine != null;
+    final canTap = widget.enabled && (widget.connectUpper || widget.connectLower) && widget.onTapLine != null;
     // Keep the 2-slot Stack stable so toggling canTap never remounts child state (e.g. media players).
     return Stack(
       clipBehavior: Clip.none,
@@ -103,24 +225,27 @@ class ReplyLineBox extends StatelessWidget {
                   containsPoint: (pos, size) => ReplyLinePainter.hitTestConnector(
                     pos,
                     size,
-                    isFromMe: isFromMe,
-                    connectUpper: connectUpper,
-                    connectLower: connectLower,
-                    compactHook: compactHook,
+                    isFromMe: widget.isFromMe,
+                    connectUpper: widget.connectUpper,
+                    connectLower: widget.connectLower,
+                    compactHook: widget.compactHook,
+                    bubbleWidth: _bubbleWidthSlot.width,
+                    fallbackMaxWidth: widget.fallbackMaxWidth,
                   ),
-                  onTap: onTapLine!,
+                  onTap: widget.onTapLine!,
                 ),
               )
             : const SizedBox.shrink(),
         _ReplyLinePaintBox(
-          enabled: enabled,
-          isFromMe: isFromMe,
-          connectUpper: connectUpper,
-          connectLower: connectLower,
-          color: color,
-          compactHook: compactHook,
-          fallbackMaxWidth: fallbackMaxWidth,
-          child: child,
+          enabled: widget.enabled,
+          isFromMe: widget.isFromMe,
+          connectUpper: widget.connectUpper,
+          connectLower: widget.connectLower,
+          color: widget.color,
+          compactHook: widget.compactHook,
+          fallbackMaxWidth: widget.fallbackMaxWidth,
+          bubbleWidthSlot: _bubbleWidthSlot,
+          child: widget.child,
         ),
       ],
     );
@@ -135,6 +260,7 @@ class _ReplyLinePaintBox extends SingleChildRenderObjectWidget {
   final Color color;
   final bool compactHook;
   final double? fallbackMaxWidth;
+  final _BubbleWidthSlot bubbleWidthSlot;
 
   const _ReplyLinePaintBox({
     required this.enabled,
@@ -144,6 +270,7 @@ class _ReplyLinePaintBox extends SingleChildRenderObjectWidget {
     required this.color,
     required this.compactHook,
     this.fallbackMaxWidth,
+    required this.bubbleWidthSlot,
     required super.child,
   });
 
@@ -156,6 +283,7 @@ class _ReplyLinePaintBox extends SingleChildRenderObjectWidget {
         color: color,
         compactHook: compactHook,
         fallbackMaxWidth: fallbackMaxWidth,
+        bubbleWidthSlot: bubbleWidthSlot,
       );
 
   @override
@@ -167,7 +295,8 @@ class _ReplyLinePaintBox extends SingleChildRenderObjectWidget {
       ..connectLower = connectLower
       ..color = color
       ..compactHook = compactHook
-      ..fallbackMaxWidth = fallbackMaxWidth;
+      ..fallbackMaxWidth = fallbackMaxWidth
+      ..bubbleWidthSlot = bubbleWidthSlot;
   }
 }
 
@@ -179,6 +308,7 @@ class RenderReplyLineBox extends RenderProxyBox {
   Color _color;
   bool _compactHook;
   double? _fallbackMaxWidth;
+  _BubbleWidthSlot? _bubbleWidthSlot;
 
   RenderReplyLineBox({
     required bool enabled,
@@ -188,13 +318,15 @@ class RenderReplyLineBox extends RenderProxyBox {
     required Color color,
     required bool compactHook,
     double? fallbackMaxWidth,
+    _BubbleWidthSlot? bubbleWidthSlot,
   })  : _enabled = enabled,
         _isFromMe = isFromMe,
         _connectUpper = connectUpper,
         _connectLower = connectLower,
         _color = color,
         _compactHook = compactHook,
-        _fallbackMaxWidth = fallbackMaxWidth;
+        _fallbackMaxWidth = fallbackMaxWidth,
+        _bubbleWidthSlot = bubbleWidthSlot;
 
   set enabled(bool v) {
     if (_enabled != v) {
@@ -245,13 +377,48 @@ class RenderReplyLineBox extends RenderProxyBox {
     }
   }
 
+  set bubbleWidthSlot(_BubbleWidthSlot? v) {
+    if (!identical(_bubbleWidthSlot, v)) {
+      _bubbleWidthSlot = v;
+      _bubbleWidthSlot?.width = _measureBubbleWidth();
+    }
+  }
+
+  static RenderReplyBubbleBounds? _findBubbleBounds(RenderObject? root) {
+    if (root == null) return null;
+    if (root is RenderReplyBubbleBounds) return root;
+    RenderReplyBubbleBounds? found;
+    root.visitChildren((child) {
+      found ??= _findBubbleBounds(child);
+    });
+    return found;
+  }
+
+  double? _measureBubbleWidth({bool allowGrandchildFallback = false}) {
+    final bounds = _findBubbleBounds(child);
+    if (bounds != null) {
+      return bounds.measuredSize?.width;
+    }
+    if (allowGrandchildFallback && child is RenderPositionedBox) {
+      final inner = (child as RenderPositionedBox).child;
+      if (inner != null && inner.hasSize) {
+        return inner.size.width;
+      }
+    }
+    return null;
+  }
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    _bubbleWidthSlot?.width = _measureBubbleWidth();
+  }
+
   @override
   void paint(PaintingContext context, Offset offset) {
+    final bubbleWidth = _measureBubbleWidth(allowGrandchildFallback: true);
+    _bubbleWidthSlot?.width = bubbleWidth;
     if (_enabled && (_connectUpper || _connectLower) && size.width > 0 && size.height > 0) {
-      double? bubbleWidth;
-      if (child is RenderPositionedBox) {
-        bubbleWidth = (child as RenderPositionedBox).child?.size.width;
-      }
       ReplyLinePainter.paintConnector(
         canvas: context.canvas,
         offset: offset,
@@ -333,11 +500,71 @@ class ReplyLinePainter extends BoxPainter {
       connectUpper: connectUpper,
       connectLower: connectLower,
       color: color,
-      fallbackMaxWidth: NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor,
+      fallbackMaxWidth: MessageState.maxBubbleWidth(context),
     );
   }
 
   static const double connectorHitPadding = 20.0;
+
+  static double compactHookTipX(
+    Offset offset,
+    Size size, {
+    required bool isFromMe,
+    double? bubbleWidth,
+    double? fallbackMaxWidth,
+  }) {
+    const double edgeInset = 18.0;
+    const double defaultHookLen = 28.0;
+    final double r = min(14.0, size.height / 2);
+    final double verticalX = isFromMe ? offset.dx + edgeInset : offset.dx + size.width - edgeInset;
+    final double turnEndX = isFromMe ? verticalX + r : verticalX - r;
+    final double rawTargetX;
+    if (bubbleWidth != null) {
+      rawTargetX = isFromMe ? offset.dx + size.width - bubbleWidth - 8.0 : offset.dx + bubbleWidth + 8.0;
+    } else if (fallbackMaxWidth != null) {
+      rawTargetX = isFromMe ? offset.dx + size.width - fallbackMaxWidth - 8.0 : offset.dx + fallbackMaxWidth + 8.0;
+    } else {
+      rawTargetX = isFromMe ? verticalX + defaultHookLen : verticalX - defaultHookLen;
+    }
+    return isFromMe ? max(turnEndX, rawTargetX) : min(turnEndX, rawTargetX);
+  }
+
+  static bool hitTestCompactHook(
+    Offset position,
+    Size size, {
+    required bool isFromMe,
+    required bool connectUpper,
+    double? bubbleWidth,
+    double? fallbackMaxWidth,
+  }) {
+    if (!connectUpper || size.width <= 0 || size.height <= 0) return false;
+    const double pad = connectorHitPadding;
+    const double edgeInset = 18.0;
+    final double midY = size.height / 2;
+    final double verticalX = isFromMe ? edgeInset : size.width - edgeInset;
+    final double tipX = compactHookTipX(
+      Offset.zero,
+      size,
+      isFromMe: isFromMe,
+      bubbleWidth: bubbleWidth,
+      fallbackMaxWidth: fallbackMaxWidth,
+    );
+    final verticalRect = Rect.fromLTRB(
+      max(0.0, verticalX - pad),
+      0.0,
+      min(size.width, verticalX + pad),
+      min(size.height, midY + pad),
+    );
+    if (verticalRect.contains(position)) return true;
+
+    final horizontalRect = Rect.fromLTRB(
+      max(0.0, min(verticalX, tipX) - pad),
+      max(0.0, midY - pad),
+      min(size.width, max(verticalX, tipX) + pad),
+      min(size.height, midY + pad),
+    );
+    return horizontalRect.contains(position);
+  }
 
   static bool hitTestConnector(
     Offset position,
@@ -346,6 +573,8 @@ class ReplyLinePainter extends BoxPainter {
     required bool connectUpper,
     required bool connectLower,
     required bool compactHook,
+    double? bubbleWidth,
+    double? fallbackMaxWidth,
   }) {
     if ((!connectUpper && !connectLower) || size.width <= 0 || size.height <= 0) {
       return false;
@@ -354,17 +583,14 @@ class ReplyLinePainter extends BoxPainter {
     final double midY = size.height / 2;
 
     if (compactHook) {
-      if (!connectUpper) return false;
-      const double edgeInset = 18.0;
-      const double hookLen = 28.0;
-      final double verticalX = isFromMe ? edgeInset : size.width - edgeInset;
-      final double tipX = isFromMe ? verticalX + hookLen : verticalX - hookLen;
-      return Rect.fromLTRB(
-        min(verticalX, tipX) - pad,
-        0.0,
-        max(verticalX, tipX) + pad,
-        min(size.height, midY + pad),
-      ).contains(position);
+      return hitTestCompactHook(
+        position,
+        size,
+        isFromMe: isFromMe,
+        connectUpper: connectUpper,
+        bubbleWidth: bubbleWidth,
+        fallbackMaxWidth: fallbackMaxWidth,
+      );
     }
 
     final double verticalX = isFromMe ? 35.0 : size.width - 35.0;
@@ -401,7 +627,7 @@ class ReplyLinePainter extends BoxPainter {
     bool compactHook = false,
   }) {
     if (compactHook) {
-      // Short iOS-style L-hook on the opposite-sender margin (never stretches across the wallpaper).
+      // Material L-hook on the opposite-sender margin reaching 8dp from the reply bubble edge.
       final paint = Paint()
         ..color = color
         ..style = PaintingStyle.stroke
@@ -410,19 +636,31 @@ class ReplyLinePainter extends BoxPainter {
         ..strokeJoin = StrokeJoin.round;
       final path = Path();
       const double edgeInset = 18.0;
-      const double hookLen = 28.0;
       final double r = min(14.0, size.height / 2);
       final double midY = offset.dy + size.height / 2;
       final double verticalX = isFromMe ? offset.dx + edgeInset : offset.dx + size.width - edgeInset;
+      final double tipX = compactHookTipX(
+        offset,
+        size,
+        isFromMe: isFromMe,
+        bubbleWidth: bubbleWidth,
+        fallbackMaxWidth: fallbackMaxWidth,
+      );
       if (connectUpper) {
         path.moveTo(verticalX, offset.dy - 4.0);
         path.lineTo(verticalX, midY - r);
         if (isFromMe) {
-          path.arcToPoint(Offset(verticalX + r, midY), clockwise: false, radius: Radius.circular(r));
-          path.lineTo(verticalX + hookLen, midY);
+          final double turnEndX = verticalX + r;
+          path.arcToPoint(Offset(turnEndX, midY), clockwise: false, radius: Radius.circular(r));
+          if (tipX > turnEndX) {
+            path.lineTo(tipX, midY);
+          }
         } else {
-          path.arcToPoint(Offset(verticalX - r, midY), clockwise: true, radius: Radius.circular(r));
-          path.lineTo(verticalX - hookLen, midY);
+          final double turnEndX = verticalX - r;
+          path.arcToPoint(Offset(turnEndX, midY), clockwise: true, radius: Radius.circular(r));
+          if (tipX < turnEndX) {
+            path.lineTo(tipX, midY);
+          }
         }
       }
       canvas.drawPath(path, paint);

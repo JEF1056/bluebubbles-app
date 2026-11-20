@@ -1,7 +1,7 @@
 import 'dart:math';
 
-import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
@@ -10,6 +10,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
 
 /// Extracted widget for reply bubble section
@@ -87,9 +88,10 @@ class ReplyBubbleSection extends StatelessWidget {
       final bubbleColor = quotedFromMe
           ? context.theme.colorScheme.primaryContainer.withValues(alpha: bubbleAlpha)
           : context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: bubbleAlpha);
-      final leftPad = !replyFromMe && (showAvatar || alwaysShowAvatars) ? 35.0 * avatarScale : 0.0;
+      final leftPad = (showAvatar || alwaysShowAvatars)
+          ? BubbleConnect.incomingAvatarIndent(isIOS: false, avatarScale: avatarScale)
+          : 0.0;
       const double bottomGap = 8.0;
-      final maxBubbleWidth = NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 30;
       void openReplyThread() {
         if (cvController.inSelectMode.value) return;
         showReplyThread(
@@ -101,61 +103,249 @@ class ReplyBubbleSection extends StatelessWidget {
         );
       }
 
+      const quoteRadius = BorderRadius.only(
+        topLeft: Radius.circular(20),
+        topRight: Radius.circular(20),
+        bottomLeft: Radius.circular(4),
+        bottomRight: Radius.circular(4),
+      );
+
       return Padding(
         padding: EdgeInsets.only(left: leftPad, bottom: 2),
-        child: Stack(
-          clipBehavior: Clip.none,
-          fit: StackFit.passthrough,
-          children: [
-            Positioned.fill(
-              child: ReplyLineHitRegion(
-                containsPoint: (pos, size) => ReplyQuoteHookPainter.hitTestHook(
-                  pos,
-                  size,
-                  quotedFromMe: quotedFromMe,
-                  replyFromMe: replyFromMe,
-                  quotedBubbleWidth: maxBubbleWidth,
-                  bottomGap: bottomGap,
-                ),
-                onTap: openReplyThread,
-              ),
-            ),
-            CustomPaint(
-              painter: ReplyQuoteHookPainter(
-                quotedFromMe: quotedFromMe,
-                replyFromMe: replyFromMe,
-                color: hookColor,
-                maxBubbleWidth: maxBubbleWidth,
-                bottomGap: bottomGap,
-              ),
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: bottomGap),
-                child: Align(
-                  alignment: quotedFromMe ? Alignment.centerRight : Alignment.centerLeft,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(18),
-                        color: bubbleColor,
-                        border: Border.fromBorderSide(
-                          BorderSide(
-                            color: hasBackground
-                                ? Colors.white.withValues(alpha: 0.18)
-                                : context.theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
-                          ),
+        child: _MaterialReplyQuoteHookSection(
+          quotedFromMe: quotedFromMe,
+          replyFromMe: replyFromMe,
+          hookColor: hookColor,
+          bottomGap: bottomGap,
+          onTapHook: openReplyThread,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: bottomGap),
+            child: Align(
+              alignment: quotedFromMe ? Alignment.centerRight : Alignment.centerLeft,
+              child: ReplyBubbleBounds(
+                child: ClipRRect(
+                  borderRadius: quoteRadius,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: quoteRadius,
+                      color: bubbleColor,
+                      border: Border.fromBorderSide(
+                        BorderSide(
+                          color: hasBackground
+                              ? Colors.white.withValues(alpha: 0.18)
+                              : context.theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
                         ),
                       ),
-                      child: replyBubble,
                     ),
+                    child: replyBubble,
                   ),
                 ),
               ),
             ),
-          ],
+          ),
         ),
       );
     }
+  }
+}
+
+class _QuotedBubbleSizeSlot {
+  Size? size;
+}
+
+class _MaterialReplyQuoteHookSection extends StatefulWidget {
+  final bool quotedFromMe;
+  final bool replyFromMe;
+  final Color hookColor;
+  final double bottomGap;
+  final VoidCallback onTapHook;
+  final Widget child;
+
+  const _MaterialReplyQuoteHookSection({
+    required this.quotedFromMe,
+    required this.replyFromMe,
+    required this.hookColor,
+    required this.bottomGap,
+    required this.onTapHook,
+    required this.child,
+  });
+
+  @override
+  State<_MaterialReplyQuoteHookSection> createState() => _MaterialReplyQuoteHookSectionState();
+}
+
+class _MaterialReplyQuoteHookSectionState extends State<_MaterialReplyQuoteHookSection> {
+  final _QuotedBubbleSizeSlot _quotedSizeSlot = _QuotedBubbleSizeSlot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      fit: StackFit.passthrough,
+      children: [
+        Positioned.fill(
+          child: ReplyLineHitRegion(
+            containsPoint: (pos, size) => ReplyQuoteHookPainter.hitTestHook(
+              pos,
+              size,
+              quotedFromMe: widget.quotedFromMe,
+              replyFromMe: widget.replyFromMe,
+              quotedBubbleWidth: _quotedSizeSlot.size?.width,
+              quotedBubbleHeight: _quotedSizeSlot.size?.height,
+              bottomGap: widget.bottomGap,
+            ),
+            onTap: widget.onTapHook,
+          ),
+        ),
+        _ReplyQuoteHookBox(
+          quotedFromMe: widget.quotedFromMe,
+          replyFromMe: widget.replyFromMe,
+          color: widget.hookColor,
+          bottomGap: widget.bottomGap,
+          quotedSizeSlot: _quotedSizeSlot,
+          child: widget.child,
+        ),
+      ],
+    );
+  }
+}
+
+class _ReplyQuoteHookBox extends SingleChildRenderObjectWidget {
+  final bool quotedFromMe;
+  final bool replyFromMe;
+  final Color color;
+  final double bottomGap;
+  final _QuotedBubbleSizeSlot quotedSizeSlot;
+
+  const _ReplyQuoteHookBox({
+    required this.quotedFromMe,
+    required this.replyFromMe,
+    required this.color,
+    required this.bottomGap,
+    required this.quotedSizeSlot,
+    required super.child,
+  });
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderReplyQuoteHookBox(
+        quotedFromMe: quotedFromMe,
+        replyFromMe: replyFromMe,
+        color: color,
+        bottomGap: bottomGap,
+        quotedSizeSlot: quotedSizeSlot,
+      );
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderReplyQuoteHookBox renderObject) {
+    renderObject
+      ..quotedFromMe = quotedFromMe
+      ..replyFromMe = replyFromMe
+      ..color = color
+      ..bottomGap = bottomGap
+      ..quotedSizeSlot = quotedSizeSlot;
+  }
+}
+
+class _RenderReplyQuoteHookBox extends RenderProxyBox {
+  bool _quotedFromMe;
+  bool _replyFromMe;
+  Color _color;
+  double _bottomGap;
+  _QuotedBubbleSizeSlot? _quotedSizeSlot;
+
+  _RenderReplyQuoteHookBox({
+    required bool quotedFromMe,
+    required bool replyFromMe,
+    required Color color,
+    required double bottomGap,
+    _QuotedBubbleSizeSlot? quotedSizeSlot,
+  })  : _quotedFromMe = quotedFromMe,
+        _replyFromMe = replyFromMe,
+        _color = color,
+        _bottomGap = bottomGap,
+        _quotedSizeSlot = quotedSizeSlot;
+
+  set quotedFromMe(bool v) {
+    if (_quotedFromMe != v) {
+      _quotedFromMe = v;
+      markNeedsPaint();
+    }
+  }
+
+  set replyFromMe(bool v) {
+    if (_replyFromMe != v) {
+      _replyFromMe = v;
+      markNeedsPaint();
+    }
+  }
+
+  set color(Color v) {
+    if (_color != v) {
+      _color = v;
+      markNeedsPaint();
+    }
+  }
+
+  set bottomGap(double v) {
+    if (_bottomGap != v) {
+      _bottomGap = v;
+      markNeedsPaint();
+    }
+  }
+
+  set quotedSizeSlot(_QuotedBubbleSizeSlot? v) {
+    if (!identical(_quotedSizeSlot, v)) {
+      _quotedSizeSlot = v;
+      _quotedSizeSlot?.size = _measureQuotedBubbleSize();
+    }
+  }
+
+  static RenderReplyBubbleBounds? _findBubbleBounds(RenderObject? root) {
+    if (root == null) return null;
+    if (root is RenderReplyBubbleBounds) return root;
+    RenderReplyBubbleBounds? found;
+    root.visitChildren((child) {
+      found ??= _findBubbleBounds(child);
+    });
+    return found;
+  }
+
+  Size? _measureQuotedBubbleSize() {
+    return _findBubbleBounds(child)?.measuredSize;
+  }
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    _quotedSizeSlot?.size = _measureQuotedBubbleSize();
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    final quotedSize = _measureQuotedBubbleSize();
+    _quotedSizeSlot?.size = quotedSize;
+    if (size.width > 0 && size.height > 0) {
+      final paint = Paint()
+        ..color = _color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
+      final path = ReplyQuoteHookPainter.buildHookPath(
+        size,
+        quotedFromMe: _quotedFromMe,
+        replyFromMe: _replyFromMe,
+        quotedBubbleWidth: quotedSize?.width,
+        quotedBubbleHeight: quotedSize?.height,
+        bottomGap: _bottomGap,
+      );
+      final canvas = context.canvas;
+      canvas.save();
+      canvas.translate(offset.dx, offset.dy);
+      canvas.drawPath(path, paint);
+      canvas.restore();
+    }
+    super.paint(context, offset);
   }
 }
 
@@ -174,6 +364,38 @@ class ReplyQuoteHookPainter extends CustomPainter {
     this.bottomGap = 8.0,
   });
 
+  static ({double x, double bubbleH, double midY, double endX}) _computeGeometry(
+    Size size, {
+    required bool quotedFromMe,
+    required bool replyFromMe,
+    double? quotedBubbleWidth,
+    double? quotedBubbleHeight,
+    double bottomGap = 8.0,
+  }) {
+    const double edgeInset = 18.0;
+    const double defaultHookLen = 28.0;
+    const double bubbleClearance = 4.0;
+    final double x = replyFromMe ? size.width - edgeInset : edgeInset;
+    final double bubbleH = (quotedBubbleHeight ?? (size.height - bottomGap)).clamp(0.0, size.height);
+    final double midY = bubbleH / 2.0;
+
+    final double endX;
+    if (quotedFromMe == replyFromMe) {
+      endX = x;
+    } else if (!replyFromMe) {
+      final double target = quotedBubbleWidth != null
+          ? size.width - quotedBubbleWidth - bubbleClearance
+          : min(x + defaultHookLen, size.width - edgeInset);
+      endX = max(x, target);
+    } else {
+      final double target = quotedBubbleWidth != null
+          ? quotedBubbleWidth + bubbleClearance
+          : max(x - defaultHookLen, edgeInset);
+      endX = min(x, target);
+    }
+    return (x: x, bubbleH: bubbleH, midY: midY, endX: endX);
+  }
+
   static bool hitTestHook(
     Offset position,
     Size size, {
@@ -183,20 +405,43 @@ class ReplyQuoteHookPainter extends CustomPainter {
     double? quotedBubbleHeight,
     double bottomGap = 8.0,
   }) {
-    final bounds = buildHookPath(
+    if (size.width <= 0 || size.height <= 0) return false;
+    const double pad = ReplyLinePainter.connectorHitPadding;
+    final g = _computeGeometry(
       size,
       quotedFromMe: quotedFromMe,
       replyFromMe: replyFromMe,
       quotedBubbleWidth: quotedBubbleWidth,
       quotedBubbleHeight: quotedBubbleHeight,
       bottomGap: bottomGap,
-    ).getBounds();
-    if (bounds.width == 0 && bounds.height == 0) return false;
-    return bounds.inflate(ReplyLinePainter.connectorHitPadding).contains(position);
+    );
+    if (quotedFromMe == replyFromMe) {
+      return Rect.fromLTRB(
+        max(0.0, g.x - pad),
+        max(0.0, g.bubbleH - pad),
+        min(size.width, g.x + pad),
+        size.height,
+      ).contains(position);
+    }
+    final verticalRect = Rect.fromLTRB(
+      max(0.0, g.x - pad),
+      max(0.0, g.midY - pad),
+      min(size.width, g.x + pad),
+      size.height,
+    );
+    if (verticalRect.contains(position)) return true;
+    final horizontalRect = Rect.fromLTRB(
+      max(0.0, min(g.x, g.endX) - pad),
+      max(0.0, g.midY - pad),
+      min(size.width, max(g.x, g.endX) + pad),
+      min(size.height, g.midY + pad),
+    );
+    return horizontalRect.contains(position);
   }
 
-  // Vertical stem sits on the reply side (replyFromMe); cross-side hooks rise to
-  // the quoted bubble's vertical center and curve toward it without overlapping.
+  // Vertical stem sits on the reply side (replyFromMe) and extends +4px past size.height
+  // so there is zero gap to the reply bubble below; cross-side hooks rise to the quoted
+  // bubble's vertical center and reach quotedBubbleEdge ± 4px without reversing past the arc.
   static Path buildHookPath(
     Size size, {
     required bool quotedFromMe,
@@ -206,52 +451,45 @@ class ReplyQuoteHookPainter extends CustomPainter {
     double bottomGap = 8.0,
   }) {
     final path = Path();
-    const double edgeInset = 18.0;
-    const double hookLen = 28.0;
     const double maxRadius = 12.0;
-    const double bubbleClearance = 6.0;
-    final double x = replyFromMe ? size.width - edgeInset : edgeInset;
-    final double bubbleH = (quotedBubbleHeight ?? (size.height - bottomGap)).clamp(0.0, size.height);
+    const double bottomOverhang = 4.0;
+    final g = _computeGeometry(
+      size,
+      quotedFromMe: quotedFromMe,
+      replyFromMe: replyFromMe,
+      quotedBubbleWidth: quotedBubbleWidth,
+      quotedBubbleHeight: quotedBubbleHeight,
+      bottomGap: bottomGap,
+    );
+    final double stemBottom = size.height + bottomOverhang;
 
     if (quotedFromMe == replyFromMe) {
-      path.moveTo(x, bubbleH);
-      path.lineTo(x, size.height);
+      path.moveTo(g.x, g.bubbleH);
+      path.lineTo(g.x, stemBottom);
       return path;
     }
 
-    final double midY = bubbleH / 2.0;
-    final double r = min(maxRadius, max(0.0, size.height - midY));
+    final double r = min(maxRadius, max(0.0, size.height - g.midY));
 
     if (!replyFromMe) {
-      // Left-side row replying to right-side quoted bubble: stem on left, curve right.
-      final double desiredEndX = x + hookLen;
-      final double maxEndX =
-          quotedBubbleWidth != null ? size.width - quotedBubbleWidth - bubbleClearance : size.width - edgeInset;
-      final double endX = min(desiredEndX, max(x, maxEndX));
-      final double effectiveR = min(r, max(0.0, endX - x));
-
-      path.moveTo(x, size.height);
-      path.lineTo(x, midY + effectiveR);
+      final double effectiveR = min(r, max(0.0, g.endX - g.x));
+      path.moveTo(g.x, stemBottom);
+      path.lineTo(g.x, g.midY + effectiveR);
       if (effectiveR > 0) {
-        path.arcToPoint(Offset(x + effectiveR, midY), clockwise: true, radius: Radius.circular(effectiveR));
+        path.arcToPoint(Offset(g.x + effectiveR, g.midY), clockwise: true, radius: Radius.circular(effectiveR));
       }
-      if (endX > x + effectiveR) {
-        path.lineTo(endX, midY);
+      if (g.endX > g.x + effectiveR) {
+        path.lineTo(g.endX, g.midY);
       }
     } else {
-      // Right-side (isFromMe) row replying to left-side quoted bubble: stem on right, curve left.
-      final double desiredEndX = x - hookLen;
-      final double minEndX = quotedBubbleWidth != null ? quotedBubbleWidth + bubbleClearance : edgeInset;
-      final double endX = max(desiredEndX, min(x, minEndX));
-      final double effectiveR = min(r, max(0.0, x - endX));
-
-      path.moveTo(x, size.height);
-      path.lineTo(x, midY + effectiveR);
+      final double effectiveR = min(r, max(0.0, g.x - g.endX));
+      path.moveTo(g.x, stemBottom);
+      path.lineTo(g.x, g.midY + effectiveR);
       if (effectiveR > 0) {
-        path.arcToPoint(Offset(x - effectiveR, midY), clockwise: false, radius: Radius.circular(effectiveR));
+        path.arcToPoint(Offset(g.x - effectiveR, g.midY), clockwise: false, radius: Radius.circular(effectiveR));
       }
-      if (endX < x - effectiveR) {
-        path.lineTo(endX, midY);
+      if (g.endX < g.x - effectiveR) {
+        path.lineTo(g.endX, g.midY);
       }
     }
     return path;

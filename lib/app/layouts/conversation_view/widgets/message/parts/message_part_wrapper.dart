@@ -233,8 +233,8 @@ class _MessageContentBubble extends StatelessWidget {
   }
 }
 
-/// Separate stateless widget for edit mode to reduce rebuild scope
-class _EditModeTextField extends StatelessWidget {
+/// Separate stateful widget for edit mode to reduce rebuild scope and own FocusNode
+class _EditModeTextField extends StatefulWidget {
   const _EditModeTextField({
     required this.editStuff,
     required this.message,
@@ -251,7 +251,20 @@ class _EditModeTextField extends StatelessWidget {
   final MessagePart part;
   final Function(String) onComplete;
 
-  MessageState get controller => MessagesSvc(chat.guid).getOrCreateState(message);
+  @override
+  State<_EditModeTextField> createState() => _EditModeTextFieldState();
+}
+
+class _EditModeTextFieldState extends State<_EditModeTextField> {
+  final FocusNode _shortcutFocusNode = FocusNode();
+
+  MessageState get controller => MessagesSvc(widget.chat.guid).getOrCreateState(widget.message);
+
+  @override
+  void dispose() {
+    _shortcutFocusNode.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -261,17 +274,17 @@ class _EditModeTextField extends StatelessWidget {
         color: Colors.transparent,
         child: Container(
           decoration: BoxDecoration(
-            color: !message.isBigEmoji
+            color: !widget.message.isBigEmoji
                 ? context.theme.colorScheme.primary.darkenAmount(isTempMessage ? 0.2 : 0)
                 : context.theme.colorScheme.surface,
           ),
           constraints: BoxConstraints(
-            maxWidth: NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 40,
+            maxWidth: MessageState.maxBubbleWidth(context, inset: 40),
             minHeight: 40,
           ),
           padding: const EdgeInsets.only(right: 10).add(const EdgeInsets.all(5)),
           child: Focus(
-            focusNode: FocusNode(),
+            focusNode: _shortcutFocusNode,
             onKeyEvent: (_, ev) {
               if (ev is! KeyDownEvent) {
                 if (ev.logicalKey == LogicalKeyboardKey.tab) {
@@ -280,15 +293,16 @@ class _EditModeTextField extends StatelessWidget {
                 return KeyEventResult.ignored;
               }
               if (ev.logicalKey == LogicalKeyboardKey.enter && !HardwareKeyboard.instance.isShiftPressed) {
-                onComplete(editStuff.controller.text);
+                widget.onComplete(widget.editStuff.controller.text);
                 return KeyEventResult.handled;
               }
               if (ev.logicalKey == LogicalKeyboardKey.escape) {
-                cvController.editing.removeWhere((e2) => e2.message.guid == message.guid! && e2.part.part == part.part);
-                if (cvController.editing.isEmpty) {
-                  cvController.lastFocusedNode.requestFocus();
+                widget.cvController.editing.removeWhere(
+                    (e2) => e2.message.guid == widget.message.guid! && e2.part.part == widget.part.part);
+                if (widget.cvController.editing.isEmpty) {
+                  widget.cvController.lastFocusedNode.requestFocus();
                 } else {
-                  cvController.editing.last.controller.focusNode?.requestFocus();
+                  widget.cvController.editing.last.controller.focusNode?.requestFocus();
                 }
                 return KeyEventResult.handled;
               }
@@ -300,22 +314,23 @@ class _EditModeTextField extends StatelessWidget {
             child: TextField(
               textCapitalization: TextCapitalization.sentences,
               autocorrect: true,
-              controller: editStuff.controller,
+              controller: widget.editStuff.controller,
+              focusNode: widget.editStuff.controller.focusNode,
               scrollPhysics: const CustomBouncingScrollPhysics(),
               style: context.theme.extension<BubbleText>()!.bubbleText.apply(
-                    fontSizeFactor: message.isBigEmoji ? 3 : 1,
+                    fontSizeFactor: widget.message.isBigEmoji ? 3 : 1,
                   ),
               keyboardType: TextInputType.multiline,
               maxLines: 14,
               minLines: 1,
-              autofocus: !(kIsDesktop || kIsWeb),
+              autofocus: true,
               enableIMEPersonalizedLearning: !SettingsSvc.settings.incognitoKeyboard.value,
               textInputAction: SettingsSvc.settings.sendWithReturn.value && !kIsWeb && !kIsDesktop
                   ? TextInputAction.send
                   : TextInputAction.newline,
               cursorColor: context.theme.extension<BubbleText>()!.bubbleText.color,
               cursorHeight:
-                  context.theme.extension<BubbleText>()!.bubbleText.fontSize! * 1.25 * (message.isBigEmoji ? 3 : 1),
+                  context.theme.extension<BubbleText>()!.bubbleText.fontSize! * 1.25 * (widget.message.isBigEmoji ? 3 : 1),
               decoration: InputDecoration(
                 contentPadding: EdgeInsets.all(SettingsSvc.settings.skin.value == Skins.iOS ? 10 : 12.5),
                 isDense: true,
@@ -349,9 +364,9 @@ class _EditModeTextField extends StatelessWidget {
                     size: 22,
                   ),
                   onPressed: () {
-                    cvController.editing
-                        .removeWhere((e2) => e2.message.guid == message.guid! && e2.part.part == part.part);
-                    cvController.lastFocusedNode.requestFocus();
+                    widget.cvController.editing.removeWhere(
+                        (e2) => e2.message.guid == widget.message.guid! && e2.part.part == widget.part.part);
+                    widget.cvController.lastFocusedNode.requestFocus();
                   },
                   iconSize: 22,
                   style: const ButtonStyle(
@@ -361,7 +376,7 @@ class _EditModeTextField extends StatelessWidget {
                 ),
                 suffixIconConstraints: const BoxConstraints(minHeight: 0, minWidth: 40),
                 suffixIcon: ValueListenableBuilder(
-                  valueListenable: editStuff.controller,
+                  valueListenable: widget.editStuff.controller,
                   builder: (context, value, _) {
                     return Padding(
                       padding: const EdgeInsets.all(3.0),
@@ -381,7 +396,7 @@ class _EditModeTextField extends StatelessWidget {
                             shape: SettingsSvc.settings.skin.value == Skins.iOS ? BoxShape.circle : BoxShape.rectangle,
                             color: SettingsSvc.settings.skin.value != Skins.iOS
                                 ? null
-                                : editStuff.controller.text.isNotEmpty
+                                : widget.editStuff.controller.text.isNotEmpty
                                     ? Colors.white
                                     : context.theme.colorScheme.outline,
                           ),
@@ -392,12 +407,12 @@ class _EditModeTextField extends StatelessWidget {
                                 : Icons.send_outlined,
                             color: SettingsSvc.settings.skin.value != Skins.iOS
                                 ? context.theme.extension<BubbleText>()!.bubbleText.color
-                                : context.theme.colorScheme.bubble(context, chat.isIMessage),
+                                : context.theme.colorScheme.bubble(context, widget.chat.isIMessage),
                             size: SettingsSvc.settings.skin.value == Skins.iOS ? 18 : 26,
                           ),
                         ),
                         onPressed: () {
-                          onComplete(editStuff.controller.text);
+                          widget.onComplete(widget.editStuff.controller.text);
                         },
                       ),
                     );
@@ -408,7 +423,7 @@ class _EditModeTextField extends StatelessWidget {
                 HapticFeedback.selectionClick();
               },
               onSubmitted: (String value) {
-                onComplete(value);
+                widget.onComplete(value);
               },
             ),
           ),

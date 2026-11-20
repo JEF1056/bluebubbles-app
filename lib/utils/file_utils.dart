@@ -10,6 +10,7 @@ import 'package:universal_io/io.dart';
 /// grant, so it uses FileManager1 (granted via --talk-name in the manifest), which opens the path
 /// host-side by URI string — no grant needed.
 Future<void> revealInFileManager(String path) async {
+  if (kIsWeb) return;
   if (Platform.isWindows) {
     await Process.start('explorer', [dirname(path)]);
   } else if (Platform.isMacOS) {

@@ -82,6 +82,11 @@ object DartWorkManager {
                     liveData.removeObserver(observer)
                     if (workInfo == null) {
                         PersistentLog.w(context, Constants.logTag, "Work record for method $method was pruned before completion was observed")
+                        try {
+                            callback(false)
+                        } catch (e: Exception) {
+                            PersistentLog.e(context, Constants.logTag, "Error running callback for pruned worker $method", e)
+                        }
                         return@Observer
                     }
                     val succeeded = workInfo.state == WorkInfo.State.SUCCEEDED

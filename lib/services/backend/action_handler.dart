@@ -21,6 +21,20 @@ class ActionHandler extends GetxService {
   /// `new-message` processing is skipped (the updated-message will handle it).
   final List<String> outOfOrderTempGuids = [];
 
+  /// Extracts `readAt` (epoch ms) or legacy `lastReadMessageTimestamp` from a
+  /// `chat-read-status-changed` payload, treating non-positive values as unset.
+  static int? extractReadBefore(Map<String, dynamic> data) {
+    return _parsePositiveEpochMs(data["readAt"]) ??
+        _parsePositiveEpochMs(data["lastReadMessageTimestamp"]);
+  }
+
+  static int? _parsePositiveEpochMs(dynamic raw) {
+    final int? value = raw is num
+        ? raw.toInt()
+        : (raw is String ? num.tryParse(raw.trim())?.toInt() : null);
+    return (value != null && value > 0) ? value : null;
+  }
+
   Future<Chat> handleNewOrUpdatedChat(Chat partialData) async {
     final chat = await ChatsSvc.fetchChat(partialData.guid) ?? partialData;
 
@@ -58,7 +72,7 @@ class ActionHandler extends GetxService {
       caller = contact?.displayName ?? caller;
     }
 
-    if (Platform.isAndroid && isAudio) {
+    if (!kIsWeb && Platform.isAndroid && isAudio) {
       final handledByTelecom = await NotificationsSvc.createIncomingFaceTimeNotification(
         callUuid,
         caller,
@@ -127,7 +141,7 @@ class ActionHandler extends GetxService {
               // If nothing arrives, process the new-message normally.
               MessageHandlerSvc.outOfOrderTempGuids.add(message.guid!);
               await Future.delayed(const Duration(milliseconds: 500));
-              if (!MessageHandlerSvc.outOfOrderTempGuids.contains(message.guid!)) return;
+              if (!MessageHandlerSvc.outOfOrderTempGuids.remove(message.guid!)) return;
             } else {
               MessageHandlerSvc.outOfOrderTempGuids.remove(message.guid!);
             }
@@ -173,22 +187,23 @@ class ActionHandler extends GetxService {
       case "participant-added":
       case "participant-left":
         try {
-          MessageHandlerSvc.handleNewOrUpdatedChat(Chat.fromMap(data['chats'].first.cast<String, dynamic>()));
+          await MessageHandlerSvc.handleNewOrUpdatedChat(Chat.fromMap(data['chats'].first.cast<String, dynamic>()));
         } catch (e, s) {
           Logger.warn("Failed to handle chat participant change event", error: e, trace: s, tag: 'ActionHandler');
         }
         return;
       case "chat-read-status-changed":
         Chat? chat = Chat.findOne(guid: data["chatGuid"]);
-        final int? readBefore = (data["lastReadMessageTimestamp"] as num?)?.toInt();
-        if (chat != null && data["read"] == true && await chat.clearNotificationsForPartialRead(readBefore)) return;
-        if (chat != null && (data["read"] == true || data["read"] == false)) {
+        final dynamic rawRead = data["read"] ?? data["status"];
+        final int? readBefore = extractReadBefore(data);
+        if (chat != null && rawRead == true && await chat.clearNotificationsForPartialRead(readBefore)) return;
+        if (chat != null && rawRead is bool) {
           // Route through ChatsService so the ChatState the conversation list
           // renders from is updated too. Writing only to the DB row leaves the
           // unread dot stale until the state is rebuilt (open chat / restart).
           // Forced so a chat already marked read locally (e.g. by a reply from another device) still clears.
-          await ChatsSvc.setChatHasUnread(chat, !data["read"]!,
-              force: data["read"] == true, privateMark: false, readBefore: readBefore);
+          await ChatsSvc.setChatHasUnread(chat, !rawRead,
+              force: rawRead, privateMark: false, readBefore: readBefore);
         }
         return;
       case "typing-indicator":

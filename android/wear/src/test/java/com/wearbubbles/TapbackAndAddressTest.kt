@@ -16,7 +16,8 @@ class TapbackAndAddressTest {
         isFromMe: Boolean = false,
         dateCreated: Long = 1000L,
         assocGuid: String? = null,
-        assocType: String? = null
+        assocType: String? = null,
+        assocEmoji: String? = null
     ) = MessageEntity(
         guid = guid,
         chatGuid = "iMessage;-;+15551234567",
@@ -28,15 +29,16 @@ class TapbackAndAddressTest {
         dateRead = 0L,
         associatedMessageGuid = assocGuid,
         associatedMessageType = assocType,
+        associatedMessageEmoji = assocEmoji,
         sendFailed = false,
         attachmentGuid = null,
         attachmentMimeType = null
     )
 
     @Test
-    fun `all six tapback types map cleanly and support removal`() {
-        val allTypes = TapbackType.entries
-        assertEquals(6, allTypes.size)
+    fun `all six picker tapback types map cleanly and support removal`() {
+        assertEquals(6, TapbackType.pickerEntries.size)
+        assertEquals(7, TapbackType.entries.size)
 
         val entities = listOf(
             msg("m1", isFromMe = false, dateCreated = 100L),
@@ -54,6 +56,42 @@ class TapbackAndAddressTest {
         assertTrue(reactions.any { it.type == TapbackType.LAUGH && it.count == 1 })
         assertTrue(reactions.any { it.type == TapbackType.EMPHASIZE && it.isFromMe })
         assertTrue(reactions.any { it.type == TapbackType.QUESTION && !it.isFromMe })
+    }
+
+    @Test
+    fun `server string tapback codes and emoji tapback glyphs map and remove cleanly`() {
+        assertEquals(TapbackType.LOVE, TapbackType.fromAddCode("love"))
+        assertEquals(TapbackType.LIKE, TapbackType.fromAddCode("like"))
+        assertEquals(TapbackType.DISLIKE, TapbackType.fromAddCode("dislike"))
+        assertEquals(TapbackType.LAUGH, TapbackType.fromAddCode("laugh"))
+        assertEquals(TapbackType.EMPHASIZE, TapbackType.fromAddCode("emphasize"))
+        assertEquals(TapbackType.QUESTION, TapbackType.fromAddCode("question"))
+        assertEquals(TapbackType.EMOJI, TapbackType.fromAddCode("emoji"))
+        assertEquals(TapbackType.EMOJI, TapbackType.fromAddCode("2006"))
+
+        assertEquals(TapbackType.LOVE, TapbackType.fromRemoveCode("-love"))
+        assertEquals(TapbackType.EMOJI, TapbackType.fromRemoveCode("-emoji"))
+        assertEquals(TapbackType.EMOJI, TapbackType.fromRemoveCode("3006"))
+        assertTrue(TapbackUtils.isTapbackCode("love"))
+        assertTrue(TapbackUtils.isTapbackCode("-emphasize"))
+        assertTrue(TapbackUtils.isTapbackCode("emoji"))
+        assertTrue(TapbackUtils.isTapbackCode("-emoji"))
+        assertTrue(TapbackUtils.isTapbackCode("2006"))
+        assertTrue(TapbackUtils.isTapbackCode("3006"))
+
+        val entities = listOf(
+            msg("m1", isFromMe = false, dateCreated = 100L),
+            msg("r1", isFromMe = true, dateCreated = 200L, assocGuid = "p:0/m1", assocType = "love"),
+            msg("r2", isFromMe = true, dateCreated = 300L, assocGuid = "p:0/m1", assocType = "-love"),
+            msg("r3", isFromMe = false, dateCreated = 350L, assocGuid = "p:0/m1", assocType = "emoji", assocEmoji = "🔥"),
+            msg("r4", isFromMe = true, dateCreated = 400L, assocGuid = "p:0/m1", assocType = "2006", assocEmoji = "🎉"),
+            msg("r5", isFromMe = true, dateCreated = 450L, assocGuid = "p:0/m1", assocType = "-emoji", assocEmoji = "🎉")
+        )
+
+        val reactions = TapbackUtils.computeReactions(entities)["m1"].orEmpty()
+        assertFalse(reactions.any { it.type == TapbackType.LOVE })
+        assertTrue(reactions.any { it.type == TapbackType.EMOJI && it.displayEmoji == "🔥" && !it.isFromMe })
+        assertFalse(reactions.any { it.displayEmoji == "🎉" })
     }
 
     @Test

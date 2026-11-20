@@ -25,8 +25,8 @@ import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Vibration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,7 +65,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = viewModel()
 ) {
     val palette = LocalWearPalette.current
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showResetConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.isResetDone) {

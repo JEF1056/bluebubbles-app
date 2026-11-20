@@ -20,6 +20,9 @@ class SettingsTile extends StatelessWidget {
     this.activePage,
   });
 
+  static bool isActiveOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_ActiveSettingsTileScope>()?.active ?? false;
+
   final Function? onTap;
   final Function? onLongPress;
   final String? subtitle;
@@ -50,10 +53,11 @@ class SettingsTile extends StatelessWidget {
         splashColor: context.theme.colorScheme.surfaceContainerHighest,
         splashFactory: context.theme.splashFactory,
         child: GestureDetector(
-          onSecondaryTapUp: (details) async {
+          onSecondaryTapUp: (details) {
             if (kIsWeb) {
-              await preventNextContextMenu();
+              suppressBrowserContextMenu();
             }
+            ContextMenuController.removeAny();
             onLongPress?.call();
           },
           // painted above the ink layer, so it just switches on and off instead of
@@ -70,7 +74,15 @@ class SettingsTile extends StatelessWidget {
                   ? null
                   : Padding(
                       padding: EdgeInsets.only(bottom: isThreeLine ? 10 : 0.0, right: 5, left: 5),
-                      child: leading,
+                      child: _ActiveSettingsTileScope(
+                        active: active,
+                        child: IconTheme.merge(
+                          data: active
+                              ? IconThemeData(color: context.theme.colorScheme.onPrimary)
+                              : const IconThemeData(),
+                          child: leading!,
+                        ),
+                      ),
                     ),
               title: title != null
                   ? Text(
@@ -124,4 +136,16 @@ class SettingsTile extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ActiveSettingsTileScope extends InheritedWidget {
+  final bool active;
+
+  const _ActiveSettingsTileScope({
+    required this.active,
+    required super.child,
+  });
+
+  @override
+  bool updateShouldNotify(_ActiveSettingsTileScope oldWidget) => active != oldWidget.active;
 }

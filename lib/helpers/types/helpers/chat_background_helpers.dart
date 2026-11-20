@@ -33,7 +33,7 @@ String serverBackgroundFilename(String backgroundGuid, {String ext = 'jpg'}) =>
 /// (`background-server-<guid>.<ext>`), or `null` for local/absent backgrounds.
 String? serverBackgroundGuidFromPath(String? filePath) {
   if (filePath == null || filePath.isEmpty) return null;
-  final name = filePath.split(RegExp(r'[/\\]')).last;
+  final name = filePath.split('?').first.split(RegExp(r'[/\\]')).last;
   if (!name.startsWith(_serverBackgroundPrefix)) return null;
   final dot = name.lastIndexOf('.');
   if (dot <= _serverBackgroundPrefix.length) return null;

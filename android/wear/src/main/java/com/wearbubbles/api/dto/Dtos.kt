@@ -41,6 +41,13 @@ data class SendMessageRequest(
     val method: String? = null
 )
 
+data class CreateChatRequest(
+    val addresses: List<String>,
+    val message: String,
+    val tempGuid: String? = null,
+    val method: String? = null
+)
+
 data class ReactRequest(
     val chatGuid: String,
     val selectedMessageGuid: String,
@@ -54,6 +61,7 @@ data class ChatDto(
     val displayName: String? = null,
     val participants: List<HandleDto>? = null,
     val lastMessage: MessageDto? = null,
+    val messages: List<MessageDto>? = null,
     val hasUnreadMessage: Boolean? = null,
     val isArchived: Boolean? = null,
     val dateDeleted: Long? = null,
@@ -83,6 +91,7 @@ data class MessageDto(
     val attachments: List<AttachmentDto>? = null,
     val associatedMessageGuid: String? = null,
     val associatedMessageType: String? = null,
+    val associatedMessageEmoji: String? = null,
     val attributedBody: JsonElement? = null
 )
 
@@ -139,7 +148,8 @@ data class MessageRelayDto(
     val attachmentGuid: String? = null,
     val attachmentMimeType: String? = null,
     val associatedMessageGuid: String? = null,
-    val associatedMessageType: String? = null
+    val associatedMessageType: String? = null,
+    val associatedMessageEmoji: String? = null
 )
 
 data class ContactRelayDto(
@@ -163,21 +173,37 @@ enum class TapbackType(
     DISLIKE("dislike", "2002", "3002", "👎", "Dislike"),
     LAUGH("laugh", "2003", "3003", "😂", "Haha"),
     EMPHASIZE("emphasize", "2004", "3004", "‼️", "Exclaim"),
-    QUESTION("question", "2005", "3005", "❓", "Question");
+    QUESTION("question", "2005", "3005", "❓", "Question"),
+    EMOJI("emoji", "2006", "3006", "😀", "Emoji");
 
     companion object {
-        fun fromAddCode(code: String?): TapbackType? = entries.firstOrNull { it.addCode == code }
-        fun fromRemoveCode(code: String?): TapbackType? = entries.firstOrNull { it.removeCode == code }
+        val pickerEntries: List<TapbackType>
+            get() = listOf(LOVE, LIKE, DISLIKE, LAUGH, EMPHASIZE, QUESTION)
+
+        fun fromAddCode(code: String?): TapbackType? {
+            val normalized = code?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.addCode == normalized || it.apiName == normalized }
+        }
+
+        fun fromRemoveCode(code: String?): TapbackType? {
+            val normalized = code?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.removeCode == normalized || "-${it.apiName}" == normalized }
+        }
+
         fun isTapbackCode(code: String?): Boolean =
-            code != null && (fromAddCode(code) != null || fromRemoveCode(code) != null)
+            fromAddCode(code) != null || fromRemoveCode(code) != null
     }
 }
 
 data class ReactionBadge(
     val type: TapbackType,
     val count: Int,
-    val isFromMe: Boolean
-)
+    val isFromMe: Boolean,
+    val customEmoji: String? = null
+) {
+    val displayEmoji: String
+        get() = customEmoji?.takeIf { it.isNotBlank() } ?: type.emoji
+}
 
 object TapbackUtils {
     private val prefixRegex = Regex("^b?p:(?:\\d+/)?")
@@ -193,8 +219,8 @@ object TapbackUtils {
      * Folds chronological reaction messages into active ReactionBadges per target message GUID.
      */
     fun computeReactions(reactionMessages: List<com.wearbubbles.db.entities.MessageEntity>): Map<String, List<ReactionBadge>> {
-        // Track per (targetGuid, senderKey) -> active TapbackType
-        val byTarget = linkedMapOf<String, LinkedHashMap<Pair<String, TapbackType>, Boolean>>()
+        // Track per (senderKey, TapbackType, emojiGlyph?) -> isFromMe
+        val byTarget = linkedMapOf<String, LinkedHashMap<Triple<String, TapbackType, String?>, Boolean>>()
         for (msg in reactionMessages.sortedBy { it.dateCreated }) {
             val target = extractTargetGuid(msg.associatedMessageGuid) ?: continue
             val code = msg.associatedMessageType ?: continue
@@ -205,22 +231,37 @@ object TapbackUtils {
             val map = byTarget.getOrPut(target) { linkedMapOf() }
 
             if (addType != null) {
-                map[senderKey to addType] = msg.isFromMe
+                val emojiGlyph = if (addType == TapbackType.EMOJI) {
+                    msg.associatedMessageEmoji?.takeIf { it.isNotBlank() }
+                } else null
+                map[Triple(senderKey, addType, emojiGlyph)] = msg.isFromMe
             } else if (removeType != null) {
-                map.remove(senderKey to removeType)
+                val emojiGlyph = if (removeType == TapbackType.EMOJI) {
+                    msg.associatedMessageEmoji?.takeIf { it.isNotBlank() }
+                } else null
+                if (removeType == TapbackType.EMOJI && emojiGlyph == null) {
+                    map.keys.removeAll { it.first == senderKey && it.second == TapbackType.EMOJI }
+                } else {
+                    map.remove(Triple(senderKey, removeType, emojiGlyph))
+                }
             }
         }
 
         return byTarget.mapValues { (_, entries) ->
-            val counts = linkedMapOf<TapbackType, Int>()
-            val fromMeSet = hashSetOf<TapbackType>()
+            val counts = linkedMapOf<Pair<TapbackType, String?>, Int>()
+            val fromMeSet = hashSetOf<Pair<TapbackType, String?>>()
             for ((key, isMe) in entries) {
-                val type = key.second
-                counts[type] = (counts[type] ?: 0) + 1
-                if (isMe) fromMeSet.add(type)
+                val badgeKey = key.second to key.third
+                counts[badgeKey] = (counts[badgeKey] ?: 0) + 1
+                if (isMe) fromMeSet.add(badgeKey)
             }
-            counts.map { (type, count) ->
-                ReactionBadge(type = type, count = count, isFromMe = type in fromMeSet)
+            counts.map { (badgeKey, count) ->
+                ReactionBadge(
+                    type = badgeKey.first,
+                    count = count,
+                    isFromMe = badgeKey in fromMeSet,
+                    customEmoji = badgeKey.second
+                )
             }
         }
     }

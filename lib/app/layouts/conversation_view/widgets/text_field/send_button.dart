@@ -97,7 +97,8 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
         style: TextButton.styleFrom(
           backgroundColor: iOS ? _iosBaseColor : null,
           shape: const CircleBorder(),
-          padding: const EdgeInsets.all(0),
+          padding: EdgeInsets.zero,
+          fixedSize: iOS ? const Size(32, 32) : const Size(48, 48),
           maximumSize: iOS ? const Size(32, 32) : const Size(48, 48),
           minimumSize: iOS ? const Size(32, 32) : const Size(48, 48),
           tapTargetSize: iOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,

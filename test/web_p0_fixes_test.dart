@@ -1,8 +1,15 @@
+import 'package:bluebubbles/app/layouts/setup/pages/sync/sync_progress.dart';
+import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/helpers/ui/oauth_helpers.dart';
-import 'package:bluebubbles/services/network/socket_service.dart';
 import 'package:bluebubbles/services/network/websocket_adapter.dart';
+import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/logger/outputs/debug_console_output.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:logger/logger.dart';
 
 class _FakeAuthClient implements GoogleSignInAuthorizationClient {
   List<String>? lastSilentScopes;
@@ -162,6 +169,44 @@ void main() {
       expect(gsi.signOutCalls, 1);
       expect(gsi._authClient.lastSilentScopes, isNull);
       expect(gsi.authenticateCalls, 0);
+    });
+  });
+
+  group('Web onboarding SyncProgress & console error logging', () {
+    testWidgets('SyncProgress lazily initializes fullSyncManager instead of throwing on mount', (tester) async {
+      final syncService = SyncService();
+      GetIt.I.registerSingleton<SyncService>(syncService);
+      GetIt.I.registerSingleton<NavigatorService>(NavigatorService());
+      final setupController = Get.put(SetupViewController());
+      addTearDown(() async {
+        Get.delete<SetupViewController>(force: true);
+        await GetIt.I.reset();
+      });
+
+      expect(SyncSvc.fullSyncManager, isNull);
+      await tester.pumpWidget(const GetMaterialApp(home: Scaffold(body: SyncProgress())));
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+      expect(SyncSvc.fullSyncManager, isNotNull);
+      expect(find.text('Syncing...'), findsOneWidget);
+      expect(setupController.pageOfNoReturn, greaterThan(0));
+    });
+
+    test('DebugConsoleOutput respects minLevel so web release logs warnings and errors only', () {
+      final captured = <String>[];
+      final origDebugPrint = debugPrint;
+      debugPrint = (String? msg, {int? wrapWidth}) {
+        if (msg != null) captured.add(msg);
+      };
+      addTearDown(() => debugPrint = origDebugPrint);
+
+      final out = DebugConsoleOutput(minLevel: Level.warning);
+      out.output(OutputEvent(LogEvent(Level.info, 'info'), ['info-line']));
+      out.output(OutputEvent(LogEvent(Level.warning, 'warn'), ['warn-line']));
+      out.output(OutputEvent(LogEvent(Level.error, 'err'), ['err-line']));
+
+      expect(captured, ['warn-line', 'err-line']);
     });
   });
 }

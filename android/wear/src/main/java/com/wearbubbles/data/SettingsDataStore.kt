@@ -23,6 +23,7 @@ class SettingsDataStore(private val context: Context) {
         private val PASSWORD = stringPreferencesKey("password")
         private val CUSTOM_HEADERS_JSON = stringPreferencesKey("custom_headers_json")
         private val PRIVATE_API_SEND = booleanPreferencesKey("private_api_send")
+        private val PRIVATE_MARK_CHAT_AS_READ = booleanPreferencesKey("private_mark_chat_as_read")
         private val HAPTIC_ENABLED = booleanPreferencesKey("haptic_enabled")
         private val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
         private val DISMISSED_UPDATE_VERSION = stringPreferencesKey("dismissed_update_version")
@@ -46,6 +47,10 @@ class SettingsDataStore(private val context: Context) {
         prefs[PRIVATE_API_SEND] ?: false
     }
 
+    val privateMarkChatAsRead: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[PRIVATE_MARK_CHAT_AS_READ] ?: false
+    }
+
     val hapticEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[HAPTIC_ENABLED] ?: true
     }
@@ -65,6 +70,8 @@ class SettingsDataStore(private val context: Context) {
 
     suspend fun isPrivateApiSend(): Boolean = privateApiSend.first()
 
+    suspend fun isPrivateMarkChatAsRead(): Boolean = privateMarkChatAsRead.first()
+
     suspend fun saveServerUrl(url: String) {
         val normalized = url.trim().trimEnd('/')
         context.dataStore.edit { prefs ->
@@ -78,11 +85,20 @@ class SettingsDataStore(private val context: Context) {
         }
     }
 
+    suspend fun saveDirectCredentials(url: String, pass: String) {
+        val normalized = url.trim().trimEnd('/')
+        context.dataStore.edit { prefs ->
+            prefs[SERVER_URL] = normalized
+            prefs[PASSWORD] = pass
+        }
+    }
+
     suspend fun saveCredentials(
         url: String,
         pass: String,
         headersJson: String = "{}",
-        usePrivateApiSend: Boolean = false
+        usePrivateApiSend: Boolean = false,
+        usePrivateMarkChatAsRead: Boolean = false
     ) {
         val normalized = url.trim().trimEnd('/')
         context.dataStore.edit { prefs ->
@@ -90,6 +106,7 @@ class SettingsDataStore(private val context: Context) {
             prefs[PASSWORD] = pass
             prefs[CUSTOM_HEADERS_JSON] = headersJson.ifBlank { "{}" }
             prefs[PRIVATE_API_SEND] = usePrivateApiSend
+            prefs[PRIVATE_MARK_CHAT_AS_READ] = usePrivateMarkChatAsRead
         }
     }
 

@@ -14,6 +14,7 @@ class VoiceMessageRecorder extends StatefulWidget {
     required this.iOS,
     required this.samsung,
     this.audioRecorder,
+    this.onCancel,
   });
 
   final RecorderController? recorderController;
@@ -25,6 +26,8 @@ class VoiceMessageRecorder extends StatefulWidget {
   final bool iOS;
 
   final bool samsung;
+
+  final VoidCallback? onCancel;
 
   @override
   State<VoiceMessageRecorder> createState() => _VoiceMessageRecorderState();
@@ -103,32 +106,53 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
     if (kIsWeb || widget.recorderController == null) {
       final minutes = _elapsed.inMinutes;
       final seconds = (_elapsed.inSeconds % 60).toString().padLeft(2, '0');
+      final showTimer = widget.iOS || kIsWeb || !widget.samsung;
+      final showCancel = widget.onCancel != null && (!widget.iOS || kIsWeb);
+      final totalWidth = (widget.textFieldSize.width - (widget.samsung ? 0 : (widget.iOS ? 36 : 8))).clamp(80.0, double.infinity);
       return Padding(
         padding: const EdgeInsets.only(left: 1),
-        child: Row(
-          children: [
-            Container(
-              width: waveWidth,
-              height: waveHeight,
-              padding: EdgeInsets.symmetric(vertical: 5, horizontal: widget.iOS ? 10 : 15),
-              decoration: decoration,
-              child: CustomPaint(
-                painter: _WebWaveformPainter(
-                  amplitudes: _amplitudes,
-                  color: waveColor,
+        child: SizedBox(
+          width: totalWidth,
+          child: Row(
+            children: [
+              Expanded(
+                child: Container(
+                  height: waveHeight,
+                  padding: EdgeInsets.symmetric(vertical: 5, horizontal: widget.iOS ? 10 : 15),
+                  decoration: decoration,
+                  child: CustomPaint(
+                    painter: _WebWaveformPainter(
+                      amplitudes: _amplitudes,
+                      color: waveColor,
+                    ),
+                  ),
                 ),
               ),
-            ),
-            Visibility(
-              visible: widget.iOS,
-              child: Center(
-                child: Text(
-                  '$minutes:$seconds',
-                  style: TextStyle(color: context.theme.colorScheme.primary),
+              if (showTimer)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    '$minutes:$seconds',
+                    style: TextStyle(
+                      color: widget.iOS ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          ],
+              if (showCancel)
+                IconButton(
+                  tooltip: 'Cancel recording',
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    Icons.delete_outline,
+                    size: 20,
+                    color: context.theme.colorScheme.error,
+                  ),
+                  onPressed: widget.onCancel,
+                ),
+            ],
+          ),
         ),
       );
     }
@@ -154,27 +178,45 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
               decoration: decoration,
             ),
             Visibility(
-              visible: widget.iOS,
+              visible: widget.iOS || !widget.samsung,
               child: Center(
-                child: StreamBuilder<Duration>(
-                  stream: recordingDurationStream,
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData) {
-                      final minutes = snapshot.data!.inMinutes;
+                child: Padding(
+                  padding: EdgeInsets.only(left: widget.iOS ? 0 : 8),
+                  child: StreamBuilder<Duration>(
+                    stream: recordingDurationStream,
+                    builder: (context, snapshot) {
+                      if (snapshot.hasData) {
+                        final minutes = snapshot.data!.inMinutes;
 
-                      final seconds = (snapshot.data!.inSeconds % 60).toString().padLeft(2, '0');
+                        final seconds = (snapshot.data!.inSeconds % 60).toString().padLeft(2, '0');
 
-                      return Text(
-                        '$minutes:$seconds',
-                        style: TextStyle(color: context.theme.colorScheme.primary),
-                      );
-                    } else {
-                      return Container();
-                    }
-                  },
+                        return Text(
+                          '$minutes:$seconds',
+                          style: TextStyle(
+                              color: widget.iOS
+                                  ? context.theme.colorScheme.primary
+                                  : context.theme.colorScheme.onSurfaceVariant),
+                        );
+                      } else {
+                        return Container();
+                      }
+                    },
+                  ),
                 ),
               ),
             ),
+            if (widget.onCancel != null && !widget.iOS)
+              IconButton(
+                tooltip: 'Cancel recording',
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+                icon: Icon(
+                  Icons.delete_outline,
+                  size: 20,
+                  color: context.theme.colorScheme.error,
+                ),
+                onPressed: widget.onCancel,
+              ),
           ],
         ));
   }

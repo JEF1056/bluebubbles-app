@@ -188,7 +188,10 @@ class AttachmentActions {
     Color selectedColor = context.theme.colorScheme.bubble(context, controller.chat.isIMessage);
     // A conversation pane on desktop can be a thousand pixels wide; the dialogs are sized for
     // a phone, so cap them there rather than stretching the canvas to fill it.
-    final dialogWidth = kIsDesktop ? 420.0 : NavigationSvc.width(context) - 70;
+    final availableDialogWidth = MediaQuery.sizeOf(context).width - 32;
+    final dialogWidth = (kIsDesktop || kIsWeb)
+        ? (availableDialogWidth < 420.0 ? availableDialogWidth : 420.0).clamp(240.0, 420.0)
+        : NavigationSvc.width(context) - 70;
 
     final result =
         await ColorPicker(
@@ -227,7 +230,8 @@ class AttachmentActions {
         type: SignatureDrawType.shape,
       ),
     );
-    canvas = kIsDesktop ? SizedBox.square(dimension: 380, child: canvas) : AspectRatio(aspectRatio: 1, child: canvas);
+    final canvasDimension = (dialogWidth - 40).clamp(200.0, 380.0);
+    canvas = (kIsDesktop || kIsWeb) ? SizedBox.square(dimension: canvasDimension, child: canvas) : AspectRatio(aspectRatio: 1, child: canvas);
 
     await showBBDialog(
       context: context,

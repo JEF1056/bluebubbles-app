@@ -299,4 +299,12 @@ class NotificationLogicTest {
         assertEquals("webp", InternalIntentReceiver.extensionForMime("image/webp"))
         assertEquals("jpg", InternalIntentReceiver.extensionForMime("image/jpeg"))
     }
+
+    @Test
+    fun `matchesNotification respects targetTag when provided`() {
+        assertTrue(DeleteNotificationHandler.matchesNotification("NEW_MESSAGE", 42, 42, "NEW_MESSAGE"))
+        assertFalse(DeleteNotificationHandler.matchesNotification("NEW_FACETIME", 42, 42, "NEW_MESSAGE"))
+        assertTrue(DeleteNotificationHandler.matchesNotification("NEW_FACETIME", 42, 42, null))
+        assertFalse(DeleteNotificationHandler.matchesNotification("NEW_MESSAGE", 41, 42, "NEW_MESSAGE"))
+    }
 }

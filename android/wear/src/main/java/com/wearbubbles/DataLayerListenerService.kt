@@ -19,6 +19,7 @@ import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.service.MessageListenerService
+import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -48,22 +49,24 @@ class DataLayerListenerService : WearableListenerService() {
 
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
         if (capabilityInfo.name == PhoneRelayClient.PHONE_CAPABILITY) {
-            val connected = capabilityInfo.nodes.isNotEmpty()
             val app = applicationContext as WearBubblesApp
-            app.phoneRelayClient.updatePhoneConnected(connected)
-            if (connected) {
-                app.socketManager.disconnect()
-                MessageListenerService.stop(applicationContext)
-                scope.launch { app.phoneRelayClient.requestCredentials() }
-            } else {
-                scope.launch {
-                    val settings = SettingsDataStore(applicationContext)
-                    if (settings.isConfigured.first()) {
-                        try {
-                            MessageListenerService.start(applicationContext)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Unable to start MessageListenerService from background: ${e.message}")
-                        }
+            app.phoneRelayClient.invalidateNodeCache()
+            scope.launch {
+                val settings = SettingsDataStore(applicationContext)
+                val hasCreds = settings.isConfigured.first()
+                val connected = PhoneRelayClient.selectRelayNode(capabilityInfo.nodes, hasCreds) != null
+                app.phoneRelayClient.updatePhoneConnected(connected)
+                if (connected) {
+                    app.socketManager.disconnect()
+                    MessageListenerService.stop(applicationContext)
+                    MessageSyncWorker.cancel(applicationContext)
+                    app.phoneRelayClient.requestCredentials()
+                } else if (hasCreds) {
+                    MessageSyncWorker.schedule(applicationContext)
+                    try {
+                        MessageListenerService.start(applicationContext)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Unable to start MessageListenerService from background: ${e.message}")
                     }
                 }
             }
@@ -86,26 +89,38 @@ class DataLayerListenerService : WearableListenerService() {
                     val pass = map.getString("password") ?: ""
                     val headers = map.getString("customHeadersJson") ?: "{}"
                     val privateApi = map.getBoolean("privateApiSend", false)
+                    val privateMarkChatAsRead = map.getBoolean("privateMarkChatAsRead", false)
                     if (url.isNotBlank() && pass.isNotBlank()) {
                         scope.launch {
                             val settings = SettingsDataStore(applicationContext)
-                            settings.saveCredentials(url, pass, headers, privateApi)
+                            settings.saveCredentials(url, pass, headers, privateApi, privateMarkChatAsRead)
                             ApiClient.configureHeaders(url, settings.parseHeaders(headers))
                         }
                     }
                 }
 
-                path == PhoneRelayClient.PATH_SYNC_CONTACTS -> {
-                    val asset = DataMapItem.fromDataItem(item).dataMap.getAsset("contactsAsset") ?: continue
+                path == PhoneRelayClient.PATH_SYNC_CHATS -> {
+                    val map = DataMapItem.fromDataItem(item).dataMap
+                    val asset = map.getAsset("payload") ?: map.getAsset("chatsAsset") ?: continue
                     scope.launch {
-                        try {
-                            val fd = Wearable.getDataClient(applicationContext).getFdForAsset(asset).await()
-                            val json = fd.inputStream.bufferedReader().use { it.readText() }
-                            fd.release()
-                            relay.handleContactsSyncJson(json)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to read contactsAsset: ${e.message}")
-                        }
+                        readAssetText(asset)?.let { relay.handleChatsSyncJson(it) }
+                    }
+                }
+
+                path == PhoneRelayClient.PATH_SYNC_MESSAGES ||
+                    path.startsWith("${PhoneRelayClient.PATH_SYNC_MESSAGES}/") -> {
+                    val map = DataMapItem.fromDataItem(item).dataMap
+                    val asset = map.getAsset("payload") ?: map.getAsset("messagesAsset") ?: continue
+                    scope.launch {
+                        readAssetText(asset)?.let { relay.handleMessagesSyncJson(it) }
+                    }
+                }
+
+                path == PhoneRelayClient.PATH_SYNC_CONTACTS -> {
+                    val map = DataMapItem.fromDataItem(item).dataMap
+                    val asset = map.getAsset("payload") ?: map.getAsset("contactsAsset") ?: continue
+                    scope.launch {
+                        readAssetText(asset)?.let { relay.handleContactsSyncJson(it) }
                     }
                 }
 
@@ -149,6 +164,29 @@ class DataLayerListenerService : WearableListenerService() {
             }
             PhoneRelayClient.PATH_SEND_RESULT -> {
                 relay.handleSendResultJson(dataStr)
+            }
+            PhoneRelayClient.PATH_ATTACHMENT_FAILED -> {
+                val guid = try {
+                    val obj = JsonParser.parseString(dataStr).asJsonObject
+                    obj.get("guid")?.takeIf { !it.isJsonNull }?.asString
+                        ?: obj.get("attachmentGuid")?.takeIf { !it.isJsonNull }?.asString
+                } catch (_: Exception) {
+                    null
+                }
+                if (!guid.isNullOrBlank()) {
+                    relay.failAttachmentRequest(guid)
+                }
+            }
+            PhoneRelayClient.PATH_AUDIO_FAILED -> {
+                try {
+                    val obj = JsonParser.parseString(dataStr).asJsonObject
+                    val tempGuid = obj.get("tempGuid")?.takeIf { !it.isJsonNull }?.asString
+                    val reason = obj.get("reason")?.takeIf { !it.isJsonNull }?.asString
+                    if (!tempGuid.isNullOrBlank()) {
+                        relay.failAudioRequest(tempGuid, reason)
+                    }
+                } catch (_: Exception) {
+                }
             }
             PhoneRelayClient.PATH_DISMISS_NOTIFICATION -> {
                 val chatGuid = try {
@@ -214,28 +252,7 @@ class DataLayerListenerService : WearableListenerService() {
         val encodedGuid = path.removePrefix(PhoneRelayClient.PATH_ATTACHMENT_PREFIX)
         val attachmentGuid = URLDecoder.decode(encodedGuid, "UTF-8")
         val app = applicationContext as WearBubblesApp
-
-        scope.launch {
-            val channelClient = Wearable.getChannelClient(applicationContext)
-            val tempFile = File(applicationContext.cacheDir, "tmp_att_${System.currentTimeMillis()}")
-            try {
-                val input = channelClient.getInputStream(channel).await()
-                input.use { inStream ->
-                    tempFile.outputStream().use { outStream ->
-                        inStream.copyTo(outStream)
-                    }
-                }
-                app.phoneRelayClient.saveStreamedAttachment(attachmentGuid, tempFile)
-            } catch (e: Exception) {
-                Log.e(TAG, "onChannelOpened attachment failed: ${e.message}")
-                tempFile.delete()
-            } finally {
-                try {
-                    channelClient.close(channel).await()
-                } catch (_: Exception) {
-                }
-            }
-        }
+        app.phoneRelayClient.streamAttachmentFromChannel(channel, attachmentGuid)
     }
 
     private fun handleSetup(messageEvent: MessageEvent) {
@@ -251,7 +268,12 @@ class DataLayerListenerService : WearableListenerService() {
 
                 val app = applicationContext as WearBubblesApp
                 if (!app.phoneRelayClient.refreshPhoneConnected()) {
-                    MessageListenerService.start(applicationContext)
+                    MessageSyncWorker.schedule(applicationContext)
+                    try {
+                        MessageListenerService.start(applicationContext)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Unable to start MessageListenerService from background setup: ${e.message}")
+                    }
                 }
 
                 try {
@@ -272,6 +294,7 @@ class DataLayerListenerService : WearableListenerService() {
             try {
                 (applicationContext as WearBubblesApp).socketManager.disconnect()
                 MessageListenerService.stop(applicationContext)
+                MessageSyncWorker.cancel(applicationContext)
                 SettingsDataStore(applicationContext).clearAll()
                 AppDatabase.getInstance(applicationContext).clearAllTables()
 
@@ -309,6 +332,20 @@ class DataLayerListenerService : WearableListenerService() {
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to send watch status", e)
             }
+        }
+    }
+
+    private suspend fun readAssetText(asset: com.google.android.gms.wearable.Asset): String? {
+        return try {
+            val fd = Wearable.getDataClient(applicationContext).getFdForAsset(asset).await()
+            try {
+                fd.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                fd.release()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read DataItem asset: ${e.message}")
+            null
         }
     }
 

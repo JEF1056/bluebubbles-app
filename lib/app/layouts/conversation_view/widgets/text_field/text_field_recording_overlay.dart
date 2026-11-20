@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/voice_message_recorder.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:record/record.dart';
@@ -68,6 +71,14 @@ class TextFieldRecordingOverlay extends StatelessWidget {
                           textFieldSize: textFieldSize,
                           iOS: iOS,
                           samsung: samsung,
+                          onCancel: () {
+                            controller.showRecording.value = false;
+                            if (kIsWeb) {
+                              unawaited(audioRecorder?.cancel().catchError((_) {}));
+                            } else {
+                              unawaited(recorderController?.stop().catchError((_) => null));
+                            }
+                          },
                         );
                 }),
         ));

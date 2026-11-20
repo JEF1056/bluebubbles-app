@@ -1,6 +1,7 @@
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/attachment_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/interactive_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
@@ -44,12 +45,48 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
   }
 
   void _openReplyThread(BuildContext context, String chatGuid, MessagePart? part) {
+    if (widget.cvController.inSelectMode.value) return;
+    final service = MessagesSvc(chatGuid);
     showReplyThread(
       context,
       message,
       part ?? MessagePart(part: widget.part),
-      MessagesSvc(chatGuid),
+      service,
       widget.cvController,
+    );
+  }
+
+  Widget? _buildQuoteThumbnail(BuildContext context, MessagePart? resolvedPart) {
+    if (resolvedPart == null || resolvedPart.hasInlineAttachments || resolvedPart.attachments.isEmpty) {
+      return null;
+    }
+    final att = resolvedPart.attachments.first;
+    final content = AttachmentsSvc.getContent(att, autoDownload: false);
+    if (content is PlatformFile && content.bytes != null && (att.mimeType?.startsWith('image/') ?? false)) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.memory(
+          content.bytes!,
+          width: 32,
+          height: 32,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+        ),
+      );
+    }
+    final icon = (att.mimeType?.startsWith('image/') ?? false)
+        ? Icons.image_outlined
+        : (att.mimeType?.startsWith('video/') ?? false)
+            ? Icons.videocam_outlined
+            : Icons.insert_drive_file_outlined;
+    return Container(
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        color: context.theme.colorScheme.surfaceContainerHigh.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, size: 18, color: context.theme.colorScheme.onSurfaceVariant),
     );
   }
 
@@ -94,47 +131,60 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
     final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
     final resolvedPart = part;
     if (!iOS) {
+      final thumb = _buildQuoteThumbnail(context, resolvedPart);
       return MouseRegion(
-        cursor: MouseCursor.defer,
+        cursor: SystemMouseCursors.click,
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 30,
+            maxWidth: MessageState.maxBubbleWidth(context, inset: 30),
             minHeight: 30,
           ),
-          child: GestureDetector(
+          child: SelectionSafeTap(
             behavior: HitTestBehavior.opaque,
             onTap: () => _openReplyThread(context, chatGuid, resolvedPart),
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-              // Obx: redacted-mode toggles and sender-name changes update the preview in place.
-              child: Obx(() => Text.rich(
-                    TextSpan(children: [
-                      if (!iOS && !message.isFromMe!) ...[
-                        TextSpan(
-                          text: controller.senderDisplayName,
-                          style: context.textTheme.labelSmall!
-                              .copyWith(fontWeight: FontWeight.w500, color: context.theme.colorScheme.onSurfaceVariant),
-                        ),
-                        const TextSpan(text: "\n"),
-                      ],
-                      TextSpan(
-                        text: _previewText(resolvedPart),
-                        style: context.textTheme.bodyMedium!.copyWith(
-                          color: (!iOS && message.isFromMe!)
-                              ? context.theme.colorScheme.onPrimaryContainer
-                              : context.theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ]),
-                    textHeightBehavior: const TextHeightBehavior(
-                      applyHeightToFirstAscent: true,
-                      applyHeightToLastDescent: true,
-                      leadingDistribution: TextLeadingDistribution.even,
-                    ),
-                    style: context.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.onSurface),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  )),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (thumb != null) ...[
+                    thumb,
+                    const SizedBox(width: 8),
+                  ],
+                  Flexible(
+                    // Obx: redacted-mode toggles and sender-name changes update the preview in place.
+                    child: Obx(() => Text.rich(
+                          TextSpan(children: [
+                            if (!iOS && !message.isFromMe!) ...[
+                              TextSpan(
+                                text: controller.senderDisplayName,
+                                style: context.textTheme.labelSmall!.copyWith(
+                                    fontWeight: FontWeight.w500,
+                                    color: context.theme.colorScheme.onSurfaceVariant),
+                              ),
+                              const TextSpan(text: "\n"),
+                            ],
+                            TextSpan(
+                              text: _previewText(resolvedPart),
+                              style: context.textTheme.bodyMedium!.copyWith(
+                                color: (!iOS && message.isFromMe!)
+                                    ? context.theme.colorScheme.onPrimaryContainer
+                                    : context.theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ]),
+                          textHeightBehavior: const TextHeightBehavior(
+                            applyHeightToFirstAscent: true,
+                            applyHeightToLastDescent: true,
+                            leadingDistribution: TextLeadingDistribution.even,
+                          ),
+                          style: context.textTheme.labelLarge!.copyWith(color: context.theme.colorScheme.onSurface),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        )),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -152,8 +202,8 @@ class _ReplyBubbleState extends State<ReplyBubble> with ThemeHelpers {
             scale: 0.8,
             alignment: message.isFromMe! ? Alignment.centerRight : Alignment.centerLeft,
             child: MouseRegion(
-              cursor: MouseCursor.defer,
-              child: GestureDetector(
+              cursor: SystemMouseCursors.click,
+              child: SelectionSafeTap(
                 onTap: () => _openReplyThread(context, chatGuid, resolvedPart),
                 behavior: HitTestBehavior.opaque,
                 child: IgnorePointer(

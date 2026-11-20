@@ -15,7 +15,7 @@ class TitleBarWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!kIsDesktop) {
+    if (!kIsDesktop || Platform.environment.containsKey('FLUTTER_TEST')) {
       return Stack(
         children: <Widget>[
           child,

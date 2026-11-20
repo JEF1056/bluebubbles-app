@@ -17,7 +17,9 @@ import 'package:defer_pointer/defer_pointer.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
 import 'package:universal_io/io.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
@@ -31,6 +33,7 @@ class MessagesView extends StatefulWidget {
   final ConversationViewController controller;
   final String? initialScrollToGuid;
   final double bottomPadding;
+  final ValueNotifier<int>? unreadWhileScrolledCount;
 
   const MessagesView({
     super.key,
@@ -38,6 +41,7 @@ class MessagesView extends StatefulWidget {
     this.initialScrollToGuid,
     required this.controller,
     this.bottomPadding = 0.0,
+    this.unreadWhileScrolledCount,
   });
 
   @override
@@ -301,13 +305,32 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
       return;
     }
     // otherwise fetch until it is loaded
+    if (kIsWeb || chat.id == null) {
+      await _loadMoreMessages(limit: 100);
+      index = _messages.indexWhere((element) => element.guid == guid);
+      if (index != -1) {
+        await scrollController.scrollToIndex(index, preferPosition: AutoScrollPosition.middle);
+        scrollController.highlight(index, highlightDuration: const Duration(milliseconds: 2000));
+      } else {
+        showSnackbar("Error", "Failed to find message!", type: SnackbarType.error);
+      }
+      return;
+    }
     final message = Message.findOne(guid: guid);
+    if (message?.id == null) {
+      showSnackbar("Error", "Failed to find message!", type: SnackbarType.error);
+      return;
+    }
     final query = (Database.messages.query(Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
           ..link(Message_.chat, Chat_.id.equals(chat.id!))
           ..order(Message_.dateCreated, flags: Order.descending))
         .build();
     final ids = await query.findIdsAsync();
     final pos = ids.indexOf(message!.id!);
+    if (pos == -1) {
+      showSnackbar("Error", "Failed to find message!", type: SnackbarType.error);
+      return;
+    }
     await _loadMoreMessages(limit: pos + 10);
     index = _messages.indexWhere((element) => element.guid == guid);
     if (index != -1) {
@@ -482,6 +505,13 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     // Update version tracker
     _listVersion.value++;
 
+    if (!(message.isFromMe ?? false) &&
+        message.associatedMessageGuid == null &&
+        scrollController.hasClients &&
+        scrollController.offset >= 250) {
+      widget.unreadWhileScrolledCount?.value = (widget.unreadWhileScrolledCount?.value ?? 0) + 1;
+    }
+
     // When the first message arrives via socket into an empty view, the
     // "Loading surrounding message context..." SliverToBoxAdapter won't
     // disappear on its own (insertItem only updates the SliverAnimatedList,
@@ -628,6 +658,152 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
   @override
   Widget build(BuildContext context) {
+    final scrollView = ScrollbarWrapper(
+      reverse: true,
+      controller: scrollController,
+      showScrollbar: true,
+      child: CustomScrollView(
+        controller: scrollController,
+        reverse: true,
+        physics: ThemeSwitcher.getScrollPhysics(),
+        // MessageHolder implements AutomaticKeepAliveClientMixin, so already-built
+        // messages survive scrolling arbitrarily far away without needing a large
+        // cache extent (which forces eager build/layout of everything within its
+        // window on every layout pass. A 10k px extent visibly stuttered chat open
+        // for exactly that reason). This is just a small bump over the 250px default
+        // for minor smoothing of local scroll gestures.
+        scrollCacheExtent: const ScrollCacheExtent.pixels(500),
+        slivers: <Widget>[
+          if (widget.bottomPadding > 0)
+            SliverToBoxAdapter(
+              child: SizedBox(height: widget.bottomPadding),
+            ),
+          SliverToBoxAdapter(
+            child: ConversationPillsRow(
+              controller: controller,
+              smartReplies: smartRepliesManager.smartReplies,
+              quickActions: quickActions,
+            ),
+          ),
+          if (!chat.isGroup && chat.isIMessage)
+            SliverToBoxAdapter(
+              child: NotificationsSilencedBanner(
+                controller: controller,
+                latestMessage: _messages.firstOrNull,
+              ),
+            ),
+          SliverToBoxAdapter(
+            child: TypingIndicatorRow(
+              controller: controller,
+            ),
+          ),
+          if (_messages.isEmpty)
+            const SliverToBoxAdapter(
+              child: Loader(text: "Loading surrounding message context..."),
+            ),
+          Builder(
+            builder: (context) {
+              return SliverAnimatedList(
+                key: _listKey,
+                initialItemCount: _messages.length + 1,
+                itemBuilder: (BuildContext context, int index, Animation<double> animation) {
+                  try {
+                    // paginate
+                    if (index >= _messages.length) {
+                      if (!noMoreMessages && handlersInitialized && index == _messages.length) {
+                        if (!fetching) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted && !fetching && !noMoreMessages) {
+                              _loadMoreMessages();
+                            }
+                          });
+                        }
+                        return const Loader();
+                      }
+
+                      return const SizedBox.shrink();
+                    }
+
+                    Message? olderMessage;
+                    Message? newerMessage;
+                    if (index + 1 < _messages.length) {
+                      olderMessage = _messages[index + 1];
+                    }
+                    if (index - 1 >= 0) {
+                      newerMessage = _messages[index - 1];
+                    }
+
+                    final message = _messages[index];
+                    final messageId = message.guid ?? 'unknown-$index';
+                    final sidePad = (kIsWeb || kIsDesktop) ? 20.0 : 5.0;
+                    final messageWidget = RepaintBoundary(
+                      key: _messageKeys.putIfAbsent(messageId, () => GlobalKey()),
+                      child: Padding(
+                        padding: EdgeInsets.only(left: sidePad, right: sidePad),
+                        child: AutoScrollTag(
+                          key: ValueKey("$messageId-scrolling"),
+                          index: index,
+                          controller: scrollController,
+                          highlightColor: context.theme.colorScheme.surface.withValues(alpha: 0.7),
+                          child: MessageHolder(
+                            cvController: controller,
+                            message: message,
+                            oldMessage: olderMessage,
+                            newMessage: newerMessage,
+                          ),
+                        ),
+                      ),
+                    );
+
+                    // Animate sent messages with size + slide + fade (only if outgoing from this device)
+                    final isFromMe = message.isFromMe ?? false;
+                    if (isFromMe &&
+                        message.isSending &&
+                        animationOrchestrator.isMessageAnimating(message)) {
+                      return animationOrchestrator.buildSentMessageAnimation(
+                        child: messageWidget,
+                        animation: animation,
+                      );
+                    }
+
+                    // Animate other messages with size + slide only (received or from other devices)
+                    if (animationOrchestrator.isMessageAnimating(message)) {
+                      return animationOrchestrator.buildReceivedMessageAnimation(
+                        child: messageWidget,
+                        animation: animation,
+                      );
+                    }
+
+                    return messageWidget;
+                  } catch (e, stack) {
+                    Logger.error("Error in SliverAnimatedList itemBuilder at index $index",
+                        error: e, trace: stack);
+                    return SizedBox(
+                      key: ValueKey('error-$index'),
+                      height: 50,
+                      child: Center(
+                        child: Text('Error loading message at index $index'),
+                      ),
+                    );
+                  }
+                },
+              );
+            },
+          ),
+          SliverPadding(
+            padding: (iOS || samsung)
+                ? const EdgeInsets.all(70)
+                : EdgeInsets.only(
+                    top: MediaQuery.paddingOf(context).top + 12,
+                    left: 12,
+                    right: 12,
+                    bottom: 12,
+                  ),
+          ),
+        ],
+      ),
+    );
+
     return DropTarget(
       // desktop_drop 0.7 releases Android's URI permission before Dart can read a drop, so nothing would attach.
       // Upstream 0.9 fixes it but needs cross_file 0.4, which the pickers and share_plus don't support yet.
@@ -657,159 +833,34 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
           child: Stack(
             children: [
               Obx(
-                () => AnimatedOpacity(
-                  opacity: _messages.isEmpty && widget.customService == null
-                      ? 0
-                      : (dropZoneManager.dragging.value ? 0.3 : 1),
-                  duration: const Duration(milliseconds: 150),
-                  curve: Curves.easeIn,
-                  child: DeferredPointerHandler(
-                    child: ScrollbarWrapper(
-                      reverse: true,
-                      controller: scrollController,
-                      showScrollbar: true,
-                      child: CustomScrollView(
-                        controller: scrollController,
-                        reverse: true,
-                        physics: ThemeSwitcher.getScrollPhysics(),
-                        // MessageHolder implements AutomaticKeepAliveClientMixin, so already-built
-                        // messages survive scrolling arbitrarily far away without needing a large
-                        // cache extent (which forces eager build/layout of everything within its
-                        // window on every layout pass. A 10k px extent visibly stuttered chat open
-                        // for exactly that reason). This is just a small bump over the 250px default
-                        // for minor smoothing of local scroll gestures.
-                        scrollCacheExtent: const ScrollCacheExtent.pixels(500),
-                        slivers: <Widget>[
-                          if (widget.bottomPadding > 0)
-                            SliverToBoxAdapter(
-                              child: SizedBox(height: widget.bottomPadding),
-                            ),
-                          SliverToBoxAdapter(
-                            child: ConversationPillsRow(
-                              controller: controller,
-                              smartReplies: smartRepliesManager.smartReplies,
-                              quickActions: quickActions,
-                            ),
-                          ),
-                          if (!chat.isGroup && chat.isIMessage)
-                            SliverToBoxAdapter(
-                              child: NotificationsSilencedBanner(
-                                controller: controller,
-                                latestMessage: _messages.firstOrNull,
-                              ),
-                            ),
-                          SliverToBoxAdapter(
-                            child: TypingIndicatorRow(
-                              controller: controller,
-                            ),
-                          ),
-                          if (_messages.isEmpty)
-                            const SliverToBoxAdapter(
-                              child: Loader(text: "Loading surrounding message context..."),
-                            ),
-                          Builder(
-                            builder: (context) {
-                              return SliverAnimatedList(
-                                key: _listKey,
-                                initialItemCount: _messages.length + 1,
-                                itemBuilder: (BuildContext context, int index, Animation<double> animation) {
-                                  try {
-                                    // paginate
-                                    if (index >= _messages.length) {
-                                      if (!noMoreMessages && handlersInitialized && index == _messages.length) {
-                                        if (!fetching) {
-                                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                                            if (mounted && !fetching && !noMoreMessages) {
-                                              _loadMoreMessages();
-                                            }
-                                          });
-                                        }
-                                        return const Loader();
-                                      }
-
-                                      return const SizedBox.shrink();
-                                    }
-
-                                    Message? olderMessage;
-                                    Message? newerMessage;
-                                    if (index + 1 < _messages.length) {
-                                      olderMessage = _messages[index + 1];
-                                    }
-                                    if (index - 1 >= 0) {
-                                      newerMessage = _messages[index - 1];
-                                    }
-
-                                    final message = _messages[index];
-                                    final messageId = message.guid ?? 'unknown-$index';
-                                    final messageWidget = RepaintBoundary(
-                                      key: _messageKeys.putIfAbsent(messageId, () => GlobalKey()),
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(left: 5.0, right: 5.0),
-                                        child: AutoScrollTag(
-                                          key: ValueKey("$messageId-scrolling"),
-                                          index: index,
-                                          controller: scrollController,
-                                          highlightColor: context.theme.colorScheme.surface.withValues(alpha: 0.7),
-                                          child: MessageHolder(
-                                            cvController: controller,
-                                            message: message,
-                                            oldMessage: olderMessage,
-                                            newMessage: newerMessage,
-                                          ),
-                                        ),
-                                      ),
-                                    );
-
-                                    // Animate sent messages with size + slide + fade (only if outgoing from this device)
-                                    final isFromMe = message.isFromMe ?? false;
-                                    if (isFromMe &&
-                                        message.isSending &&
-                                        animationOrchestrator.isMessageAnimating(message)) {
-                                      return animationOrchestrator.buildSentMessageAnimation(
-                                        child: messageWidget,
-                                        animation: animation,
-                                      );
-                                    }
-
-                                    // Animate other messages with size + slide only (received or from other devices)
-                                    if (animationOrchestrator.isMessageAnimating(message)) {
-                                      return animationOrchestrator.buildReceivedMessageAnimation(
-                                        child: messageWidget,
-                                        animation: animation,
-                                      );
-                                    }
-
-                                    return messageWidget;
-                                  } catch (e, stack) {
-                                    Logger.error("Error in SliverAnimatedList itemBuilder at index $index",
-                                        error: e, trace: stack);
-                                    return SizedBox(
-                                      key: ValueKey('error-$index'),
-                                      height: 50,
-                                      child: Center(
-                                        child: Text('Error loading message at index $index'),
-                                      ),
-                                    );
-                                  }
-                                },
-                              );
-                            },
-                          ),
-                          SliverPadding(
-                            padding: (iOS || samsung)
-                                ? const EdgeInsets.all(70)
-                                : EdgeInsets.only(
-                                    top: MediaQuery.paddingOf(context).top + 12,
-                                    left: 12,
-                                    right: 12,
-                                    bottom: 12,
-                                  ),
-                          ),
-                        ],
+                () {
+                  final isDragging = dropZoneManager.dragging.value;
+                  return AnimatedOpacity(
+                    opacity: _messages.isEmpty && widget.customService == null ? 0 : (isDragging ? 0.3 : 1),
+                    duration: const Duration(milliseconds: 150),
+                    curve: Curves.easeIn,
+                    child: DeferredPointerHandler(
+                      child: NotificationListener<UserScrollNotification>(
+                        onNotification: (notification) {
+                          if (notification.direction != ScrollDirection.idle) {
+                            controller.onUserChatInteraction();
+                          }
+                          return false;
+                        },
+                        child: Listener(
+                          behavior: HitTestBehavior.translucent,
+                          onPointerDown: (_) => controller.onUserChatInteraction(),
+                          onPointerSignal: (event) {
+                            if (event is PointerScrollEvent) {
+                              controller.onUserChatInteraction();
+                            }
+                          },
+                          child: (kIsWeb || kIsDesktop) ? SelectionArea(child: scrollView) : scrollView,
+                        ),
                       ),
                     ),
-                  ),
-                ),
+                  );
+                },
               ),
               DragDropOverlay(
                 dragging: dropZoneManager.dragging,

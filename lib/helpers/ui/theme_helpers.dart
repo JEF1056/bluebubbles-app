@@ -189,13 +189,13 @@ mixin ThemeHelpers<T extends StatefulWidget> on State<T> {
   bool get showAltLayout =>
       SettingsSvc.settings.tabletMode.value &&
       (!context.isPhone || context.width / context.height > 0.8) &&
-      context.width > 600 &&
+      context.width > (kIsWeb ? 680 : 600) &&
       !LifecycleSvc.isBubble;
 
   bool get showAltLayoutContextless =>
       SettingsSvc.settings.tabletMode.value &&
       (!Get.context!.isPhone || Get.context!.width / Get.context!.height > 0.8) &&
-      Get.context!.width > 600 &&
+      Get.context!.width > (kIsWeb ? 680 : 600) &&
       !LifecycleSvc.isBubble;
 
   bool get iOS => CurrentSkin.iOS;
@@ -205,6 +205,28 @@ mixin ThemeHelpers<T extends StatefulWidget> on State<T> {
   bool get samsung => CurrentSkin.samsung;
 
   Brightness get brightness => context.theme.colorScheme.brightness;
+}
+
+/// 130deg GMsg Web outgoing RCS/iMessage bubble gradient on default GMsg primary; null for SMS or custom palettes.
+LinearGradient? gmsgOutgoingGradient(BuildContext context, {required bool isSms}) {
+  if (isSms) return null;
+  final cs = Theme.of(context).colorScheme;
+  final isDark = cs.brightness == Brightness.dark;
+  if (!isDark && cs.primary.toARGB32() == 0xFF0B57D0) {
+    return const LinearGradient(
+      begin: Alignment(-0.766, -0.643),
+      end: Alignment(0.766, 0.643),
+      colors: [Color(0xFF1B79F3), Color(0xFF0B57D0)],
+    );
+  }
+  if (isDark && cs.primary.toARGB32() == 0xFFA8C7FA) {
+    return const LinearGradient(
+      begin: Alignment(-0.766, -0.643),
+      end: Alignment(0.766, 0.643),
+      colors: [Color(0xFF0842A0), Color(0xFF07347E)],
+    );
+  }
+  return null;
 }
 
 /// Extension to provide BuildContext with easy access to commonly used theme helper values

@@ -34,19 +34,12 @@ class MethodChannelService implements MethodChannelServiceDelegate {
   /// Note what this deliberately does *not* check: whether this isolate's socket is
   /// connected. It usually isn't — `LifecycleService.close()` disconnects on
   /// background — because the hand-off here is to the **headless isolate**, which
-  /// never ignores (see the `headless` bail-out above), not to our own socket.
+  /// never ignores (see the `headless` bail-out below), not to our own socket.
   ///
-  /// So resist adding a `socket.connected` condition to make this "safer". It would
-  /// flip to `false` for essentially every backgrounded push, and then both this
-  /// isolate and the headless one would process the same message. They share only
-  /// the database — `_processedGuids` and `_inflightByGuid` in
-  /// [IncomingMessageHandler] are per-isolate — so both can pass the
-  /// `Message.findOne` existence check before either writes, and both reach the
-  /// notification dispatch. If this drop is ever wrong, the fix belongs on the
-  /// Android side, in which isolate gets handed the push.
-  ///
-  /// Contrast [MethodChannelHandlers._handleNewMessage], which drops in favour of
-  /// *this* isolate's socket and therefore does have to check `connected`.
+  /// `DartWorker.kt` routes each push/socket job to a single engine (`mainEngine`
+  /// when ready, else `workerEngine`), and `MethodChannelHandlers._handleNewMessage` /
+  /// `_handleUpdatedMessage` rely on `_pushCopies` dedup in [IncomingMessageHandler]
+  /// rather than calling [shouldIgnoreMessage].
   @override
   bool get shouldIgnoreMessage {
     if (headless) return false;

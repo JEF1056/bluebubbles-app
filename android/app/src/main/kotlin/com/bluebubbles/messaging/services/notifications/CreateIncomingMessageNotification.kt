@@ -94,6 +94,12 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             String.format(Locale.US, "%019d", Long.MAX_VALUE - timestampMs.coerceAtLeast(0L))
 
         internal fun shouldShowPhoneMuteAction(showReactionAction: Boolean): Boolean = !showReactionAction
+
+        internal fun resolveNotificationId(chatId: Int?, chatGuid: String): Int {
+            if (chatId != null && chatId != 0) return chatId
+            val hash = chatGuid.hashCode() and 0x7fffffff
+            return if (hash == 0) 1 else hash
+        }
     }
 
     override fun handleMethodCall(
@@ -102,19 +108,28 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         context: Context
     ) {
         // channel details
-        val channelId: String = call.argument("channel_id")!!
+        val channelId: String = call.argument<String>("channel_id")?.takeIf { it.isNotBlank() } ?: run {
+            PersistentLog.w(context, Constants.logTag, "Missing channel_id for incoming message notification")
+            return result.success(null)
+        }
         // chat details
-        val chatGuid: String = call.argument("chat_guid")!!
-        val chatTitle: String = call.argument("chat_title")!!
-        val chatIsGroup: Boolean = call.argument("chat_is_group")!!
+        val chatGuid: String = call.argument<String>("chat_guid")?.takeIf { it.isNotBlank() } ?: run {
+            PersistentLog.w(context, Constants.logTag, "Missing chat_guid for incoming message notification")
+            return result.success(null)
+        }
+        val chatTitle: String = call.argument<String>("chat_title") ?: chatGuid
+        val chatIsGroup: Boolean = call.argument<Boolean>("chat_is_group") ?: false
         val chatIcon: ByteArray? = call.argument("chat_icon")
         // message details
-        val messageText: String = call.argument("message_text")!!
-        val messageGuid: String = call.argument("message_guid")!!
-        val messageDate: Long = call.argument("message_date")!!
-        val messageIsFromMe: Boolean = call.argument("message_is_from_me")!!
+        val messageText: String = call.argument<String>("message_text") ?: ""
+        val messageGuid: String = call.argument<String>("message_guid")?.takeIf { it.isNotBlank() } ?: run {
+            PersistentLog.w(context, Constants.logTag, "Missing message_guid for incoming message notification")
+            return result.success(null)
+        }
+        val messageDate: Long = call.argument<Number>("message_date")?.toLong() ?: System.currentTimeMillis()
+        val messageIsFromMe: Boolean = call.argument<Boolean>("message_is_from_me") ?: false
         // contact details
-        val contactName: String = call.argument("contact_name")!!
+        val contactName: String = call.argument<String>("contact_name") ?: chatTitle
         val contactIcon: ByteArray? = call.argument("contact_avatar")
         val contactBitmap = if ((contactIcon?.size ?: 0) == 0) null else Utils.getAdaptiveIconFromByteArray(contactIcon!!)
         // Reuse contactBitmap on 1:1 chats to avoid decoding the same avatar bytes twice.
@@ -142,8 +157,8 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
         val explicitOnlyAlertOnce: Boolean = call.argument("only_alert_once") ?: false
         val rawHistoricMessages: List<Map<String, Any?>>? = call.argument("historic_messages")
 
-        // calculate a notification ID based on the chat database ID
-        val notificationId: Int = call.argument("chat_id")!!
+        // calculate a notification ID based on the chat database ID (0 is reserved for the group summary)
+        val notificationId: Int = resolveNotificationId(call.argument<Number>("chat_id")?.toInt(), chatGuid)
 
         val notificationManager = context.getSystemService(NotificationManager::class.java)
 
@@ -473,7 +488,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                     .putExtra("notificationId", 0)
                     .putExtra("bubble", false)
                     .setType("OpenSummary"),
-                PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
             )
 
             val activeChildren = activeNotifications.filter {

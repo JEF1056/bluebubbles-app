@@ -4,6 +4,7 @@ import android.app.RemoteInput
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,11 +14,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Key
@@ -25,11 +26,13 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Smartphone
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -41,6 +44,7 @@ import androidx.wear.compose.material.Text
 import androidx.wear.input.RemoteInputIntentHelper
 import androidx.wear.input.wearableExtender
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
+import com.wearbubbles.R
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
@@ -59,7 +63,7 @@ fun SetupScreen(
     viewModel: SetupViewModel = viewModel()
 ) {
     val palette = LocalWearPalette.current
-    val state by viewModel.uiState.collectAsState()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     LaunchedEffect(state.isSuccess) {
         if (state.isSuccess) {
@@ -121,16 +125,15 @@ fun SetupScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(34.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
-                            .background(palette.primaryAction),
+                            .background(Color.White),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.Chat,
-                            contentDescription = null,
-                            tint = palette.onPrimaryAction,
-                            modifier = Modifier.size(19.dp)
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                            contentDescription = "BlueBubbles",
+                            modifier = Modifier.requiredSize(58.dp)
                         )
                     }
                     Text(

@@ -318,10 +318,31 @@ class ThemesService {
     Color onSurfaceVariant = Color(resolvedPalette.neutralVariant.get(isDark ? 80 : 30));
     Color outline = Color(resolvedPalette.neutralVariant.get(isDark ? 60 : 50));
     Color outlineVariant = Color(resolvedPalette.neutralVariant.get(isDark ? 30 : 80));
+    Color error = Color(resolvedPalette.error.get(isDark ? 80 : 40));
+    Color onError = Color(resolvedPalette.error.get(isDark ? 20 : 100));
+    Color errorContainer = Color(resolvedPalette.error.get(isDark ? 30 : 90));
+    Color onErrorContainer = Color(resolvedPalette.error.get(isDark ? 80 : 10));
 
     if (palette == null && variant == MaterialYouVariant.base) {
+      // Align fallback base theme with GMsg Web gm3-bc25-active tokens.
       primary = isDark ? const Color(0xFFA8C7FA) : const Color(0xFF0B57D0);
       onPrimary = isDark ? const Color(0xFF062E6F) : Colors.white;
+      secondary = isDark ? const Color(0xFF7FCFFF) : const Color(0xFF00639B);
+      secondaryContainer = isDark ? const Color(0xFF004A77) : const Color(0xFFC2E7FF);
+      surface = isDark ? const Color(0xFF111318) : const Color(0xFFFFFFFF);
+      surfaceContainerLowest = isDark ? const Color(0xFF0E0E0E) : const Color(0xFFFFFFFF);
+      surfaceContainerLow = isDark ? const Color(0xFF181A1E) : const Color(0xFFF8FAFD);
+      surfaceContainer = isDark ? const Color(0xFF1E1F20) : const Color(0xFFF0F4F9);
+      surfaceContainerHigh = isDark ? const Color(0xFF282A2F) : const Color(0xFFE9EEF6);
+      surfaceContainerHighest = isDark ? const Color(0xFF33353A) : const Color(0xFFDDE3EA);
+      onSurface = isDark ? const Color(0xFFE3E3E3) : const Color(0xFF1F1F1F);
+      onSurfaceVariant = isDark ? const Color(0xFFC4C7C5) : const Color(0xFF444746);
+      outline = isDark ? const Color(0xFF8E918F) : const Color(0xFF747775);
+      outlineVariant = isDark ? const Color(0xFF444746) : const Color(0xFFC4C7C5);
+      error = isDark ? const Color(0xFFFFB4AB) : const Color(0xFFBA1A1A);
+      onError = isDark ? const Color(0xFF690005) : Colors.white;
+      errorContainer = isDark ? const Color(0xFF93000A) : const Color(0xFFFFDAD6);
+      onErrorContainer = isDark ? const Color(0xFFFFDAD6) : const Color(0xFF410002);
     }
 
     if (variant == MaterialYouVariant.vibrant) {
@@ -431,10 +452,10 @@ class ThemesService {
         onTertiary: onTertiary,
         tertiaryContainer: tertiaryContainer,
         onTertiaryContainer: onTertiaryContainer,
-        error: Color(resolvedPalette.error.get(isDark ? 80 : 40)),
-        onError: Color(resolvedPalette.error.get(isDark ? 20 : 100)),
-        errorContainer: Color(resolvedPalette.error.get(isDark ? 30 : 90)),
-        onErrorContainer: Color(resolvedPalette.error.get(isDark ? 80 : 10)),
+        error: error,
+        onError: onError,
+        errorContainer: errorContainer,
+        onErrorContainer: onErrorContainer,
         surface: surface,
         onSurface: onSurface,
         surfaceContainerLowest: surfaceContainerLowest,
@@ -645,11 +666,13 @@ class ThemesService {
       provider = MemoryImage(imageBytes);
     } else if (kIsWeb) {
       final basePath = FilesystemService.stripWebPathVersion(imagePath);
-      Uint8List? resolvedBytes = await WebMediaCache.instance.get(WebMediaCache.chatBackgroundsStore, basePath);
+      Uint8List? resolvedBytes = FilesystemSvc.getCachedChatBackgroundByPath(imagePath) ??
+          await WebMediaCache.instance.get(WebMediaCache.chatBackgroundsStore, basePath);
       if (resolvedBytes == null && basePath.startsWith('web-bg://')) {
+        final sanitized = basePath.substring('web-bg://'.length).split('/').first;
         final entries = await WebMediaCache.instance.getAllEntries(WebMediaCache.chatBackgroundsStore);
         for (final entry in entries.entries) {
-          if ('web-bg://${FilesystemService.sanitizeGuid(entry.key)}' == basePath) {
+          if (FilesystemService.sanitizeGuid(entry.key) == sanitized) {
             resolvedBytes = entry.value;
             break;
           }
@@ -730,7 +753,7 @@ class ThemesService {
   }
 
   ThemePair getStructsFromData(ThemeData light, ThemeData dark) {
-    return Platform.isWindows ? _applyWindowsAccent(light, dark) : ThemePair(light: light, dark: dark);
+    return (!kIsWeb && Platform.isWindows) ? _applyWindowsAccent(light, dark) : ThemePair(light: light, dark: dark);
   }
 
   Future<ThemeStruct> revertToPreviousDarkTheme() async {

@@ -4,6 +4,7 @@ import android.content.Context
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.SettingsHelper
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -31,6 +32,70 @@ class HttpService(private val context: Context) {
         private const val TAG = "HttpService"
         private const val DEFAULT_TIMEOUT_MS = 30000L
         private const val CLOUDFLARE_RETRY_ATTEMPTS = 2
+        private val SENSITIVE_QUERY_REGEX = Regex("([?&](?:guid|password)=)([^&#\\s]+)", RegexOption.IGNORE_CASE)
+
+        internal val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .readTimeout(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .writeTimeout(DEFAULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .build()
+        }
+
+        internal fun redactUrl(url: HttpUrl): String {
+            val sensitiveParams = url.queryParameterNames.filter {
+                it.equals("guid", ignoreCase = true) || it.equals("password", ignoreCase = true)
+            }
+            if (sensitiveParams.isEmpty()) return url.toString()
+            val builder = url.newBuilder()
+            for (param in sensitiveParams) {
+                builder.setQueryParameter(param, "REDACTED")
+            }
+            return builder.build().toString()
+        }
+
+        internal fun redactSensitiveQueryParams(text: String): String =
+            SENSITIVE_QUERY_REGEX.replace(text, "$1REDACTED")
+
+        internal fun buildOkHttpClient(
+            timeoutMs: Long,
+            headersProvider: () -> Map<String, String>,
+            logger: (String) -> Unit
+        ): OkHttpClient {
+            val loggingInterceptor = HttpLoggingInterceptor { message ->
+                logger(redactSensitiveQueryParams(message))
+            }.apply {
+                level = HttpLoggingInterceptor.Level.BASIC
+                redactHeader("Authorization")
+                redactHeader("Cookie")
+            }
+
+            val headersInterceptor = Interceptor { chain ->
+                val originalRequest = chain.request()
+                val requestBuilder = originalRequest.newBuilder()
+
+                headersProvider().forEach { (key, value) ->
+                    requestBuilder.addHeader(key, value)
+                }
+
+                val request = requestBuilder.build()
+                val safeUrl = redactUrl(request.url)
+                logger("Request: [${request.method}] $safeUrl")
+
+                val response = chain.proceed(request)
+                logger("Response: [${response.code}] $safeUrl")
+
+                response
+            }
+
+            return sharedClient.newBuilder()
+                .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                .writeTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                .addInterceptor(headersInterceptor)
+                .addInterceptor(loggingInterceptor)
+                .build()
+        }
     }
     
     init {
@@ -41,42 +106,13 @@ class HttpService(private val context: Context) {
      * Create the Retrofit instance with OkHttp client
      */
     private fun createRetrofitInstance(): BlueBubblesApi {
-        val timeout = settings.apiTimeout.toLong()
-        
-        // Create logging interceptor
-        val loggingInterceptor = HttpLoggingInterceptor { message ->
-            PersistentLog.d(context, TAG, message)
-        }.apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        }
-        
-        // Create custom headers interceptor
-        val headersInterceptor = Interceptor { chain ->
-            val originalRequest = chain.request()
-            val requestBuilder = originalRequest.newBuilder()
-            
-            // Add all custom headers
-            settings.getAllHeaders().forEach { (key, value) ->
-                requestBuilder.addHeader(key, value)
-            }
-            
-            val request = requestBuilder.build()
-            PersistentLog.d(context, TAG, "Request: [${request.method}] ${request.url}")
-
-            val response = chain.proceed(request)
-            PersistentLog.d(context, TAG, "Response: [${response.code}] ${request.url}")
-            
-            response
-        }
-        
-        // Create OkHttp client
-        val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(timeout, TimeUnit.MILLISECONDS)
-            .readTimeout(timeout, TimeUnit.MILLISECONDS)
-            .writeTimeout(timeout, TimeUnit.MILLISECONDS)
-            .addInterceptor(headersInterceptor)
-            .addInterceptor(loggingInterceptor)
-            .build()
+        val timeout = settings.apiTimeout.toLong().coerceAtLeast(1000L)
+        val appContext = context.applicationContext
+        val okHttpClient = buildOkHttpClient(
+            timeoutMs = timeout,
+            headersProvider = { settings.getAllHeaders() },
+            logger = { message -> PersistentLog.d(appContext, TAG, message) }
+        )
         
         // Build base URL (API root)
         val baseUrl = if (settings.hasServerUrl()) {

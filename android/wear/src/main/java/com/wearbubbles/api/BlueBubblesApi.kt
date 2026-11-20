@@ -1,12 +1,13 @@
 package com.wearbubbles.api
 
+import com.google.gson.JsonElement
 import com.wearbubbles.api.dto.ApiResponse
 import com.wearbubbles.api.dto.ChatDto
 import com.wearbubbles.api.dto.ChatQueryRequest
 import com.wearbubbles.api.dto.ContactDto
+import com.wearbubbles.api.dto.CreateChatRequest
 import com.wearbubbles.api.dto.MessageDto
 import com.wearbubbles.api.dto.MessageQueryRequest
-import com.wearbubbles.api.dto.PingResponse
 import com.wearbubbles.api.dto.PinnedChatsResponse
 import com.wearbubbles.api.dto.ReactRequest
 import com.wearbubbles.api.dto.SendMessageRequest
@@ -24,7 +25,7 @@ interface BlueBubblesApi {
     @GET("/api/v1/ping")
     suspend fun ping(
         @Query("password") password: String
-    ): ApiResponse<PingResponse>
+    ): ApiResponse<JsonElement>
 
     @POST("/api/v1/chat/query")
     suspend fun getChats(
@@ -55,6 +56,12 @@ interface BlueBubblesApi {
         @Query("password") password: String,
         @Body body: SendMessageRequest
     ): ApiResponse<MessageDto>
+
+    @POST("/api/v1/chat/new")
+    suspend fun createChat(
+        @Query("password") password: String,
+        @Body body: CreateChatRequest
+    ): ApiResponse<ChatDto>
 
     @POST("/api/v1/message/react")
     suspend fun reactToMessage(

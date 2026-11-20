@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/cupertino_url_preview.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/expressive_url_preview.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/url_preview_controller.dart';
@@ -6,6 +8,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/shared
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 /// Link preview card.
@@ -76,7 +79,9 @@ class _UrlPreviewState extends State<UrlPreview>
 
     // Reply bubbles are laid out compactly and carry no image or affordance, so
     // they keep shrink-wrapping.
-    if (controller.inReply) return card;
+    if (controller.inReply) {
+      return kIsWeb ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: card) : card;
+    }
 
     // Take the full width offered, rather than the width the current content
     // happens to want. Without this the card is sized by whatever it holds at
@@ -90,8 +95,13 @@ class _UrlPreviewState extends State<UrlPreview>
     // is also rendered in the conversation-details link and location lists,
     // where an unbounded width is possible and infinity would throw.
     return LayoutBuilder(
-      builder: (context, constraints) =>
-          constraints.hasBoundedWidth ? SizedBox(width: constraints.maxWidth, child: card) : card,
+      builder: (context, constraints) {
+        if (!constraints.hasBoundedWidth) {
+          return kIsWeb ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: card) : card;
+        }
+        final width = kIsWeb ? math.min(constraints.maxWidth, 320.0) : constraints.maxWidth;
+        return SizedBox(width: width, child: card);
+      },
     );
   }
 }

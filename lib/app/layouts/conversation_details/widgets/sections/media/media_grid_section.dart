@@ -224,10 +224,6 @@ class _MediaGridSectionState extends State<MediaGridSection> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb) {
-      return const SliverToBoxAdapter(child: SizedBox.shrink());
-    }
-
     final hideWhenEmpty = !widget.fullPage && !widget.isLoading && _filteredMedia.isEmpty;
 
     final slivers = <Widget>[

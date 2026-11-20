@@ -189,7 +189,7 @@ class _PermissionCard extends StatelessWidget {
                     colors: [context.theme.colorScheme.primary, context.theme.colorScheme.primary.darkenPercent(5)],
                   ),
                 ),
-                child: Icon(icon, color: Colors.white, size: 24),
+                child: Icon(icon, color: context.theme.colorScheme.onPrimary, size: 24),
               ),
               const SizedBox(width: 14),
               // Label + description
@@ -314,10 +314,11 @@ class _ActionButton extends StatelessWidget {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           ),
           onPressed: onPressed,
-          icon: Icon(icon, color: Colors.white, size: 18),
+          icon: Icon(icon, color: context.theme.colorScheme.onPrimary, size: 18),
           label: Text(
             label,
-            style: context.theme.textTheme.bodyMedium!.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
+            style: context.theme.textTheme.bodyMedium!
+                .copyWith(color: context.theme.colorScheme.onPrimary, fontWeight: FontWeight.w600),
           ),
         ),
       ),

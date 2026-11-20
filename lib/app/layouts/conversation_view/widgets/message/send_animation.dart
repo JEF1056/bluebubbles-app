@@ -329,7 +329,7 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
   Widget build(BuildContext context) {
     final typicalWidth = message?.isBigEmoji ?? false
         ? NavigationSvc.width(context)
-        : NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 40;
+        : MessageState.maxBubbleWidth(context, inset: 40);
     const duration = 450;
     const curve = Curves.easeInOut;
     const buttonSize = 88;

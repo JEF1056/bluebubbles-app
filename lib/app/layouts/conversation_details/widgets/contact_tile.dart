@@ -82,9 +82,14 @@ class ContactTile extends StatelessWidget {
           Clipboard.setData(ClipboardData(text: handle.address));
           showCopiedToast("Address copied to clipboard");
         },
-        onTap: kIsDesktop
-            ? null
-            : () async {
+        onTap: kIsWeb
+            ? () {
+                Clipboard.setData(ClipboardData(text: handle.address));
+                showCopiedToast("Address copied to clipboard");
+              }
+            : kIsDesktop
+                ? null
+                : () async {
                 final contactV2 = handle.contactsV2.firstOrNull;
                 if (contactV2 == null || !contactV2.isNative) {
                   await MethodChannelSvc.actions.openContactForm(

@@ -174,23 +174,34 @@ class Handle {
 
   static List<Handle> bulkSave(List<Handle> handles, {matchOnOriginalROWID = false}) {
     HtmlDatabase.runInTransaction(TxMode.write, () {
+      final seenByKey = <String, Handle>{};
+      final toPersist = <Handle>[];
       for (Handle h in handles) {
-        Handle? existing;
-        if (matchOnOriginalROWID) {
-          existing = Handle.findOne(originalROWID: h.originalROWID);
-        } else {
-          existing = Handle.findOne(addressAndService: HandleLookupKey(h.address, h.service));
+        final prior = seenByKey[h.uniqueAddressAndService];
+        if (prior != null) {
+          prior.originalROWID ??= h.originalROWID;
+          continue;
         }
+        Handle? existing;
+        if (matchOnOriginalROWID && h.originalROWID != null) {
+          existing = Handle.findOne(originalROWID: h.originalROWID);
+        }
+        existing ??= Handle.findOne(addressAndService: HandleLookupKey(h.address, h.service));
 
         if (existing != null) {
           h.id = existing.id;
           h.originalROWID ??= existing.originalROWID;
         }
+        seenByKey[h.uniqueAddressAndService] = h;
+        toPersist.add(h);
       }
 
-      final insertedIds = HtmlDatabase.handles.putMany(handles);
+      final insertedIds = HtmlDatabase.handles.putMany(toPersist);
       for (int i = 0; i < insertedIds.length; i++) {
-        handles[i].id = insertedIds[i];
+        toPersist[i].id = insertedIds[i];
+      }
+      for (final h in handles) {
+        h.id ??= seenByKey[h.uniqueAddressAndService]?.id;
       }
     });
     return handles;

@@ -11,11 +11,13 @@ class WebAudioController extends ChangeNotifier {
   Duration get position => Duration.zero;
   Duration get duration => Duration.zero;
   bool get hasError => false;
+  double get playbackRate => 1.0;
 
   Future<void> play() async {}
   Future<void> pause() async {}
   Future<void> togglePlayPause() async {}
   Future<void> seek(Duration position) async {}
+  void setPlaybackRate(double rate) {}
 }
 
 Future<void> playWebChime({

@@ -38,3 +38,6 @@
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
 -keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
+
+# WorkManager InputMerger (OverwritingInputMerger for ReplySendWorker)
+-keep class * extends androidx.work.InputMerger { public <init>(); }

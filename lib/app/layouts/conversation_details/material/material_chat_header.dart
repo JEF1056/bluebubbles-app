@@ -27,6 +27,7 @@ class ExpressiveChatHeader extends StatelessWidget {
 
   bool get _canCall =>
       !kIsDesktop &&
+      !kIsWeb &&
       !(chat.chatIdentifier?.startsWith("urn:biz") ?? false) &&
       (chat.handles.isNotEmpty &&
           ((chat.handles.first.contactsV2.firstOrNull?.phoneNumbers.isNotEmpty ?? false) ||
@@ -192,7 +193,7 @@ class ExpressiveChatHeader extends StatelessWidget {
         if (_canAddPeople)
           M3EButtonGroupItem(
             icon: Icons.person_add_outlined,
-            label: "Add people",
+            label: "Add",
             onPressed: () => showAddParticipant(context, chat),
           ),
         M3EButtonGroupItem(

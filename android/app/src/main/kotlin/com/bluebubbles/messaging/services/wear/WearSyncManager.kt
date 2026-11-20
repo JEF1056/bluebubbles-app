@@ -1,14 +1,21 @@
 package com.bluebubbles.messaging.services.wear
 
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
+import androidx.core.app.NotificationCompat
 import java.io.ByteArrayOutputStream
 import com.bluebubbles.messaging.Constants
+import com.bluebubbles.messaging.MainActivity
+import com.bluebubbles.messaging.R
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
+import com.bluebubbles.messaging.services.foreground.SocketIOForegroundService
+import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.SettingsHelper
 import com.google.android.gms.wearable.Asset
@@ -22,12 +29,18 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import io.socket.client.IO
 import io.socket.client.Socket
+import io.socket.emitter.Emitter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.tasks.await
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -38,7 +51,9 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.File
+import java.net.URI
 import java.net.URLEncoder
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -46,6 +61,8 @@ import java.util.concurrent.TimeUnit
 object WearSyncManager {
     private const val TAG = "WearSyncManager"
     const val WATCH_CAPABILITY = "bluebubbles_watch_app"
+    internal const val PAYLOAD_MESSAGE_MAX_BYTES = 60_000
+    private const val ASSET_KEY_PAYLOAD = "payload"
     private const val PREFS_NAME = "wear_sync_prefs"
     private const val KEY_WATCH_CONNECTED = "watch_connected"
     private const val KEY_WATCH_CHECKED_AT = "watch_checked_at"
@@ -66,6 +83,8 @@ object WearSyncManager {
     const val PATH_SEND_AUDIO_PREFIX = "/bb/send-audio/"
     const val PATH_REQUEST_ATTACHMENT = "/bb/request-attachment"
     const val PATH_ATTACHMENT_PREFIX = "/bb/attachment/"
+    const val PATH_ATTACHMENT_FAILED = "/bb/attachment-failed"
+    const val PATH_AUDIO_FAILED = "/bb/audio-failed"
     const val PATH_AVATAR_PREFIX = "/bb/avatar/"
     const val PATH_MARK_READ = "/bb/mark-read"
     const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
@@ -84,7 +103,7 @@ object WearSyncManager {
 
     private val incomingCalls = ConcurrentHashMap<String, IncomingCallMeta>()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
@@ -96,6 +115,9 @@ object WearSyncManager {
 
     @Volatile
     private var relaySocket: Socket? = null
+    @Volatile
+    private var ownsRelaySocket: Boolean = false
+    private val relayListeners = mutableListOf<Pair<String, Emitter.Listener>>()
     private var socketTimeoutJob: Job? = null
 
     @JvmStatic
@@ -115,11 +137,7 @@ object WearSyncManager {
             val capInfo = Wearable.getCapabilityClient(context)
                 .getCapability(WATCH_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
                 .await()
-            val connected = if (capInfo.nodes.isNotEmpty()) {
-                true
-            } else {
-                Wearable.getNodeClient(context).connectedNodes.await().isNotEmpty()
-            }
+            val connected = capInfo.nodes.isNotEmpty()
             updateWatchConnectedCache(context, connected)
             connected
         } catch (e: Exception) {
@@ -191,15 +209,24 @@ object WearSyncManager {
             autoAnswer = true
         )
         if (!routed) {
-            val launch = android.content.Intent(context, com.bluebubbles.messaging.MainActivity::class.java).apply {
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            val launch = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra("callUuid", callUuid)
                 putExtra("answer", true)
                 putExtra("audioOnly", true)
                 putExtra("caller", callerName)
                 type = "AnswerFaceTime"
             }
-            context.startActivity(launch)
+            launchActivityOrNotify(
+                context = context,
+                intent = launch,
+                notificationId = callUuid.hashCode(),
+                title = callerName.ifBlank { "Incoming FaceTime Audio" },
+                body = "Tap to answer call",
+                channelId = NotificationChannelHandler.FACETIME_CHANNEL_ID,
+                tag = Constants.newFaceTimeNotificationTag,
+                highPriority = true
+            )
         }
     }
 
@@ -220,17 +247,64 @@ object WearSyncManager {
 
     fun handleOpenChatFromWatch(context: Context, chatGuid: String) {
         if (chatGuid.isBlank()) return
-        val launch = android.content.Intent(context, com.bluebubbles.messaging.MainActivity::class.java).apply {
+        val launch = Intent(context, MainActivity::class.java).apply {
             addFlags(
-                android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
             putExtra("chatGuid", chatGuid)
             putExtra("bubble", false)
             type = "OpenChat"
         }
-        context.startActivity(launch)
+        launchActivityOrNotify(
+            context = context,
+            intent = launch,
+            notificationId = chatGuid.hashCode(),
+            title = "Open Chat",
+            body = "Tap to open conversation",
+            channelId = NotificationChannelHandler.NEW_MESSAGES_CHANNEL_ID,
+            tag = Constants.newMessageNotificationTag,
+            highPriority = false
+        )
+    }
+
+    private fun launchActivityOrNotify(
+        context: Context,
+        intent: Intent,
+        notificationId: Int,
+        title: String,
+        body: String,
+        channelId: String,
+        tag: String,
+        highPriority: Boolean
+    ) {
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            PersistentLog.w(context, TAG, "BAL blocked or activity launch failed (${e.message}); posting fallback notification")
+            try {
+                val pi = PendingIntent.getActivity(
+                    context,
+                    notificationId,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val builder = NotificationCompat.Builder(context, channelId)
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setContentIntent(pi)
+                    .setAutoCancel(true)
+                    .setPriority(if (highPriority) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+                if (highPriority) {
+                    builder.setFullScreenIntent(pi, true)
+                }
+                context.getSystemService(NotificationManager::class.java)?.notify(tag, notificationId, builder.build())
+            } catch (ne: Exception) {
+                PersistentLog.e(context, TAG, "Fallback notification failed: ${ne.message}")
+            }
+        }
     }
 
     private fun cancelCallNotifications(context: Context, callUuid: String) {
@@ -256,12 +330,14 @@ object WearSyncManager {
                 val password = settings.guidAuthKey
                 val headersJson = gson.toJson(settings.getAllHeaders())
                 val privateApiSend = settings.enablePrivateAPI && settings.privateAPISend
+                val privateMarkChatAsRead = settings.enablePrivateAPI && settings.privateMarkChatAsRead
 
                 val putReq = PutDataMapRequest.create(PATH_CREDENTIALS).apply {
                     dataMap.putString("serverUrl", origin)
                     dataMap.putString("password", password)
                     dataMap.putString("customHeadersJson", headersJson)
                     dataMap.putBoolean("privateApiSend", privateApiSend)
+                    dataMap.putBoolean("privateMarkChatAsRead", privateMarkChatAsRead)
                 }.asPutDataRequest().setUrgent()
                 Wearable.getDataClient(context).putDataItem(putReq).await()
 
@@ -270,6 +346,7 @@ object WearSyncManager {
                     addProperty("password", password)
                     addProperty("customHeadersJson", headersJson)
                     addProperty("privateApiSend", privateApiSend)
+                    addProperty("privateMarkChatAsRead", privateMarkChatAsRead)
                 }.toString().toByteArray()
                 sendToWatch(context, targetNodeId, PATH_CREDENTIALS, msgJson)
             } catch (e: Exception) {
@@ -341,7 +418,7 @@ object WearSyncManager {
                     add("chats", out)
                     addProperty("pinsAuthoritative", pinsAuthoritative)
                 }.toString().toByteArray()
-                sendToWatch(context, targetNodeId, PATH_SYNC_CHATS, payload)
+                sendJsonOrAsset(context, targetNodeId, PATH_SYNC_CHATS, PATH_SYNC_CHATS, payload)
                 syncChatIcons(context, settings, client, chatAvatarTargets.take(15))
             } catch (e: Exception) {
                 PersistentLog.e(context, TAG, "syncChats error: ${e.message}")
@@ -451,6 +528,8 @@ object WearSyncManager {
                 }
             }
 
+            lastText = lastText?.take(300)
+
             val relayJson = JsonObject().apply {
                 addProperty("guid", guid)
                 addProperty("chatIdentifier", chatIdentifier)
@@ -498,19 +577,24 @@ object WearSyncManager {
         settings: SettingsHelper,
         client: OkHttpClient,
         targets: List<Pair<String, String>>
-    ) {
-        for ((chatGuid, avatarKey) in targets) {
-            try {
-                val url = "${settings.apiRoot}/chat/${encode(chatGuid)}/icon?password=${encode(settings.guidAuthKey)}"
-                client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
-                    if (!resp.isSuccessful) return@use
-                    val bytes = resp.body?.bytes() ?: return@use
-                    if (bytes.isEmpty() || bytes.size > 250_000) return@use
-                    putAvatarAsset(context, avatarKey, bytes)
+    ) = coroutineScope {
+        val semaphore = Semaphore(4)
+        targets.map { (chatGuid, avatarKey) ->
+            async {
+                semaphore.withPermit {
+                    try {
+                        val url = "${settings.apiRoot}/chat/${encode(chatGuid)}/icon?password=${encode(settings.guidAuthKey)}"
+                        client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+                            if (!resp.isSuccessful) return@use
+                            val bytes = resp.body?.bytes() ?: return@use
+                            if (bytes.isEmpty() || bytes.size > 250_000) return@use
+                            putAvatarAsset(context, avatarKey, bytes)
+                        }
+                    } catch (_: Exception) {
+                    }
                 }
-            } catch (_: Exception) {
             }
-        }
+        }.awaitAll()
     }
 
     fun syncMessages(context: Context, chatGuid: String, before: Long? = null, targetNodeId: String? = null) {
@@ -555,7 +639,13 @@ object WearSyncManager {
                         addProperty("chatGuid", chatGuid)
                         add("messages", out)
                     }.toString().toByteArray()
-                    sendToWatch(context, targetNodeId, PATH_SYNC_MESSAGES, payload)
+                    sendJsonOrAsset(
+                        context,
+                        targetNodeId,
+                        PATH_SYNC_MESSAGES,
+                        "$PATH_SYNC_MESSAGES/${Uri.encode(chatGuid)}",
+                        payload
+                    )
                 }
             } catch (e: Exception) {
                 PersistentLog.e(context, TAG, "syncMessages error: ${e.message}")
@@ -654,7 +744,7 @@ object WearSyncManager {
                     var avatarPushCount = 0
                     for (rec in records) {
                         var compressedAvatar: ByteArray? = null
-                        if (!rec.avatarB64.isNullOrBlank() && (rec.isPinned || avatarPushCount < 80)) {
+                        if (!rec.avatarB64.isNullOrBlank() && shouldPushContactAvatar(avatarPushCount)) {
                             try {
                                 val rawBytes = Base64.decode(rec.avatarB64, Base64.DEFAULT)
                                 compressedAvatar = compressAvatarForWatch(rawBytes)
@@ -662,15 +752,16 @@ object WearSyncManager {
                             }
                         }
                         for ((raw, norm) in rec.addresses) {
+                            val canPushAvatar = compressedAvatar != null && shouldPushContactAvatar(avatarPushCount)
                             out.add(JsonObject().apply {
                                 addProperty("normalizedAddress", norm)
                                 addProperty("displayName", rec.displayName)
                                 addProperty("rawAddress", raw)
-                                addProperty("hasAvatar", compressedAvatar != null)
+                                addProperty("hasAvatar", canPushAvatar)
                             })
-                            if (compressedAvatar != null && (rec.isPinned || avatarPushCount < 80)) {
+                            if (canPushAvatar) {
                                 try {
-                                    putAvatarAsset(context, norm, compressedAvatar)
+                                    putAvatarAsset(context, norm, compressedAvatar!!)
                                     avatarPushCount++
                                 } catch (_: Exception) {
                                 }
@@ -678,19 +769,37 @@ object WearSyncManager {
                         }
                     }
                     val payloadBytes = JsonObject().apply { add("contacts", out) }.toString().toByteArray()
-                    if (payloadBytes.size <= 60_000) {
-                        sendToWatch(context, targetNodeId, PATH_SYNC_CONTACTS, payloadBytes)
-                    } else {
-                        val putReq = PutDataMapRequest.create(PATH_SYNC_CONTACTS).apply {
-                            dataMap.putAsset("contactsAsset", Asset.createFromBytes(payloadBytes))
-                            dataMap.putLong("updatedAt", System.currentTimeMillis())
-                        }.asPutDataRequest().setUrgent()
-                        Wearable.getDataClient(context).putDataItem(putReq).await()
-                    }
+                    sendJsonOrAsset(context, targetNodeId, PATH_SYNC_CONTACTS, PATH_SYNC_CONTACTS, payloadBytes)
                 }
             } catch (e: Exception) {
                 PersistentLog.e(context, TAG, "syncContacts error: ${e.message}")
             }
+        }
+    }
+
+    internal fun extractDmRecipientIfNewChatError(
+        chatGuid: String,
+        httpCode: Int,
+        responseBody: String?
+    ): String? {
+        val idx = chatGuid.indexOf(";-;")
+        if (idx < 0) return null
+        val recipient = chatGuid.substring(idx + 3).trim()
+        if (recipient.isBlank()) return null
+        val isMissingChat = httpCode == 404 ||
+            ((httpCode == 400 || httpCode == 500) && responseBody?.contains("does not exist", ignoreCase = true) == true)
+        return if (isMissingChat) recipient else null
+    }
+
+    internal fun parseNewChatMessageResult(responseBody: String?, fallbackChatGuid: String): JsonObject? {
+        return try {
+            val dataObj = JsonParser.parseString(responseBody ?: "{}").asObjOrNull()?.obj("data")
+                ?: return null
+            val createdChatGuid = dataObj.str("guid")?.takeIf { it.isNotBlank() } ?: fallbackChatGuid
+            val firstMsg = dataObj.arr("messages")?.firstOrNull()?.asObjOrNull() ?: return null
+            mapMessageToRelayJson(firstMsg, createdChatGuid)
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -710,11 +819,12 @@ object WearSyncManager {
             }
             try {
                 val client = buildOkHttpClient(settings, minReadTimeoutMs = 130_000L)
+                val usePrivateApi = settings.enablePrivateAPI && settings.privateAPISend
                 val body = JsonObject().apply {
                     addProperty("chatGuid", chatGuid)
                     addProperty("tempGuid", tempGuid)
                     addProperty("message", text)
-                    if (settings.enablePrivateAPI && settings.privateAPISend) {
+                    if (usePrivateApi) {
                         addProperty("method", "private-api")
                     }
                 }.toString().toRequestBody(jsonMediaType)
@@ -722,6 +832,33 @@ object WearSyncManager {
                 client.newCall(Request.Builder().url(url).post(body).build()).execute().use { resp ->
                     val ok = resp.isSuccessful
                     val bodyStr = resp.body?.string()
+                    if (!ok) {
+                        val recipient = extractDmRecipientIfNewChatError(chatGuid, resp.code, bodyStr)
+                        if (recipient != null) {
+                            val newChatBody = JsonObject().apply {
+                                add("addresses", JsonArray().apply { add(recipient) })
+                                addProperty("message", text)
+                                addProperty("tempGuid", tempGuid)
+                                addProperty("method", if (usePrivateApi) "private-api" else "apple-script")
+                            }.toString().toRequestBody(jsonMediaType)
+                            val newChatUrl = "${settings.apiRoot}/chat/new?password=${encode(settings.guidAuthKey)}"
+                            client.newCall(Request.Builder().url(newChatUrl).post(newChatBody).build()).execute().use { newResp ->
+                                val newOk = newResp.isSuccessful
+                                val newBodyStr = newResp.body?.string()
+                                val newMsgObj = parseNewChatMessageResult(newBodyStr, chatGuid)
+                                sendResult(
+                                    context,
+                                    nodeId,
+                                    requestId,
+                                    tempGuid,
+                                    newOk,
+                                    if (newOk) null else "HTTP ${newResp.code}",
+                                    newMsgObj
+                                )
+                            }
+                            return@launch
+                        }
+                    }
                     val msgObj = try {
                         JsonParser.parseString(bodyStr ?: "{}").asObjOrNull()?.obj("data")
                             ?.let { mapMessageToRelayJson(it, chatGuid) }
@@ -751,12 +888,13 @@ object WearSyncManager {
         selectedMessageGuid: String,
         reaction: String,
         partIndex: Int,
-        requestId: String
+        requestId: String,
+        tempGuid: String? = null
     ) {
         scope.launch {
             val settings = SettingsHelper(context)
             if (!settings.hasServerUrl() || !settings.hasAuthKey()) {
-                sendResult(context, nodeId, requestId, null, false, "Phone server not configured")
+                sendResult(context, nodeId, requestId, tempGuid, false, "Phone server not configured")
                 return@launch
             }
             try {
@@ -769,10 +907,26 @@ object WearSyncManager {
                 }.toString().toRequestBody(jsonMediaType)
                 val url = "${settings.apiRoot}/message/react?password=${encode(settings.guidAuthKey)}"
                 client.newCall(Request.Builder().url(url).post(body).build()).execute().use { resp ->
-                    sendResult(context, nodeId, requestId, null, resp.isSuccessful, if (resp.isSuccessful) null else "HTTP ${resp.code}")
+                    val ok = resp.isSuccessful
+                    val bodyStr = resp.body?.string()
+                    val msgObj = try {
+                        JsonParser.parseString(bodyStr ?: "{}").asObjOrNull()?.obj("data")
+                            ?.let { mapMessageToRelayJson(it, chatGuid) }
+                    } catch (_: Exception) {
+                        null
+                    }
+                    sendResult(
+                        context,
+                        nodeId,
+                        requestId,
+                        tempGuid,
+                        ok,
+                        if (ok) null else "HTTP ${resp.code}",
+                        msgObj
+                    )
                 }
             } catch (e: Exception) {
-                sendResult(context, nodeId, requestId, null, false, e.message ?: "Reaction failed")
+                sendResult(context, nodeId, requestId, tempGuid, false, e.message ?: "Reaction failed")
             }
         }
     }
@@ -829,10 +983,34 @@ object WearSyncManager {
         }
     }
 
+    suspend fun notifyAttachmentFailed(context: Context, nodeId: String, attachmentGuid: String) {
+        val payload = JsonObject().apply {
+            addProperty("guid", attachmentGuid)
+        }.toString().toByteArray()
+        try {
+            Wearable.getMessageClient(context).sendMessage(nodeId, PATH_ATTACHMENT_FAILED, payload).await()
+        } catch (_: Exception) {
+        }
+    }
+
+    suspend fun notifyAudioReceiveFailed(context: Context, nodeId: String, tempGuid: String, reason: String) {
+        val payload = JsonObject().apply {
+            addProperty("tempGuid", tempGuid)
+            addProperty("reason", reason)
+        }.toString().toByteArray()
+        try {
+            Wearable.getMessageClient(context).sendMessage(nodeId, PATH_AUDIO_FAILED, payload).await()
+        } catch (_: Exception) {
+        }
+    }
+
     fun streamAttachmentToWatch(context: Context, nodeId: String, attachmentGuid: String) {
         scope.launch {
             val settings = SettingsHelper(context)
-            if (!settings.hasServerUrl() || !settings.hasAuthKey()) return@launch
+            if (!settings.hasServerUrl() || !settings.hasAuthKey()) {
+                notifyAttachmentFailed(context, nodeId, attachmentGuid)
+                return@launch
+            }
             val channelClient = Wearable.getChannelClient(context)
             var channel: com.google.android.gms.wearable.ChannelClient.Channel? = null
             try {
@@ -841,9 +1019,14 @@ object WearSyncManager {
                 client.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
                     if (!resp.isSuccessful) {
                         PersistentLog.w(context, TAG, "Attachment download HTTP ${resp.code}")
+                        notifyAttachmentFailed(context, nodeId, attachmentGuid)
                         return@launch
                     }
-                    val input = resp.body?.byteStream() ?: return@launch
+                    val input = resp.body?.byteStream()
+                    if (input == null) {
+                        notifyAttachmentFailed(context, nodeId, attachmentGuid)
+                        return@launch
+                    }
                     channel = channelClient.openChannel(nodeId, "$PATH_ATTACHMENT_PREFIX${encode(attachmentGuid)}").await()
                     val out = channelClient.getOutputStream(channel!!).await()
                     out.use { stream ->
@@ -853,6 +1036,7 @@ object WearSyncManager {
                 }
             } catch (e: Exception) {
                 PersistentLog.e(context, TAG, "streamAttachmentToWatch error: ${e.message}")
+                notifyAttachmentFailed(context, nodeId, attachmentGuid)
             } finally {
                 channel?.let { ch ->
                     try {
@@ -864,14 +1048,28 @@ object WearSyncManager {
         }
     }
 
+    internal fun shouldPushContactAvatar(avatarPushCount: Int, maxAvatars: Int = 80): Boolean =
+        avatarPushCount < maxAvatars
+
+    internal fun shouldSendWatchReadReceipt(enablePrivateAPI: Boolean, privateMarkChatAsRead: Boolean): Boolean =
+        enablePrivateAPI && privateMarkChatAsRead
+
     fun handleMarkReadFromWatch(context: Context, chatGuid: String) {
         if (chatGuid.isBlank()) return
         cancelNotificationsForChat(context, chatGuid)
-        DartWorkManager.createWorker(context, "MarkChatRead", hashMapOf("chatGuid" to chatGuid)) {}
+        val settings = SettingsHelper(context)
+        // shortcut: global privateMarkChatAsRead only; per-chat autoSendReadReceipts override lives in Dart
+        val sendReadReceipt = shouldSendWatchReadReceipt(settings.enablePrivateAPI, settings.privateMarkChatAsRead)
+        val canDirectPost = sendReadReceipt && settings.hasServerUrl() && settings.hasAuthKey()
+        // When we POST /read directly below, pass privateMark=true so Dart only updates local DB without double-POSTing.
+        DartWorkManager.createWorker(
+            context,
+            "MarkChatRead",
+            hashMapOf("chatGuid" to chatGuid, "privateMark" to (canDirectPost || !sendReadReceipt))
+        ) {}
+        if (!canDirectPost) return
         scope.launch {
             try {
-                val settings = SettingsHelper(context)
-                if (!settings.hasServerUrl() || !settings.hasAuthKey()) return@launch
                 val client = buildOkHttpClient(settings)
                 val url = "${settings.apiRoot}/chat/${encode(chatGuid)}/read?password=${encode(settings.guidAuthKey)}"
                 client.newCall(Request.Builder().url(url).post("{}".toRequestBody(jsonMediaType)).build()).execute().close()
@@ -894,6 +1092,16 @@ object WearSyncManager {
         }
     }
 
+    internal fun isValidSocketOrigin(origin: String): Boolean {
+        if (origin.isBlank()) return false
+        return try {
+            val uri = URI(origin)
+            (uri.scheme == "http" || uri.scheme == "https") && !uri.host.isNullOrBlank()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     @Synchronized
     private fun startSocketRelay(context: Context) {
         socketTimeoutJob?.cancel()
@@ -901,12 +1109,25 @@ object WearSyncManager {
             delay(SOCKET_IDLE_TIMEOUT_MS)
             stopSocketRelay()
         }
-        if (relaySocket != null) return
+        val fgSocket = SocketIOForegroundService.activeSocket
+        if (relaySocket != null) {
+            if (fgSocket != null && fgSocket.connected() && relaySocket === fgSocket) return
+            if (ownsRelaySocket && relaySocket?.connected() == true) return
+            detachRelaySocketLocked()
+        }
+        if (fgSocket != null && fgSocket.connected()) {
+            attachRelayListenersLocked(context, fgSocket)
+            relaySocket = fgSocket
+            ownsRelaySocket = false
+            return
+        }
         val settings = SettingsHelper(context)
         if (!settings.hasServerUrl() || !settings.hasAuthKey()) return
+        if (!isValidSocketOrigin(settings.origin)) {
+            PersistentLog.w(context, TAG, "startSocketRelay skipped: invalid origin '${settings.origin}'")
+            return
+        }
         try {
-            relaySocket?.disconnect()
-            relaySocket?.off()
             val extraHeaders = mutableMapOf<String, List<String>>()
             settings.getAllHeaders().forEach { (k, v) -> extraHeaders[k] = listOf(v) }
             val opts = IO.Options.builder()
@@ -916,48 +1137,81 @@ object WearSyncManager {
                 .setExtraHeaders(extraHeaders)
                 .build()
             val sock = IO.socket(settings.origin, opts)
-            listOf("new-message" to PATH_NEW_MESSAGE, "updated-message" to PATH_UPDATED_MESSAGE).forEach { (event, path) ->
-                sock.on(event) { args ->
-                    val raw = args.firstOrNull() as? JSONObject ?: return@on
-                    scope.launch {
-                        val obj = JsonParser.parseString(raw.toString()).asObjOrNull() ?: return@launch
-                        val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid") ?: return@launch
-                        val dto = mapMessageToRelayJson(obj, chatGuid)
-                        sendMessageToWatchNodes(context, path, dto.toString().toByteArray())
-                    }
-                }
-            }
-            sock.on("typing-indicator") { args ->
-                val raw = args.firstOrNull() as? JSONObject ?: return@on
-                val guid = raw.optString("guid", "")
-                if (guid.isNotBlank()) {
-                    val payload = JsonObject().apply {
-                        addProperty("chatGuid", guid)
-                        addProperty("isTyping", raw.optBoolean("display", false))
-                    }.toString().toByteArray()
-                    scope.launch { sendMessageToWatchNodes(context, PATH_TYPING_INDICATOR, payload) }
-                }
-            }
-            sock.on("pinned-chats-updated") {
-                syncChats(context)
-            }
+            attachRelayListenersLocked(context, sock)
             sock.connect()
             relaySocket = sock
+            ownsRelaySocket = true
         } catch (e: Exception) {
             PersistentLog.w(context, TAG, "startSocketRelay failed: ${e.message}")
         }
+    }
+
+    private fun attachRelayListenersLocked(context: Context, sock: Socket) {
+        listOf("new-message" to PATH_NEW_MESSAGE, "updated-message" to PATH_UPDATED_MESSAGE).forEach { (event, path) ->
+            val listener = Emitter.Listener { args ->
+                val raw = args.firstOrNull() as? JSONObject ?: return@Listener
+                scope.launch {
+                    val obj = JsonParser.parseString(raw.toString()).asObjOrNull() ?: return@launch
+                    val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid") ?: return@launch
+                    val dto = mapMessageToRelayJson(obj, chatGuid)
+                    val payloadBytes = dto.toString().toByteArray()
+                    if (shouldUseDataAsset(payloadBytes)) {
+                        syncMessages(context, chatGuid)
+                    } else {
+                        sendMessageToWatchNodes(context, path, payloadBytes)
+                    }
+                }
+            }
+            sock.on(event, listener)
+            relayListeners.add(event to listener)
+        }
+        val typingListener = Emitter.Listener { args ->
+            val raw = args.firstOrNull() as? JSONObject ?: return@Listener
+            val guid = raw.optString("guid", "")
+            if (guid.isNotBlank()) {
+                val payload = JsonObject().apply {
+                    addProperty("chatGuid", guid)
+                    addProperty("isTyping", raw.optBoolean("display", false))
+                }.toString().toByteArray()
+                scope.launch { sendMessageToWatchNodes(context, PATH_TYPING_INDICATOR, payload) }
+            }
+        }
+        sock.on("typing-indicator", typingListener)
+        relayListeners.add("typing-indicator" to typingListener)
+
+        val pinnedListener = Emitter.Listener {
+            syncChats(context)
+        }
+        sock.on("pinned-chats-updated", pinnedListener)
+        relayListeners.add("pinned-chats-updated" to pinnedListener)
+    }
+
+    private fun detachRelaySocketLocked() {
+        val sock = relaySocket
+        if (sock != null) {
+            for ((event, listener) in relayListeners) {
+                try {
+                    sock.off(event, listener)
+                } catch (_: Exception) {
+                }
+            }
+            if (ownsRelaySocket) {
+                try {
+                    sock.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        relayListeners.clear()
+        relaySocket = null
+        ownsRelaySocket = false
     }
 
     @Synchronized
     private fun stopSocketRelay() {
         socketTimeoutJob?.cancel()
         socketTimeoutJob = null
-        try {
-            relaySocket?.disconnect()
-            relaySocket?.off()
-        } catch (_: Exception) {
-        }
-        relaySocket = null
+        detachRelaySocketLocked()
     }
 
     internal fun shouldCancelSummary(
@@ -993,13 +1247,22 @@ object WearSyncManager {
         }
     }
 
+    internal fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
     private suspend fun putAvatarAsset(context: Context, normalizedKey: String, bytes: ByteArray) {
+        val hash = sha256Hex(bytes)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefKey = "avatar_hash_$normalizedKey"
+        if (prefs.getString(prefKey, null) == hash) return
+
         val safeKey = Uri.encode(normalizedKey)
         val req = PutDataMapRequest.create("$PATH_AVATAR_PREFIX$safeKey").apply {
             dataMap.putString("key", normalizedKey)
             dataMap.putAsset("avatar", Asset.createFromBytes(bytes))
         }.asPutDataRequest()
         Wearable.getDataClient(context).putDataItem(req).await()
+        prefs.edit().putString(prefKey, hash).apply()
     }
 
     private suspend fun sendResult(
@@ -1026,6 +1289,27 @@ object WearSyncManager {
         }
     }
 
+    internal fun shouldUseDataAsset(payloadBytes: ByteArray): Boolean =
+        payloadBytes.size > PAYLOAD_MESSAGE_MAX_BYTES
+
+    private suspend fun sendJsonOrAsset(
+        context: Context,
+        targetNodeId: String?,
+        messagePath: String,
+        dataPath: String,
+        payloadBytes: ByteArray
+    ) {
+        if (!shouldUseDataAsset(payloadBytes)) {
+            sendToWatch(context, targetNodeId, messagePath, payloadBytes)
+        } else {
+            val putReq = PutDataMapRequest.create(dataPath).apply {
+                dataMap.putAsset(ASSET_KEY_PAYLOAD, Asset.createFromBytes(payloadBytes))
+                dataMap.putLong("updatedAt", System.currentTimeMillis())
+            }.asPutDataRequest().setUrgent()
+            Wearable.getDataClient(context).putDataItem(putReq).await()
+        }
+    }
+
     private suspend fun sendToWatch(context: Context, targetNodeId: String?, path: String, payload: ByteArray) {
         if (targetNodeId != null) {
             Wearable.getMessageClient(context).sendMessage(targetNodeId, path, payload).await()
@@ -1036,7 +1320,10 @@ object WearSyncManager {
 
     private suspend fun sendMessageToWatchNodes(context: Context, path: String, payload: ByteArray) {
         try {
-            val nodes = Wearable.getNodeClient(context).connectedNodes.await()
+            val nodes = Wearable.getCapabilityClient(context)
+                .getCapability(WATCH_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
+                .await()
+                .nodes
             val msgClient = Wearable.getMessageClient(context)
             for (node in nodes) {
                 try {

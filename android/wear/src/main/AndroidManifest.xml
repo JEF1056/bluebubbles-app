@@ -39,7 +39,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:taskAffinity=""
-            android:theme="@android:style/Theme.DeviceDefault">
+            android:theme="@style/Theme.WearBubbles">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

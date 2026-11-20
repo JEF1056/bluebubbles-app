@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/conversation_list_fab.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/footer/samsung_footer.dart';
+import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/material_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/samsung_header.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/initial_widget_right.dart';
@@ -175,7 +176,8 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
           NavigationSvc.pushAndRemoveUntil(
             context,
             ConversationView(
-                chat: kIsWeb ? (await Chat.findOneWeb(guid: lastOpenedChat))! : Chat.findOne(guid: lastOpenedChat)!),
+                chat: kIsWeb ? (await Chat.findOneWeb(guid: lastOpenedChat))! : Chat.findOne(guid: lastOpenedChat)!,
+                autoOpened: true),
             (route) => route.isFirst,
           );
         });
@@ -242,6 +244,22 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
       children: [
         child,
         const Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: SyncHairlineIndicator(),
+        ),
+        if (kIsWeb)
+          const Positioned(
+            top: 10,
+            left: 16,
+            right: 16,
+            child: SafeArea(
+              bottom: false,
+              child: Align(alignment: Alignment.topCenter, child: WebConnectivityBanner()),
+            ),
+          ),
+        const Positioned(
           top: 16,
           left: 16,
           right: 16,
@@ -250,16 +268,6 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
             child: Align(alignment: Alignment.topRight, child: ServerV2MigrationBanner()),
           ),
         ),
-        if (kIsWeb)
-          const Positioned(
-            bottom: 16,
-            left: 16,
-            right: 16,
-            child: SafeArea(
-              top: false,
-              child: Align(alignment: Alignment.bottomCenter, child: WebConnectivityBanner()),
-            ),
-          ),
       ],
     );
 
@@ -350,44 +358,93 @@ class _ConversationListState extends CustomState<ConversationList, void, Convers
 class WebConnectivityBanner extends StatelessWidget {
   final bool? onlineOverride;
   final bool? reconnectingOverride;
+  final VoidCallback? onRetry;
 
-  const WebConnectivityBanner({super.key, this.onlineOverride, this.reconnectingOverride});
+  const WebConnectivityBanner({
+    super.key,
+    this.onlineOverride,
+    this.reconnectingOverride,
+    this.onRetry,
+  });
+
+  void _triggerReconnect() {
+    if (onRetry != null) {
+      onRetry!();
+      return;
+    }
+    if (GetIt.I.isRegistered<SocketService>()) {
+      SocketSvc.restartSocket();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     Widget buildBanner(bool online, bool reconnecting) {
-      if (online && !reconnecting) return const SizedBox.shrink();
       final theme = Theme.of(context);
       final isOffline = !online;
-      final bg = isOffline ? theme.colorScheme.errorContainer : theme.colorScheme.surfaceContainerHigh;
-      final fg = isOffline ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSurface;
-      return IgnorePointer(
-        child: Material(
-          color: bg.withValues(alpha: 0.94),
-          elevation: 2,
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (isOffline)
-                  Icon(Icons.cloud_off, size: 15, color: fg)
-                else
-                  SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: fg),
-                  ),
-                const SizedBox(width: 8),
-                Text(
-                  isOffline ? 'Offline — waiting for network' : 'Reconnecting…',
-                  style: theme.textTheme.labelMedium?.copyWith(color: fg),
+      final isDegraded = isOffline || reconnecting;
+      final Widget pill;
+      if (!isDegraded) {
+        pill = const SizedBox.shrink(key: ValueKey('connected'));
+      } else {
+        final bg = isOffline ? theme.colorScheme.errorContainer : theme.colorScheme.secondaryContainer;
+        final fg = isOffline ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSecondaryContainer;
+        final border = (isOffline ? theme.colorScheme.error : theme.colorScheme.outlineVariant)
+            .withValues(alpha: isOffline ? 0.28 : 0.45);
+        pill = Semantics(
+          key: ValueKey(isOffline ? 'offline' : 'reconnecting'),
+          liveRegion: true,
+          button: true,
+          container: true,
+          label: isOffline ? 'Offline, tap to retry connection' : 'Reconnecting to server',
+          child: Material(
+            color: bg,
+            elevation: 1,
+            shadowColor: theme.colorScheme.shadow.withValues(alpha: 0.14),
+            shape: StadiumBorder(side: BorderSide(color: border)),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: _triggerReconnect,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isOffline)
+                      Icon(Icons.cloud_off_rounded, size: 14, color: fg)
+                    else
+                      SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 1.8, color: fg),
+                      ),
+                    const SizedBox(width: 7),
+                    Flexible(
+                      child: Text(
+                        isOffline ? 'Offline · Retry' : 'Reconnecting…',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: fg,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.1,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
-        ),
+        );
+      }
+
+      return AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        switchInCurve: Curves.easeOut,
+        switchOutCurve: Curves.easeIn,
+        transitionBuilder: (child, animation) => FadeTransition(opacity: animation, child: child),
+        child: pill,
       );
     }
 

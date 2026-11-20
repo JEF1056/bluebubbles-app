@@ -29,21 +29,19 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
     final topPadding = MediaQuery.viewPaddingOf(context).top;
     final topOffset = topPadding + (kIsDesktop ? 36.0 : 8.0);
 
-    return ListenableBuilder(
-      listenable: _controller,
-      builder: (context, _) {
-        final state = _controller.state;
-        final visible = state.phase == ActiveCallPhase.ongoing;
+    return Positioned(
+      top: topOffset,
+      left: 16,
+      right: 16,
+      child: ListenableBuilder(
+        listenable: _controller,
+        builder: (context, _) {
+          final state = _controller.state;
+          if (state.phase != ActiveCallPhase.ongoing) {
+            return const SizedBox.shrink();
+          }
 
-        if (!visible) {
-          return const SizedBox.shrink();
-        }
-
-        return Positioned(
-          top: topOffset,
-          left: 16,
-          right: 16,
-          child: Center(
+          return Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 400),
               child: Material(
@@ -137,9 +135,9 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
                 ),
               ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

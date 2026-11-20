@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Backspace
@@ -35,7 +36,6 @@ import androidx.compose.material.icons.rounded.Dialpad
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,13 +47,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
@@ -66,7 +66,6 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults.It
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.api.dto.AddressNormalizer
-import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
 import com.wearbubbles.ui.theme.ContactAvatar
@@ -289,16 +288,15 @@ fun NewMessageScreen(
     viewModel: NewMessageViewModel = viewModel()
 ) {
     val palette = LocalWearPalette.current
-    val context = LocalContext.current
-    val query by viewModel.query.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val db = remember(context) { AppDatabase.getInstance(context) }
-    val allContacts by remember(db) {
-        db.contactDao().getAllContactsFlow()
-    }.collectAsState(initial = emptyList())
-    val recentChats by remember(db) {
-        db.chatDao().getAllChats()
-    }.collectAsState(initial = emptyList())
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val query = state.query
+    val isLoading = state.isLoading
+    val hasContacts = state.hasContacts
+    val recentChats = state.recentChats
+    val filteredContacts = state.filteredContacts
+    val favoriteRows = state.favoriteRows
+    val duplicateNames = state.duplicateNames
+    val alphabeticalSections = state.alphabeticalSections
 
     var showDialpad by rememberSaveable { mutableStateOf(false) }
     var dialpadNumber by rememberSaveable { mutableStateOf("") }
@@ -359,27 +357,6 @@ fun NewMessageScreen(
         } catch (_: ActivityNotFoundException) {
             launchKeyboardInput()
         }
-    }
-
-    val filteredContacts = remember(allContacts, query) {
-        filterContacts(allContacts, query)
-    }
-    val relayClient = remember(context) { (context.applicationContext as com.wearbubbles.WearBubblesApp).phoneRelayClient }
-    val favoriteContacts = remember(allContacts, recentChats) {
-        selectFavoriteContacts(
-            contacts = allContacts,
-            recentChats = recentChats,
-            resolveAvatarPath = { norm -> relayClient.getAvatarFile(norm)?.absolutePath }
-        )
-    }
-    val favoriteRows = remember(favoriteContacts) {
-        favoriteContacts.chunked(2)
-    }
-    val duplicateNames = remember(filteredContacts) {
-        duplicateDisplayNames(filteredContacts)
-    }
-    val alphabeticalSections = remember(filteredContacts) {
-        groupContactsAlphabetically(filteredContacts)
     }
 
     val columnState = rememberResponsiveColumnState(
@@ -538,7 +515,7 @@ fun NewMessageScreen(
                             )
                         }
                     }
-                } else if (favoriteContacts.isNotEmpty()) {
+                } else if (favoriteRows.isNotEmpty()) {
                     item(key = "favorites_header") {
                         Row(
                             modifier = Modifier
@@ -594,7 +571,7 @@ fun NewMessageScreen(
                     }
                 }
 
-                if (isLoading && allContacts.isEmpty()) {
+                if (isLoading && !hasContacts) {
                     item(key = "loading_contacts") {
                         Text(
                             text = "Loading contacts...",
@@ -706,7 +683,7 @@ private fun FavoriteContactCapsule(
     val palette = LocalWearPalette.current
     val display = contact.displayName.ifBlank { contact.normalizedAddress }
     val avatarFile = remember(contact.avatarPath) {
-        contact.avatarPath?.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.exists() }
+        contact.avatarPath?.takeIf { it.isNotBlank() }?.let(::File)
     }
     val swatch = remember(contact.normalizedAddress) {
         avatarSwatchFor(contact.normalizedAddress)
@@ -722,9 +699,8 @@ private fun FavoriteContactCapsule(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(46.dp)
-                .clip(RoundedCornerShape(50))
+                .size(48.dp)
+                .clip(CircleShape)
                 .background(swatch.container),
             contentAlignment = Alignment.Center
         ) {

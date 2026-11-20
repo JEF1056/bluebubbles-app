@@ -33,10 +33,18 @@ class FindMyFriendListTile extends StatelessWidget {
       final hideContactInfo = shouldRedactFindMyContactInfo();
       final now = controller.currentTime;
       final isLive = item.isLiveFresh(now);
-      final freshness = item.displayFreshness(now);
+      final isLocating = item.locatingInProgress ||
+          (item.stableId != null && controller.locatingFriendId.value == item.stableId);
+      final freshness = formatFindMyFreshness(
+        isLiveFresh: isLive,
+        locatingInProgress: isLocating,
+        isOld: item.isOld,
+        lastUpdated: item.lastUpdated,
+        now: now,
+      );
       final hasLocation = item.latitude != null && item.longitude != null;
       final markerPoint = hasLocation ? controller.markerPointForFriend(item) : null;
-      final address = controller.addressForFriend(item, preferLong: !withLocation);
+      final address = controller.addressForFriend(item, preferLong: true);
       final proximity = (withLocation && hasLocation && !hideContactInfo)
           ? controller.proximityLabelForFriend(item)
           : '';
@@ -52,8 +60,6 @@ class FindMyFriendListTile extends StatelessWidget {
             formattedAddress: item.handleAddress != null ? formatPhoneNumber(item.handleAddress!) : null,
           );
       final isSelected = item.stableId != null && controller.selectedFriendId.value == item.stableId;
-      final isLocating = item.locatingInProgress ||
-          (item.stableId != null && controller.locatingFriendId.value == item.stableId);
 
       final locationLine = hideContactInfo
           ? 'Location'
@@ -66,17 +72,19 @@ class FindMyFriendListTile extends StatelessWidget {
         if (!isLive && freshness.isNotEmpty) freshness,
       ].join(' · ');
 
+      final isPinned = controller.isFriendPinned(item);
+
       return FindMySharedTile(
         isSelected: isSelected,
+        isPinned: isPinned,
+        onTogglePin: () => controller.toggleFriendPin(item),
         cardKey: ValueKey('findmy-inline-friend-${item.stableId ?? displayName}'),
         leadingExpanded: FindMyFriendAvatar(handle: avatarHandle, displayName: displayName, size: 44),
         leadingCollapsed: FindMyFriendAvatar(handle: avatarHandle, displayName: displayName, size: 42),
         displayName: displayName,
         locationLine: locationLine,
         showStatusDot: isLive,
-        statusText: isLive
-            ? 'Live'
-            : (isLocating ? 'Locating...' : (freshness.isNotEmpty ? freshness : 'Offline')),
+        statusText: isLive ? 'Live' : (freshness.isNotEmpty ? freshness : 'Offline'),
         statusActive: isLive,
         isBusyExpanded: isLocating,
         busyIndicatorKey: ValueKey('findmy-friend-locating-${item.stableId ?? displayName}'),

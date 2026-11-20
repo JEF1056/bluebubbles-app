@@ -6,6 +6,7 @@ import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -17,6 +18,8 @@ class MaterialConversationTile extends CustomStateful<ConversationTileController
 }
 
 class _MaterialConversationTileState extends CustomState<MaterialConversationTile, void, ConversationTileController> {
+  bool _isHovered = false;
+
   bool get shouldPartialHighlight => controller.shouldPartialHighlight.value;
 
   bool get shouldHighlight => controller.shouldHighlight.value;
@@ -38,45 +41,49 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
       child: Obx(() {
         NavigationSvc.listener.value;
         final isSelected = controller.isSelected;
-        final tileRadius = isSelected
-            ? const BorderRadius.all(Radius.circular(42))
-            : (shouldHighlight || shouldPartialHighlight)
+        final unread = ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false;
+        final tileRadius = (isSelected || shouldHighlight)
+            ? const BorderRadius.all(Radius.circular(9999))
+            : shouldPartialHighlight
                 ? M3EShapes.radiusXl
                 : M3EShapes.radiusLgIncreased;
         final child = Material(
           color: Colors.transparent,
           borderRadius: tileRadius,
           child: InkWell(
-            mouseCursor: MouseCursor.defer,
+            mouseCursor: SystemMouseCursors.click,
             onTap: () => controller.onTap(context),
-            onSecondaryTapUp: (details) => controller.onSecondaryTap(Get.context!, details),
+            onSecondaryTapUp: (details) => controller.onSecondaryTap(context, details),
             onLongPress: controller.onLongPress,
             borderRadius: tileRadius,
             child: ListTile(
-              mouseCursor: MouseCursor.defer,
+              mouseCursor: SystemMouseCursors.click,
               dense: SettingsSvc.settings.denseChatTiles.value,
               visualDensity: SettingsSvc.settings.denseChatTiles.value ? VisualDensity.compact : null,
-              minTileHeight: SettingsSvc.settings.denseChatTiles.value ? null : 76,
+              minTileHeight: SettingsSvc.settings.denseChatTiles.value ? null : (kIsWeb ? 72 : 76),
               minVerticalPadding: SettingsSvc.settings.denseChatTiles.value ? 7.5 : 10,
-              title: Obx(() => ChatTitle(
-                    parentController: controller,
-                    style: context.theme.textTheme.bodyLarge!.copyWith(
-                      fontWeight: controller.shouldHighlight.value
-                          ? FontWeight.w500
-                          : (ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false)
-                              ? FontWeight.bold
-                              : null,
-                      color: context.theme.colorScheme.onSurface,
-                    ),
-                  )),
+              title: Obx(() {
+                final titleUnread = ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false;
+                return ChatTitle(
+                  parentController: controller,
+                  style: context.theme.textTheme.bodyLarge!.copyWith(
+                    fontWeight: titleUnread
+                        ? FontWeight.w700
+                        : controller.shouldHighlight.value
+                            ? FontWeight.w500
+                            : null,
+                    color: context.theme.colorScheme.onSurface,
+                  ),
+                );
+              }),
               subtitle: controller.subtitle ??
                   Obx(() {
-                    final unread = ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false;
+                    final subUnread = ChatsSvc.getChatState(controller.chat.guid)?.hasUnreadMessage.value ?? false;
                     return ChatSubtitle(
                       parentController: controller,
                       style: context.theme.textTheme.bodyMedium!.copyWith(
-                        fontWeight: unread ? FontWeight.w600 : null,
-                        color: controller.shouldHighlight.value || unread
+                        fontWeight: subUnread ? FontWeight.w700 : null,
+                        color: controller.shouldHighlight.value || subUnread
                             ? context.theme.colorScheme.onSurface
                             : context.theme.colorScheme.onSurfaceVariant,
                         height: 1.43,
@@ -85,39 +92,74 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
                   }),
               contentPadding: const EdgeInsets.symmetric(horizontal: 8),
               leading: leading,
-              trailing: MaterialTrailing(parentController: controller),
+              trailing: MaterialTrailing(parentController: controller, isHovered: _isHovered),
             ),
           ),
         );
 
-        return AnimatedContainer(
-          margin: EdgeInsets.symmetric(horizontal: isSelected ? 12 : 8, vertical: 1.5),
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            borderRadius: tileRadius,
-            color: isSelected
-                ? context.theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
-                : shouldPartialHighlight
-                    ? context.theme.colorScheme.surfaceContainerHighest
-                    : shouldHighlight
-                        ? context.theme.colorScheme.primaryContainer
-                        : context.theme.colorScheme.surface,
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) {
+            if (!_isHovered) setState(() => _isHovered = true);
+          },
+          onExit: (_) {
+            if (_isHovered) setState(() => _isHovered = false);
+          },
+          child: AnimatedContainer(
+            margin: EdgeInsets.symmetric(horizontal: isSelected ? 12 : 8, vertical: 1.5),
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              borderRadius: tileRadius,
+              color: isSelected
+                  ? context.theme.colorScheme.secondaryContainer.withValues(alpha: 0.7)
+                  : shouldPartialHighlight
+                      ? context.theme.colorScheme.surfaceContainerHighest
+                      : shouldHighlight
+                          ? context.theme.colorScheme.secondaryContainer
+                          : _isHovered
+                              ? context.theme.colorScheme.surfaceContainerHigh
+                              : context.theme.colorScheme.surface,
+            ),
+            duration: M3EMotion.spatialFast.duration,
+            curve: M3EMotion.spatialFast.curve,
+            child: NavigationSvc.isAvatarOnly(context)
+                ? InkWell(
+                    mouseCursor: SystemMouseCursors.click,
+                    onTap: () => controller.onTap(context),
+                    onSecondaryTapUp: (details) => controller.onSecondaryTap(context, details),
+                    onLongPress: controller.onLongPress,
+                    borderRadius: tileRadius,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 15.0),
+                      child: Center(
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            leading,
+                            if (unread)
+                              Positioned(
+                                top: 0,
+                                right: 0,
+                                child: Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: context.theme.colorScheme.primary,
+                                    border: Border.all(
+                                      color: context.theme.colorScheme.surface,
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  )
+                : child,
           ),
-          duration: M3EMotion.spatialFast.duration,
-          curve: M3EMotion.spatialFast.curve,
-          child: NavigationSvc.isAvatarOnly(context)
-              ? InkWell(
-                  mouseCursor: MouseCursor.defer,
-                  onTap: () => controller.onTap(context),
-                  onSecondaryTapUp: (details) => controller.onSecondaryTap(Get.context!, details),
-                  onLongPress: controller.onLongPress,
-                  borderRadius: tileRadius,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 15.0),
-                    child: Center(child: leading),
-                  ),
-                )
-              : child,
         );
       }),
     );
@@ -125,7 +167,9 @@ class _MaterialConversationTileState extends CustomState<MaterialConversationTil
 }
 
 class MaterialTrailing extends CustomStateful<ConversationTileController> {
-  const MaterialTrailing({super.key, required super.parentController});
+  const MaterialTrailing({super.key, required super.parentController, this.isHovered = false});
+
+  final bool isHovered;
 
   @visibleForTesting
   static int computeUnreadCount(
@@ -165,6 +209,11 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
         final hasError = (message?.error ?? 0) > 0;
         final unread = chatState.hasUnreadMessage.value;
         final muteType = chatState.muteType.value;
+        final hasMention = unread &&
+            message != null &&
+            message.isFromMe != true &&
+            message.attributedBody.any((b) => b.runs.any((r) => r.hasMention));
+        final showHoverMenu = (kIsDesktop || kIsWeb) && widget.isHovered && !controller.isSelected;
         final unreadCount = unread ? MaterialTrailing.computeUnreadCount(controller.chat, chatState.lastReadMessageGuid.value) : 0;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,
@@ -199,11 +248,17 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
             const SizedBox(height: 5),
             AnimatedSwitcher(
               duration: M3EMotion.spatialFast.duration,
-              switchInCurve: M3EMotion.spatialOvershoot,
-              switchOutCurve: M3EMotion.effectsFast.curve,
               transitionBuilder: (child, anim) => ScaleTransition(
-                scale: anim,
-                child: FadeTransition(opacity: anim, child: child),
+                scale: CurvedAnimation(
+                  parent: anim,
+                  curve: M3EMotion.spatialOvershoot,
+                  reverseCurve: M3EMotion.effectsFast.curve,
+                ),
+                // FadeTransition asserts opacity stays in [0, 1], so keep overshoot on scale only.
+                child: FadeTransition(
+                  opacity: CurvedAnimation(parent: anim, curve: M3EMotion.effectsFast.curve),
+                  child: child,
+                ),
               ),
               child: controller.isSelected
                   ? Icon(
@@ -212,29 +267,77 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
                       size: 20,
                       color: context.theme.colorScheme.primary,
                     )
-                  : Row(
-                      key: ValueKey('meta_${chatState.isPinned.value}_${muteType == "mute"}_$unread'),
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (chatState.isPinned.value)
-                          Icon(Icons.push_pin_outlined, size: 18, color: context.theme.colorScheme.onSurfaceVariant),
-                        if (muteType != "mute" && unread) ...[
-                          if (chatState.isPinned.value) const SizedBox(width: 5),
-                          _MaterialUnreadBadge(count: unreadCount),
-                        ],
-                        if (muteType == "mute") const SizedBox(width: 5),
-                        if (muteType == "mute")
-                          Icon(
-                            Icons.notifications_off_outlined,
-                            color: controller.shouldHighlight.value || unread
-                                ? context.theme.colorScheme.primary
-                                : context.theme.colorScheme.onSurfaceVariant,
-                            size: 18,
+                  : showHoverMenu
+                      ? Builder(
+                          key: const ValueKey('hover_menu'),
+                          builder: (btnContext) => IconButton(
+                            icon: Icon(
+                              Icons.more_vert,
+                              size: 18,
+                              color: context.theme.colorScheme.onSurfaceVariant,
+                            ),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+                            tooltip: 'More options',
+                            onPressed: () {
+                              final box = btnContext.findRenderObject() as RenderBox?;
+                              final pos = box != null
+                                  ? box.localToGlobal(Offset(box.size.width, box.size.height))
+                                  : Offset.zero;
+                              showConversationTileMenu(
+                                context,
+                                controller,
+                                controller.chat,
+                                pos,
+                                context.textTheme,
+                              );
+                            },
                           ),
-                      ],
-                    ),
+                        )
+                      : Row(
+                          key: ValueKey('meta_${chatState.isPinned.value}_${muteType == "mute"}_${unread}_$hasMention'),
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (chatState.isPinned.value)
+                              Icon(Icons.push_pin_outlined, size: 18, color: context.theme.colorScheme.onSurfaceVariant),
+                            if (hasMention) ...[
+                              if (chatState.isPinned.value) const SizedBox(width: 4),
+                              Container(
+                                width: 16,
+                                height: 16,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: context.theme.colorScheme.surfaceContainerHighest,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  '@',
+                                  style: context.theme.textTheme.labelSmall?.copyWith(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: context.theme.colorScheme.onSurface,
+                                    height: 1.0,
+                                  ),
+                                ),
+                              ),
+                            ],
+                            if (muteType != "mute" && unread) ...[
+                              if (chatState.isPinned.value || hasMention) const SizedBox(width: 5),
+                              _MaterialUnreadBadge(count: unreadCount),
+                            ],
+                            if (muteType == "mute") const SizedBox(width: 5),
+                            if (muteType == "mute")
+                              Icon(
+                                Icons.notifications_off_outlined,
+                                color: controller.shouldHighlight.value || unread
+                                    ? context.theme.colorScheme.primary
+                                    : context.theme.colorScheme.onSurfaceVariant,
+                                size: 18,
+                              ),
+                          ],
+                        ),
             ),
           ],
         );

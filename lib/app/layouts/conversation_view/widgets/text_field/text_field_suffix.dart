@@ -4,7 +4,6 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/send_e
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/audio_player.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/handlers/web_input_interop.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/send_button.dart';
-import 'package:bluebubbles/app/wrappers/cupertino_icon_wrapper.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -127,6 +126,7 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
           return Padding(
             padding: EdgeInsets.all(isMaterial ? 0.0 : 3.0),
             child: AnimatedCrossFade(
+              alignment: Alignment.center,
               crossFadeState: canSend && !showRecording ? CrossFadeState.showSecond : CrossFadeState.showFirst,
               duration: const Duration(milliseconds: 150),
               firstChild: _RecordingButton(
@@ -206,6 +206,7 @@ class _RecordingButton extends StatelessWidget {
     return Obx(() {
       final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
       final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
+      final buttonSize = isIOS ? const Size(32, 32) : const Size(48, 48);
 
       return TextButton(
         style: TextButton.styleFrom(
@@ -219,40 +220,44 @@ class _RecordingButton extends StatelessWidget {
                       ? context.theme.colorScheme.outline
                       : context.theme.colorScheme.primary.withValues(alpha: 0.4),
           shape: const CircleBorder(),
-          padding: const EdgeInsets.all(0),
-          maximumSize: isIOS ? ((isDesktop || isWeb) ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
-          minimumSize: isIOS ? ((isDesktop || isWeb) ? const Size(40, 40) : const Size(32, 32)) : const Size(48, 48),
+          padding: EdgeInsets.zero,
+          fixedSize: buttonSize,
+          maximumSize: buttonSize,
+          minimumSize: buttonSize,
           tapTargetSize: isIOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
         ),
-        child: !isChatCreator && !showRecording
-            ? CupertinoIconWrapper(
-                icon: Icon(
-                  isIOS
-                      ? CupertinoIcons.mic_fill
-                      : isMaterial
-                          ? Icons.graphic_eq
-                          : Icons.mic_none,
-                  color: isIOS
-                      ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
-                      : isMaterial
-                          ? context.theme.colorScheme.onPrimaryContainer
-                          : context.theme.colorScheme.onSurfaceVariant,
-                  size: isIOS ? 20 : 24,
-                ),
-              )
-            : CupertinoIconWrapper(
-                icon: Icon(
-                  isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
-                  color: isIOS
-                      ? context.theme.colorScheme.primary
-                      : isMaterial
-                          ? context.theme.colorScheme.onErrorContainer
-                          : context.theme.colorScheme.onSurfaceVariant,
-                  size: isIOS ? 15 : 22,
-                ),
-              ),
+        child: SizedBox(
+          width: buttonSize.width,
+          height: buttonSize.height,
+          child: Center(
+            child: !isChatCreator && !showRecording
+                ? Icon(
+                    isIOS
+                        ? CupertinoIcons.mic_fill
+                        : isMaterial
+                            ? Icons.graphic_eq
+                            : Icons.mic_none,
+                    color: isIOS
+                        ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
+                        : isMaterial
+                            ? context.theme.colorScheme.onPrimaryContainer
+                            : context.theme.colorScheme.onSurfaceVariant,
+                    size: isIOS ? 18 : 22,
+                  )
+                : Icon(
+                    isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
+                    color: isIOS
+                        ? context.theme.colorScheme.primary
+                        : isMaterial
+                            ? context.theme.colorScheme.onErrorContainer
+                            : context.theme.colorScheme.onSurfaceVariant,
+                    size: isIOS ? 15 : 22,
+                  ),
+          ),
+        ),
         onPressed: () async {
           if (controller == null) return;
+          controller!.onUserChatInteraction(immediate: true);
           controller!.showRecording.toggle();
 
           if (controller!.showRecording.value) {
@@ -428,6 +433,7 @@ class _RecordingButton extends StatelessWidget {
                   text: "Send",
                   isDefault: true,
                   onPressed: () async {
+                    controller!.onUserChatInteraction(immediate: true);
                     await controller!.send(SendData(
                       attachments: [file],
                       text: "",

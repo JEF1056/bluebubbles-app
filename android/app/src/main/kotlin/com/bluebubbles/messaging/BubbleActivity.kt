@@ -49,7 +49,12 @@ class BubbleActivity : FlutterFragmentActivity() {
         setEngine(flutterEngine)
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, Constants.methodChannel).setMethodCallHandler {
-                call, result -> MethodCallHandler().methodCallHandler(call, result, this)
+                call, result ->
+            if (call.method == "ready") {
+                result.success(null)
+            } else {
+                MethodCallHandler().methodCallHandler(call, result, this)
+            }
         }
     }
 

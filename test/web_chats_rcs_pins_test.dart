@@ -60,23 +60,30 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Offline — waiting for network'), findsNothing);
+      expect(find.text('Offline · Retry'), findsNothing);
       expect(find.text('Reconnecting…'), findsNothing);
     });
 
-    testWidgets('shows offline banner when offline', (tester) async {
+    testWidgets('shows offline tonal pill when offline and invokes retry on tap', (tester) async {
+      var retried = false;
       await tester.pumpWidget(
-        const MaterialApp(
+        MaterialApp(
           home: Scaffold(
-            body: WebConnectivityBanner(onlineOverride: false, reconnectingOverride: false),
+            body: WebConnectivityBanner(
+              onlineOverride: false,
+              reconnectingOverride: false,
+              onRetry: () => retried = true,
+            ),
           ),
         ),
       );
-      expect(find.text('Offline — waiting for network'), findsOneWidget);
-      expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+      expect(find.text('Offline · Retry'), findsOneWidget);
+      expect(find.byIcon(Icons.cloud_off_rounded), findsOneWidget);
+      await tester.tap(find.text('Offline · Retry'));
+      expect(retried, isTrue);
     });
 
-    testWidgets('shows reconnecting banner when online and reconnecting', (tester) async {
+    testWidgets('shows reconnecting pill when online and reconnecting', (tester) async {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(

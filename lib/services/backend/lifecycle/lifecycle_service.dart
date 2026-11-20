@@ -30,9 +30,10 @@ class LifecycleService with WidgetsBindingObserver {
   final RxBool isReconnecting = false.obs;
   VoidCallback? _webLifecycleDispose;
   bool _webWakeInFlight = false;
+  bool _webFocused = true;
 
   bool get isAlive {
-    if (kIsWeb) return !isWebDocumentHidden;
+    if (kIsWeb) return !isWebDocumentHidden && _webFocused;
     if (kIsDesktop) return windowFocused;
     // Headless isolates may not have a widgets binding (e.g. the GlobalIsolate),
     // where touching WidgetsBinding.instance throws — rely on the port marker only.
@@ -51,11 +52,14 @@ class LifecycleService with WidgetsBindingObserver {
   /// direction, e.g. dropping a push notification because the UI is expected to
   /// receive the message over the socket instead.
   bool get isForeground {
-    if (kIsWeb) return !isWebDocumentHidden;
+    if (kIsWeb) return !isWebDocumentHidden && _webFocused;
     if (kIsDesktop) return windowFocused;
     if (headless) return false;
     return WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
   }
+
+  /// True when the UI is visible and focused for direct user interaction.
+  bool get isUiInteractive => !headless && isForeground;
 
   AppLifecycleState? get currentState => WidgetsBinding.instance.lifecycleState;
 
@@ -90,10 +94,24 @@ class LifecycleService with WidgetsBindingObserver {
 
     if (kIsWeb && !headless) {
       isOnline.value = isWebNavigatorOnline;
+      _webFocused = isWebDocumentFocused;
       _webLifecycleDispose?.call();
       _webLifecycleDispose = listenWebLifecycle(
         onVisibilityChange: (hidden) {
-          if (hidden) {
+          if (hidden || !_webFocused) {
+            if (GetIt.I.isRegistered<ChatsService>()) {
+              ChatsSvc.setActiveToDead();
+            }
+          } else {
+            if (GetIt.I.isRegistered<ChatsService>()) {
+              ChatsSvc.setActiveToAlive();
+            }
+            unawaited(_onWebWake());
+          }
+        },
+        onFocusChange: (focused) {
+          _webFocused = focused;
+          if (!focused || isWebDocumentHidden) {
             if (GetIt.I.isRegistered<ChatsService>()) {
               ChatsSvc.setActiveToDead();
             }
@@ -192,7 +210,12 @@ class LifecycleService with WidgetsBindingObserver {
       }
 
       open();
-    } else if (state != AppLifecycleState.inactive) {
+    } else if (state == AppLifecycleState.inactive) {
+      if (!kIsDesktop && GetIt.I.isRegistered<ChatsService>()) {
+        ChatsSvc.setActiveToDead();
+      }
+      return;
+    } else {
       if (isBubble) {
         closeBubble();
       } else {

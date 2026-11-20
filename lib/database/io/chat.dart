@@ -440,7 +440,7 @@ class Chat {
   /// this only clears the read messages' notifications. Returns false when the read covers the latest message.
   Future<bool> clearNotificationsForPartialRead(int? readBefore) async {
     final latest = dbLatestMessage.target;
-    if (readBefore == null || latest == null || (latest.isFromMe ?? false)) return false;
+    if (readBefore == null || latest == null || (latest.isFromMe ?? false) || latest.dateRead != null) return false;
     if ((latest.dateCreated?.millisecondsSinceEpoch ?? 0) <= readBefore) return false;
 
     if (kIsDesktop) {
@@ -456,8 +456,8 @@ class Chat {
   /// [readBefore] (epoch ms) limits notification clearing to messages dated at or before it.
   Future<Chat> toggleHasUnreadAsync(bool hasUnread,
       {bool force = false, bool clearLocalNotifications = true, bool privateMark = true, int? readBefore}) async {
-    if (kIsDesktop && !hasUnread) {
-      NotificationsSvc.clearDesktopNotificationsForChat(guid, readBefore: readBefore);
+    if (kIsDesktop && clearLocalNotifications && !hasUnread) {
+      await NotificationsSvc.clearDesktopNotificationsForChat(guid, readBefore: readBefore);
     }
 
     if (hasUnreadMessage == hasUnread && !force) return this;
@@ -539,10 +539,10 @@ class Chat {
 
     // If the incoming message was newer than the "last" one, set the unread status accordingly
     if (checkForMessageText && changeUnreadStatus && isNewer) {
-      // Simple logic: mark read if from me, mark unread if not
+      // Simple logic: mark read if from me, mark unread if not (unless already read on another device)
       if (message.isFromMe!) {
         await toggleHasUnreadAsync(false, clearLocalNotifications: clearNotificationsIfFromMe, privateMark: false);
-      } else {
+      } else if (message.dateRead == null) {
         await toggleHasUnreadAsync(true, privateMark: false);
       }
     }
@@ -789,7 +789,8 @@ class Chat {
     if (id == null) return this;
     this.autoSendReadReceipts = autoSendReadReceipts;
     await saveAsync(updateAutoSendReadReceipts: true);
-    if (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value) {
+    if (SettingsSvc.settings.enablePrivateAPI.value &&
+        (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value)) {
       HttpSvc.chat.markRead(guid);
     }
     return this;
@@ -1013,7 +1014,7 @@ class Chat {
   static final Map<String, String?> _cachedServerBgGuids = {};
   static final Map<String, Future<void>> _inFlightBgSyncs = {};
 
-  static String? cachedServerBackgroundGuid(String guid) {
+  static String? cachedServerBackgroundGuid(String guid, {String? fallbackStoredPath}) {
     if (_cachedServerBgGuids.containsKey(guid)) {
       return _cachedServerBgGuids[guid];
     }

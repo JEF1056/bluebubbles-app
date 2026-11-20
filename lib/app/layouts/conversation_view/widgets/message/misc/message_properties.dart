@@ -1,12 +1,12 @@
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_line_painter.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_thread_popup.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:collection/collection.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -39,8 +39,8 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
     _chatGuid = controller.cvController?.chat.guid ?? ChatStateScope.readChatOnce(context).guid;
   }
 
-  List<TextSpan> getProperties() {
-    final properties = <TextSpan>[];
+  List<({String label, VoidCallback onTap})> _getPropertyActions() {
+    final properties = <({String label, VoidCallback onTap})>[];
     // Collections are per-attachment for replies (native iMessage). Skip the
     // aggregate bubble-level count; open threads via per-card popup instead.
     final replyList = widget.part.isMediaCollection
@@ -50,41 +50,41 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
       final effect =
           effectMap.entries.firstWhereOrNull((element) => element.value == message.expressiveSendStyleId)?.key ??
               "unknown";
-      properties.add(TextSpan(
-          text: "↺ sent with $effect",
-          recognizer: TapGestureRecognizer()
-            ..onTap = () {
-              if (stringToMessageEffect[effect] == MessageEffect.echo) {
-                showSnackbar("Notice", "Echo animation is not supported at this time.", type: SnackbarType.error);
-                return;
-              }
-              HapticFeedback.mediumImpact();
-              if ((stringToMessageEffect[effect] ?? MessageEffect.none).isBubble) {
-                MessageStateScope.of(context).triggerBubbleEffect(widget.part.part);
-              } else if (widget.globalKey != null) {
-                EventDispatcherSvc.emit('play-effect', {
-                  'type': effect,
-                  'size': widget.globalKey!.globalPaintBounds(context),
-                });
-              }
-            }));
+      properties.add((
+        label: "↺ sent with $effect",
+        onTap: () {
+          if (stringToMessageEffect[effect] == MessageEffect.echo) {
+            showSnackbar("Notice", "Echo animation is not supported at this time.", type: SnackbarType.error);
+            return;
+          }
+          HapticFeedback.mediumImpact();
+          if ((stringToMessageEffect[effect] ?? MessageEffect.none).isBubble) {
+            MessageStateScope.of(context).triggerBubbleEffect(widget.part.part);
+          } else if (widget.globalKey != null) {
+            EventDispatcherSvc.emit('play-effect', {
+              'type': effect,
+              'size': widget.globalKey!.globalPaintBounds(context),
+            });
+          }
+        },
+      ));
     }
     if (replyList.isNotEmpty) {
-      properties.add(TextSpan(
-          text: "${replyList.length} repl${replyList.length > 1 ? "ies" : "y"}",
-          recognizer: TapGestureRecognizer()
-            ..onTap = () {
-              if (controller.cvController == null) return;
-              showReplyThread(context, message, widget.part, service, controller.cvController!);
-            }));
+      properties.add((
+        label: "${replyList.length} repl${replyList.length > 1 ? "ies" : "y"}",
+        onTap: () {
+          if (controller.cvController == null) return;
+          showReplyThread(context, message, widget.part, service, controller.cvController!);
+        },
+      ));
     }
     if (widget.part.isEdited) {
-      properties.add(TextSpan(
-          text: "Edited",
-          recognizer: TapGestureRecognizer()
-            ..onTap = () {
-              controller.showEdits.toggle();
-            }));
+      properties.add((
+        label: "Edited",
+        onTap: () {
+          controller.showEdits.toggle();
+        },
+      ));
     }
 
     return properties;
@@ -98,7 +98,9 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
       // Also observe showEdits since that's toggled directly
       controller.showEdits.value;
 
-      final props = getProperties();
+      final props = _getPropertyActions();
+      final textStyle = context.theme.textTheme.labelSmall!
+          .copyWith(color: context.theme.colorScheme.primary, fontWeight: FontWeight.bold);
       return AnimatedSize(
         curve: Curves.easeInOut,
         alignment: Alignment.bottomCenter,
@@ -106,12 +108,22 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
         child: props.isNotEmpty
             ? Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 15).add(const EdgeInsets.only(top: 3)),
-                child: Text.rich(
-                  TextSpan(
-                    children: intersperse(const TextSpan(text: " • "), props).toList(),
+                child: SelectionContainer.disabled(
+                  child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      for (var i = 0; i < props.length; i++) ...[
+                        if (i > 0) Text(" • ", style: textStyle),
+                        MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: SelectionSafeTap(
+                            onTap: props[i].onTap,
+                            child: Text(props[i].label, style: textStyle),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  style: context.theme.textTheme.labelSmall!
-                      .copyWith(color: context.theme.colorScheme.primary, fontWeight: FontWeight.bold),
                 ),
               )
             : const SizedBox.shrink(),

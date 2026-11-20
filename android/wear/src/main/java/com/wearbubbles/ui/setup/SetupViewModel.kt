@@ -7,12 +7,13 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.service.MessageListenerService
-import kotlinx.coroutines.delay
+import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class SetupUiState(
     val serverUrl: String = "",
@@ -58,22 +59,16 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         _uiState.value = _uiState.value.copy(serverUrl = cleaned, error = null)
-        viewModelScope.launch {
-            settings.saveServerUrl(cleaned)
-        }
     }
 
     fun updatePassword(password: String) {
         _uiState.value = _uiState.value.copy(password = password, error = null)
-        viewModelScope.launch {
-            settings.savePassword(password)
-        }
     }
 
     fun syncFromPhone() {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSyncingFromPhone = true, error = null)
-            val connected = relay.refreshPhoneConnected()
+            val connected = relay.refreshPhoneConnected(force = true)
             if (!connected) {
                 _uiState.value = _uiState.value.copy(
                     isSyncingFromPhone = false,
@@ -88,12 +83,12 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
             }
             relay.requestCredentials()
             // Wait briefly for phone Data Layer response
-            repeat(12) {
-                delay(400)
-                if (settings.isConfigured.first()) {
-                    _uiState.value = _uiState.value.copy(isSyncingFromPhone = false, isSuccess = true)
-                    return@launch
-                }
+            val configured = withTimeoutOrNull(4_800L) {
+                settings.isConfigured.first { it }
+            } == true
+            if (configured) {
+                _uiState.value = _uiState.value.copy(isSyncingFromPhone = false, isSuccess = true)
+                return@launch
             }
             _uiState.value = _uiState.value.copy(
                 isSyncingFromPhone = false,
@@ -116,10 +111,12 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
                 val api = ApiClient.getApi(url, settings.getCustomHeaders())
                 val response = api.ping(pass)
                 if (response.status == 200) {
-                    settings.saveServerUrl(url)
-                    settings.savePassword(pass)
-                    if (!relay.refreshPhoneConnected()) {
+                    settings.saveDirectCredentials(url, pass)
+                    if (!relay.refreshPhoneConnected(force = true)) {
+                        MessageSyncWorker.schedule(getApplication())
                         MessageListenerService.start(getApplication())
+                    } else {
+                        MessageSyncWorker.cancel(getApplication())
                     }
                     _uiState.value = _uiState.value.copy(isTesting = false, isSuccess = true)
                 } else {

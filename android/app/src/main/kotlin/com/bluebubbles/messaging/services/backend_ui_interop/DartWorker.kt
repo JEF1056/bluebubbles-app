@@ -12,6 +12,7 @@ import androidx.work.WorkerParameters
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.R
+import com.bluebubbles.messaging.services.foreground.SocketIOForegroundService
 import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.google.common.util.concurrent.Futures
@@ -29,6 +30,7 @@ import io.flutter.view.FlutterCallbackInformation
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -52,12 +54,20 @@ import net.wolverinebeach.flutter_timezone.FlutterTimezonePlugin
 
 class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWorker(context, workerParams) {
 
+    private class PermanentEngineInitException(message: String) : Exception(message)
+
     companion object {
         var workerEngine: FlutterEngine? = null
 
         // Single lock guarding all [workerEngine] state transitions (init, use-selection,
         // and destroy) — split locks here previously allowed destroy/init races.
         var engineReady = Mutex()
+
+        @Volatile
+        private var closeJob: Job? = null
+
+        internal fun engineIdleKeepAliveMs(hasActiveSocket: Boolean): Long =
+            if (hasActiveSocket) 60_000L else 5_000L
 
         // Number of times a worker is re-enqueued after a transient failure before giving up.
         // The FCM payload lives in the work's input data, so each retry re-delivers the event.
@@ -156,6 +166,9 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
                 }
                 if (useMainEngine) mainEngine else workerEngine
             }
+        } catch (e: PermanentEngineInitException) {
+            PersistentLog.e(applicationContext, Constants.logTag, "Permanent engine init failure for method $method: ${e.message}", e)
+            return Result.failure()
         } catch (e: Exception) {
             PersistentLog.e(applicationContext, Constants.logTag, "Engine init failed for worker with method $method: ${e.message}", e)
             return retryOrFail(method, "engine init failed: ${e.message}")
@@ -216,6 +229,9 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
             return callResult
         } catch (e: Exception) {
             PersistentLog.w(applicationContext, Constants.logTag, "Error sending method $method to Dart: ${e.message}", e)
+            if (engineToUse === workerEngine) {
+                closeEngineIfNeeded()
+            }
             return retryOrFail(method, "exception sending to Dart: ${e.message}")
         }
     }
@@ -233,6 +249,14 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
 
             PersistentLog.d(applicationContext, Constants.logTag, "Loading callback info")
             val info = ApplicationInfoLoader.load(applicationContext)
+            val callbackHandle = applicationContext.getSharedPreferences("FlutterSharedPreferences", 0)
+                .getLong("backgroundCallbackHandle", -1L)
+            if (callbackHandle == -1L) {
+                throw PermanentEngineInitException("Missing backgroundCallbackHandle in SharedPreferences")
+            }
+            val callbackInfo = FlutterCallbackInformation.lookupCallbackInformation(callbackHandle)
+                ?: throw PermanentEngineInitException("FlutterCallbackInformation lookup returned null for handle $callbackHandle")
+
             workerEngine = FlutterEngine(applicationContext, null, FlutterJNI(), null, false)
             registerWorkerPlugins(workerEngine!!)
             val ready = withTimeoutOrNull(ENGINE_READY_TIMEOUT_MS) {
@@ -248,7 +272,6 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
                             }
                         }
                     }
-                    val callbackInfo = FlutterCallbackInformation.lookupCallbackInformation(applicationContext.getSharedPreferences("FlutterSharedPreferences", 0).getLong("backgroundCallbackHandle", -1))
                     val callback = DartExecutor.DartCallback(applicationContext.assets, info.flutterAssetsDir, callbackInfo)
 
                     PersistentLog.d(applicationContext, Constants.logTag, "Executing Dart callback")
@@ -268,9 +291,10 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
     }
 
     private fun closeEngineIfNeeded() {
-        // Delay 5 seconds so Dart has a chance to complete everything and in case new work comes in shortly after
-        CoroutineScope(Dispatchers.Main).launch {
-            delay(5_000L)
+        closeJob?.cancel()
+        val keepAliveMs = engineIdleKeepAliveMs(SocketIOForegroundService.activeSocket != null)
+        closeJob = CoroutineScope(Dispatchers.Main).launch {
+            delay(keepAliveMs)
             // Take the SAME lock that guards engine init/use so we can never destroy an
             // engine another worker is initializing or about to invoke into. The destroy
             // must also happen synchronously inside the lock — deferring it (the old

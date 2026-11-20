@@ -6,6 +6,7 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
@@ -98,13 +99,27 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
     });
   }
 
-  Widget _richText(List<InlineSpan> spans) => RunTextEffects(
+  Widget _richText(
+    List<InlineSpan> spans, {
+    required bool isFromMe,
+    required bool selected,
+    bool isDarkOutgoing = true,
+  }) =>
+      RunTextEffects(
         runs: _hasRunEffects ? part.runs : const [],
         animation: _runAnimation,
         textOffset: isNullOrEmpty(part.subject) ? 0 : part.displaySubject!.length + 1,
         child: RichText(
           text: TextSpan(children: spans),
           textHeightBehavior: !iOS ? const TextHeightBehavior(leadingDistribution: TextLeadingDistribution.even) : null,
+          selectionRegistrar: (kIsWeb || kIsDesktop) ? SelectionContainer.maybeOf(context) : null,
+          selectionColor: (kIsWeb || kIsDesktop)
+              ? (selected
+                  ? context.theme.colorScheme.primary.withValues(alpha: 0.3)
+                  : (isFromMe && isDarkOutgoing)
+                      ? Colors.white.withValues(alpha: 0.35)
+                      : context.theme.colorScheme.primary.withValues(alpha: 0.28))
+              : null,
         ),
       );
 
@@ -207,24 +222,39 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
       final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
       final bubbleAlpha = hasWallpaper ? 0.86 : 1.0;
 
+      final resolvedChat = message.chat.target ?? controller.cvController?.chat ?? ChatStateScope.maybeOf(context)?.chat;
+      final isIMessage = resolvedChat?.isIMessage ?? (message.service != 'SMS');
+
       Color? resolvedColor;
       BoxDecoration? resolvedDecoration;
+      bool isDarkOutgoing = false;
       if (isFromMe && !message.isBigEmoji) {
         final base = selected
             ? context.theme.colorScheme.tertiaryContainer
             : context.theme.colorScheme
-                .bubble(context, message.chat.target?.isIMessage ?? true)
+                .bubble(context, isIMessage)
                 .darkenAmount(isTempMessage ? 0.2 : 0);
         if (useOutgoingGradient) {
-          resolvedDecoration = BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: TextBubble.outgoingTonalGradient(base, alpha: bubbleAlpha),
-            ),
-          );
+          final gmsgGrad = gmsgOutgoingGradient(context, isSms: !isIMessage);
+          final grad = gmsgGrad != null
+              ? LinearGradient(
+                  begin: gmsgGrad.begin,
+                  end: gmsgGrad.end,
+                  colors: gmsgGrad.colors
+                      .map((c) => c.darkenAmount(isTempMessage ? 0.2 : 0).withValues(alpha: bubbleAlpha))
+                      .toList(),
+                )
+              : LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: TextBubble.outgoingTonalGradient(base, alpha: bubbleAlpha),
+                );
+          resolvedDecoration = BoxDecoration(gradient: grad);
+          isDarkOutgoing = gmsgGrad != null ||
+              ThemeData.estimateBrightnessForColor(grad.colors.first) == Brightness.dark;
         } else {
           resolvedColor = base.withValues(alpha: bubbleAlpha);
+          isDarkOutgoing = ThemeData.estimateBrightnessForColor(base) == Brightness.dark;
         }
       } else if (!isFromMe && !message.isBigEmoji && useGradient) {
         resolvedDecoration = BoxDecoration(
@@ -242,7 +272,7 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
         constraints: BoxConstraints(
           maxWidth: message.isBigEmoji
               ? NavigationSvc.width(context)
-              : NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 40,
+              : MessageState.maxBubbleWidth(context, inset: 40),
           minHeight: material ? 38 : 36,
         ),
         padding: EdgeInsets.symmetric(vertical: material ? 9 : 8, horizontal: material ? 16 : 15)
@@ -289,7 +319,14 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
                           final value1 = anim.get("size");
                           return Transform.scale(scale: value1, alignment: Alignment.center, child: child);
                         },
-                        child: Center(widthFactor: 1, child: _richText(snapshot.data!)),
+                        child: Center(
+                            widthFactor: 1,
+                            child: _richText(
+                              snapshot.data!,
+                              isFromMe: isFromMe,
+                              selected: selected,
+                              isDarkOutgoing: isDarkOutgoing,
+                            )),
                       ));
                 }
                 return Center(
@@ -297,7 +334,12 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
                   child: Padding(
                       padding:
                           message.fullText.length == 1 ? const EdgeInsets.only(left: 3, right: 3) : EdgeInsets.zero,
-                      child: _richText(snapshot.data!)),
+                      child: _richText(
+                        snapshot.data!,
+                        isFromMe: isFromMe,
+                        selected: selected,
+                        isDarkOutgoing: isDarkOutgoing,
+                      )),
                 );
               }
               return const SizedBox.shrink();

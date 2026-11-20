@@ -1,5 +1,6 @@
 import 'package:bluebubbles/database/global/attributed_body.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:html/dom.dart' as dom;
 import 'package:html/parser.dart' as html_parser;
 import 'package:pasteboard/pasteboard.dart';
@@ -7,7 +8,9 @@ import 'package:universal_io/io.dart';
 
 /// The clipboard's rich copy as HTML for [htmlRuns]. On Android most apps copy styled text rather than an HTML clip,
 /// which pasteboard can't read, so the platform side converts either to HTML.
-Future<String?> clipboardHtml() => Platform.isAndroid ? MethodChannelSvc.actions.clipboardHtml() : Pasteboard.html;
+Future<String?> clipboardHtml() => kIsWeb
+    ? Future.value(null)
+    : (Platform.isAndroid ? MethodChannelSvc.actions.clipboardHtml() : Pasteboard.html);
 
 const _bold = 1, _italic = 2, _underline = 4, _strikethrough = 8;
 const _attributes = {

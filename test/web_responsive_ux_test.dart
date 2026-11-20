@@ -3,6 +3,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_desktop_actions.dart';
 import 'package:bluebubbles/services/backend_ui_interop/event_dispatcher.dart' as bb_events;
 import 'package:bluebubbles/services/services.dart' hide EventDispatcher;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
@@ -83,14 +84,15 @@ void main() {
   });
 
   group('NavigatorService responsive & inspector state', () {
-    test('toggleInspectorDrawer flips showInspectorDrawer', () {
+    test('toggleInspectorDrawer flips showInspectorDrawer (closed by default on web)', () {
       _registerMinimalServices();
 
-      expect(NavigationSvc.showInspectorDrawer.value, isTrue);
+      expect(NavigationSvc.showInspectorDrawer.value, equals(!kIsWeb));
+      final initial = NavigationSvc.showInspectorDrawer.value;
       NavigationSvc.toggleInspectorDrawer();
-      expect(NavigationSvc.showInspectorDrawer.value, isFalse);
+      expect(NavigationSvc.showInspectorDrawer.value, equals(!initial));
       NavigationSvc.toggleInspectorDrawer();
-      expect(NavigationSvc.showInspectorDrawer.value, isTrue);
+      expect(NavigationSvc.showInspectorDrawer.value, equals(initial));
     });
 
     testWidgets('pushAndRemoveSettingsUntil preserves activeSettingsWidget in narrow mode until popped or closed',

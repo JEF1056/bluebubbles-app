@@ -600,10 +600,10 @@ void main() {
       expect(q.find().map((c) => c.id), contains(emptyGuidChat.id));
       q.close();
 
-      // Seed an existing attachment so a duplicate guid in afterPut throws UniqueViolationException.
+      // Seed an existing attachment so a conflicting explicit id + duplicate guid in afterPut throws UniqueViolationException.
       attachments.put(Attachment(guid: 'dup-att-1'));
       final msg = Message(guid: 'msg-persist-before-afterput', text: 'hello');
-      msg.dbAttachments.add(Attachment(guid: 'dup-att-1'));
+      msg.dbAttachments.add(Attachment(id: 99999, guid: 'dup-att-1'));
       expect(() => messages.put(msg), throwsA(isA<UniqueViolationException>()));
 
       // Message must still have been enqueued for persistence and survive reload.
@@ -612,6 +612,73 @@ void main() {
       final reloaded = reopened.box<Message>().query(Message_.guid.equals('msg-persist-before-afterput')).build().findFirst();
       expect(reloaded?.text, 'hello');
       await reopened.close(flushPending: false);
+    });
+
+    test('multi-chat sync reuses existing unique entities on un-IDd ToOne/ToMany/Backlink relations', () async {
+      final handles = store.box<Handle>();
+      final chats = store.box<Chat>();
+      final messages = store.box<Message>();
+      final attachments = store.box<Attachment>();
+
+      final chat1 = Chat.fromMap({
+        'guid': 'any;-;+19499980689',
+        'chatIdentifier': '+19499980689',
+        'participants': [
+          {'originalROWID': 30, 'address': '+19499980689', 'service': 'iMessage'},
+        ],
+        'lastMessage': {
+          'guid': 'msg-sync-1',
+          'originalROWID': 101,
+          'text': 'Hey there',
+          'isFromMe': false,
+          'dateCreated': DateTime(2026, 3, 1, 12, 0).millisecondsSinceEpoch,
+          'handle': {'originalROWID': 30, 'address': '+19499980689', 'service': 'iMessage'},
+          'attachments': [
+            {'guid': 'att-sync-1', 'transferName': 'pic.jpg', 'mimeType': 'image/jpeg'},
+          ],
+        },
+      });
+      final chat2 = Chat.fromMap({
+        'guid': 'any;+;group-with-shared-handle',
+        'chatIdentifier': 'chat12345',
+        'participants': [
+          {'originalROWID': 30, 'address': '+19499980689', 'service': 'iMessage'},
+          {'originalROWID': 31, 'address': '+15550001111', 'service': 'iMessage'},
+        ],
+      });
+
+      // Mirror ChatActions.bulkSyncChats: persist deduplicated participant handles first, then putMany(chats).
+      handles.putMany([chat1.participants.first, chat2.participants.last]);
+      chats.putMany([chat1, chat2]);
+
+      expect(handles.count(), 2);
+      expect(chats.count(), 2);
+      expect(messages.count(), 1);
+      expect(attachments.count(), 1);
+      expect(chat1.handles.map((h) => h.address), ['+19499980689']);
+      expect(chat2.handles.map((h) => h.address).toSet(), {'+19499980689', '+15550001111'});
+
+      // Re-syncing the same message & attachment via Message.fromMap updates in place without UniqueViolationException.
+      final resynced = Message.fromMap({
+        'guid': 'msg-sync-1',
+        'originalROWID': 101,
+        'text': 'Hey there',
+        'isFromMe': false,
+        'dateCreated': DateTime(2026, 3, 1, 12, 0).millisecondsSinceEpoch,
+        'handle': {'originalROWID': 30, 'address': '+19499980689', 'service': 'iMessage'},
+        'attachments': [
+          {'guid': 'att-sync-1', 'transferName': 'pic.jpg', 'mimeType': 'image/jpeg'},
+        ],
+      });
+      resynced.id = messages.query(Message_.guid.equals('msg-sync-1')).build().findFirst()!.id;
+      resynced.chat.target = chat1;
+      resynced.handleRelation.target = Handle(originalROWID: 30, address: '+19499980689', service: 'iMessage');
+      messages.put(resynced);
+
+      expect(handles.count(), 2);
+      expect(messages.count(), 1);
+      expect(attachments.count(), 1);
+      expect(attachments.getAll().single.message.targetId, resynced.id);
     });
   });
 }

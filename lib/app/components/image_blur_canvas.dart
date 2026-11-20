@@ -24,7 +24,7 @@ class ImageBlurCanvas extends StatelessWidget {
     super.key,
     this.filePath,
     this.bytes,
-  }) : assert(filePath != null || bytes != null, 'Either filePath or bytes must be provided');
+  });
 
   final String? filePath;
   final Uint8List? bytes;
@@ -50,6 +50,12 @@ class ImageBlurCanvas extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasBytes = bytes != null && bytes!.isNotEmpty;
+    if (filePath == null && !hasBytes) {
+      return Center(
+        child: Icon(Icons.image_outlined, color: Theme.of(context).colorScheme.outline),
+      );
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final rawWidth = (constraints.maxWidth * MediaQuery.of(context).devicePixelRatio).round().abs();

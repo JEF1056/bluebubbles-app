@@ -101,7 +101,7 @@
         <receiver
             android:name=".services.foreground.ForegroundServiceBroadcastReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="restartservice" />
             </intent-filter>
@@ -171,7 +171,7 @@
             android:name=".services.foreground.SocketIOForegroundService"
             android:foregroundServiceType="remoteMessaging"
             android:enabled="true"
-            android:exported="true" />
+            android:exported="false" />
 
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

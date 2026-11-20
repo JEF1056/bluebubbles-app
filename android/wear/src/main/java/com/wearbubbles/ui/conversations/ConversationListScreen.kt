@@ -26,8 +26,8 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -66,10 +66,10 @@ fun ConversationListScreen(
     viewModel: ConversationListViewModel = viewModel()
 ) {
     val palette = LocalWearPalette.current
-    val chats by viewModel.chats.collectAsState()
-    val isRefreshing by viewModel.isRefreshing.collectAsState()
-    val updateVersion by viewModel.updateVersion.collectAsState()
-    val error by viewModel.error.collectAsState()
+    val chats by viewModel.chats.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val updateVersion by viewModel.updateVersion.collectAsStateWithLifecycle()
+    val error by viewModel.error.collectAsStateWithLifecycle()
     var chatToDelete by remember { mutableStateOf<ChatItemUi?>(null) }
 
     val columnState = rememberResponsiveColumnState(

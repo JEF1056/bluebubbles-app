@@ -538,7 +538,7 @@ class Message {
 
   String get groupEventText {
     final h = handle ?? handleRelation.target ?? getHandle();
-    final name = h?.displayName ?? (isFromMe! || h == null ? 'You' : 'Unknown');
+    final name = h?.displayName ?? (isFromMe! || h == null ? SettingsSvc.effectiveUserName : 'Unknown');
     return buildGroupEventText(name);
   }
 

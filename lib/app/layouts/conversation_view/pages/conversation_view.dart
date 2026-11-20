@@ -13,6 +13,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/screen
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_acrylic/window_effect.dart';
@@ -25,12 +26,14 @@ class ConversationView extends StatefulWidget {
     this.customService,
     this.initialScrollToGuid,
     this.fromChatCreator = false,
+    this.autoOpened = false,
   });
 
   final Chat chat;
   final MessagesService? customService;
   final String? initialScrollToGuid;
   final bool fromChatCreator;
+  final bool autoOpened;
 
   @override
   ConversationViewState createState() => ConversationViewState();
@@ -50,6 +53,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   // header widgets will not rebuild on keyboard frames.
   late final Widget _bodyContent;
   late final PreferredSizeWidget _appBar;
+  final ValueNotifier<int> _unreadWhileScrolledCount = ValueNotifier<int>(0);
 
   Chat get chat => widget.chat;
 
@@ -69,8 +73,11 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     controller.viewOwner = this;
     controller.fromChatCreator = widget.fromChatCreator;
     controller.fromSearchResult = widget.initialScrollToGuid != null;
-    ChatsSvc.setActiveChatSync(chat);
+    ChatsSvc.setActiveChatSync(chat, clearNotifications: !widget.autoOpened);
     ChatsSvc.activeChat?.controller = controller;
+    if (kIsWeb && NavigationSvc.showInspectorDrawer.value) {
+      NavigationSvc.showInspectorDrawer.value = false;
+    }
     Logger.debug("Conversation View initialized for ${chat.guid}");
 
     controller.loadReplyToMessageState(); // P224b
@@ -148,6 +155,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                         initialScrollToGuid: widget.initialScrollToGuid,
                         controller: controller,
                         bottomPadding: 88.0 + bottomInset,
+                        unreadWhileScrolledCount: _unreadWhileScrolledCount,
                       ),
                     ),
                     Positioned(
@@ -156,7 +164,10 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                       bottom: 88.0 + bottomInset,
                       child: Align(
                         alignment: Alignment.bottomCenter,
-                        child: ScrollDownButton(controller: controller),
+                        child: ScrollDownButton(
+                          controller: controller,
+                          unreadWhileScrolledCount: _unreadWhileScrolledCount,
+                        ),
                       ),
                     ),
                     Positioned(
@@ -186,8 +197,12 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                             customService: widget.customService,
                             initialScrollToGuid: widget.initialScrollToGuid,
                             controller: controller,
+                            unreadWhileScrolledCount: _unreadWhileScrolledCount,
                           ),
-                          ScrollDownButton(controller: controller),
+                          ScrollDownButton(
+                            controller: controller,
+                            unreadWhileScrolledCount: _unreadWhileScrolledCount,
+                          ),
                         ],
                       ),
                     ),
@@ -254,6 +269,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
 
   @override
   void dispose() {
+    _unreadWhileScrolledCount.dispose();
     routeObserver.unsubscribe(this);
     controller.saveReplyToMessageState(); // P8bda
     // A replacement view may already have taken this controller over; deleting it would dispose the focus nodes

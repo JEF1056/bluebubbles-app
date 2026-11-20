@@ -64,8 +64,9 @@ class ConversationTileController extends StatefulController {
 
   Future<void> onSecondaryTap(BuildContext context, TapUpDetails details) async {
     if (kIsWeb) {
-      await preventNextContextMenu();
+      suppressBrowserContextMenu();
     }
+    ContextMenuController.removeAny();
     shouldPartialHighlight.value = true;
     if (!context.mounted) return;
     await showConversationTileMenu(
@@ -268,6 +269,20 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
   Widget build(BuildContext context) {
     return Obx(() {
       final chatState = controller.chatState;
+      final hasTyping = material &&
+          Get.isRegistered<ConversationViewController>(tag: controller.chat.guid) &&
+          Get.find<ConversationViewController>(tag: controller.chat.guid).showTypingIndicator.value;
+      if (hasTyping) {
+        return Text(
+          "Typing…",
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: widget.style.copyWith(
+            color: context.theme.colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w400,
+          ),
+        );
+      }
       final latestMessage = chatState.latestMessage.value;
       final isFromMe = latestMessage?.isFromMe ?? false;
       final isRead = latestMessage?.dateRead != null;
@@ -415,7 +430,7 @@ class ChatLeadingState extends State<ChatLeading> with ThemeHelpers {
                         editable: false,
                       ),
               ),
-              if (showTypingIndicator)
+              if (showTypingIndicator && !material)
                 Positioned(
                   top: 30,
                   left: 20,

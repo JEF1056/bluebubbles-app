@@ -163,10 +163,12 @@ class _PageNumberState extends CustomState<PageNumber, int, SetupViewController>
         children: [
           TextSpan(
               text: "${controller.currentPage}",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Colors.white, fontWeight: FontWeight.bold)),
+              style: context.theme.textTheme.bodyLarge!
+                  .copyWith(color: context.theme.colorScheme.onPrimary, fontWeight: FontWeight.bold)),
           TextSpan(
               text: " of ${kIsWeb ? "4" : kIsDesktop ? "5" : "7"}",
-              style: context.theme.textTheme.bodyLarge!.copyWith(color: Colors.white38, fontWeight: FontWeight.bold)),
+              style: context.theme.textTheme.bodyLarge!.copyWith(
+                  color: context.theme.colorScheme.onPrimary.withValues(alpha: 0.38), fontWeight: FontWeight.bold)),
         ],
       ),
     );

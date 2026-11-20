@@ -54,6 +54,9 @@ class SettingsHelper(private val context: Context) {
     
     val privateAPIAttachmentSend: Boolean
         get() = prefs.getBoolean("${PREFIX}privateAPIAttachmentSend", false)
+
+    val privateMarkChatAsRead: Boolean
+        get() = prefs.getBoolean("${PREFIX}privateMarkChatAsRead", false)
     
     // Notification reaction settings
     val notificationReactionAction: Boolean
