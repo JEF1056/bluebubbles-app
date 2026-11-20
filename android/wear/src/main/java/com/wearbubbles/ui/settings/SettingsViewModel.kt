@@ -142,6 +142,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             ApiClient.reset()
             settings.clearAll(markDisconnected = true)
             withContext(Dispatchers.IO) {
+                relay.deleteCredentialsDataItem()
                 relay.clearLocalCaches()
                 db.clearAllTables()
             }

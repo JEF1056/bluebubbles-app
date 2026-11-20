@@ -72,7 +72,9 @@ extension ChatsServiceFork on ChatsService {
     if (clearNotifications && alive && _isUiInteractive) {
       // Defer the observable update to avoid updating during build phase
       Future.microtask(() {
-        setChatHasUnread(chatState.chat, false);
+        if (isChatActive(chatState.chat.guid) && _isUiInteractive) {
+          setChatHasUnread(chatState.chat, false);
+        }
       });
     }
 

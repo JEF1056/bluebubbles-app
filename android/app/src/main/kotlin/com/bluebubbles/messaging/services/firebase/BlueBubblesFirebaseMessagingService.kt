@@ -3,6 +3,7 @@ package com.bluebubbles.messaging.services.firebase
 import android.content.Intent
 import androidx.core.os.bundleOf
 import com.bluebubbles.messaging.Constants
+import com.bluebubbles.messaging.UnifiedPushReceiver
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.Utils
@@ -19,6 +20,10 @@ class BlueBubblesFirebaseMessagingService: FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
         val type = message.data["type"] ?: return
+        if (!UnifiedPushReceiver.isAllowedPushType(type)) {
+            PersistentLog.w(applicationContext, Constants.logTag, "Ignoring unexpected FCM message type: $type")
+            return
+        }
         PersistentLog.d(applicationContext, Constants.logTag, "Received new message of type $type from FCM...")
         DartWorkManager.createWorker(applicationContext, type, HashMap(message.data)) {}
 

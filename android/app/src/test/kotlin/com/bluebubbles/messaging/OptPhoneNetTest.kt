@@ -4,6 +4,7 @@ import com.bluebubbles.messaging.services.intents.InternalIntentReceiver
 import com.bluebubbles.messaging.services.network.HttpService
 import com.bluebubbles.messaging.services.notifications.CreateIncomingMessageNotification
 import com.bluebubbles.messaging.services.notifications.MediaControllerCallback
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.FilesystemUtils
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
@@ -167,5 +168,62 @@ class OptPhoneNetTest {
         assertFalse(redacted.contains("abc"))
         assertTrue(redacted.contains("REDACTED"))
         assertTrue(redacted.contains("other=1"))
+    }
+
+    @Test
+    fun `push allowlist accepts remote events and rejects local-only or unknown types`() {
+        assertTrue(UnifiedPushReceiver.isAllowedPushType("new-message"))
+        assertTrue(UnifiedPushReceiver.isAllowedPushType("updated-message"))
+        assertTrue(UnifiedPushReceiver.isAllowedPushType("chat-read-status-changed"))
+        assertTrue(UnifiedPushReceiver.isAllowedPushType("incoming-facetime"))
+        assertTrue(UnifiedPushReceiver.isAllowedPushType("ft-call-status-changed"))
+
+        assertFalse(UnifiedPushReceiver.isAllowedPushType(null))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType(""))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("NewServerUrl"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("ReplyChat"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("MarkChatRead"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("MuteChat"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("unifiedpush-settings"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("socket-event"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("answer-facetime"))
+        assertFalse(UnifiedPushReceiver.isAllowedPushType("arbitrary-handler"))
+    }
+
+    @Test
+    fun `wearSyncManager custom headers interceptor scopes headers to configured server origin`() {
+        val observedHeaders = mutableListOf<String?>()
+        val client = WearSyncManager.buildOkHttpClient(
+            timeoutMs = 15_000L,
+            serverOrigin = "https://bb.example.com:8443",
+            headersProvider = { mapOf("CF-Access-Client-Secret" to "top-secret") },
+        ).newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                observedHeaders.add(req.header("CF-Access-Client-Secret"))
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("{}".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        client.newCall(Request.Builder().url("https://BB.EXAMPLE.COM:8443/api/v1/ping").build()).execute().close()
+        client.newCall(Request.Builder().url("https://evil.example.com:8443/img.png").build()).execute().close()
+        client.newCall(Request.Builder().url("http://bb.example.com:8443/api/v1/ping").build()).execute().close()
+        client.newCall(Request.Builder().url("https://bb.example.com:9443/api/v1/ping").build()).execute().close()
+
+        assertEquals(listOf("top-secret", null, null, null), observedHeaders)
+
+        val unconfiguredClient = WearSyncManager.buildOkHttpClient(
+            timeoutMs = 15_000L,
+            serverOrigin = "",
+            headersProvider = { mapOf("CF-Access-Client-Secret" to "top-secret") },
+        )
+        assertFalse(WearSyncManager.shouldAttachCustomHeaders("https://bb.example.com/ping".toHttpUrl(), null))
+        assertNotNull(unconfiguredClient)
     }
 }

@@ -121,6 +121,7 @@ class Settings {
   final RxBool cancelQueuedMessages = false.obs;
   final RxBool repliesToPrevious = false.obs;
   final RxnString localhostPort = RxnString(null);
+  final RxnString lanProofKey = RxnString(null);
   final RxBool useLocalIpv6 = false.obs;
   final RxnString sendSoundPath = RxnString();
   final RxnString receiveSoundPath = RxnString();
@@ -426,6 +427,7 @@ class Settings {
       'cancelQueuedMessages': cancelQueuedMessages.value,
       'repliesToPrevious': repliesToPrevious.value,
       'useLocalhost': localhostPort.value,
+      'lanProofKey': lanProofKey.value,
       'useLocalIpv6': useLocalIpv6.value,
       'soundVolume': soundVolume.value,
       'syncContactsAutomatically': syncContactsAutomatically.value,
@@ -635,6 +637,7 @@ class Settings {
     SettingsSvc.settings.repliesToPrevious.value =
         map['repliesToPrevious'] ?? SettingsSvc.settings.repliesToPrevious.value;
     SettingsSvc.settings.localhostPort.value = map['useLocalhost'] ?? SettingsSvc.settings.localhostPort.value;
+    SettingsSvc.settings.lanProofKey.value = map['lanProofKey'] ?? SettingsSvc.settings.lanProofKey.value;
     SettingsSvc.settings.useLocalIpv6.value = map['useLocalIpv6'] ?? SettingsSvc.settings.useLocalIpv6.value;
     SettingsSvc.settings.sendSoundPath.value = map['sendSoundPath'] ?? SettingsSvc.settings.sendSoundPath.value;
     SettingsSvc.settings.receiveSoundPath.value =
@@ -867,6 +870,7 @@ class Settings {
     s.cancelQueuedMessages.value = map['cancelQueuedMessages'] ?? false;
     s.repliesToPrevious.value = map['repliesToPrevious'] ?? false;
     s.localhostPort.value = map['useLocalhost'];
+    s.lanProofKey.value = map['lanProofKey'];
     s.useLocalIpv6.value = map['useLocalIpv6'] ?? false;
     s.sendSoundPath.value = map['sendSoundPath'];
     s.receiveSoundPath.value = map['receiveSoundPath'];

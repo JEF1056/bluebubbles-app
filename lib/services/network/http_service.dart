@@ -268,8 +268,15 @@ class HttpService implements BaseApi {
 class ApiInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    final hasHttpOrigin = options.uri.isScheme('http') || options.uri.isScheme('https');
+    final ownServer = hasHttpOrigin && HttpSvc.origin.isNotEmpty && options.uri.origin == HttpSvc.origin;
+    // Custom headers can hold tunnel credentials: never hand them to other hosts.
+    if (!ownServer) {
+      final sensitiveKeys = HttpSvc.headers.keys.map((k) => k.toLowerCase()).toSet();
+      options.headers.removeWhere((k, _) => sensitiveKeys.contains(k.toLowerCase()));
+    }
     // Send HttpOnly Cloudflare Access cookie to our own server only (never 3P hosts).
-    if (kIsWeb && HttpSvc.origin.isNotEmpty && options.uri.origin == HttpSvc.origin) {
+    if (kIsWeb && ownServer) {
       options.extra['withCredentials'] = true;
     }
     Logger.info("Request: [${options.method}] ${options.path}", tag: "HTTP Service");

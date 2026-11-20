@@ -30,7 +30,11 @@
   <!-- MapLibre GL JS (preloaded & pinned to 6.19.0 for maplibre_web ^0.4.0) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.19.0/dist/maplibre-gl.css" integrity="sha384-S+OnE5M4U3Qc2nR0RgljGrVs06xqfRg8L7uFk/pOF5+sRuSDG4oKkqKZmFrx7w09" crossorigin="anonymous">
   <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.19.0/dist/maplibre-gl.mjs" integrity="sha384-xwIwS2ZrVZdy1v8I+MtCDAkB+tCwelpTdNz9yPRN03mYLaG5HTwyhOnylbOgukuC" crossorigin="anonymous">
-  <script>window.flutterMapLibre = { maplibreGlVersion: "6.19.0" };</script>
+  <script>
+    window.flutterMapLibre = { maplibreGlVersion: "6.19.0" };
+    // The app has no pmtiles:// sources; stub window.pmtiles so maplibre_web skips unpinned jsDelivr fetch.
+    window.pmtiles = { Protocol: class { tile() {} } };
+  </script>
 
   <style id="splash-screen-style">
     html {

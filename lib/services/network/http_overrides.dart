@@ -4,35 +4,20 @@ import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/network/user_certificates.dart';
 import 'package:universal_io/io.dart';
 
-/// Shared certificate validation logic for both HTTP and WebSocket connections
-/// Returns true if the certificate should be accepted (override bad cert), false otherwise
+/// Returns true only when [host] is an IP literal matching [serverHost].
+/// Hostnames must present a platform-trusted certificate.
+bool acceptsBadCertFor(String serverHost, String host) {
+  final normalizedServer = serverHost.trim().toLowerCase();
+  final normalizedHost = host.trim().toLowerCase();
+  if (normalizedServer.isEmpty || normalizedServer != normalizedHost) return false;
+  return InternetAddress.tryParse(normalizedHost) != null;
+}
+
+/// Shared certificate validation logic for both HTTP and WebSocket connections.
+/// Returns true if the certificate should be accepted (override bad cert), false otherwise.
 bool shouldAcceptCertificate(X509Certificate cert, String host, int port) {
-  String serverUrl = sanitizeServerAddress() ?? "";
-
-  // Extract hostname from the server URL
-  Uri? uri = Uri.tryParse(serverUrl);
-  if (uri == null) {
-    return false;
-  }
-
-  String serverHost = uri.host;
-  bool isValidCert = false;
-
-  // Handle wildcard certificates
-  if (host.startsWith("*")) {
-    // Extract the domain from wildcard (e.g., "*.example.com" -> "example.com")
-    String domain = host.substring(2); // Remove "*."
-    // Check if server host ends with the domain and has exactly one more subdomain
-    // or matches the domain exactly
-    isValidCert = serverHost == domain ||
-        (serverHost.endsWith('.$domain') &&
-            serverHost.substring(0, serverHost.length - domain.length - 1).split('.').length == 1);
-  } else {
-    // For non-wildcard certificates, the hosts must match exactly
-    isValidCert = serverHost == host;
-  }
-
-  return isValidCert;
+  final serverHost = Uri.tryParse(sanitizeServerAddress() ?? "")?.host ?? "";
+  return acceptsBadCertFor(serverHost, host);
 }
 
 class CustomHttpContext extends HttpOverrides {

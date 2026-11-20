@@ -36,9 +36,14 @@ Future<bool> saveNewServerUrl(String newServerUrl,
     // is set — and falls back to the remote URL when the probe fails.
     if (addressChanged) {
       NetworkTasks.setOriginOverride(null);
+      SettingsSvc.settings.lanProofKey.value = null;
     }
 
-    await SettingsSvc.settings.saveManyAsync(["serverAddress", ...saveAdditionalSettings]);
+    await SettingsSvc.settings.saveManyAsync([
+      "serverAddress",
+      if (addressChanged) "lanProofKey",
+      ...saveAdditionalSettings,
+    ]);
 
     // Don't await because we don't care about the result
     if (tryRestartForegroundService) {
@@ -62,8 +67,9 @@ Future<bool> saveNewServerUrl(String newServerUrl,
 Future<void> clearServerUrl(
     {bool tryRestartForegroundService = true, List<String> saveAdditionalSettings = const []}) async {
   SettingsSvc.settings.serverAddress.value = "";
+  SettingsSvc.settings.lanProofKey.value = null;
   NetworkTasks.setOriginOverride(null);
-  await SettingsSvc.settings.saveManyAsync(["serverAddress", ...saveAdditionalSettings]);
+  await SettingsSvc.settings.saveManyAsync(["serverAddress", "lanProofKey", ...saveAdditionalSettings]);
 
   // Don't await because we don't care about the result
   if (tryRestartForegroundService) {

@@ -73,6 +73,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     controller.viewOwner = this;
     controller.fromChatCreator = widget.fromChatCreator;
     controller.fromSearchResult = widget.initialScrollToGuid != null;
+    controller.autoOpened = widget.autoOpened;
     ChatsSvc.setActiveChatSync(chat, clearNotifications: !widget.autoOpened);
     _sectionWorker = ever(NavigationSvc.openSection, (_) => _updateCovered());
     _updateCovered();

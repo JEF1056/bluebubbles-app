@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/database/database.dart';
@@ -8,6 +10,7 @@ import 'package:bluebubbles/services/backend/sync/server_v2_migrations.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 import 'package:network_info_plus/network_info_plus.dart';
@@ -112,6 +115,13 @@ class NetworkTasks {
     try {
       final response = await HttpSvc.server.info();
       final data = response.data?['data'];
+      final serverLanProofKey = data is Map ? data['lan_proof_key'] : null;
+      if (serverLanProofKey is String &&
+          serverLanProofKey.isNotEmpty &&
+          SettingsSvc.settings.lanProofKey.value != serverLanProofKey) {
+        SettingsSvc.settings.lanProofKey.value = serverLanProofKey;
+        await SettingsSvc.settings.saveOneAsync('lanProofKey');
+      }
       final localIpv4s = ((data?['local_ipv4s'] ?? []) as List).cast<String>();
       final localIpv6s = ((data?['local_ipv6s'] ?? []) as List).cast<String>();
 
@@ -227,19 +237,49 @@ class NetworkTasks {
     });
   }
 
+  /// Generates a 128-bit random 32-char lowercase hex nonce for LAN proof.
+  static String generateLanProofNonce([Random? rng]) {
+    final random = rng ?? Random.secure();
+    return List.generate(32, (_) => random.nextInt(16).toRadixString(16)).join();
+  }
+
+  /// Verifies the server's HMAC-SHA256 LAN identity proof against `{ data: { proof } }`.
+  static bool lanProofMatches(String key, String nonce, Object? responseData) {
+    if (key.isEmpty || nonce.length != 32 || responseData is! Map) return false;
+    final data = responseData['data'];
+    final proof = data is Map ? data['proof'] : null;
+    if (proof is! String) return false;
+    final expected = Hmac(sha256, utf8.encode(key)).convert(utf8.encode(nonce)).toString();
+    final actual = proof.trim().toLowerCase();
+    if (expected.length != actual.length) return false;
+    var diff = 0;
+    for (var i = 0; i < expected.length; i++) {
+      diff |= expected.codeUnitAt(i) ^ actual.codeUnitAt(i);
+    }
+    return diff == 0;
+  }
+
+  @visibleForTesting
+  static Future<String?> probeAddresses(List<String> ips, String port) => _probeAddresses(ips, port);
+
   /// Probes [ips] on [port] with https then http, returning the first address
-  /// that responds with "pong", or null if none respond.
+  /// that proves knowledge of [SettingsSvc.settings.lanProofKey] via HMAC-SHA256,
+  /// or null if none respond with a valid proof.
   ///
   /// IPv6 addresses must already be bracket-formatted, e.g. `[::1]`.
   static Future<String?> _probeAddresses(List<String> ips, String port) async {
+    final key = SettingsSvc.settings.lanProofKey.value;
+    if (key == null || key.isEmpty) return null;
+    final rng = Random.secure();
     for (final ip in ips) {
       for (final scheme in ['https', 'http']) {
         final addr = '$scheme://$ip:$port';
         try {
-          final response = await HttpSvc.server.ping(customUrl: addr);
-          if (response.data.toString().contains('pong')) return addr;
+          final nonce = generateLanProofNonce(rng);
+          final response = await HttpSvc.server.lanProof(addr, nonce);
+          if (lanProofMatches(key, nonce, response.data)) return addr;
         } catch (_) {
-          Logger.debug('Failed to connect to local address: $addr', tag: 'NetworkTasks');
+          Logger.debug('Failed to verify local address: $addr', tag: 'NetworkTasks');
         }
       }
     }

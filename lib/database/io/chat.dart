@@ -721,10 +721,6 @@ class Chat {
     if (id == null) return this;
     this.autoSendReadReceipts = autoSendReadReceipts;
     await saveAsync(updateAutoSendReadReceipts: true);
-    if (SettingsSvc.settings.enablePrivateAPI.value &&
-        (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value)) {
-      HttpSvc.chat.markRead(guid);
-    }
     return this;
   }
 

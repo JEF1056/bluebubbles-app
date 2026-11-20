@@ -536,6 +536,24 @@ class PhoneRelayClient(private val context: Context) {
         invalidateNodeCache()
     }
 
+    suspend fun deleteCredentialsDataItem() {
+        try {
+            val dataClient = Wearable.getDataClient(context)
+            val items = dataClient.dataItems.await()
+            try {
+                for (item in items) {
+                    if (item.uri.path == PATH_CREDENTIALS) {
+                        dataClient.deleteDataItems(item.uri).await()
+                    }
+                }
+            } finally {
+                items.release()
+            }
+            dataClient.deleteDataItems(android.net.Uri.Builder().scheme("wear").path(PATH_CREDENTIALS).build()).await()
+        } catch (_: Exception) {
+        }
+    }
+
     suspend fun handleProfileSync(userName: String, userHandle: String, avatarBytes: ByteArray?) =
         withContext(ingestionDispatcher) {
             try {

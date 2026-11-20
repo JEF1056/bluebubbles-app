@@ -1,5 +1,7 @@
 package com.wearbubbles.api
 
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -12,18 +14,34 @@ object ApiClient {
     private var currentBaseUrl: String = ""
 
     @Volatile
+    private var configuredServerUrl: HttpUrl? = null
+
+    @Volatile
     private var currentHeaders: Map<String, String> = emptyMap()
 
     @Volatile
     private var api: BlueBubblesApi? = null
 
+    internal fun shouldAttachCustomHeaders(requestUrl: HttpUrl, serverUrl: HttpUrl?): Boolean {
+        if (serverUrl == null) return false
+        if (!requestUrl.host.equals(serverUrl.host, ignoreCase = true)) return false
+        if (requestUrl.port != serverUrl.port) return false
+        if (serverUrl.isHttps && !requestUrl.isHttps) return false
+        return true
+    }
+
     val okHttpClient: OkHttpClient by lazy {
         val headersInterceptor = Interceptor { chain ->
-            val builder = chain.request().newBuilder()
-            currentHeaders.forEach { (k, v) ->
-                if (k.isNotBlank()) builder.header(k, v)
+            val request = chain.request()
+            if (shouldAttachCustomHeaders(request.url, configuredServerUrl)) {
+                val builder = request.newBuilder()
+                currentHeaders.forEach { (k, v) ->
+                    if (k.isNotBlank()) builder.header(k, v)
+                }
+                chain.proceed(builder.build())
+            } else {
+                chain.proceed(request)
             }
-            chain.proceed(builder.build())
         }
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -34,6 +52,7 @@ object ApiClient {
     }
 
     fun configureHeaders(serverUrl: String, headers: Map<String, String>) {
+        configuredServerUrl = serverUrl.trim().toHttpUrlOrNull()
         val merged = headers.toMutableMap()
         if (serverUrl.contains("ngrok")) {
             merged["ngrok-skip-browser-warning"] = "true"
@@ -72,6 +91,7 @@ object ApiClient {
     @Synchronized
     fun reset() {
         currentBaseUrl = ""
+        configuredServerUrl = null
         currentHeaders = emptyMap()
         api = null
     }

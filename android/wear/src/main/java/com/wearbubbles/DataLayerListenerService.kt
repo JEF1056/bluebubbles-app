@@ -317,6 +317,7 @@ class DataLayerListenerService : WearableListenerService() {
                 MessageSyncWorker.cancel(applicationContext)
                 NotificationHelper.cancelAll(applicationContext)
                 ApiClient.reset()
+                app.phoneRelayClient.deleteCredentialsDataItem()
                 app.phoneRelayClient.clearLocalCaches()
                 SettingsDataStore(applicationContext).clearAll(markDisconnected = true)
                 AppDatabase.getInstance(applicationContext).clearAllTables()

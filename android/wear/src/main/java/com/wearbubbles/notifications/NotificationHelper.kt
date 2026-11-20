@@ -58,7 +58,7 @@ object NotificationHelper {
     private val _activeChatGuid = MutableStateFlow<String?>(null)
     val activeChatGuid: StateFlow<String?> = _activeChatGuid.asStateFlow()
 
-    // Null until MainActivity reports lifecycle so unit tests without an activity remain unaffected.
+    // Require MainActivity.onResume() (true) so early ViewModel init before lifecycle binding cannot mark read.
     private val _isAppResumed = MutableStateFlow<Boolean?>(null)
     @Volatile
     private var pendingLaunchChatGuid: String? = null
@@ -83,7 +83,12 @@ object NotificationHelper {
         pendingLaunchChatGuid = chatGuid?.takeIf { it.isNotBlank() }
     }
 
-    internal fun isAppResumedOrUnbound(): Boolean = _isAppResumed.value != false
+    internal fun isAppResumedOrUnbound(): Boolean = _isAppResumed.value == true
+
+    internal fun resetLifecycleForTest() {
+        _isAppResumed.value = null
+        pendingLaunchChatGuid = null
+    }
 
     internal fun shouldActivateChat(chatGuid: String): Boolean {
         if (!isAppResumedOrUnbound()) return false

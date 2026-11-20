@@ -1,8 +1,14 @@
 package com.wearbubbles
 
+import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.ChatRepository
 import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.relay.PhoneRelayClient
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -66,5 +72,45 @@ class OptWearDataTest {
         assertTrue(MessageRepository.hasMoreRelayedMessages(-1))
         assertTrue(MessageRepository.hasMoreRelayedMessages(40))
         assertFalse(MessageRepository.hasMoreRelayedMessages(12))
+    }
+
+    @Test
+    fun `apiClient custom headers interceptor scopes headers to configured server origin`() {
+        val observedSecrets = mutableListOf<String?>()
+        val observedNgrok = mutableListOf<String?>()
+        val testClient = ApiClient.okHttpClient.newBuilder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                observedSecrets.add(req.header("CF-Access-Client-Secret"))
+                observedNgrok.add(req.header("ngrok-skip-browser-warning"))
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("OK")
+                    .body("{}".toResponseBody("application/json".toMediaType()))
+                    .build()
+            }
+            .build()
+
+        ApiClient.reset()
+        try {
+            ApiClient.configureHeaders(
+                "https://my-watch.ngrok-free.app",
+                mapOf("CF-Access-Client-Secret" to "top-secret")
+            )
+            testClient.newCall(Request.Builder().url("https://MY-WATCH.NGROK-FREE.APP/api/v1/ping").build()).execute().close()
+            testClient.newCall(Request.Builder().url("https://evil.example.com/avatar.png").build()).execute().close()
+            testClient.newCall(Request.Builder().url("http://my-watch.ngrok-free.app/api/v1/ping").build()).execute().close()
+            testClient.newCall(Request.Builder().url("https://my-watch.ngrok-free.app:8443/api/v1/ping").build()).execute().close()
+
+            ApiClient.reset()
+            testClient.newCall(Request.Builder().url("https://my-watch.ngrok-free.app/api/v1/ping").build()).execute().close()
+
+            assertEquals(listOf("top-secret", null, null, null, null), observedSecrets)
+            assertEquals(listOf("true", null, null, null, null), observedNgrok)
+        } finally {
+            ApiClient.reset()
+        }
     }
 }

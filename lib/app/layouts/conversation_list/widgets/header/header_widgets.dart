@@ -9,6 +9,7 @@ import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_lis
 import 'package:bluebubbles/app/layouts/setup/setup_view.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
+import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -463,6 +464,11 @@ void logout(BuildContext context) {
         onPressed: () async {
           Navigator.of(context, rootNavigator: true).pop();
           FilesystemSvc.deleteDB();
+          if (kIsWeb) {
+            await Database.clearWebPersistence();
+            await WebMediaCache.instance.clearAll();
+          }
+          await FilesystemSvc.deleteCacheDirectories();
           SocketSvc.forgetConnection();
           SettingsSvc.settings = Settings();
           SettingsSvc.fcmData = FCMData();
@@ -471,6 +477,10 @@ void logout(BuildContext context) {
             darkTheme: "OLED Dark",
             lightTheme: "Bright White",
           );
+          if (kIsWeb) {
+            WebListeners.reset();
+            await Database.flushWebPersistence();
+          }
           Get.offAll(
               () => const PopScope(
                     canPop: false,

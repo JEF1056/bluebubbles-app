@@ -42,6 +42,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.tasks.await
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -343,6 +345,12 @@ object WearSyncManager {
                 val settings = SettingsHelper(context)
                 val origin = settings.origin
                 val password = settings.guidAuthKey
+                if (origin.isBlank() || password.isBlank()) {
+                    Wearable.getDataClient(context)
+                        .deleteDataItems(Uri.Builder().scheme("wear").path(PATH_CREDENTIALS).build())
+                        .await()
+                    return@launch
+                }
                 val headersJson = gson.toJson(settings.getAllHeaders())
                 val privateApiSend = settings.enablePrivateAPI && settings.privateAPISend
                 val privateMarkChatAsRead = settings.enablePrivateAPI && settings.privateMarkChatAsRead
@@ -1130,32 +1138,18 @@ object WearSyncManager {
     internal fun shouldPushContactAvatar(avatarPushCount: Int, maxAvatars: Int = 80): Boolean =
         avatarPushCount < maxAvatars
 
-    internal fun shouldSendWatchReadReceipt(enablePrivateAPI: Boolean, privateMarkChatAsRead: Boolean): Boolean =
-        enablePrivateAPI && privateMarkChatAsRead
+    internal fun watchMarkReadWorkerArgs(chatGuid: String): HashMap<String, Any?> =
+        hashMapOf("chatGuid" to chatGuid, "privateMark" to true)
 
     fun handleMarkReadFromWatch(context: Context, chatGuid: String) {
         if (chatGuid.isBlank()) return
         cancelNotificationsForChat(context, chatGuid)
-        val settings = SettingsHelper(context)
-        // shortcut: global privateMarkChatAsRead only; per-chat autoSendReadReceipts override lives in Dart
-        val sendReadReceipt = shouldSendWatchReadReceipt(settings.enablePrivateAPI, settings.privateMarkChatAsRead)
-        val canDirectPost = sendReadReceipt && settings.hasServerUrl() && settings.hasAuthKey()
-        // When we POST /read directly below, pass privateMark=true so Dart only updates local DB without double-POSTing.
+        // Delegate server POST to Dart so global + per-chat autoSendReadReceipts overrides are respected without double-POSTing.
         DartWorkManager.createWorker(
             context,
             "MarkChatRead",
-            hashMapOf("chatGuid" to chatGuid, "privateMark" to (canDirectPost || !sendReadReceipt))
+            watchMarkReadWorkerArgs(chatGuid)
         ) {}
-        if (!canDirectPost) return
-        scope.launch {
-            try {
-                val client = buildOkHttpClient(settings)
-                val url = "${settings.apiRoot}/chat/${encode(chatGuid)}/read?password=${encode(settings.guidAuthKey)}"
-                client.newCall(Request.Builder().url(url).post("{}".toRequestBody(jsonMediaType)).build()).execute().close()
-            } catch (e: Exception) {
-                PersistentLog.w(context, TAG, "markRead HTTP failed: ${e.message}")
-            }
-        }
     }
 
     fun handleDismissFromWatch(context: Context, chatGuid: String) {
@@ -1417,13 +1411,40 @@ object WearSyncManager {
 
     private val baseOkHttpClient: OkHttpClient by lazy { OkHttpClient() }
 
-    internal fun buildOkHttpClient(settings: SettingsHelper, minReadTimeoutMs: Long = 15_000L): OkHttpClient {
-        val timeout = settings.apiTimeout.toLong().coerceAtLeast(15_000L)
+    internal fun shouldAttachCustomHeaders(requestUrl: HttpUrl, serverUrl: HttpUrl?): Boolean {
+        if (serverUrl == null) return false
+        if (!requestUrl.host.equals(serverUrl.host, ignoreCase = true)) return false
+        if (requestUrl.port != serverUrl.port) return false
+        if (serverUrl.isHttps && !requestUrl.isHttps) return false
+        return true
+    }
+
+    internal fun buildOkHttpClient(settings: SettingsHelper, minReadTimeoutMs: Long = 15_000L): OkHttpClient =
+        buildOkHttpClient(
+            timeoutMs = settings.apiTimeout.toLong(),
+            minReadTimeoutMs = minReadTimeoutMs,
+            serverOrigin = settings.origin,
+            headersProvider = { settings.getAllHeaders() },
+        )
+
+    internal fun buildOkHttpClient(
+        timeoutMs: Long,
+        minReadTimeoutMs: Long = 15_000L,
+        serverOrigin: String,
+        headersProvider: () -> Map<String, String>,
+    ): OkHttpClient {
+        val timeout = timeoutMs.coerceAtLeast(15_000L)
         val readTimeout = timeout.coerceAtLeast(minReadTimeoutMs)
+        val expectedOrigin = serverOrigin.trim().toHttpUrlOrNull()
         val headersInterceptor = Interceptor { chain ->
-            val builder = chain.request().newBuilder()
-            settings.getAllHeaders().forEach { (k, v) -> builder.addHeader(k, v) }
-            chain.proceed(builder.build())
+            val request = chain.request()
+            if (shouldAttachCustomHeaders(request.url, expectedOrigin)) {
+                val builder = request.newBuilder()
+                headersProvider().forEach { (k, v) -> builder.addHeader(k, v) }
+                chain.proceed(builder.build())
+            } else {
+                chain.proceed(request)
+            }
         }
         return baseOkHttpClient.newBuilder()
             .connectTimeout(timeout, TimeUnit.MILLISECONDS)

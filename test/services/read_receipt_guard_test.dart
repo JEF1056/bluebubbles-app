@@ -408,20 +408,22 @@ void main() {
       expect(chat.toggleCalls.single.privateMark, isFalse);
     });
 
-    test('Chat.toggleAutoReadAsync gates HttpSvc.chat.markRead on enablePrivateAPI', () async {
+    test('Chat.toggleAutoReadAsync updates preference without eager HttpSvc.chat.markRead', () async {
       final adapter = _registerTestServices();
       final chat = _RecordingChat(guid: 'iMessage;-;+15550008', id: 42);
 
       SettingsSvc.settings.enablePrivateAPI.value = false;
       await chat.toggleAutoReadAsync(true);
       await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(chat.autoSendReadReceipts, isTrue);
       expect(adapter.requests, isEmpty);
 
       SettingsSvc.settings.enablePrivateAPI.value = true;
+      await chat.toggleAutoReadAsync(false);
       await chat.toggleAutoReadAsync(true);
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(adapter.requests, hasLength(1));
-      expect(adapter.requests.single.uri.path, '/api/v1/chat/iMessage;-;+15550008/read');
+      expect(chat.autoSendReadReceipts, isTrue);
+      expect(adapter.requests, isEmpty);
     });
   });
 }

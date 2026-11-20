@@ -296,17 +296,17 @@ class Attachment {
 
   String get directory => "$baseDirectory/$guid";
 
-  String get path {
-    switch (Platform.operatingSystem) {
-      case "windows":
-        return "$directory/${"$transferName".replaceAll(RegExp(r'[<>:"/|?*]'), "_")}";
-      case "linux":
-      case "macos":
-        return "$directory/${"$transferName".replaceAll(RegExp(r'/'), "_")}";
-      default:
-        return "$directory/$transferName";
-    }
+  /// Sanitizes [transferName] so a remote sender cannot traverse out of [directory].
+  static String sanitizeTransferName(String? transferName, {bool isWindows = false}) {
+    final raw = "$transferName";
+    final sanitized = isWindows
+        ? raw.replaceAll(RegExp(r'[<>:"/|?*\\]'), "_")
+        : raw.replaceAll('/', '_');
+    if (sanitized == '.' || sanitized == '..') return sanitized.replaceAll('.', '_');
+    return sanitized;
   }
+
+  String get path => "$directory/${sanitizeTransferName(transferName, isWindows: Platform.isWindows)}";
 
   /// Extension used for the on-disk conversion of formats Flutter can't decode
   /// natively.

@@ -88,19 +88,27 @@ class NotificationHelperTest {
     }
 
     @Test
-    fun `isAppResumedOrUnbound blocks activation only while explicitly paused`() {
-        assertTrue(NotificationHelper.isAppResumedOrUnbound())
-        NotificationHelper.setAppResumed(false)
-        assertFalse(NotificationHelper.isAppResumedOrUnbound())
-        NotificationHelper.setAppResumed(true)
-        assertTrue(NotificationHelper.isAppResumedOrUnbound())
+    fun `isAppResumedOrUnbound requires explicit resume and blocks unbound or paused`() {
+        NotificationHelper.resetLifecycleForTest()
+        try {
+            assertFalse(NotificationHelper.isAppResumedOrUnbound())
+            NotificationHelper.setAppResumed(false)
+            assertFalse(NotificationHelper.isAppResumedOrUnbound())
+            NotificationHelper.setAppResumed(true)
+            assertTrue(NotificationHelper.isAppResumedOrUnbound())
+        } finally {
+            NotificationHelper.resetLifecycleForTest()
+        }
     }
 
     @Test
     fun `shouldActivateChat blocks stale chat while another launch target is pending`() {
         val chatA = "iMessage;-;+15551111111"
         val chatB = "iMessage;-;+15552222222"
+        NotificationHelper.resetLifecycleForTest()
         try {
+            assertFalse(NotificationHelper.shouldActivateChat(chatA))
+
             NotificationHelper.setAppResumed(true)
             NotificationHelper.setPendingLaunchChatGuid(chatB)
             assertFalse(NotificationHelper.shouldActivateChat(chatA))
@@ -113,8 +121,7 @@ class NotificationHelperTest {
             NotificationHelper.setPendingLaunchChatGuid(null)
             assertTrue(NotificationHelper.shouldActivateChat(chatA))
         } finally {
-            NotificationHelper.setPendingLaunchChatGuid(null)
-            NotificationHelper.setAppResumed(true)
+            NotificationHelper.resetLifecycleForTest()
         }
     }
 }

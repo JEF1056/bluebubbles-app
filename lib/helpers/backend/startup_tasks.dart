@@ -576,7 +576,8 @@ class StartupTasks {
         final redirectingAway = pendingGuid != null && pendingGuid != activeChat.chat.guid;
         // Settings, Find My or a page over the chat hides it, so it isn't being read and its field mustn't take focus
         final covered = activeChat.isCovered.value;
-        if ((lifecycle?.isForeground ?? true) &&
+        if ((lifecycle?.isUiInteractive ?? true) &&
+            !(activeChat.controller?.autoOpened ?? false) &&
             !redirectingAway &&
             !(activeChat.controller?.showingSubRoute ?? false) &&
             !covered) {

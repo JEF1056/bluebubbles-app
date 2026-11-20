@@ -33,6 +33,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   late final String tag;
   bool fromChatCreator = false;
   bool fromSearchResult = false;
+  bool autoOpened = false;
 
   /// The ConversationView that may delete this controller. Moving across the tablet breakpoint builds the new view
   /// before disposing the old one, and both share this controller.

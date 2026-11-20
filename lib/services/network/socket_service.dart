@@ -241,12 +241,13 @@ class SocketService {
 
     _cancelOfflineDebounce();
 
-    if (!event.contains(ConnectivityResult.wifi) &&
-        !event.contains(ConnectivityResult.ethernet) &&
-        HttpSvc.originOverride != null) {
-      Logger.info("Detected switch off wifi, removing localhost address...");
-      NetworkTasks.setOriginOverride(null);
-      followOrigin();
+    if (HttpSvc.originOverride != null) {
+      if (!event.contains(ConnectivityResult.wifi) && !event.contains(ConnectivityResult.ethernet)) {
+        Logger.info("Detected switch off wifi, removing localhost address...");
+      } else {
+        Logger.info("Connectivity changed, re-probing localhost address...");
+      }
+      _reproveLanOverride();
     }
 
     final wasOffline = !_networkAvailable;
@@ -398,7 +399,11 @@ class SocketService {
       s.onConnect((data) => handleStatusUpdate(SocketState.connected, data)),
       s.onReconnect((data) => handleStatusUpdate(SocketState.connected, data)),
       s.onReconnectAttempt((data) => handleStatusUpdate(SocketState.reconnecting, data)),
-      s.onDisconnect((data) => handleStatusUpdate(SocketState.disconnected, data)),
+      s.onDisconnect((data) {
+        _reproveLanOverride();
+        if (!identical(socket, s)) return;
+        handleStatusUpdate(SocketState.disconnected, data);
+      }),
       s.onConnectError((data) => handleStatusUpdate(SocketState.error, data)),
       s.onReconnectError((data) => handleStatusUpdate(SocketState.error, data)),
       s.onError((data) => handleStatusUpdate(SocketState.error, data)),
@@ -547,6 +552,18 @@ class SocketService {
     if (!connectionDesired || socket == null || _dialedOrigin == serverAddress) return;
     Logger.info(tag: _tag, "Server origin moved from $_dialedOrigin to $serverAddress — rebuilding socket");
     restartSocket();
+  }
+
+  @visibleForTesting
+  void reproveLanOverrideForTest() => _reproveLanOverride();
+
+  // A LAN override is only proven for the network it was probed on.
+  void _reproveLanOverride() {
+    if (HttpSvc.originOverride == null) return;
+    NetworkTasks.setOriginOverride(null);
+    if (!connectionDesired) return;
+    followOrigin();
+    unawaited(NetworkTasks.detectLocalhost());
   }
 
   void forgetConnection() {

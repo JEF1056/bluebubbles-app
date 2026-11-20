@@ -20,6 +20,24 @@ class UnifiedPushReceiver : MessagingReceiver() {
         const val tag: String = "UnifiedPushReceiver"
         internal const val TASKER_EVENT_ACTION = "net.dinglisch.android.taskerm.BB_EVENT"
 
+        internal val ALLOWED_PUSH_TYPES: Set<String> = setOf(
+            "new-message",
+            "updated-message",
+            "group-name-change",
+            "participant-removed",
+            "participant-added",
+            "participant-left",
+            "group-icon-changed",
+            "scheduled-message-error",
+            "chat-read-status-changed",
+            "incoming-facetime",
+            "ft-call-status-changed",
+            "imessage-aliases-removed",
+        )
+
+        internal fun isAllowedPushType(type: String?): Boolean =
+            type != null && type in ALLOWED_PUSH_TYPES
+
         private val gson: Gson = GsonBuilder()
             .setObjectToNumberStrategy(ToNumberPolicy.LONG_OR_DOUBLE)
             .create()
@@ -73,6 +91,10 @@ class UnifiedPushReceiver : MessagingReceiver() {
         val msg = payload.toString(Charsets.UTF_8)
         val (type, payloadMap) = parsePayload(msg) ?: run {
             PersistentLog.d(applicationContext, tag, "Invalid or malformed UnifiedPush message payload")
+            return
+        }
+        if (!isAllowedPushType(type)) {
+            PersistentLog.w(applicationContext, tag, "Ignoring unexpected UnifiedPush message type: $type")
             return
         }
 

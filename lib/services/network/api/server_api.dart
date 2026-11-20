@@ -23,6 +23,19 @@ class ServerApi {
     });
   }
 
+  /// Request an unauthenticated LAN-identity HMAC proof from [customUrl].
+  /// Never attaches `guid` or credentials so probing an unproven LAN IP cannot leak the password.
+  Future<Response> lanProof(String customUrl, String nonce, {CancelToken? cancelToken}) async {
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.get(
+        "$customUrl/api/v1/lan-proof",
+        queryParameters: {"nonce": nonce},
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    }, checkOrigin: false);
+  }
+
   /// The server's subscription tier (`tier` is null without a license). v2 servers only.
   Future<Response> subscription({CancelToken? cancelToken}) async {
     return _svc.runApiGuarded(() async {

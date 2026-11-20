@@ -195,6 +195,12 @@ class SettingsService {
         toSave.add('serverPrivateAPI');
       }
 
+      final lanProofKey = response.data['data']['lan_proof_key'];
+      if (lanProofKey is String && lanProofKey.isNotEmpty && settings.lanProofKey.value != lanProofKey) {
+        settings.lanProofKey.value = lanProofKey;
+        toSave.add('lanProofKey');
+      }
+
       final details = ServerDetails.fromServerInfo(response.data['data']);
       await _syncServerPrivateApi(details.privateApiEnabled, toSave: toSave);
       await _saveServerDetails(details);
