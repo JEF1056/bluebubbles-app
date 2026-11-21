@@ -60,6 +60,7 @@ import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.WearPillButton
+import com.wearbubbles.ui.theme.WearRotaryFocusScope
 import com.wearbubbles.ui.theme.WearSyncPill
 import com.wearbubbles.ui.theme.centeredTextStyle
 
@@ -99,12 +100,13 @@ fun ConversationListScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     )
 
-    ScreenScaffold(
-        scrollState = columnState,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-    ) {
+    WearRotaryFocusScope {
+        ScreenScaffold(
+            scrollState = columnState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.canvas)
+        ) {
         ScalingLazyColumn(
             columnState = columnState,
             modifier = Modifier
@@ -273,6 +275,7 @@ fun ConversationListScreen(
                     minHeight = 48.dp
                 )
             }
+        }
         }
     }
 

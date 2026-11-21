@@ -66,6 +66,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -76,6 +78,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.wear.compose.foundation.ExperimentalWearFoundationApi
+import androidx.wear.compose.foundation.HierarchicalFocusCoordinator
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
@@ -297,6 +301,23 @@ internal fun submitDirectKeyboardText(raw: String): String? =
     raw.trim().takeIf { it.isNotEmpty() }
 
 /**
+ * Re-claims Wear Compose rotary focus after inline View focus changes (e.g. WearDirectKeyboardInput)
+ * or window focus transitions (waking from AOD, closing a modal, or returning from voice/notifications).
+ */
+@OptIn(ExperimentalWearFoundationApi::class)
+@Composable
+fun WearRotaryFocusScope(
+    active: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    HierarchicalFocusCoordinator(
+        requiresFocus = { active && windowFocused },
+        content = content
+    )
+}
+
+/**
  * Opens the system IME (Gboard) directly without Wear OS's RemoteInput voice/emoji/keyboard
  * chooser, and tears down cleanly when submitted, dismissed, or backed out.
  */
@@ -314,6 +335,7 @@ fun WearDirectKeyboardInput(
     if (requestToken <= 0) return
 
     val context = LocalContext.current
+    val hostView = LocalView.current
     val imm = remember(context) {
         context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
     }
@@ -323,6 +345,17 @@ fun WearDirectKeyboardInput(
     var editTextRef by remember { mutableStateOf<EditText?>(null) }
     var dismissedToken by remember { mutableIntStateOf(0) }
 
+    fun restoreHostFocus() {
+        if (hostView.isAttachedToWindow && !hostView.hasFocus()) {
+            hostView.requestFocus()
+        }
+        hostView.post {
+            if (hostView.isAttachedToWindow && !hostView.hasFocus()) {
+                hostView.requestFocus()
+            }
+        }
+    }
+
     fun dismiss(et: EditText?) {
         if (dismissedToken == requestToken) return
         dismissedToken = requestToken
@@ -331,6 +364,7 @@ fun WearDirectKeyboardInput(
             it.clearFocus()
             imm?.hideSoftInputFromWindow(it.windowToken, 0)
         }
+        restoreHostFocus()
         currentOnDismiss()
     }
 
@@ -369,6 +403,7 @@ fun WearDirectKeyboardInput(
     DisposableEffect(Unit) {
         onDispose {
             editTextRef?.let { imm?.hideSoftInputFromWindow(it.windowToken, 0) }
+            restoreHostFocus()
         }
     }
 

@@ -134,6 +134,7 @@ import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.WearCircleIconButton
 import com.wearbubbles.ui.theme.WearDirectKeyboardInput
 import com.wearbubbles.ui.theme.WearPillButton
+import com.wearbubbles.ui.theme.WearRotaryFocusScope
 import com.wearbubbles.ui.theme.WearSyncPill
 import com.wearbubbles.ui.theme.centeredTextStyle
 import com.wearbubbles.ui.theme.rememberSpeechInputLauncher
@@ -389,27 +390,28 @@ fun MessageDetailScreen(
             }
     }
 
-    ScreenScaffold(
-        scrollState = columnState,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitPointerEvent(PointerEventPass.Initial)
-                        viewModel.onUserInteraction()
+    WearRotaryFocusScope(active = keyboardRequestToken <= 0) {
+        ScreenScaffold(
+            scrollState = columnState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.canvas)
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent(PointerEventPass.Initial)
+                            viewModel.onUserInteraction()
+                        }
                     }
                 }
-            }
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            ScalingLazyColumn(
-                columnState = columnState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(palette.canvas)
-            ) {
+        ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                ScalingLazyColumn(
+                    columnState = columnState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(palette.canvas)
+                ) {
             item(key = "chat_header") {
                 ListHeader(
                     modifier = Modifier
@@ -605,6 +607,7 @@ fun MessageDetailScreen(
                     .align(Alignment.TopCenter)
                     .padding(top = 22.dp)
             )
+        }
         }
     }
 

@@ -45,6 +45,7 @@ import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
+import com.wearbubbles.ui.theme.WearRotaryFocusScope
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.ui.theme.WearPillButton
 import com.wearbubbles.ui.theme.centeredTextStyle
@@ -112,21 +113,23 @@ fun WearModalScaffold(
                 .fillMaxSize()
                 .background(WearModalCanvas)
         ) {
-            ScreenScaffold(
-                scrollState = columnState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        this.alpha = alpha
-                        scaleX = scale
-                        scaleY = scale
-                    }
-            ) {
-                ScalingLazyColumn(
-                    columnState = columnState,
-                    modifier = Modifier.fillMaxSize(),
-                    content = content
-                )
+            WearRotaryFocusScope {
+                ScreenScaffold(
+                    scrollState = columnState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            this.alpha = alpha
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                ) {
+                    ScalingLazyColumn(
+                        columnState = columnState,
+                        modifier = Modifier.fillMaxSize(),
+                        content = content
+                    )
+                }
             }
         }
     }

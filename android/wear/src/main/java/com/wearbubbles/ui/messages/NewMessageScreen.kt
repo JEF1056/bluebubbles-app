@@ -60,6 +60,7 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults.ItemType
 import com.google.android.horologist.compose.layout.ScreenScaffold
+import com.wearbubbles.ui.theme.WearRotaryFocusScope
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.api.dto.AddressNormalizer
 import com.wearbubbles.db.entities.ChatEntity
@@ -343,12 +344,13 @@ fun NewMessageScreen(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     )
 
-    ScreenScaffold(
-        scrollState = columnState,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-    ) {
+    WearRotaryFocusScope(active = keyboardRequestToken <= 0) {
+        ScreenScaffold(
+            scrollState = columnState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.canvas)
+        ) {
         ScalingLazyColumn(
             columnState = columnState,
             modifier = Modifier
@@ -618,6 +620,7 @@ fun NewMessageScreen(
                     }
                 }
             }
+        }
         }
     }
 }

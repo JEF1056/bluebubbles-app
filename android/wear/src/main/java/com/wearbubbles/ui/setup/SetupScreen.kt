@@ -54,6 +54,7 @@ import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.OnErrorContainer
 import com.wearbubbles.ui.theme.SuccessColor
 import com.wearbubbles.ui.theme.WearPillButton
+import com.wearbubbles.ui.theme.WearRotaryFocusScope
 import com.wearbubbles.ui.theme.centeredTextStyle
 
 @OptIn(ExperimentalHorologistApi::class)
@@ -103,12 +104,13 @@ fun SetupScreen(
 
     val hasManualCreds = state.serverUrl.isNotBlank() && state.password.isNotBlank()
 
-    ScreenScaffold(
-        scrollState = columnState,
-        modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-    ) {
+    WearRotaryFocusScope {
+        ScreenScaffold(
+            scrollState = columnState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(palette.canvas)
+        ) {
         ScalingLazyColumn(
             columnState = columnState,
             modifier = Modifier
@@ -329,6 +331,7 @@ fun SetupScreen(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
+        }
         }
     }
 }
