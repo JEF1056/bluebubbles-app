@@ -263,7 +263,8 @@ object NotificationHelper {
             manager,
             notificationId,
             chatGuid,
-            NotificationCompat.MessagingStyle.Message(replyText, now, me)
+            // Pass null Person so MessagingStyle always treats the reply as from mePerson.
+            NotificationCompat.MessagingStyle.Message(replyText, now, null as Person?)
         )
 
         val senderName = meta?.senderName ?: "BlueBubbles"

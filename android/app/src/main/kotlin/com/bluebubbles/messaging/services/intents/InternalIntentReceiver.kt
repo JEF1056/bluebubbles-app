@@ -36,10 +36,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileInputStream
-import java.io.IOException
 import java.net.URLEncoder
 import java.util.UUID
 
@@ -331,6 +328,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
             if (temp != null) {
                 Notification.MessagingStyle(Person.Builder()
                     .setName(temp.user.name)
+                    .setKey(temp.user.key ?: "me")
                     .setIcon(temp.user.icon?.toIcon(context))
                     .build()
                 )
@@ -344,33 +342,16 @@ class InternalIntentReceiver: BroadcastReceiver() {
             PersistentLog.w(context, Constants.logTag, "Could not extract MessagingStyle, creating new one for reply")
             Notification.MessagingStyle(Person.Builder()
                 .setName(prefs.getString("userName", "You"))
+                .setKey("me")
                 .build()
             )
         }
-        val sender = Person.Builder()
-            .setName(prefs.getString("userName", "You"))
-        val avatarPath = prefs.getString("userAvatarPath", "")
-        if (!avatarPath.isNullOrEmpty()) {
-            val file = File(avatarPath)
-            if (file.isFile) {
-                try {
-                    val bytes = FileInputStream(file).use { fis ->
-                        BufferedInputStream(fis).use { it.readBytes() }
-                    }
-                    if (bytes.isNotEmpty()) {
-                        Utils.getAdaptiveIconFromByteArray(bytes)?.let { icon ->
-                            sender.setIcon(icon.toIcon(context))
-                        }
-                    }
-                } catch (e: IOException) {
-                    PersistentLog.w(context, Constants.logTag, "Failed to load user avatar for reply notification: ${e.message}")
-                }
-            }
-        }
+        // Pass null Person so Android MessagingStyle treats this reply as from messagingStyle.user
+        // instead of a remote sender (which would overwrite the 1:1 notification title with userName).
         val msg = Notification.MessagingStyle.Message(
             if (succeeded) replyText else "⚠ Not sent: $replyText",
             System.currentTimeMillis(),
-            sender.build()
+            null as Person?
         )
         if (succeeded && mediaMime != null && mediaUri != null) {
             msg.setData(mediaMime, mediaUri)

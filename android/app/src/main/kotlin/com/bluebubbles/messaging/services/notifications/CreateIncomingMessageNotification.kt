@@ -213,7 +213,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                     val hDate = (h["date"] as? Number)?.toLong() ?: return@forEach
                     val hFromMe = h["is_from_me"] as? Boolean ?: false
                     val hSender = if (hFromMe) {
-                        youPerson
+                        null
                     } else {
                         val hName = (h["sender_name"] as? String)?.takeIf { it.isNotBlank() } ?: contactName
                         val hKey = h["sender_key"] as? String ?: contactKey
@@ -232,7 +232,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             val styleMessage = NotificationCompat.MessagingStyle.Message(
                 messageText,
                 messageDate,
-                sender
+                if (messageIsFromMe) null else sender
             )
             if (!attachmentPath.isNullOrEmpty() && !attachmentMime.isNullOrEmpty()) {
                 try {
