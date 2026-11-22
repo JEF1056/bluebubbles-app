@@ -125,5 +125,73 @@ void main() {
 
       expect(deduped, hasLength(2));
     });
+
+    test('deduplicates unresolved email alias sharing sub-meter GPS fix with skewed timestamps', () {
+      final aaron = ContactV2(
+        nativeContactId: 'contact-aaron',
+        displayName: 'Aaron Lee',
+        addresses: ['+19499980689'],
+      );
+      final phoneFriend = _friend(
+        handleAddress: '+19499980689',
+        lat: 37.401647314348594,
+        lng: -121.93249705406014,
+        lastUpdated: DateTime.fromMillisecondsSinceEpoch(1795311430933),
+      );
+      final emailFriend = _friend(
+        handleAddress: 'aaron68lee@gmail.com',
+        lat: 37.401647276344946,
+        lng: -121.93249700762715,
+        lastUpdated: DateTime.fromMillisecondsSinceEpoch(1795310762210),
+      );
+
+      final deduped = deduplicateFindMyFriends(
+        [emailFriend, phoneFriend],
+        contactLookup: (addr) => aaron.addresses.any((a) => findMyHandlesMatch(a, addr)) ? aaron : null,
+      );
+
+      expect(deduped, hasLength(1));
+      expect(deduped.single.handleAddress, '+19499980689');
+      expect(deduped.single.lastUpdated?.millisecondsSinceEpoch, 1795311430933);
+    });
+
+    test('deduplicates separate server and native contacts sharing displayName across phone and email without coords', () {
+      final serverContact = ContactV2(
+        nativeContactId: 'server-phillis',
+        displayName: 'Phillis',
+        addresses: ['+14849834078'],
+      );
+      final nativeContact = ContactV2(
+        nativeContactId: 'android-phillis',
+        displayName: 'Phillis',
+        addresses: ['xinyu32008@gmail.com'],
+      );
+      final phoneFriend = _friend(
+        handleAddress: '+14849834078',
+        lat: 37.3346,
+        lng: -122.0090,
+        status: LocationStatus.live,
+      );
+      final emailNoLocation = _friend(
+        handleAddress: 'xinyu32008@gmail.com',
+        lat: null,
+        lng: null,
+        lastUpdated: null,
+        status: LocationStatus.legacy,
+      );
+
+      final deduped = deduplicateFindMyFriends(
+        [emailNoLocation, phoneFriend],
+        contactLookup: (addr) {
+          if (findMyHandlesMatch(addr, '+14849834078')) return serverContact;
+          if (findMyHandlesMatch(addr, 'xinyu32008@gmail.com')) return nativeContact;
+          return null;
+        },
+      );
+
+      expect(deduped, hasLength(1));
+      expect(deduped.single.handleAddress, '+14849834078');
+      expect(deduped.single.latitude, 37.3346);
+    });
   });
 }

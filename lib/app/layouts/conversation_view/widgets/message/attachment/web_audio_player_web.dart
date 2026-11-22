@@ -273,15 +273,18 @@ Future<void> playWebSoundAsset(
     } catch (_) {}
   }
 
+  _suspendSharedCtxTimer?.cancel();
+  // Hold an active slot across resume/decodeAudioData so concurrent finishes cannot suspend ctx mid-decode.
+  _activeWebSoundCount++;
+  var handedOffToFinish = false;
   try {
-    _suspendSharedCtxTimer?.cancel();
     final ctx = _sharedAudioCtx ??= web.AudioContext();
     if (ctx.state == 'suspended') {
       await ctx.resume().toDart;
     }
     if (ctx.state == 'running') {
       final buffer = await _loadDecodedBuffer(ctx, assetPath);
-      if (buffer != null) {
+      if (buffer != null && ctx.state == 'running') {
         final gain = ctx.createGain();
         gain.gain.value = clampedVol;
         gain.connect(ctx.destination);
@@ -290,7 +293,6 @@ Future<void> playWebSoundAsset(
         source.buffer = buffer;
         source.connect(gain);
 
-        _activeWebSoundCount++;
         var finished = false;
         Timer? fallbackTimer;
         late final web.EventListener onEnded;
@@ -316,6 +318,7 @@ Future<void> playWebSoundAsset(
         final durationMs = (buffer.duration * 1000).ceil().clamp(250, 10000);
         fallbackTimer = Timer(Duration(milliseconds: durationMs + 500), finishSound);
 
+        handedOffToFinish = true;
         try {
           source.start();
         } catch (_) {
@@ -325,9 +328,12 @@ Future<void> playWebSoundAsset(
         return;
       }
     }
-    if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
   } catch (_) {
-    if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
+  } finally {
+    if (!handedOffToFinish) {
+      if (_activeWebSoundCount > 0) _activeWebSoundCount--;
+      if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
+    }
   }
 
   try {

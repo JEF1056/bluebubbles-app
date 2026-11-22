@@ -52,9 +52,10 @@ class _FakePrefsMessagingActions extends SharedPreferencesMessagingActions {
 }
 
 class _FakeFindMyBleService extends FindMyBleService {
-  _FakeFindMyBleService(this._streamControllerFactory) : super(isSupportedOverride: true);
+  _FakeFindMyBleService(this._streamControllerFactory, {this.specFuture}) : super(isSupportedOverride: true);
 
   final StreamController<FindMyBleScanEvent> Function() _streamControllerFactory;
+  final Future<FindMyBleSpec?>? specFuture;
   int scanStartCount = 0;
   int scanCancelCount = 0;
 
@@ -68,14 +69,17 @@ class _FakeFindMyBleService extends FindMyBleService {
   Future<bool> isBluetoothEnabled() async => true;
 
   @override
-  Future<FindMyBleSpec?> getBleSpec(String deviceId, {bool forceRefresh = false}) async => FindMyBleSpec(
-        deviceId: 'dev-1',
-        rawId: 'dev-1',
-        provider: 'gfind',
-        serviceUuid: '0000fe2c-0000-1000-8000-00805f9b34fb',
-        expiresAt: DateTime.now().add(const Duration(minutes: 10)),
-        supportsUwb: false,
-      );
+  Future<FindMyBleSpec?> getBleSpec(String deviceId, {bool forceRefresh = false}) async {
+    if (specFuture != null) return specFuture;
+    return FindMyBleSpec(
+      deviceId: 'dev-1',
+      rawId: 'dev-1',
+      provider: 'gfind',
+      serviceUuid: '0000fe2c-0000-1000-8000-00805f9b34fb',
+      expiresAt: DateTime.now().add(const Duration(minutes: 10)),
+      supportsUwb: false,
+    );
+  }
 
   @override
   Future<bool> canLaunchUwbApp(FindMyBleSpec spec) async => false;
@@ -266,6 +270,63 @@ void main() {
       expect(ble.scanCancelCount, 2);
       expect(SchedulerBinding.instance.transientCallbackCount, 0);
 
+      await streamCtrl.close();
+    });
+
+    testWidgets('FindMyNearbySheet skips scan start if lifecycle paused during spec fetch', (tester) async {
+      final specCompleter = Completer<FindMyBleSpec?>();
+      late StreamController<FindMyBleScanEvent> streamCtrl;
+      final ble = _FakeFindMyBleService(() {
+        streamCtrl = StreamController<FindMyBleScanEvent>.broadcast();
+        return streamCtrl;
+      }, specFuture: specCompleter.future);
+      final controller = FindMyController(autoFetch: false);
+      final device = FindMyDevice.fromJson({
+        'id': 'dev-1',
+        'name': 'Keys',
+        'deviceClass': 'Accessory',
+        'isConsideredAccessory': true,
+        'features': {
+          'TRACKER_PROVIDER': 'gfind',
+          'CAN_RING': true,
+          'CAN_FIND_NEARBY': true,
+        },
+      });
+
+      addTearDown(() => tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed));
+
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: GetMaterialApp(
+            home: Scaffold(
+              body: FindMyNearbySheet(device: device, controller: controller, bleService: ble),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      specCompleter.complete(
+        FindMyBleSpec(
+          deviceId: 'dev-1',
+          rawId: 'dev-1',
+          provider: 'gfind',
+          serviceUuid: '0000fe2c-0000-1000-8000-00805f9b34fb',
+          expiresAt: DateTime.now().add(const Duration(minutes: 10)),
+          supportsUwb: false,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(ble.scanStartCount, 0);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(ble.scanStartCount, 1);
+
+      await tester.pumpWidget(const SizedBox.shrink());
       await streamCtrl.close();
     });
 

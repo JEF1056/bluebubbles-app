@@ -52,7 +52,7 @@ class OptPhoneCoreTest {
         val opts = IO.Options()
         SocketIOForegroundService.applyReconnectBackoff(opts)
         assertEquals(2_000L, opts.reconnectionDelay)
-        assertEquals(600_000L, opts.reconnectionDelayMax)
+        assertEquals(60_000L, opts.reconnectionDelayMax)
 
         // Initial offline gating
         assertFalse(

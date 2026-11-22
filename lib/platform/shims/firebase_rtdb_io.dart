@@ -12,6 +12,8 @@ void setupFirebaseRtdb() {
   );
 }
 
+const Duration _rtdbTimeout = Duration(seconds: 15);
+
 Future<String?> fetchFirebaseServerUrl({
   required String apiKey,
   required String appId,
@@ -32,14 +34,16 @@ Future<String?> fetchFirebaseServerUrl({
   if (databaseUrl != null && databaseUrl.isNotEmpty) {
     final db = FirebaseDatabase(app: app);
     try {
-      final event = await db.reference().child('config').child('serverUrl').onValue.first;
+      // Cached Repo stays interrupted after goOffline(); resume before reading.
+      await db.goOnline();
+      final event = await db.reference().child('config').child('serverUrl').onValue.first.timeout(_rtdbTimeout);
       return event.snapshot.value?.toString();
     } finally {
       await db.goOffline();
     }
   }
   final db = FirebaseFirestore.instanceFor(app: app);
-  final doc = await db.collection('server').doc('config').get();
+  final doc = await db.collection('server').doc('config').get().timeout(_rtdbTimeout);
   return doc.data()?['serverUrl']?.toString();
 }
 
@@ -49,7 +53,8 @@ Future<void> setFirebaseNextRestart({
 }) async {
   final db = FirebaseDatabase(databaseURL: databaseUrl);
   try {
-    await db.reference().child('config').child('nextRestart').set(timestampMs);
+    await db.goOnline();
+    await db.reference().child('config').child('nextRestart').set(timestampMs).timeout(_rtdbTimeout);
   } finally {
     await db.goOffline();
   }

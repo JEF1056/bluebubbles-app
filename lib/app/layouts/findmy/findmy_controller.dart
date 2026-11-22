@@ -119,7 +119,15 @@ ContactV2? _lookupContactForFindMyFriend(
 }
 
 bool _contactContainsAddress(ContactV2 contact, String address) =>
-    contact.addresses.any((entry) => findMyHandlesMatch(entry, address));
+    contact.addresses.any((entry) => findMyHandlesMatch(entry, address)) ||
+    contact.phoneNumbers.any((entry) => findMyHandlesMatch(entry.number, address)) ||
+    contact.emailAddresses.any((entry) => findMyHandlesMatch(entry.address, address));
+
+String _normalizedContactNameForDedup(ContactV2 contact) {
+  final raw = (contact.displayName.isNotEmpty ? contact.displayName : contact.computedDisplayName).trim().toLowerCase();
+  if (raw.isEmpty || raw == 'unknown' || raw == 'unknown friend' || raw.contains('@')) return '';
+  return raw;
+}
 
 bool _contactsRepresentSamePerson(ContactV2? a, ContactV2? b, String? addrA, String? addrB) {
   if (a != null && b != null) {
@@ -128,6 +136,11 @@ bool _contactsRepresentSamePerson(ContactV2? a, ContactV2? b, String? addrA, Str
     final idB = b.nativeContactId.trim();
     if (idA.isNotEmpty && idB.isNotEmpty && idA == idB) return true;
     if (a.id != 0 && a.id == b.id) return true;
+    // Separate server vs native contact cards for the same person (e.g. phone on macOS, email on Android).
+    if (a.addresses.any((entry) => _contactContainsAddress(b, entry))) return true;
+    final nameA = _normalizedContactNameForDedup(a);
+    final nameB = _normalizedContactNameForDedup(b);
+    if (nameA.isNotEmpty && nameA == nameB && (_isEmailAddress(addrA) != _isEmailAddress(addrB))) return true;
   }
   if (a != null && addrB != null && addrB.trim().isNotEmpty && _contactContainsAddress(a, addrB)) return true;
   if (b != null && addrA != null && addrA.trim().isNotEmpty && _contactContainsAddress(b, addrA)) return true;
@@ -184,7 +197,8 @@ bool _sameAppleIdLocationAlias(
   final tsA = a.lastUpdated?.millisecondsSinceEpoch;
   final tsB = b.lastUpdated?.millisecondsSinceEpoch;
   if (tsA == null || tsB == null) return false;
-  return (tsA - tsB).abs() <= 5000;
+  // Apple caches shallow fixes per handle independently; sub-meter coords (~1m) within 24h are the same Apple ID.
+  return (tsA - tsB).abs() <= const Duration(hours: 24).inMilliseconds;
 }
 
 FindMyFriend _mergeDuplicateFriends(
@@ -447,7 +461,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
         _positionStreamFn = positionStream,
         _livePollInterval = livePollInterval ?? const Duration(seconds: 5),
         _liveFallbackInterval = liveFallbackInterval ?? const Duration(seconds: 25),
-        _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(seconds: 45),
+        _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(minutes: 3),
         _geocodeMinInterval = geocodeMinInterval ?? const Duration(seconds: 1),
         _readPrefListFn = readPrefList,
         _writePrefListFn = writePrefList,
@@ -1177,15 +1191,23 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   }
 
   void _scrollToTop(ScrollController scrollController) {
-    for (final c in [scrollController, if (activeSheetScrollController != null && !identical(activeSheetScrollController, scrollController)) activeSheetScrollController]) {
-      if (c == null || !c.hasClients) continue;
-      for (final position in c.positions) {
+    if (scrollController.hasClients) {
+      for (final position in scrollController.positions) {
         if (position.pixels > 0) {
           position.animateTo(
             0,
             duration: const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
           );
+        }
+      }
+    }
+    final sheetScroll = activeSheetScrollController;
+    if (sheetScroll != null && !identical(sheetScroll, scrollController) && sheetScroll.hasClients) {
+      for (final position in sheetScroll.positions) {
+        if (position.pixels > 0) {
+          // Jump rather than animate so DraggableScrollableSheet.animateTo isn't cancelled.
+          position.jumpTo(0);
         }
       }
     }

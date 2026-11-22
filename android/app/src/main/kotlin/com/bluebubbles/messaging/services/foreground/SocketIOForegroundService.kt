@@ -112,7 +112,7 @@ class SocketIOForegroundService : Service() {
 
         internal fun applyReconnectBackoff(opts: IO.Options) {
             opts.reconnectionDelay = 2_000L
-            opts.reconnectionDelayMax = 600_000L
+            opts.reconnectionDelayMax = 60_000L
         }
 
         internal fun shouldAttemptConnect(

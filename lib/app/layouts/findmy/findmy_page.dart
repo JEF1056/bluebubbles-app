@@ -50,15 +50,30 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     }
   }
 
+  void _resetActiveSheetScrollToTop() {
+    final sheetScroll = controller.activeSheetScrollController;
+    if (sheetScroll == null || !sheetScroll.hasClients) return;
+    for (final position in sheetScroll.positions) {
+      if (position.pixels > 0) {
+        position.jumpTo(0);
+      }
+    }
+  }
+
   void _openDetailSheet() {
-    if (!mounted || !context.isPhone) return;
-    if (controller.sheetController.isAttached) {
+    if (!mounted) return;
+    if (!controller.sheetController.isAttached) return;
+    // Jump scroll to top before animating sheet extent so DrivenScrollActivity doesn't cancel animateTo.
+    _resetActiveSheetScrollToTop();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !controller.sheetController.isAttached) return;
+      _resetActiveSheetScrollToTop();
       controller.sheetController.animateTo(
         _detailSnapPoint,
         duration: const Duration(milliseconds: 280),
         curve: Curves.easeOutCubic,
       );
-    }
+    });
   }
 
   double _detailSheetOffsetPx() {

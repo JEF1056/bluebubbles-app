@@ -83,20 +83,19 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      _pausedByLifecycle = true;
       if (_scanSub != null) {
-        _pausedByLifecycle = true;
         unawaited(_scanSub!.cancel());
         _scanSub = null;
         _syncPulseAnimation();
       }
-    } else if (state == AppLifecycleState.resumed &&
-        _pausedByLifecycle &&
-        _spec != null &&
-        _errorText == null &&
-        !_loading &&
-        _scanSub == null) {
+    } else if (state == AppLifecycleState.resumed) {
+      final shouldResume =
+          _pausedByLifecycle && _spec != null && _errorText == null && !_loading && _scanSub == null;
       _pausedByLifecycle = false;
-      _subscribeScan(_spec!);
+      if (shouldResume) {
+        _subscribeScan(_spec!);
+      }
     }
   }
 
@@ -123,6 +122,14 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
   }
 
   void _subscribeScan(FindMyBleSpec spec) {
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (_pausedByLifecycle ||
+        lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.hidden) {
+      _pausedByLifecycle = true;
+      _syncPulseAnimation();
+      return;
+    }
     _scanSub?.cancel();
     _scanSub = _ble.scanStream(spec).listen(
       (event) {
