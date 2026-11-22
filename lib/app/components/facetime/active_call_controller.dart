@@ -1,14 +1,17 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/facetime/web_ringtone.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/helpers/ui/ui_helpers.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/facetime.dart';
+import 'package:bluebubbles/services/facetime/web_webrtc_client.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -189,6 +192,8 @@ class ActiveCallController extends ChangeNotifier {
 
   static String? failureMessageFor({String? endedReason, String? endedError}) {
     final reason = endedReason?.trim().toLowerCase();
+    // Missed calls are reported as missed-call notifications, never error banners.
+    if (reason == 'missed') return null;
     final err = endedError?.trim();
     final hasFailureReason = reason != null && _failureEndedReasons.contains(reason);
     final hasEndedError = err != null && err.isNotEmpty;
@@ -224,9 +229,21 @@ class ActiveCallController extends ChangeNotifier {
     PendingCallTab? Function()? onOpenPendingTab,
     Future<bool> Function({required String callUuid, required String callerName, String? callerAddress, bool isTelephony})?
         onStartTelecomAudio,
+    Future<bool> Function({
+      required String callUuid,
+      required String callerName,
+      String? callerAddress,
+      bool isTelephony,
+      bool isVideo,
+    })? onStartTelecomCall,
     Future<void> Function(String callUuid, {bool onlyIfRinging})? onEndNativeCall,
     void Function(String callUuid, {bool keepCallState})? onDismissOverlay,
     void Function(String title, String message)? onShowError,
+    void Function(String? callUuid)? onStartIncomingRingtone,
+    void Function(String? callUuid)? onStopIncomingRingtone,
+    WebWebRtcClient? webRtcClient,
+    Future<bool> Function(bool enabled)? onToggleSpeaker,
+    bool? isWebOverride,
   })  : _onEndCall = onEndCall,
         _onReturnToCall = onReturnToCall,
         _onMuteChanged = onMuteChanged,
@@ -243,9 +260,15 @@ class ActiveCallController extends ChangeNotifier {
         _onLaunchJoinLink = onLaunchJoinLink,
         _onOpenPendingTab = onOpenPendingTab,
         _onStartTelecomAudio = onStartTelecomAudio,
+        _onStartTelecomCall = onStartTelecomCall,
         _onEndNativeCall = onEndNativeCall,
         _onDismissOverlay = onDismissOverlay,
-        _onShowError = onShowError;
+        _onShowError = onShowError,
+        _onStartIncomingRingtone = onStartIncomingRingtone,
+        _onStopIncomingRingtone = onStopIncomingRingtone,
+        _webRtcClient = webRtcClient ?? WebWebRtcClient(),
+        _onToggleSpeaker = onToggleSpeaker,
+        _isWebOverride = isWebOverride;
 
   final Future<void> Function(String? callUuid, bool isTelecom)? _onEndCall;
   final Future<void> Function(String? joinLink, BuildContext? context)? _onReturnToCall;
@@ -269,9 +292,322 @@ class ActiveCallController extends ChangeNotifier {
     String? callerAddress,
     bool isTelephony,
   })? _onStartTelecomAudio;
+  final Future<bool> Function({
+    required String callUuid,
+    required String callerName,
+    String? callerAddress,
+    bool isTelephony,
+    bool isVideo,
+  })? _onStartTelecomCall;
   final Future<void> Function(String callUuid, {bool onlyIfRinging})? _onEndNativeCall;
   final void Function(String callUuid, {bool keepCallState})? _onDismissOverlay;
   final void Function(String title, String message)? _onShowError;
+  final void Function(String? callUuid)? _onStartIncomingRingtone;
+  final void Function(String? callUuid)? _onStopIncomingRingtone;
+  final WebWebRtcClient _webRtcClient;
+  final Future<bool> Function(bool enabled)? _onToggleSpeaker;
+  final bool? _isWebOverride;
+  String? _ringingCallUuid;
+
+  bool get _isWeb => _isWebOverride ?? kIsWeb;
+
+  final Rxn<Widget> remoteVideoWidget = Rxn<Widget>();
+  final Rxn<Widget> localVideoWidget = Rxn<Widget>();
+  final RxBool cameraEnabled = false.obs;
+  final RxBool canFlipCamera = false.obs;
+  final RxBool isFrontCamera = true.obs;
+  final RxBool isSpeakerOn = false.obs;
+
+  WebRtcBridgeConfig? get cachedWebRtcConfig => _webRtcClient.cachedConfig;
+  bool get isWebRtcActive => _webRtcClient.isActive;
+
+  Future<WebRtcBridgeConfig> getWebRtcConfig({bool forceRefresh = false}) =>
+      _webRtcClient.fetchBridgeConfig(forceRefresh: forceRefresh);
+
+  Future<bool> toggleSpeaker() async {
+    final next = !isSpeakerOn.value;
+    if (_onToggleSpeaker != null) {
+      try {
+        final applied = await _onToggleSpeaker(next);
+        if (applied) {
+          isSpeakerOn.value = next;
+          notifyListeners();
+        }
+        return applied;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (_isWeb) {
+      return false;
+    }
+    if (Platform.isAndroid && GetIt.I.isRegistered<MethodChannelService>()) {
+      try {
+        final result = await MethodChannelSvc.channel.invokeMethod<bool>(
+          'set-facetime-speaker',
+          <String, dynamic>{'call_uuid': _state.callUuid, 'enabled': next},
+        );
+        final applied = result ?? next;
+        if (applied) {
+          isSpeakerOn.value = next;
+          notifyListeners();
+        }
+        return applied;
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  Future<bool> toggleCamera() async {
+    if (_state.phase == ActiveCallPhase.idle || _state.isTelephony) {
+      return false;
+    }
+    final next = !cameraEnabled.value;
+    if (_webRtcClient.isActive) {
+      try {
+        await _webRtcClient.setCameraEnabled(next);
+        cameraEnabled.value = _webRtcClient.cameraEnabled.value;
+        localVideoWidget.value = _webRtcClient.localVideo.value;
+        canFlipCamera.value = _webRtcClient.canFlipCamera.value;
+        isFrontCamera.value = _webRtcClient.frontCamera.value;
+        notifyListeners();
+        return cameraEnabled.value == next;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (!_isWeb &&
+        Platform.isAndroid &&
+        GetIt.I.isRegistered<MethodChannelService>() &&
+        (_state.callUuid?.isNotEmpty ?? false)) {
+      try {
+        final applied = await MethodChannelSvc.channel.invokeMethod<bool>(
+          'set-facetime-camera-enabled',
+          <String, dynamic>{'call_uuid': _state.callUuid, 'enabled': next},
+        );
+        if (applied == true) {
+          cameraEnabled.value = next;
+          notifyListeners();
+          return true;
+        }
+        return false;
+      } catch (_) {
+        return false;
+      }
+    }
+    cameraEnabled.value = next;
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> flipCamera() async {
+    if (_state.phase == ActiveCallPhase.idle || !canFlipCamera.value || !cameraEnabled.value) {
+      return false;
+    }
+    if (_webRtcClient.isActive) {
+      try {
+        await _webRtcClient.flipCamera();
+        isFrontCamera.value = _webRtcClient.frontCamera.value;
+        notifyListeners();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    if (!_isWeb &&
+        Platform.isAndroid &&
+        GetIt.I.isRegistered<MethodChannelService>() &&
+        (_state.callUuid?.isNotEmpty ?? false)) {
+      try {
+        final flipped = await MethodChannelSvc.channel.invokeMethod<bool>(
+          'flip-facetime-camera',
+          <String, dynamic>{'call_uuid': _state.callUuid},
+        );
+        if (flipped == true) {
+          isFrontCamera.value = !isFrontCamera.value;
+          notifyListeners();
+          return true;
+        }
+        return false;
+      } catch (_) {
+        return false;
+      }
+    }
+    isFrontCamera.value = !isFrontCamera.value;
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> openFaceTimeLink({BuildContext? context}) async {
+    final link = _state.joinLink;
+    if (link == null || link.isEmpty) return;
+    await _launchJoinLink(link, context: context);
+  }
+
+  Future<bool> _startWebRtcBridge({
+    required String callUuid,
+    required bool wantVideo,
+    required bool answerCall,
+    bool initialMuted = false,
+  }) async {
+    _webRtcClient.onRemoteVideoChanged = (widget) {
+      remoteVideoWidget.value = widget;
+      notifyListeners();
+    };
+    _webRtcClient.onLocalVideoChanged = (widget) {
+      localVideoWidget.value = widget;
+      notifyListeners();
+    };
+    _webRtcClient.onCameraEnabledChanged = (enabled) {
+      cameraEnabled.value = enabled;
+      notifyListeners();
+    };
+    _webRtcClient.onCanFlipCameraChanged = (canFlip) {
+      canFlipCamera.value = canFlip;
+      notifyListeners();
+    };
+    _webRtcClient.onFrontCameraChanged = (isFront) {
+      isFrontCamera.value = isFront;
+      notifyListeners();
+    };
+    try {
+      await _webRtcClient.start(
+        callUuid: callUuid,
+        wantVideo: wantVideo,
+        answerCall: answerCall,
+        initialMuted: initialMuted,
+      );
+      if (_state.phase == ActiveCallPhase.idle || _state.callUuid != callUuid) {
+        await _stopWebRtcBridge(emitHangup: false);
+        return false;
+      }
+      remoteVideoWidget.value = _webRtcClient.remoteVideo.value;
+      localVideoWidget.value = _webRtcClient.localVideo.value;
+      cameraEnabled.value = _webRtcClient.cameraEnabled.value;
+      canFlipCamera.value = _webRtcClient.canFlipCamera.value;
+      isFrontCamera.value = _webRtcClient.frontCamera.value;
+      notifyListeners();
+      return true;
+    } catch (e, s) {
+      _safeLogWarn('WebRTC bridge startup failed', e, s);
+      _resetVideoNotifiers();
+      return false;
+    }
+  }
+
+  Future<void> _stopWebRtcBridge({bool emitHangup = true}) async {
+    _webRtcClient.onRemoteVideoChanged = null;
+    _webRtcClient.onLocalVideoChanged = null;
+    _webRtcClient.onCameraEnabledChanged = null;
+    _webRtcClient.onCanFlipCameraChanged = null;
+    _webRtcClient.onFrontCameraChanged = null;
+    _resetVideoNotifiers();
+    await _webRtcClient.hangup(emitSignal: emitHangup);
+  }
+
+  void _resetVideoNotifiers() {
+    remoteVideoWidget.value = null;
+    localVideoWidget.value = null;
+    cameraEnabled.value = false;
+    canFlipCamera.value = false;
+    isFrontCamera.value = true;
+  }
+
+  int? _parseTextureId(dynamic rawTextureId) {
+    if (rawTextureId is int) return rawTextureId;
+    if (rawTextureId is num) return rawTextureId.toInt();
+    return int.tryParse(rawTextureId?.toString() ?? '');
+  }
+
+  Future<bool> startWebOutgoingCall({
+    required String address,
+    required String callerName,
+    Uint8List? avatarBytes,
+    required bool video,
+    required bool isTelephony,
+    String? chatGuid,
+    Future<PlacedFaceTimeCall> Function(bool isVideo)? onPlaceServerCall,
+    void Function(String link)? onFallbackJoinLink,
+  }) async {
+    final effectiveVideo = video && !isTelephony;
+    startOutgoing(
+      callerName: callerName,
+      callerAddress: address,
+      avatarBytes: avatarBytes,
+      isVideo: effectiveVideo,
+      isTelephony: isTelephony,
+      chatGuid: chatGuid,
+      activeDeviceId: localDeviceId,
+      activeDeviceName: localDeviceName,
+    );
+
+    PlacedFaceTimeCall placed;
+    try {
+      placed = await (onPlaceServerCall != null
+          ? onPlaceServerCall(effectiveVideo)
+          : HttpSvc.faceTime.call(
+              address,
+              video: effectiveVideo,
+              isTelephony: isTelephony,
+              displayName: callerName,
+              chatGuid: chatGuid,
+            ));
+    } on FaceTimeException catch (e, s) {
+      _safeLogWarn('Failed to place FaceTime call', e, s);
+      clear();
+      reportError(e.message);
+      return false;
+    } catch (e, s) {
+      _safeLogWarn('Failed to place FaceTime call', e, s);
+      clear();
+      reportError("Couldn't start the call.");
+      return false;
+    }
+
+    final uuid = placed.call.callUuid;
+    if (_state.phase == ActiveCallPhase.idle) {
+      await _leaveServer(uuid);
+      return false;
+    }
+
+    startOutgoing(
+      callUuid: uuid,
+      callerName: callerName,
+      callerAddress: address,
+      avatarBytes: avatarBytes,
+      isVideo: effectiveVideo,
+      joinLink: placed.link,
+      isTelephony: isTelephony,
+      chatGuid: chatGuid,
+      activeDeviceId: localDeviceId,
+      activeDeviceName: localDeviceName,
+    );
+
+    final started = await _startWebRtcBridge(
+      callUuid: uuid,
+      wantVideo: effectiveVideo,
+      answerCall: false,
+    );
+    if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) {
+      await _stopWebRtcBridge(emitHangup: false);
+      return false;
+    }
+    if (started) {
+      return true;
+    }
+
+    final link = placed.link;
+    if (effectiveVideo && link != null && link.isNotEmpty && onFallbackJoinLink != null) {
+      onFallbackJoinLink(link);
+      return true;
+    }
+
+    await endCall();
+    reportError("Couldn't connect WebRTC media for this call.");
+    return false;
+  }
 
   String get localDeviceId =>
       (_deviceId != null && _deviceId.isNotEmpty) ? _deviceId : ClientDeviceIdentity.resolveDeviceId();
@@ -364,6 +700,7 @@ class ActiveCallController extends ChangeNotifier {
       startedAt: startedAt ?? (matches ? _state.startedAt : null) ?? _now(),
       localDeviceId: localDeviceId,
     );
+    _startIncomingRingtone(callUuid);
     notifyListeners();
   }
 
@@ -383,6 +720,7 @@ class ActiveCallController extends ChangeNotifier {
     DateTime? startedAt,
   }) {
     _stopTicker();
+    _stopIncomingRingtone();
     _elapsed = Duration.zero;
     _state = ActiveCallState(
       phase: ActiveCallPhase.outgoing,
@@ -419,6 +757,7 @@ class ActiveCallController extends ChangeNotifier {
     String? activeDeviceName,
   }) {
     _stopTicker();
+    _stopIncomingRingtone(callUuid);
     _elapsed = Duration.zero;
     final matches = _state.callUuid == callUuid;
     final nextTelephony = isTelephony ?? (matches ? _state.isTelephony : false);
@@ -458,6 +797,7 @@ class ActiveCallController extends ChangeNotifier {
     DateTime? connectedAt,
   }) {
     final effectiveConnectedAt = connectedAt ?? _now();
+    _stopIncomingRingtone(callUuid);
     final matches = callUuid != null && callUuid.isNotEmpty && _state.callUuid == callUuid;
     _state = ActiveCallState(
       phase: ActiveCallPhase.ongoing,
@@ -522,22 +862,27 @@ class ActiveCallController extends ChangeNotifier {
   }
 
   /// Called when Android Telecom reports the local call transitioned to `active`.
-  void notifyTelecomActive(String callUuid, {bool isTelephony = false}) {
+  void notifyTelecomActive(String callUuid, {bool isTelephony = false, bool? isVideo}) {
     if (callUuid.isEmpty) return;
+    final wasIdle = _state.phase == ActiveCallPhase.idle;
     final wasOnOtherDevice = _state.isOnOtherDevice || _state.phase == ActiveCallPhase.incoming;
-    final matchesOrIdle = _state.phase == ActiveCallPhase.idle ||
+    final prevActiveDeviceId = _state.activeDeviceId;
+    final matchesOrIdle = wasIdle ||
         _state.callUuid == null ||
         _state.callUuid!.isEmpty ||
         _state.callUuid == callUuid;
     if (!matchesOrIdle) return;
 
-    if (_state.phase == ActiveCallPhase.idle) {
+    final effectiveTelephony = isTelephony || (!wasIdle && _state.isTelephony);
+    final effectiveVideo = effectiveTelephony ? false : (isVideo ?? (wasIdle ? false : _state.isVideo));
+
+    if (wasIdle) {
       startOngoing(
         callUuid: callUuid,
-        callerName: isTelephony ? 'iPhone Call' : 'FaceTime Call',
-        isVideo: false,
+        callerName: effectiveTelephony ? 'iPhone Call' : 'FaceTime Call',
+        isVideo: effectiveVideo,
         isTelecomCall: true,
-        isTelephony: isTelephony,
+        isTelephony: effectiveTelephony,
         activeDeviceId: localDeviceId,
         activeDeviceName: localDeviceName,
       );
@@ -548,9 +893,9 @@ class ActiveCallController extends ChangeNotifier {
       _state = _state.copyWith(
         phase: ActiveCallPhase.ongoing,
         callUuid: callUuid,
-        isVideo: false,
+        isVideo: effectiveVideo,
         isTelecomCall: true,
-        isTelephony: isTelephony || _state.isTelephony,
+        isTelephony: effectiveTelephony,
         activeDeviceId: localDeviceId,
         activeDeviceName: localDeviceName,
         connectedAt: connectedAt,
@@ -560,9 +905,52 @@ class ActiveCallController extends ChangeNotifier {
       notifyListeners();
     }
 
-    if (wasOnOtherDevice || _state.activeDeviceId != localDeviceId) {
-      unawaited(_handoffServer(callUuid, mode: 'audio'));
+    if (wasIdle || wasOnOtherDevice || prevActiveDeviceId != localDeviceId) {
+      unawaited(_handoffServer(callUuid, mode: effectiveVideo ? 'video_bridge' : 'audio'));
     }
+    unawaited(syncNativeVideoTextures(callUuid: callUuid));
+  }
+
+  /// Queries native Android Telecom for already-registered remote/local video
+  /// texture IDs on controller attach or call screen init so calls whose native
+  /// texture events arrived earlier still render video.
+  Future<void> syncNativeVideoTextures({String? callUuid}) async {
+    if (_isWeb || !Platform.isAndroid || !GetIt.I.isRegistered<MethodChannelService>()) return;
+    if (_state.phase == ActiveCallPhase.idle || _webRtcClient.isActive) return;
+    final targetUuid = (callUuid != null && callUuid.isNotEmpty) ? callUuid : _state.callUuid;
+    if (targetUuid == null || targetUuid.isEmpty) return;
+
+    int? remoteId;
+    int? localId;
+    try {
+      remoteId = _parseTextureId(
+        await MethodChannelSvc.channel.invokeMethod<dynamic>(
+          'get-facetime-video-texture',
+          {'call_uuid': targetUuid},
+        ),
+      );
+    } catch (_) {}
+    try {
+      localId = _parseTextureId(
+        await MethodChannelSvc.channel.invokeMethod<dynamic>(
+          'get-facetime-local-video-texture',
+          {'call_uuid': targetUuid},
+        ),
+      );
+    } catch (_) {}
+
+    if (_state.phase == ActiveCallPhase.idle || _state.callUuid != targetUuid) return;
+    bool changed = false;
+    if (remoteId != null && remoteId > 0) {
+      remoteVideoWidget.value = Texture(textureId: remoteId);
+      changed = true;
+    }
+    if (localId != null && localId > 0) {
+      localVideoWidget.value = Texture(textureId: localId);
+      cameraEnabled.value = true;
+      changed = true;
+    }
+    if (changed) notifyListeners();
   }
 
   void syncMutedFromNative(String callUuid, bool muted) {
@@ -577,12 +965,67 @@ class ActiveCallController extends ChangeNotifier {
     }
   }
 
+  void handleFacetimeCallState(Map<String, dynamic> arguments) {
+    final phase = arguments['phase']?.toString();
+    final uuid = arguments['call_uuid']?.toString();
+    if (phase == null || uuid == null || uuid.isEmpty) return;
+    final isTelephony = arguments['is_telephony'] == true;
+    switch (phase) {
+      case 'dialing':
+        bindCallUuid(uuid, isTelephony: isTelephony);
+        break;
+      case 'active':
+        notifyTelecomActive(
+          uuid,
+          isTelephony: isTelephony,
+          isVideo: arguments['is_video'] is bool ? arguments['is_video'] as bool : null,
+        );
+        break;
+      case 'mute':
+        syncMutedFromNative(uuid, arguments['muted'] == true);
+        break;
+      case 'video-texture':
+        if (_state.phase == ActiveCallPhase.idle) return;
+        if (_state.callUuid != null && _state.callUuid!.isNotEmpty && _state.callUuid != uuid) return;
+        final textureId = _parseTextureId(arguments['texture_id']);
+        remoteVideoWidget.value = (textureId != null && textureId > 0) ? Texture(textureId: textureId) : null;
+        notifyListeners();
+        break;
+      case 'local-video-texture':
+        if (_state.phase == ActiveCallPhase.idle) return;
+        if (_state.callUuid != null && _state.callUuid!.isNotEmpty && _state.callUuid != uuid) return;
+        final textureId = _parseTextureId(arguments['texture_id']);
+        final hasTex = textureId != null && textureId > 0;
+        localVideoWidget.value = hasTex ? Texture(textureId: textureId) : null;
+        cameraEnabled.value = arguments['camera_enabled'] is bool
+            ? arguments['camera_enabled'] as bool
+            : hasTex;
+        if (arguments['can_flip_camera'] is bool) {
+          canFlipCamera.value = arguments['can_flip_camera'] as bool;
+        } else if (!hasTex) {
+          canFlipCamera.value = false;
+        }
+        if (arguments['front_camera'] is bool) {
+          isFrontCamera.value = arguments['front_camera'] as bool;
+        }
+        notifyListeners();
+        break;
+      case 'ended':
+        if (_state.callUuid == uuid && !_state.isOnOtherDevice) {
+          clear();
+        }
+        break;
+    }
+  }
+
   void toggleMute() {
     if (_state.phase != ActiveCallPhase.ongoing && _state.phase != ActiveCallPhase.outgoing) return;
     final nextMuted = !_state.isMuted;
     _state = _state.copyWith(isMuted: nextMuted);
     if (_onMuteChanged != null) {
       _onMuteChanged(nextMuted);
+    } else if (_isWeb || _webRtcClient.isActive) {
+      unawaited(_webRtcClient.setMuted(nextMuted));
     } else if (!kIsWeb &&
         Platform.isAndroid &&
         _state.isTelecomCall &&
@@ -602,6 +1045,10 @@ class ActiveCallController extends ChangeNotifier {
     if (uuid == null || uuid.isEmpty) return;
     if (_onSendDtmf != null) {
       await _onSendDtmf(uuid, digit);
+      return;
+    }
+    if (_webRtcClient.isActive) {
+      await _webRtcClient.sendDtmf(digit);
       return;
     }
     if (GetIt.I.isRegistered<HttpService>()) {
@@ -628,7 +1075,7 @@ class ActiveCallController extends ChangeNotifier {
     final effectiveTelephony = prev.isTelephony;
     final effectiveAudioOnly = audioOnly || effectiveTelephony || !prev.isVideo;
 
-    if (kIsWeb && !effectiveAudioOnly) {
+    if (_isWeb && !effectiveAudioOnly && _webRtcClient.cachedConfig?.videoSupported != true) {
       _closePendingCallTab();
       _pendingCallTab = (_onOpenPendingTab ?? openPendingCallTab)();
     }
@@ -646,12 +1093,106 @@ class ActiveCallController extends ChangeNotifier {
       activeDeviceName: localDeviceName,
     );
 
-    if (effectiveAudioOnly && (!kIsWeb && Platform.isAndroid || _onStartTelecomAudio != null)) {
-      final routed = await _startTelecomAudio(
+    if (_isWeb) {
+      if (effectiveAudioOnly) {
+        final started = await _startWebRtcBridge(
+          callUuid: uuid,
+          wantVideo: false,
+          answerCall: true,
+        );
+        if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) {
+          await _stopWebRtcBridge(emitHangup: false);
+          return false;
+        }
+        if (started) {
+          _closePendingCallTab();
+          _dismissOverlay(uuid, keepCallState: true);
+          startOngoing(
+            callUuid: uuid,
+            callerName: prev.callerName,
+            callerAddress: prev.callerAddress,
+            avatarBytes: prev.avatarBytes,
+            isVideo: false,
+            isTelecomCall: false,
+            isTelephony: effectiveTelephony,
+            chatGuid: prev.chatGuid,
+            isOutgoing: prev.isOutgoing,
+            activeDeviceId: localDeviceId,
+            activeDeviceName: localDeviceName,
+            startedAt: prev.startedAt,
+          );
+          if (_onAnswerServerCall != null) {
+            await _onAnswerServerCall(uuid, audioOnly: true, displayName: prev.callerName, chatGuid: prev.chatGuid);
+          } else {
+            await _handoffServer(uuid, mode: 'audio');
+          }
+          return true;
+        }
+        _closePendingCallTab();
+        _stopIncomingRingtone(uuid);
+        _dismissOverlay(uuid, keepCallState: false);
+        clearPendingIfMatches(uuid);
+        reportError("Couldn't connect WebRTC audio for this call.");
+        return false;
+      }
+
+      final config = await getWebRtcConfig();
+      if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) return false;
+      if (config.videoSupported) {
+        _closePendingCallTab();
+        final started = await _startWebRtcBridge(
+          callUuid: uuid,
+          wantVideo: true,
+          answerCall: true,
+        );
+        if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) {
+          await _stopWebRtcBridge(emitHangup: false);
+          return false;
+        }
+        if (started) {
+          _dismissOverlay(uuid, keepCallState: true);
+          startOngoing(
+            callUuid: uuid,
+            callerName: prev.callerName,
+            callerAddress: prev.callerAddress,
+            avatarBytes: prev.avatarBytes,
+            isVideo: true,
+            isTelecomCall: false,
+            isTelephony: false,
+            chatGuid: prev.chatGuid,
+            isOutgoing: prev.isOutgoing,
+            activeDeviceId: localDeviceId,
+            activeDeviceName: localDeviceName,
+            startedAt: prev.startedAt,
+          );
+          try {
+            if (_onAnswerServerCall != null) {
+              await _onAnswerServerCall(
+                uuid,
+                audioOnly: false,
+                displayName: prev.callerName,
+                chatGuid: prev.chatGuid,
+              );
+            } else {
+              await _handoffServer(uuid, mode: 'video_bridge');
+            }
+          } catch (e, s) {
+            _safeLogWarn('Failed to sync answered FaceTime video call', e, s);
+          }
+          _openInAppCallScreenIfPossible(context);
+          return true;
+        }
+      }
+    }
+
+    final isVideo = !effectiveAudioOnly && !effectiveTelephony;
+    if (!_isWeb && (Platform.isAndroid || _onStartTelecomCall != null || (!isVideo && _onStartTelecomAudio != null))) {
+      final routed = await _startTelecomCall(
         callUuid: uuid,
         callerName: prev.callerName.isNotEmpty ? prev.callerName : (effectiveTelephony ? 'iPhone Call' : 'FaceTime Call'),
         callerAddress: prev.callerAddress,
         isTelephony: effectiveTelephony,
+        isVideo: isVideo,
       );
       if (routed) {
         _closePendingCallTab();
@@ -661,7 +1202,7 @@ class ActiveCallController extends ChangeNotifier {
           callerName: prev.callerName,
           callerAddress: prev.callerAddress,
           avatarBytes: prev.avatarBytes,
-          isVideo: false,
+          isVideo: isVideo,
           isTelecomCall: true,
           isTelephony: effectiveTelephony,
           chatGuid: prev.chatGuid,
@@ -670,10 +1211,22 @@ class ActiveCallController extends ChangeNotifier {
           activeDeviceName: localDeviceName,
           startedAt: prev.startedAt,
         );
-        if (_onAnswerServerCall != null) {
-          await _onAnswerServerCall(uuid, audioOnly: true, displayName: prev.callerName, chatGuid: prev.chatGuid);
-        } else {
-          await _handoffServer(uuid, mode: 'audio');
+        try {
+          if (_onAnswerServerCall != null) {
+            await _onAnswerServerCall(
+              uuid,
+              audioOnly: !isVideo,
+              displayName: prev.callerName,
+              chatGuid: prev.chatGuid,
+            );
+          } else {
+            await _handoffServer(uuid, mode: isVideo ? 'video_bridge' : 'audio');
+          }
+        } catch (e, s) {
+          _safeLogWarn('Failed to sync answered FaceTime call', e, s);
+        }
+        if (isVideo) {
+          _openInAppCallScreenIfPossible(context);
         }
         return true;
       }
@@ -689,7 +1242,7 @@ class ActiveCallController extends ChangeNotifier {
     try {
       placed = await _answerServer(
         uuid,
-        audioOnly: effectiveAudioOnly && !kIsWeb,
+        audioOnly: effectiveAudioOnly && !_isWeb,
         displayName: prev.callerName,
         chatGuid: prev.chatGuid,
       );
@@ -709,6 +1262,7 @@ class ActiveCallController extends ChangeNotifier {
 
     if (link == null || link.isEmpty) {
       _closePendingCallTab();
+      _stopIncomingRingtone(uuid);
       _dismissOverlay(uuid, keepCallState: false);
       clearPendingIfMatches(uuid);
       reportError(answerFailure ?? "Couldn't join the FaceTime call.");
@@ -767,52 +1321,161 @@ class ActiveCallController extends ChangeNotifier {
       mode = 'audio';
     } else if (audioOnly == false) {
       mode = 'video';
-    } else if (kIsWeb) {
-      mode = 'video';
-    } else if (Platform.isAndroid && !prev.isVideo) {
-      mode = 'audio';
     } else {
-      mode = 'video';
+      mode = prev.isVideo ? 'video' : 'audio';
     }
 
-    if ((kIsWeb || _onOpenPendingTab != null) && mode == 'video') {
+    if ((_isWeb || _onOpenPendingTab != null) &&
+        mode == 'video' &&
+        (!_isWeb || _webRtcClient.cachedConfig?.videoSupported != true)) {
       _closePendingCallTab();
       _pendingCallTab = (_onOpenPendingTab ?? openPendingCallTab)();
     }
 
+    if (_isWeb) {
+      if (mode == 'audio') {
+        try {
+          await _handoffServer(uuid, mode: 'audio');
+        } on FaceTimeException catch (e, s) {
+          _safeLogWarn('Failed to transfer FaceTime call here', e, s);
+          _closePendingCallTab();
+          reportError(e.message);
+          return false;
+        } catch (e, s) {
+          _safeLogWarn('Failed to transfer FaceTime call here', e, s);
+          _closePendingCallTab();
+          reportError("Couldn't transfer the FaceTime call.");
+          return false;
+        }
+
+        final started = await _startWebRtcBridge(
+          callUuid: uuid,
+          wantVideo: false,
+          answerCall: false,
+          initialMuted: prev.isMuted,
+        );
+        if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) {
+          await _stopWebRtcBridge(emitHangup: false);
+          return false;
+        }
+        if (!started) {
+          _closePendingCallTab();
+          reportError("Couldn't connect WebRTC audio for this call.");
+          return false;
+        }
+        final nextPhase = prev.phase == ActiveCallPhase.outgoing ? ActiveCallPhase.outgoing : ActiveCallPhase.ongoing;
+        final nextConnectedAt = nextPhase == ActiveCallPhase.ongoing ? (prev.connectedAt ?? _now()) : prev.connectedAt;
+        _state = prev.copyWith(
+          phase: nextPhase,
+          isVideo: false,
+          isTelecomCall: false,
+          activeDeviceId: localDeviceId,
+          activeDeviceName: localDeviceName,
+          connectedAt: nextConnectedAt,
+          localDeviceId: localDeviceId,
+        );
+        if (nextPhase == ActiveCallPhase.ongoing && nextConnectedAt != null) {
+          _startTickerFrom(nextConnectedAt);
+        }
+        notifyListeners();
+        _closePendingCallTab();
+        return true;
+      }
+
+      final config = await getWebRtcConfig();
+      if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) return false;
+      if (config.videoSupported) {
+        _closePendingCallTab();
+        final started = await _startWebRtcBridge(
+          callUuid: uuid,
+          wantVideo: true,
+          answerCall: false,
+          initialMuted: prev.isMuted,
+        );
+        if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) {
+          await _stopWebRtcBridge(emitHangup: false);
+          return false;
+        }
+        if (started) {
+          try {
+            await _handoffServer(uuid, mode: 'video_bridge');
+          } on FaceTimeException catch (e, s) {
+            _safeLogWarn('Failed to transfer FaceTime call here', e, s);
+            await _stopWebRtcBridge();
+            reportError(e.message);
+            return false;
+          } catch (e, s) {
+            _safeLogWarn('Failed to transfer FaceTime call here', e, s);
+            await _stopWebRtcBridge();
+            reportError("Couldn't transfer the FaceTime call.");
+            return false;
+          }
+          final nextPhase = prev.phase == ActiveCallPhase.outgoing ? ActiveCallPhase.outgoing : ActiveCallPhase.ongoing;
+          final nextConnectedAt = nextPhase == ActiveCallPhase.ongoing ? (prev.connectedAt ?? _now()) : prev.connectedAt;
+          _state = prev.copyWith(
+            phase: nextPhase,
+            isVideo: true,
+            isTelecomCall: false,
+            activeDeviceId: localDeviceId,
+            activeDeviceName: localDeviceName,
+            connectedAt: nextConnectedAt,
+            localDeviceId: localDeviceId,
+          );
+          if (nextPhase == ActiveCallPhase.ongoing && nextConnectedAt != null) {
+            _startTickerFrom(nextConnectedAt);
+          }
+          notifyListeners();
+          _openInAppCallScreenIfPossible(context);
+          return true;
+        }
+      }
+    }
+
+    final effectiveVideo = mode == 'video' && !prev.isTelephony;
+    final bool useTelecom = !_isWeb &&
+        (Platform.isAndroid || _onStartTelecomCall != null || (!effectiveVideo && _onStartTelecomAudio != null));
+    bool telecomStarted = false;
+    if (useTelecom) {
+      telecomStarted = await _startTelecomCall(
+        callUuid: uuid,
+        callerName: prev.callerName.isNotEmpty ? prev.callerName : (prev.isTelephony ? 'iPhone Call' : 'FaceTime Call'),
+        callerAddress: prev.callerAddress,
+        isTelephony: prev.isTelephony,
+        isVideo: effectiveVideo,
+      );
+    }
+
     PlacedFaceTimeCall? placed;
     try {
-      placed = await _handoffServer(uuid, mode: mode);
+      placed = await _handoffServer(
+        uuid,
+        mode: telecomStarted && effectiveVideo ? 'video_bridge' : mode,
+      );
     } on FaceTimeException catch (e, s) {
       _safeLogWarn('Failed to transfer FaceTime call here', e, s);
+      if (telecomStarted) {
+        unawaited(_endNativeCall(uuid, onlyIfRinging: false));
+      }
       _closePendingCallTab();
       reportError(e.message);
       return false;
     } catch (e, s) {
       _safeLogWarn('Failed to transfer FaceTime call here', e, s);
+      if (telecomStarted) {
+        unawaited(_endNativeCall(uuid, onlyIfRinging: false));
+      }
       _closePendingCallTab();
       reportError("Couldn't transfer the FaceTime call.");
       return false;
     }
 
     final link = placed?.link ?? prev.joinLink;
-    final bool useAudioTelecom = mode == 'audio' && (!kIsWeb && Platform.isAndroid || _onStartTelecomAudio != null);
-    bool telecomStarted = false;
-    if (useAudioTelecom) {
-      telecomStarted = await _startTelecomAudio(
-        callUuid: uuid,
-        callerName: prev.callerName.isNotEmpty ? prev.callerName : (prev.isTelephony ? 'iPhone Call' : 'FaceTime Call'),
-        callerAddress: prev.callerAddress,
-        isTelephony: prev.isTelephony,
-      );
-    }
-
     final nextPhase = prev.phase == ActiveCallPhase.outgoing ? ActiveCallPhase.outgoing : ActiveCallPhase.ongoing;
     final nextConnectedAt = nextPhase == ActiveCallPhase.ongoing ? (prev.connectedAt ?? _now()) : prev.connectedAt;
 
     _state = prev.copyWith(
       phase: nextPhase,
-      isVideo: mode == 'video' && !prev.isTelephony,
+      isVideo: effectiveVideo,
       isTelecomCall: telecomStarted,
       joinLink: link,
       activeDeviceId: localDeviceId,
@@ -827,6 +1490,9 @@ class ActiveCallController extends ChangeNotifier {
 
     if (telecomStarted) {
       _closePendingCallTab();
+      if (effectiveVideo) {
+        _openInAppCallScreenIfPossible(context);
+      }
       return true;
     }
 
@@ -845,11 +1511,24 @@ class ActiveCallController extends ChangeNotifier {
 
   Future<void> endCall() async {
     final prev = _state;
+    final bridgeActive = _webRtcClient.isActive;
+    _stopTicker();
+    _stopIncomingRingtone();
     _closePendingCallTab();
-    clear();
+    _resetVideoNotifiers();
+    isSpeakerOn.value = false;
+    _elapsed = Duration.zero;
+    if (_state.phase != ActiveCallPhase.idle) {
+      _state = ActiveCallState.idle;
+      notifyListeners();
+    }
+    if (bridgeActive) {
+      await _stopWebRtcBridge(emitHangup: true);
+    }
 
     final uuid = prev.callUuid;
     if (uuid != null && uuid.isNotEmpty) {
+      _stopIncomingRingtone(uuid);
       _dismissOverlay(uuid, keepCallState: false);
     }
 
@@ -880,6 +1559,7 @@ class ActiveCallController extends ChangeNotifier {
       final endedError = _nonEmptyString(data['ended_error']);
       final failureReason = failureMessageFor(endedReason: endedReason, endedError: endedError);
 
+      _stopIncomingRingtone(uuid);
       _dismissOverlay(uuid, keepCallState: false);
       unawaited(_endNativeCall(uuid, onlyIfRinging: false));
       final matchesActive = _state.phase != ActiveCallPhase.idle &&
@@ -894,7 +1574,7 @@ class ActiveCallController extends ChangeNotifier {
         _closePendingCallTab();
       }
 
-      if (failureReason != null && _lastFailureUuid != uuid) {
+      if (matchesActive && failureReason != null && _lastFailureUuid != uuid) {
         _lastFailureUuid = uuid;
         _lastFailure = ActiveCallFailure(
           callUuid: uuid,
@@ -956,20 +1636,26 @@ class ActiveCallController extends ChangeNotifier {
     final joinLink = _extractLink(data['link']) ?? (matchesPrev ? prev.joinLink : null);
     final isMuted = data['is_muted'] is bool ? data['is_muted'] as bool : (matchesPrev ? prev.isMuted : false);
 
-    final activeDeviceId = data.containsKey('active_device_id')
+    final rawActiveDeviceId = data.containsKey('active_device_id')
         ? _nonEmptyString(data['active_device_id'])
         : (matchesPrev ? prev.activeDeviceId : null);
-    final activeDeviceName = data.containsKey('active_device_name')
+    final rawActiveDeviceName = data.containsKey('active_device_name')
         ? _nonEmptyString(data['active_device_name'])
         : (matchesPrev ? prev.activeDeviceName : null);
+    final holdsWebRtcHere = _webRtcClient.activeCallUuid == uuid;
+    final activeDeviceId = rawActiveDeviceId ?? (holdsWebRtcHere ? localDeviceId : null);
+    final activeDeviceName = rawActiveDeviceName ?? (holdsWebRtcHere ? localDeviceName : null);
     final nowOnOtherDevice = activeDeviceId != null && activeDeviceId != localDeviceId;
 
     final wasHeldHere = matchesPrev && prev.isHeldHere;
     final wasTelecom = matchesPrev && prev.isTelecomCall;
 
-    // Remote device took over an active call from us -> close local Web tab / Telecom audio without hanging up server.
-    if (nowOnOtherDevice && (wasHeldHere || wasTelecom || _pendingCallTab != null)) {
+    // Remote device took over an active call from us -> close local Web tab / Telecom / WebRTC without hanging up server.
+    if (nowOnOtherDevice && (wasHeldHere || wasTelecom || holdsWebRtcHere || _pendingCallTab != null)) {
       _closePendingCallTab();
+      if (holdsWebRtcHere) {
+        unawaited(_stopWebRtcBridge(emitHangup: false));
+      }
       if (wasTelecom) {
         unawaited(_endNativeCall(uuid, onlyIfRinging: false));
       }
@@ -1025,6 +1711,12 @@ class ActiveCallController extends ChangeNotifier {
       localDeviceId: localDeviceId,
     );
 
+    if (nextPhase == ActiveCallPhase.incoming) {
+      _startIncomingRingtone(uuid);
+    } else {
+      _stopIncomingRingtone(uuid);
+    }
+
     if (nextPhase == ActiveCallPhase.ongoing && connectedAt != null) {
       _startTickerFrom(connectedAt);
     } else {
@@ -1043,7 +1735,8 @@ class ActiveCallController extends ChangeNotifier {
         _closePendingCallTab();
         clear();
         if (uuid != null && uuid.isNotEmpty) {
-          _dismissOverlay(uuid, keepCallState: false);
+          _stopIncomingRingtone(uuid);
+      _dismissOverlay(uuid, keepCallState: false);
           unawaited(_endNativeCall(uuid, onlyIfRinging: false));
         }
       }
@@ -1098,11 +1791,17 @@ class ActiveCallController extends ChangeNotifier {
 
   void clear() {
     _stopTicker();
+    _stopIncomingRingtone();
     _closePendingCallTab();
+    _resetVideoNotifiers();
+    isSpeakerOn.value = false;
     _elapsed = Duration.zero;
     if (_state.phase != ActiveCallPhase.idle) {
       _state = ActiveCallState.idle;
       notifyListeners();
+    }
+    if (_webRtcClient.isActive) {
+      unawaited(_stopWebRtcBridge(emitHangup: false));
     }
   }
 
@@ -1196,13 +1895,41 @@ class ActiveCallController extends ChangeNotifier {
     }
   }
 
-  Future<bool> _startTelecomAudio({
+  void _openInAppCallScreenIfPossible(BuildContext? context) {
+    BuildContext? target = (context != null && context.mounted) ? context : null;
+    if (target == null) {
+      try {
+        final ctx = Get.context;
+        if (ctx != null && ctx.mounted) {
+          target = ctx;
+        }
+      } catch (_) {
+        return;
+      }
+    }
+    if (target == null || !target.mounted) return;
+    if (Navigator.maybeOf(target, rootNavigator: true) == null) return;
+    openInAppCallScreen(context: target, controller: this);
+  }
+
+  Future<bool> _startTelecomCall({
     required String callUuid,
     required String callerName,
     String? callerAddress,
     required bool isTelephony,
+    required bool isVideo,
   }) async {
-    if (_onStartTelecomAudio != null) {
+    final effectiveVideo = isVideo && !isTelephony;
+    if (_onStartTelecomCall != null) {
+      return _onStartTelecomCall(
+        callUuid: callUuid,
+        callerName: callerName,
+        callerAddress: callerAddress,
+        isTelephony: isTelephony,
+        isVideo: effectiveVideo,
+      );
+    }
+    if (!effectiveVideo && _onStartTelecomAudio != null) {
       return _onStartTelecomAudio(
         callUuid: callUuid,
         callerName: callerName,
@@ -1211,6 +1938,16 @@ class ActiveCallController extends ChangeNotifier {
       );
     }
     if (!kIsWeb && Platform.isAndroid && GetIt.I.isRegistered<MethodChannelService>()) {
+      if (effectiveVideo) {
+        final result = await MethodChannelSvc.channel.invokeMethod<bool>('answer-facetime-audio', {
+          'call_uuid': callUuid,
+          'caller_name': callerName,
+          'caller_address': callerAddress,
+          'is_telephony': false,
+          'is_video': true,
+        });
+        return result == true;
+      }
       return MethodChannelSvc.actions.answerFaceTimeAudio(
         callUuid: callUuid,
         callerName: callerName,
@@ -1351,10 +2088,56 @@ class ActiveCallController extends ChangeNotifier {
     return DateTime.fromMillisecondsSinceEpoch(ms);
   }
 
+  void _startIncomingRingtone(String? uuid) {
+    if (uuid == null || uuid.isEmpty) return;
+    if (_ringingCallUuid == uuid) return;
+    if (_ringingCallUuid != null) {
+      _stopIncomingRingtone(_ringingCallUuid);
+    }
+    _ringingCallUuid = uuid;
+    if (_onStartIncomingRingtone != null) {
+      _onStartIncomingRingtone(uuid);
+      return;
+    }
+    if (kIsWeb && identical(this, instance)) {
+      final double volume = GetIt.I.isRegistered<SettingsService>()
+          ? (SettingsSvc.settings.soundVolume.value / 100.0).clamp(0.0, 1.0)
+          : 1.0;
+      startWebFaceTimeRingtone(callUuid: uuid, volume: volume);
+    }
+  }
+
+  void _stopIncomingRingtone([String? uuid]) {
+    final active = _ringingCallUuid;
+    if (active != null && uuid != null && uuid.isNotEmpty && active != uuid) {
+      return;
+    }
+    final target = (uuid != null && uuid.isNotEmpty) ? uuid : active;
+    final hadActive = active != null;
+    _ringingCallUuid = null;
+    if (_onStopIncomingRingtone != null) {
+      if (hadActive || (uuid != null && uuid.isNotEmpty)) {
+        _onStopIncomingRingtone(target);
+      }
+      return;
+    }
+    if (kIsWeb && identical(this, instance)) {
+      stopWebFaceTimeRingtone(callUuid: target);
+    }
+  }
+
   @override
   void dispose() {
     _stopTicker();
+    _stopIncomingRingtone();
     _closePendingCallTab();
+    _webRtcClient.dispose();
+    remoteVideoWidget.close();
+    localVideoWidget.close();
+    cameraEnabled.close();
+    canFlipCamera.close();
+    isFrontCamera.close();
+    isSpeakerOn.close();
     super.dispose();
   }
 }

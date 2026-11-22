@@ -166,11 +166,11 @@ class Attachment {
 
     // Handle file system operations on main thread AFTER isolate call
     String appDocPath = FilesystemSvc.appDocDir.path;
-    String pathName = "$appDocPath/attachments/$oldGuid";
+    String pathName = "$appDocPath/attachments/${FilesystemService.sanitizeGuid(oldGuid)}";
     Directory directory = Directory(pathName);
 
     if (directory.existsSync()) {
-      final newDirPath = "$appDocPath/attachments/${newAttachment.guid}";
+      final newDirPath = "$appDocPath/attachments/${FilesystemService.sanitizeGuid(newAttachment.guid)}";
       await directory.rename(newDirPath);
 
       // After the directory rename the file inside still has its old name (the temp transferName).
@@ -295,7 +295,7 @@ class Attachment {
 
   static String get baseDirectory => FilesystemSvc.attachmentsPath;
 
-  String get directory => "$baseDirectory/$guid";
+  String get directory => "$baseDirectory/${FilesystemService.sanitizeGuid(guid)}";
 
   /// Sanitizes [transferName] so a remote sender cannot traverse out of [directory].
   static String sanitizeTransferName(String? transferName, {bool isWindows = false}) {

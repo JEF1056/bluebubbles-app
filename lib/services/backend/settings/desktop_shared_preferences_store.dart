@@ -202,13 +202,22 @@ base class DesktopSharedPreferencesStore extends SharedPreferencesAsyncPlatform 
   /// main isolate shares its thread with the platform thread, and synchronous
   /// I/O (including the fsync in [_atomicWrite]) stalled keyboard input for
   /// hundreds of milliseconds per write on slow or AV-scanned disks.
+  static bool _isLockExistsError(FileSystemException e) {
+    final code = e.osError?.errorCode;
+    if (code == null) return false;
+    // POSIX EEXIST (17); Windows ERROR_FILE_EXISTS (80) / ERROR_ALREADY_EXISTS (183).
+    return Platform.isWindows ? (code == 80 || code == 183) : code == 17;
+  }
+
   Future<T> _locked<T>(Future<T> Function() action) async {
     final File lockFile = File('${(await _getDataFile()).path}.lock');
+    final DateTime deadline = DateTime.now().add(_staleLockTimeout * 2);
     while (true) {
       try {
         await lockFile.create(recursive: true, exclusive: true);
         break;
-      } on FileSystemException {
+      } on FileSystemException catch (e) {
+        if (!_isLockExistsError(e) || DateTime.now().isAfter(deadline)) rethrow;
         await _breakStaleLock(lockFile);
         await Future.delayed(_lockRetryDelay);
       }

@@ -110,6 +110,8 @@ class ChatsService {
   /// since the `customGroupIds` filter branch in [getFilteredChats] reads
   /// membership from there.
   StreamSubscription? _customGroupsListener;
+  StreamSubscription<String>? _appLinksSub;
+  final Map<String, StreamSubscription> _chatStateSubs = {};
 
   // ========== Helper Getters (replacing direct chats access) ==========
 
@@ -342,13 +344,14 @@ class ChatsService {
 
   void initDbWatchers() {
     if (headless) return;
+    countSub?.cancel();
     // watch for new chats
     final countQuery = (Database.chats.query(Chat_.dateDeleted.isNull())..order(Chat_.id, flags: Order.descending))
         .watch(triggerImmediately: true);
     countSub = countQuery.listen((event) async {
       if (!SettingsSvc.settings.finishedSetup.value) return;
       final newCount = event.count();
-      if (newCount > currentCount && currentCount != 0) {
+      if (newCount > currentCount) {
         final chat = event.findFirst();
         if (chat == null) return;
         if (chat.dbOnlyLatestMessageDate == null || chat.dbOnlyLatestMessageDate!.millisecondsSinceEpoch == 0) {
@@ -379,13 +382,15 @@ class ChatsService {
     _loadDefaultChatListFilters();
 
     // Get current count from database or server
-    currentCount = getChatCount() ??
-        (await HttpSvc.chat.getCount().catchError((err) {
-          Logger.info("Error when fetching chat count!", tag: "ChatBloc");
-          return Response(requestOptions: RequestOptions(path: ''));
-        }))
-            .data['data']['total'] ??
-        0;
+    final countResponse = getChatCount() == null
+        ? await HttpSvc.chat.getCount().catchError((err) {
+            Logger.info("Error when fetching chat count!", tag: "ChatBloc");
+            return Response(requestOptions: RequestOptions(path: ''));
+          })
+        : null;
+    final countData = countResponse?.data;
+    final serverCount = (countData is Map && countData['data'] is Map) ? countData['data']['total'] as int? : null;
+    currentCount = getChatCount() ?? serverCount ?? 0;
     if (generation != _initGeneration) {
       final newer = _activeInit;
       if (newer != null) await newer;
@@ -404,6 +409,10 @@ class ChatsService {
 
     // Clear existing chats to avoid duplicates on re-init
     if (chatStates.isNotEmpty || _sortedChats.isNotEmpty) {
+      for (final sub in _chatStateSubs.values) {
+        sub.cancel();
+      }
+      _chatStateSubs.clear();
       chatStates.clear();
       _sortedChats.clear();
     }
@@ -480,8 +489,9 @@ class ChatsService {
 
     if (kIsDesktop && Platform.isWindows) {
       /* ----- IMESSAGE:// HANDLER ----- */
-      final _appLinks = AppLinks();
-      _appLinks.stringLinkStream.listen((String string) async {
+      _appLinksSub?.cancel();
+      final appLinks = AppLinks();
+      _appLinksSub = appLinks.stringLinkStream.listen((String string) async {
         // Second instances forward their argument here, including COM launches the toast forwarder couldn't handle.
         Logger.info("Received app link: $string", tag: "ChatsService");
         if (!string.startsWith("imessage://")) return;
@@ -491,10 +501,12 @@ class ChatsService {
             .replaceFirst(RegExp(r'/$'), ''));
         if (uri == null) return;
 
+        final ctx = Get.context;
+        if (ctx == null) return;
         final address = uri.path;
         final handle = Handle.findOne(addressAndService: HandleLookupKey(address, "iMessage"));
         await NavigationSvc.pushAndRemoveUntil(
-          Get.context!,
+          ctx,
           NewChatCreator(
             initialSelected: [SelectedContact(displayName: handle?.displayName ?? address, address: address)],
             initialText: uri.queryParameters['body'],
@@ -521,8 +533,9 @@ class ChatsService {
 
   /// Set up listeners on a ChatState to track unread count changes
   void _setupChatStateListeners(ChatState chatState) {
+    _chatStateSubs.remove(chatState.chat.guid)?.cancel();
     // Listen to hasUnreadMessage changes to update global unread count
-    chatState.hasUnreadMessage.listen((hasUnread) {
+    _chatStateSubs[chatState.chat.guid] = chatState.hasUnreadMessage.listen((hasUnread) {
       _recalculateUnreadCount();
     });
   }
@@ -715,6 +728,12 @@ class ChatsService {
     _generateFakeAvatarsListener?.cancel();
     _hideAttachmentsListener?.cancel();
     _customGroupsListener?.cancel();
+    _appLinksSub?.cancel();
+    _appLinksSub = null;
+    for (final sub in _chatStateSubs.values) {
+      sub.cancel();
+    }
+    _chatStateSubs.clear();
   }
 
   /// Get sorted chats (pin index first, then by latest message date)
@@ -861,6 +880,7 @@ class ChatsService {
 
   void removeChat(Chat toRemove) {
     if (headless) return;
+    _chatStateSubs.remove(toRemove.guid)?.cancel();
     chatStates.remove(toRemove.guid);
     _sortedChats.removeWhere((c) => c.guid == toRemove.guid);
     _scheduleListVersionUpdate(immediate: true);
@@ -1892,12 +1912,18 @@ class ChatsService {
     currentCount = 0;
     hasChats.value = false;
     _activeChat = null;
+    for (final sub in _chatStateSubs.values) {
+      sub.cancel();
+    }
+    _chatStateSubs.clear();
     chatStates.clear();
     _sortedChats.clear();
     loadedAllChats = Completer();
     loadedFirstChatBatch.value = false;
     webCachedHandles.clear();
 
+    _appLinksSub?.cancel();
+    _appLinksSub = null;
     countSub?.cancel();
     if (reinitWatchers) {
       initDbWatchers();

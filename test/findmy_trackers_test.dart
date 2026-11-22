@@ -291,6 +291,7 @@ void main() {
       ),
     );
     await tester.pump();
+    await tester.pump();
     expect(find.text('Lock'), findsOneWidget);
     await tester.tap(find.text('Lock'));
     await tester.pump();
@@ -306,6 +307,7 @@ void main() {
         trend: 'stronger',
       ),
     );
+    await tester.pump();
     await tester.pump();
     expect(find.text('~0.9 m'), findsOneWidget);
     expect(find.text('Here • Stronger'), findsOneWidget);

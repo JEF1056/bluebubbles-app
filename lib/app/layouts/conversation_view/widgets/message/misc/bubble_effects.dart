@@ -65,7 +65,7 @@ class _BubbleEffectsState extends State<BubbleEffects> with SingleTickerProvider
     final effectStr =
         effectMap.entries.firstWhereOrNull((e) => e.value == message.expressiveSendStyleId)?.key ?? "unknown";
     final effect = stringToMessageEffect[effectStr] ?? MessageEffect.none;
-    if (effect == MessageEffect.invisibleInk) {
+    if (effect == MessageEffect.invisibleInk && !widget.messageState.hasEffectPlayed.value) {
       // Set size first, then flip rxControl so the single Obx rebuild
       // that fires has the correct dimensions and BackdropFilter covers
       // the text from the very first animated frame.
@@ -185,6 +185,7 @@ class _BubbleEffectsState extends State<BubbleEffects> with SingleTickerProvider
     final effect = stringToMessageEffect[effectStr] ?? MessageEffect.none;
     if (message.expressiveSendStyleId == null) return widget.child;
     if (effect == MessageEffect.invisibleInk) {
+      final animateParticles = TickerMode.valuesOf(context).enabled && !MediaQuery.disableAnimationsOf(context);
       return NotificationListener<SizeChangedLayoutNotification>(
         onNotification: (notification) {
           if (rxControl.value != Control.stop) {
@@ -203,6 +204,7 @@ class _BubbleEffectsState extends State<BubbleEffects> with SingleTickerProvider
                       if (effect != MessageEffect.invisibleInk) return;
                       if ((details.primaryDelta ?? 0).abs() > 1) {
                         message.setPlayedDate();
+                        widget.messageState.markEffectPlayed();
                         // Fade out, then mark stopped once the animation finishes.
                         _fadeController.animateTo(0.0).then((_) {
                           if (mounted) rxControl.value = Control.stop;
@@ -227,19 +229,24 @@ class _BubbleEffectsState extends State<BubbleEffects> with SingleTickerProvider
                           ),
                           child: BackdropFilter(
                             filter: ImageFilter.blur(sigmaX: 5, sigmaY: 5),
-                            child: Particles(
-                              key: UniqueKey(),
-                              height: _size.value.height,
-                              width: _size.value.width,
-                              interaction: ParticleInteraction.none(),
-                              particles: List.generate(
-                                  _size.value.height * _size.value.width ~/ 25,
-                                  (index) => CircularParticle(
-                                        color: Colors.white.withAlpha(150),
-                                        radius: Random().nextDouble() * (_size.value.height / 75).clamp(0.5, 1),
-                                        velocity: Offset(Random().nextDouble() * 10, Random().nextDouble() * 10),
-                                      )),
-                            ),
+                            child: animateParticles
+                                ? Particles(
+                                    key: ValueKey(_size.value),
+                                    height: _size.value.height,
+                                    width: _size.value.width,
+                                    interaction: ParticleInteraction.none(),
+                                    particles: List.generate(
+                                        _size.value.height * _size.value.width ~/ 25,
+                                        (index) => CircularParticle(
+                                              color: Colors.white.withAlpha(150),
+                                              radius: Random().nextDouble() * (_size.value.height / 75).clamp(0.5, 1),
+                                              velocity: Offset(Random().nextDouble() * 10, Random().nextDouble() * 10),
+                                            )),
+                                  )
+                                : SizedBox(
+                                    width: _size.value.width,
+                                    height: _size.value.height,
+                                  ),
                           ),
                         ),
                       ),

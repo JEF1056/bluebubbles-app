@@ -93,9 +93,10 @@ class ContactServiceV2 {
         final hasAvatar = !isNullOrEmpty(c.avatarPath);
         for (final addr in c.addresses) {
           if (addr.contains('@')) {
-            final prev = emailMap[addr];
+            final normEmail = ContactV2.normalizeEmail(addr);
+            final prev = emailMap[normEmail];
             if (prev == null || (hasAvatar && isNullOrEmpty(prev.avatarPath))) {
-              emailMap[addr] = c;
+              emailMap[normEmail] = c;
             }
           } else {
             for (final v in ContactV2Actions.phoneNumberVariants(addr)) {

@@ -258,6 +258,11 @@ class MethodChannelHandlers {
       handleId: 0,
     );
 
+    if (!GetIt.I.isRegistered<OutgoingMessageHandler>()) {
+      Logger.warn('OutgoingMessageHandler not registered yet, requesting method channel retry');
+      return _retry();
+    }
+
     final Completer<void> completer = Completer();
     OutgoingMsgHandler.queue(
       OutgoingMessage(
@@ -304,7 +309,9 @@ class MethodChannelHandlers {
         if (chat != null) {
           final bool privateMark = arguments['privateMark'] as bool? ?? true;
           await chat.toggleHasUnreadAsync(false, clearLocalNotifications: false, privateMark: privateMark);
-          ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(false);
+          if (!service.headless && GetIt.I.isRegistered<ChatsService>()) {
+            ChatsSvc.getChatState(chat.guid)?.updateHasUnreadInternal(false);
+          }
           return await _ok();
         }
       }
@@ -397,7 +404,8 @@ class MethodChannelHandlers {
   }
 
   Future<bool> _handleFtCallStatusChanged(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (!service.headless && LifecycleSvc.isForeground) return _ok();
+    final socketConnected = GetIt.I.isRegistered<SocketService>() && SocketSvc.socket?.connected == true;
+    if (!service.headless && LifecycleSvc.isForeground && socketConnected) return _ok();
     await Database.waitForInit();
     Logger.info('Received facetime call status change from FCM');
 
@@ -417,6 +425,9 @@ class MethodChannelHandlers {
   Future<bool> _handleAnswerFacetime(MethodCall _, Map<String, dynamic>? arguments) async {
     Logger.info('Answering FaceTime call');
     if (arguments == null) return _ok();
+    if (!GetIt.I.isRegistered<IntentsService>()) {
+      return service.headless ? _ok() : _retry();
+    }
 
     await IntentsSvc.answerFaceTime(
       arguments['callUuid'],
@@ -427,27 +438,8 @@ class MethodChannelHandlers {
   }
 
   Future<bool> _handleFacetimeCallState(MethodCall _, Map<String, dynamic>? arguments) async {
-    if (arguments == null) return _ok();
-    final phase = arguments['phase']?.toString();
-    final uuid = arguments['call_uuid']?.toString();
-    if (phase == null || uuid == null || uuid.isEmpty) return _ok();
-    final isTelephony = arguments['is_telephony'] == true;
-    final ctrl = ActiveCallController.instance;
-    switch (phase) {
-      case 'dialing':
-        ctrl.bindCallUuid(uuid, isTelephony: isTelephony);
-        break;
-      case 'active':
-        ctrl.notifyTelecomActive(uuid, isTelephony: isTelephony);
-        break;
-      case 'mute':
-        ctrl.syncMutedFromNative(uuid, arguments['muted'] == true);
-        break;
-      case 'ended':
-        if (ctrl.state.callUuid == uuid && !ctrl.state.isOnOtherDevice) {
-          ctrl.clear();
-        }
-        break;
+    if (arguments != null) {
+      ActiveCallController.instance.handleFacetimeCallState(arguments);
     }
     return _ok();
   }

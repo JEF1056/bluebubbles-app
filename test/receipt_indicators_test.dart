@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/message_holder_timestamps.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/delivered_indicator.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/relative_timestamp_ticker.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
@@ -453,7 +454,141 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.textContaining('Received · $expectedTime', findRichText: true), findsOneWidget);
       });
+
+      testWidgets('renders Edited in place of status/received and toggles showEdits on tap ($skin)', (tester) async {
+        settingsService.settings.skin.value = skin;
+        settingsService.settings.showDeliveryTimestamps.value = false;
+
+        final editedOutgoing = MessageState(Message(
+          guid: 'edited-out-$skin',
+          text: 'Updated text',
+          isFromMe: true,
+          dateCreated: t,
+          dateDelivered: t,
+          dateRead: t,
+          dateEdited: t,
+        ))
+          ..parts.assignAll([
+            MessagePart(
+              part: 0,
+              text: 'Updated text',
+              edits: [MessagePart(part: 0, text: 'Original text')],
+            ),
+          ]);
+        // Even with all receipt flags false, edited messages still show "Edited".
+        await tester.pumpWidget(wrapIndicator(editedOutgoing));
+        await tester.pumpAndSettle();
+        expect(find.text('Edited', findRichText: true), findsOneWidget);
+        expect(find.textContaining('Read', findRichText: true), findsNothing);
+        expect(editedOutgoing.showEdits.value, isFalse);
+
+        await tester.tap(find.text('Edited', findRichText: true));
+        await tester.pump();
+        expect(editedOutgoing.showEdits.value, isTrue);
+
+        await tester.tap(find.text('Edited', findRichText: true));
+        await tester.pump();
+        expect(editedOutgoing.showEdits.value, isFalse);
+
+        final editedIncoming = MessageState(Message(
+          guid: 'edited-in-$skin',
+          text: 'Incoming updated',
+          isFromMe: false,
+          dateCreated: t,
+          dateEdited: t,
+        ))
+          ..showReceivedIndicator.value = true
+          ..parts.assignAll([
+            MessagePart(
+              part: 0,
+              text: 'Incoming updated',
+              edits: [MessagePart(part: 0, text: 'Incoming original')],
+            ),
+          ]);
+        await tester.pumpWidget(wrapIndicator(editedIncoming));
+        await tester.pumpAndSettle();
+        expect(find.text('Edited', findRichText: true), findsOneWidget);
+        expect(find.textContaining('Received', findRichText: true), findsNothing);
+      });
     }
+
+    testWidgets('tapping Edited reveals ghost original without duplicate Edited label, and forceShow toggles Edited · time',
+        (tester) async {
+      settingsService.settings.skin.value = Skins.Material;
+      settingsService.settings.showDeliveryTimestamps.value = false;
+
+      final editedPart = MessagePart(
+        part: 0,
+        text: 'Updated text',
+        edits: [MessagePart(part: 0, text: 'Original text')],
+      );
+      final state = MessageState(Message(
+        guid: 'edited-history-toggle',
+        text: 'Updated text',
+        isFromMe: true,
+        dateCreated: t,
+        dateEdited: t,
+      )..chat.target = Chat(guid: 'iMessage;-;+15550099'))
+        ..parts.assignAll([editedPart]);
+
+      Widget buildTree({required bool forceShow}) => GetMaterialApp(
+            theme: ThemeData(
+              useMaterial3: true,
+              extensions: const [BubbleText(bubbleText: TextStyle(fontSize: 15))],
+            ),
+            home: MessageStateScope(
+              messageState: state,
+              child: Scaffold(
+                body: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    EditHistoryObserver(
+                      part: editedPart,
+                      newerMessage: null,
+                      showAvatar: false,
+                      alwaysShowAvatars: false,
+                      avatarScale: 1.0,
+                    ),
+                    DeliveredIndicator(forceShow: forceShow),
+                  ],
+                ),
+              ),
+            ),
+          );
+
+      await tester.pumpWidget(buildTree(forceShow: false));
+      await tester.pumpAndSettle();
+
+      // Initially collapsed: only the DeliveredIndicator "Edited" label is shown (no timestamp).
+      expect(find.textContaining('Original text', findRichText: true), findsNothing);
+      expect(find.text('Edited', findRichText: true), findsOneWidget);
+      expect(find.textContaining('·', findRichText: true), findsNothing);
+
+      // Tap "Edited" -> reveals ghost original message with NO duplicate ghost "Edited" label.
+      await tester.tap(find.text('Edited', findRichText: true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Original text', findRichText: true), findsOneWidget);
+      expect(find.text('Edited', findRichText: true), findsOneWidget);
+
+      // Tap "Edited" again -> hides original message.
+      await tester.tap(find.text('Edited', findRichText: true));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Original text', findRichText: true), findsNothing);
+      expect(find.text('Edited', findRichText: true), findsOneWidget);
+
+      // Tapping the message bubble toggles forceShow -> shows "Edited · <time>" in-place
+      // without cross-fading a second "Edited" on top of the first.
+      await tester.pumpWidget(buildTree(forceShow: true));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.descendant(of: find.byType(DeliveredIndicator), matching: find.byType(Text)), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Edited · ', findRichText: true), findsOneWidget);
+
+      await tester.pumpWidget(buildTree(forceShow: false));
+      await tester.pumpAndSettle();
+      expect(find.text('Edited', findRichText: true), findsOneWidget);
+      expect(find.textContaining('·', findRichText: true), findsNothing);
+    });
   });
 
   group('Realtime relative-timestamp ticker (Google Messages parity)', () {

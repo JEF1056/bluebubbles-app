@@ -15,8 +15,6 @@ import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.service.MessageListenerService
 import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -130,15 +128,12 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
             _isRefreshing.value = true
             _error.value = null
             try {
-                coroutineScope {
-                    // Refresh contacts alongside chats so contact lookups never block chat list updates.
-                    val contactsJob = async { runCatching { contactRepo.refreshContacts() } }
-                    val chatResult = chatRepo.refreshChats()
-                    contactsJob.await()
-                    chatResult.exceptionOrNull()?.let { err ->
-                        if (_chats.value.isEmpty()) {
-                            _error.value = err.localizedMessage?.take(50) ?: "Refresh failed"
-                        }
+                // Refresh contacts in parallel without holding the chat-list sync indicator open.
+                viewModelScope.launch { runCatching { contactRepo.refreshContacts() } }
+                val chatResult = chatRepo.refreshChats()
+                chatResult.exceptionOrNull()?.let { err ->
+                    if (_chats.value.isEmpty()) {
+                        _error.value = err.localizedMessage?.take(50) ?: "Refresh failed"
                     }
                 }
             } catch (e: Exception) {

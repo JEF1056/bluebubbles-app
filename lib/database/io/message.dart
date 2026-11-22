@@ -537,7 +537,11 @@ class Message {
   /// when no condition is specified
   static List<Message> find({Condition<Message>? cond}) {
     final query = Database.messages.query(cond).build();
-    return query.find();
+    try {
+      return query.find();
+    } finally {
+      query.close();
+    }
   }
 
   static Future<List<Message>> findAsync({Condition<Message>? cond}) async {
@@ -624,12 +628,17 @@ class Message {
   }
 
   String? get interactiveMediaPath {
-    final extension = balloonBundleId!.contains("com.apple.Digital")
+    final bundleId = balloonBundleId;
+    if (guid == null || guid!.isEmpty || bundleId == null || bundleId.isEmpty) return null;
+    final extension = bundleId.contains("com.apple.Digital")
         ? ".mov"
-        : balloonBundleId!.contains("com.apple.Handwriting")
+        : bundleId.contains("com.apple.Handwriting")
             ? ".png"
             : null;
-    return "${FilesystemSvc.messagesPath}/$guid/embedded-media/$balloonBundleId$extension";
+    if (extension == null) return null;
+    final safeGuid = FilesystemService.sanitizeGuid(guid);
+    final safeBundleId = FilesystemService.sanitizeGuid(bundleId);
+    return "${FilesystemSvc.messagesPath}/$safeGuid/embedded-media/$safeBundleId$extension";
   }
 
   bool get isGroupEvent => groupTitle != null || (itemType ?? 0) > 0 || (groupActionType ?? 0) > 0;

@@ -59,7 +59,7 @@ class EditHistoryObserver extends StatelessWidget {
     final message = MessageStateScope.messageOf(context);
     final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
     return Padding(
-      padding: showAvatar || alwaysShowAvatars
+      padding: !message.isFromMe! && (showAvatar || alwaysShowAvatars)
           ? EdgeInsets.only(left: BubbleConnect.incomingAvatarIndent(isIOS: isIOS, avatarScale: avatarScale))
           : EdgeInsets.zero,
       child: Obx(() => AnimatedSize(
@@ -73,17 +73,19 @@ class EditHistoryObserver extends StatelessWidget {
                       crossAxisAlignment: message.isFromMe! ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: part.edits
-                          .map((edit) => ClipPath(
-                                clipper: TailClipper(
-                                  isFromMe: message.isFromMe!,
-                                  showTail: !part.isPkPass &&
-                                      message.showTail(newerMessage) &&
-                                      ms.isTrailingMessagePart(part),
-                                  connectLower: BubbleConnect.lower(ms, part),
-                                  connectUpper: BubbleConnect.upper(ms, part),
-                                ),
-                                child: TextBubble(
-                                  message: edit,
+                          .indexed
+                          .map((entry) => Padding(
+                                padding: const EdgeInsets.only(bottom: 2.0),
+                                child: ClipPath(
+                                  clipper: TailClipper(
+                                    isFromMe: message.isFromMe!,
+                                    showTail: false,
+                                    connectLower: true,
+                                    connectUpper: entry.$1 > 0 || BubbleConnect.upper(ms, part),
+                                  ),
+                                  child: TextBubble(
+                                    message: entry.$2,
+                                  ),
                                 ),
                               ))
                           .toList(),

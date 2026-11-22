@@ -5,6 +5,7 @@ import 'dart:ui';
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/facetime.dart';
 import 'package:flutter/cupertino.dart';
@@ -40,7 +41,9 @@ class OutgoingFaceTimeSheet extends StatefulWidget {
     required this.checkTelecomEnabled,
     required this.onOpenCallingAccounts,
     required this.requestCallPermissions,
+    this.requestVideoPermissions,
     required this.onPlaceNativeAudioCall,
+    this.onPlaceNativeCall,
     required this.onStartServerCall,
     required this.onOpenJoinLink,
     required this.onHangUpRingingCall,
@@ -61,7 +64,9 @@ class OutgoingFaceTimeSheet extends StatefulWidget {
   final Future<bool> Function() checkTelecomEnabled;
   final Future<void> Function() onOpenCallingAccounts;
   final Future<bool> Function() requestCallPermissions;
+  final Future<bool> Function()? requestVideoPermissions;
   final Future<bool> Function() onPlaceNativeAudioCall;
+  final Future<bool> Function(bool isVideo)? onPlaceNativeCall;
   final Future<PlacedFaceTimeCall> Function(bool video) onStartServerCall;
   final Future<void> Function(String link) onOpenJoinLink;
   final Future<void> Function(String callUuid) onHangUpRingingCall;
@@ -157,12 +162,17 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
     }
   }
 
+  bool _usesNativeAndroid(bool video) =>
+      widget.isAndroid && (!video || (!widget.isTelephony && widget.onPlaceNativeCall != null));
+
   Future<void> _beginCall(bool video) async {
     _cancelled = false;
     _selectedVideo = video;
 
-    if (!video && widget.isAndroid) {
-      final hasPerms = await widget.requestCallPermissions();
+    if (_usesNativeAndroid(video)) {
+      final hasPerms = video && widget.requestVideoPermissions != null
+          ? await widget.requestVideoPermissions!()
+          : await widget.requestCallPermissions();
       if (_cancelled || !mounted) return;
       if (!hasPerms) {
         setState(() => _phase = _OutgoingSheetPhase.permissionsRequired);
@@ -178,12 +188,14 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
       }
 
       setState(() => _phase = _OutgoingSheetPhase.connecting);
-      final placedNative = await widget.onPlaceNativeAudioCall();
+      final placedNative = widget.onPlaceNativeCall != null
+          ? await widget.onPlaceNativeCall!(video)
+          : await widget.onPlaceNativeAudioCall();
       if (_cancelled || !mounted) return;
       if (!placedNative) {
         final msg = widget.isTelephony
             ? "Couldn't start iPhone cellular call."
-            : "Couldn't start native FaceTime Audio call.";
+            : (video ? "Couldn't start native FaceTime Video call." : "Couldn't start native FaceTime Audio call.");
         _controller.reportError(msg);
         setState(() {
           _errorMessage = msg;
@@ -192,15 +204,19 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
         return;
       }
 
+      final rootNav = Navigator.of(context, rootNavigator: true);
       _controller.startOngoing(
         callerName: widget.callerName,
         callerAddress: widget.callerAddress,
         avatarBytes: widget.avatarBytes,
-        isVideo: false,
+        isVideo: video && !widget.isTelephony,
         isTelecomCall: true,
         isTelephony: widget.isTelephony,
       );
       Navigator.of(context).pop();
+      if (rootNav.mounted) {
+        openInAppCallScreen(context: rootNav.context, controller: _controller);
+      }
       return;
     }
 
@@ -323,20 +339,30 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
 
     final sheetSurface = widget.isIOS
-        ? (isDark ? const Color(0xE0161D27) : const Color(0xE6F8FAFC))
+        ? (isDark
+            ? FaceTimePalette.darkSurface.withValues(alpha: 0.88)
+            : theme.colorScheme.surfaceContainerLow.withValues(alpha: 0.90))
         : (isDark ? FaceTimePalette.darkSurface : theme.colorScheme.surfaceContainerLow);
 
     final borderColor = isDark
-        ? Colors.white.withValues(alpha: 0.12)
-        : Colors.black.withValues(alpha: 0.08);
+        ? FaceTimePalette.hairline
+        : theme.colorScheme.outlineVariant.withValues(alpha: 0.5);
+
+    final titleColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
+    final subtitleColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
 
     Widget content = Container(
       decoration: BoxDecoration(
         color: sheetSurface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(FaceTimeDims.sheetTopRadius)),
         border: Border(top: BorderSide(color: borderColor, width: 1)),
       ),
-      padding: EdgeInsets.fromLTRB(24, 12, 24, 24 + bottomInset),
+      padding: EdgeInsets.fromLTRB(
+        FaceTimeDims.contactSideMargin,
+        12,
+        FaceTimeDims.contactSideMargin,
+        FaceTimeDims.contactSideMargin + bottomInset,
+      ),
       child: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -348,7 +374,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.38),
+                  color: subtitleColor.withValues(alpha: 0.38),
                   borderRadius: BorderRadius.circular(999),
                 ),
               ),
@@ -374,6 +400,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleLarge?.copyWith(
+                          color: titleColor,
                           fontWeight: FontWeight.w700,
                           letterSpacing: -0.2,
                         ),
@@ -386,7 +413,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                          color: subtitleColor,
                         ),
                       ),
                     ],
@@ -398,7 +425,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
 
             AnimatedSwitcher(
               duration: reducedMotion ? Duration.zero : const Duration(milliseconds: 200),
-              child: _buildPhaseBody(context, theme),
+              child: _buildPhaseBody(context, theme, isDark, reducedMotion),
             ),
           ],
         ),
@@ -407,7 +434,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
 
     if (widget.isIOS) {
       content = ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(FaceTimeDims.sheetTopRadius)),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
           child: content,
@@ -422,7 +449,12 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
     );
   }
 
-  Widget _buildPhaseBody(BuildContext context, ThemeData theme) {
+  Widget _buildPhaseBody(BuildContext context, ThemeData theme, bool isDark, bool reducedMotion) {
+    final titleColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
+    final subtitleColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
+    final outlinedForeground = isDark ? FaceTimePalette.onCanvas : null;
+    final outlinedSide = isDark ? BorderSide(color: FaceTimePalette.secondaryText.withValues(alpha: 0.4)) : null;
+
     switch (_phase) {
       case _OutgoingSheetPhase.chooseMode:
         return Column(
@@ -432,9 +464,14 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
           children: [
             _OutgoingOptionCard(
               icon: widget.isIOS ? CupertinoIcons.videocam_fill : Icons.videocam_rounded,
-              accentColor: FaceTimePalette.blue,
+              accentColor: isDark ? FaceTimePalette.blueDark : FaceTimePalette.blue,
               title: 'Start video call',
-              subtitle: 'Opens FaceTime video link',
+              subtitle: (widget.isAndroid && !widget.isTelephony && widget.onPlaceNativeCall != null)
+                  ? (_telecomEnabled == false
+                      ? 'Needs Calling Account setup'
+                      : 'Native video via Android Calling')
+                  : 'Opens FaceTime video link',
+              reducedMotion: reducedMotion,
               onTap: () => _beginCall(true),
             ),
             const SizedBox(height: 12),
@@ -447,6 +484,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                       ? 'Needs Calling Account setup'
                       : 'Native audio via Android Calling')
                   : 'Opens FaceTime audio link',
+              reducedMotion: reducedMotion,
               onTap: () => _beginCall(false),
             ),
             if (widget.isAndroid && _telecomEnabled == false) ...[
@@ -467,12 +505,16 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
           icon: Icons.phone_in_talk_rounded,
           accentColor: FaceTimePalette.amber,
           title: 'Enable Calling Account',
-          body: 'Turn on BlueBubbles FaceTime in Android Calling Accounts to place native FaceTime Audio calls.',
+          body: _selectedVideo
+              ? 'Turn on BlueBubbles FaceTime in Android Calling Accounts to place native FaceTime Video calls.'
+              : 'Turn on BlueBubbles FaceTime in Android Calling Accounts to place native FaceTime Audio calls.',
           actions: [
             OutlinedButton(
               onPressed: () => setState(() => _phase = _OutgoingSheetPhase.chooseMode),
               style: OutlinedButton.styleFrom(
-                minimumSize: const Size(88, 48),
+                foregroundColor: outlinedForeground,
+                side: outlinedSide,
+                minimumSize: const Size(88, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Back'),
@@ -484,13 +526,13 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                 if (!mounted) return;
                 setState(() => _telecomEnabled = enabled);
                 if (enabled) {
-                  await _beginCall(false);
+                  await _beginCall(_selectedVideo);
                 }
               },
               style: FilledButton.styleFrom(
                 backgroundColor: FaceTimePalette.blue,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(140, 48),
+                minimumSize: const Size(140, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Open calling settings'),
@@ -501,25 +543,29 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
       case _OutgoingSheetPhase.permissionsRequired:
         return _InlineStatusPanel(
           key: const ValueKey('permissions-required'),
-          icon: Icons.mic_off_rounded,
+          icon: _selectedVideo ? Icons.videocam_off_rounded : Icons.mic_off_rounded,
           accentColor: FaceTimePalette.amber,
-          title: 'Microphone & Phone access needed',
-          body: 'Allow Microphone and Phone permissions to place native FaceTime Audio calls.',
+          title: _selectedVideo ? 'Microphone, Camera & Phone access needed' : 'Microphone & Phone access needed',
+          body: _selectedVideo
+              ? 'Allow Microphone, Camera, and Phone permissions to place native FaceTime Video calls.'
+              : 'Allow Microphone and Phone permissions to place native FaceTime Audio calls.',
           actions: [
             OutlinedButton(
               onPressed: () => setState(() => _phase = _OutgoingSheetPhase.chooseMode),
               style: OutlinedButton.styleFrom(
-                minimumSize: const Size(88, 48),
+                foregroundColor: outlinedForeground,
+                side: outlinedSide,
+                minimumSize: const Size(88, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Back'),
             ),
             FilledButton(
-              onPressed: () => _beginCall(false),
+              onPressed: () => _beginCall(_selectedVideo),
               style: FilledButton.styleFrom(
                 backgroundColor: FaceTimePalette.blue,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(120, 48),
+                minimumSize: const Size(120, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Try again'),
@@ -532,20 +578,25 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
           key: const ValueKey('connecting'),
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
-            borderRadius: BorderRadius.circular(20),
+            color: isDark
+                ? FaceTimePalette.darkElevated
+                : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.65),
+            borderRadius: BorderRadius.circular(FaceTimeDims.estimatePillRadius),
+            border: Border.all(
+              color: isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+            ),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Row(
                 children: [
-                  const SizedBox(
+                  SizedBox(
                     width: 24,
                     height: 24,
                     child: CircularProgressIndicator(
                       strokeWidth: 2.5,
-                      color: FaceTimePalette.blue,
+                      color: isDark ? FaceTimePalette.blueDark : FaceTimePalette.blue,
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -557,15 +608,18 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                           'Calling ${widget.callerName}…',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: titleColor,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           _selectedVideo
-                              ? 'Preparing FaceTime Video link'
+                              ? (_usesNativeAndroid(true) ? 'Starting FaceTime Video' : 'Preparing FaceTime Video link')
                               : (widget.isTelephony ? 'Calling via iPhone Cellular' : 'Starting FaceTime Audio'),
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                            color: subtitleColor,
                           ),
                         ),
                       ],
@@ -579,7 +633,9 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                 child: OutlinedButton(
                   onPressed: _cancelConnecting,
                   style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(double.infinity, 48),
+                    foregroundColor: outlinedForeground,
+                    side: outlinedSide,
+                    minimumSize: const Size(double.infinity, FaceTimeDims.actionButtonSize),
                     shape: const StadiumBorder(),
                   ),
                   child: const Text('Cancel call'),
@@ -590,6 +646,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
         );
 
       case _OutgoingSheetPhase.ringingJoinReady:
+        final dangerColor = isDark ? FaceTimePalette.redDarkSkin : FaceTimePalette.red;
         return _InlineStatusPanel(
           key: const ValueKey('ringing-join-ready'),
           icon: widget.isIOS ? CupertinoIcons.videocam_fill : Icons.videocam_rounded,
@@ -610,9 +667,9 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
                       }
                     },
               style: OutlinedButton.styleFrom(
-                foregroundColor: FaceTimePalette.red,
-                side: BorderSide(color: FaceTimePalette.red.withValues(alpha: 0.5)),
-                minimumSize: const Size(112, 48),
+                foregroundColor: dangerColor,
+                side: BorderSide(color: dangerColor.withValues(alpha: 0.55)),
+                minimumSize: const Size(112, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Hang Up'),
@@ -628,7 +685,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
               style: FilledButton.styleFrom(
                 backgroundColor: FaceTimePalette.blue,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(124, 48),
+                minimumSize: const Size(124, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Join Call'),
@@ -647,7 +704,9 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
             OutlinedButton(
               onPressed: () => Navigator.of(context).pop(),
               style: OutlinedButton.styleFrom(
-                minimumSize: const Size(110, 48),
+                foregroundColor: outlinedForeground,
+                side: outlinedSide,
+                minimumSize: const Size(110, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Leave ringing'),
@@ -667,7 +726,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
               style: FilledButton.styleFrom(
                 backgroundColor: FaceTimePalette.red,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(124, 48),
+                minimumSize: const Size(124, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Hang up call'),
@@ -679,14 +738,16 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
         return _InlineStatusPanel(
           key: const ValueKey('error'),
           icon: Icons.error_outline_rounded,
-          accentColor: FaceTimePalette.red,
+          accentColor: isDark ? FaceTimePalette.redDarkSkin : FaceTimePalette.red,
           title: "Couldn't start FaceTime",
           body: _errorMessage ?? 'Unable to connect right now.',
           actions: [
             OutlinedButton(
               onPressed: () => Navigator.of(context).pop(),
               style: OutlinedButton.styleFrom(
-                minimumSize: const Size(96, 48),
+                foregroundColor: outlinedForeground,
+                side: outlinedSide,
+                minimumSize: const Size(96, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Close'),
@@ -696,7 +757,7 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
               style: FilledButton.styleFrom(
                 backgroundColor: FaceTimePalette.blue,
                 foregroundColor: Colors.white,
-                minimumSize: const Size(112, 48),
+                minimumSize: const Size(112, FaceTimeDims.actionButtonSize),
                 shape: const StadiumBorder(),
               ),
               child: const Text('Try again'),
@@ -707,12 +768,13 @@ class _OutgoingFaceTimeSheetState extends State<OutgoingFaceTimeSheet> {
   }
 }
 
-class _OutgoingOptionCard extends StatelessWidget {
+class _OutgoingOptionCard extends StatefulWidget {
   const _OutgoingOptionCard({
     required this.icon,
     required this.accentColor,
     required this.title,
     required this.subtitle,
+    required this.reducedMotion,
     required this.onTap,
   });
 
@@ -720,7 +782,15 @@ class _OutgoingOptionCard extends StatelessWidget {
   final Color accentColor;
   final String title;
   final String subtitle;
+  final bool reducedMotion;
   final VoidCallback onTap;
+
+  @override
+  State<_OutgoingOptionCard> createState() => _OutgoingOptionCardState();
+}
+
+class _OutgoingOptionCardState extends State<_OutgoingOptionCard> {
+  bool _pressed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -729,55 +799,73 @@ class _OutgoingOptionCard extends StatelessWidget {
     final cardColor = isDark
         ? FaceTimePalette.darkElevated
         : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.72);
+    final titleColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
+    final subtitleColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
+    final cardRadius = BorderRadius.circular(FaceTimeDims.ongoingPillRadius);
+    final scale = (!widget.reducedMotion && _pressed) ? 0.96 : 1.0;
 
-    return Material(
-      color: cardColor,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 68),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: accentColor.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(14),
+    return AnimatedScale(
+      scale: scale,
+      duration: widget.reducedMotion ? Duration.zero : const Duration(milliseconds: 100),
+      curve: Curves.easeOut,
+      child: Material(
+        color: cardColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: cardRadius,
+          side: BorderSide(
+            color: isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.35),
+          ),
+        ),
+        child: InkWell(
+          onTap: widget.onTap,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTapCancel: () => setState(() => _pressed = false),
+          borderRadius: cardRadius,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 68),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: widget.accentColor.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(widget.icon, color: widget.accentColor, size: FaceTimeDims.actionIconSize),
                   ),
-                  child: Icon(icon, color: accentColor, size: 22),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            color: titleColor,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+                        const SizedBox(height: 2),
+                        Text(
+                          widget.subtitle,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: subtitleColor,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  size: 16,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ],
+                  Icon(
+                    Icons.arrow_forward_ios_rounded,
+                    size: 16,
+                    color: subtitleColor,
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -794,11 +882,12 @@ class _InlineTelecomBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: FaceTimePalette.amber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
         border: Border.all(color: FaceTimePalette.amber.withValues(alpha: 0.28)),
       ),
       child: Row(
@@ -809,7 +898,7 @@ class _InlineTelecomBanner extends StatelessWidget {
             child: Text(
               'Enable Calling Accounts for native FaceTime Audio.',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurface,
+                color: isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -817,8 +906,8 @@ class _InlineTelecomBanner extends StatelessWidget {
           TextButton(
             onPressed: onOpenSettings,
             style: TextButton.styleFrom(
-              minimumSize: const Size(48, 48),
-              foregroundColor: FaceTimePalette.blue,
+              minimumSize: const Size(FaceTimeDims.actionButtonSize, FaceTimeDims.actionButtonSize),
+              foregroundColor: isDark ? FaceTimePalette.blueDark : FaceTimePalette.blue,
             ),
             child: const Text('Setup'),
           ),
@@ -847,11 +936,17 @@ class _InlineStatusPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(20),
+        color: isDark
+            ? FaceTimePalette.darkElevated
+            : theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(FaceTimeDims.estimatePillRadius),
+        border: Border.all(
+          color: isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -872,7 +967,10 @@ class _InlineStatusPanel extends StatelessWidget {
               Expanded(
                 child: Text(
                   title,
-                  style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -881,7 +979,7 @@ class _InlineStatusPanel extends StatelessWidget {
           Text(
             body,
             style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+              color: isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 16),
@@ -911,15 +1009,27 @@ class FaceTimeJoinFallbackSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    final titleColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
+    final subtitleColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
     return Container(
       decoration: BoxDecoration(
-        color: theme.brightness == Brightness.dark
-            ? FaceTimePalette.darkSurface
-            : theme.colorScheme.surfaceContainerLow,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        color: isDark ? FaceTimePalette.darkSurface : theme.colorScheme.surfaceContainerLow,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(FaceTimeDims.sheetTopRadius)),
+        border: Border(
+          top: BorderSide(
+            color: isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+            width: 1,
+          ),
+        ),
       ),
-      padding: EdgeInsets.fromLTRB(24, 12, 24, 24 + bottomInset),
+      padding: EdgeInsets.fromLTRB(
+        FaceTimeDims.contactSideMargin,
+        12,
+        FaceTimeDims.contactSideMargin,
+        FaceTimeDims.contactSideMargin + bottomInset,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -929,7 +1039,7 @@ class FaceTimeJoinFallbackSheet extends StatelessWidget {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.38),
+                color: subtitleColor.withValues(alpha: 0.38),
                 borderRadius: BorderRadius.circular(999),
               ),
             ),
@@ -937,12 +1047,15 @@ class FaceTimeJoinFallbackSheet extends StatelessWidget {
           const SizedBox(height: 20),
           Text(
             'FaceTime link ready',
-            style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            style: theme.textTheme.titleLarge?.copyWith(
+              color: titleColor,
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 8),
           Text(
             'Your browser blocked opening the FaceTime tab automatically.',
-            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodyMedium?.copyWith(color: subtitleColor),
           ),
           const SizedBox(height: 20),
           Wrap(
@@ -953,7 +1066,9 @@ class FaceTimeJoinFallbackSheet extends StatelessWidget {
               OutlinedButton(
                 onPressed: onCopyLink,
                 style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(112, 48),
+                  foregroundColor: isDark ? FaceTimePalette.onCanvas : null,
+                  side: isDark ? BorderSide(color: FaceTimePalette.secondaryText.withValues(alpha: 0.4)) : null,
+                  minimumSize: const Size(112, FaceTimeDims.actionButtonSize),
                   shape: const StadiumBorder(),
                 ),
                 child: const Text('Copy link'),
@@ -963,7 +1078,7 @@ class FaceTimeJoinFallbackSheet extends StatelessWidget {
                 style: FilledButton.styleFrom(
                   backgroundColor: FaceTimePalette.blue,
                   foregroundColor: Colors.white,
-                  minimumSize: const Size(112, 48),
+                  minimumSize: const Size(112, FaceTimeDims.actionButtonSize),
                   shape: const StadiumBorder(),
                 ),
                 child: const Text('Join call'),

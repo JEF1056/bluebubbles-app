@@ -1,5 +1,6 @@
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/ui/findmy_helpers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
@@ -258,12 +259,15 @@ void main() {
     ]);
   });
 
-  test('formatFindMyFriendDistance marks Nearby ONLY <= 100m and formats miles otherwise', () {
+  test('formatFindMyFriendDistance marks Nearby ONLY <= 20m and formats miles otherwise', () {
+    expect(kFindMyNearbyMeters, 20.0);
     expect(formatFindMyFriendDistance(null), '');
     expect(formatFindMyFriendDistance(-1), '');
     expect(formatFindMyFriendDistance(0), 'Nearby');
-    expect(formatFindMyFriendDistance(99.9), 'Nearby');
-    expect(formatFindMyFriendDistance(100.0), 'Nearby');
+    expect(formatFindMyFriendDistance(19.9), 'Nearby');
+    expect(formatFindMyFriendDistance(20.0), 'Nearby');
+    expect(formatFindMyFriendDistance(20.1), '<0.1 mi');
+    expect(formatFindMyFriendDistance(80.0), '<0.1 mi');
     expect(formatFindMyFriendDistance(100.1), '0.1 mi');
     expect(formatFindMyFriendDistance(2253.0), '1.4 mi'); // ~1.4 mi, same city is NOT Nearby
     expect(formatFindMyFriendDistance(56327.0), '35 mi');

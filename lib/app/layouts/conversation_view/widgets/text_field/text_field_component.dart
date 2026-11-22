@@ -23,8 +23,6 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/helpers/ui/html_runs.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_fork_widgets.dart' as fork;
-import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_fork_widgets.dart'
-    show DictationMicButton, NativeSpeechDictation;
 
 export 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_fork_widgets.dart'
     show NativeSpeechDictation, hintTextForService;
@@ -98,10 +96,13 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   ClipboardPasteHandler? clipboardHandler;
   StreamSubscription<void>? _webPasteSub;
   Worker? _recordingWorker;
-  late final NativeSpeechDictation _dictation;
-  bool _sttAvailable = false;
 
   TextFieldComponentState() : isRecordingNotifier = ValueNotifier<bool>(false);
+
+  void _updateRecordingState() {
+    isRecordingNotifier.value =
+        (controller?.showRecording.value ?? false) || (recorderController?.isRecording ?? false);
+  }
 
   @override
   void initState() {
@@ -114,22 +115,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     subjectTextController = widget.subjectTextController;
     sendMessage = widget.sendMessage;
 
-    _dictation = NativeSpeechDictation(
-      getTextController: () => controller?.textController ?? textController,
-      onInteraction: () => controller?.onUserChatInteraction(),
-      onListeningChanged: (listening) => controller?.isDictating.value = listening,
-      onError: (msg) => showSnackbar("Error", msg, type: SnackbarType.error),
-    );
-    unawaited(_dictation.checkAvailability().then((available) {
-      if (mounted && available) {
-        setState(() => _sttAvailable = true);
-      }
-    }));
-
-    // add a listener to recorderController to update isRecordingNotifier
-    recorderController?.addListener(() {
-      isRecordingNotifier.value = recorderController?.isRecording ?? false;
-    });
+    recorderController?.addListener(_updateRecordingState);
 
     _configureHandlers();
     _fieldFocusNode = controller?.focusNode ?? focusNode;
@@ -166,11 +152,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   void dispose() {
     _webPasteSub?.cancel();
     _recordingWorker?.dispose();
-    if (controller?.stopDictation == _stopDictation) {
-      controller?.stopDictation = null;
-    }
-    controller?.isDictating.value = false;
-    _dictation.dispose();
+    recorderController?.removeListener(_updateRecordingState);
     _fieldFocusNode?.removeListener(_onFieldFocusChange);
     // dispose of the ValueNotifier when the state is disposed
     isRecordingNotifier.dispose();
@@ -181,15 +163,10 @@ class TextFieldComponentState extends State<TextFieldComponent> {
   void didUpdateWidget(TextFieldComponent oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.controller != oldWidget.controller) {
-      if (oldWidget.controller?.stopDictation == _stopDictation) {
-        oldWidget.controller?.stopDictation = null;
-      }
       controller = widget.controller;
       _configureHandlers();
     }
   }
-
-  Future<void> _stopDictation() => _dictation.stop();
 
   void _configureHandlers() {
     _recordingWorker?.dispose();
@@ -200,17 +177,12 @@ class TextFieldComponentState extends State<TextFieldComponent> {
       emojiHandler = null;
       mentionHandler = null;
       keyboardHandler = null;
+      _updateRecordingState();
       return;
     }
-    ctrl.stopDictation = _stopDictation;
-    ctrl.isDictating.value = _dictation.isListening.value;
 
-    if (recorderController == null) {
-      isRecordingNotifier.value = ctrl.showRecording.value;
-      _recordingWorker = ever(ctrl.showRecording, (bool val) {
-        isRecordingNotifier.value = val;
-      });
-    }
+    _updateRecordingState();
+    _recordingWorker = ever(ctrl.showRecording, (_) => _updateRecordingState());
 
     emojiHandler = EmojiAutocompleteHandler(controller: ctrl, textField: textController);
     mentionHandler = MentionAutocompleteHandler(controller: ctrl, textField: textController);
@@ -260,13 +232,6 @@ class TextFieldComponentState extends State<TextFieldComponent> {
     );
   }
 
-  Widget _buildDictationButton(BuildContext context, {bool compact = false}) => DictationMicButton(
-        dictation: _dictation,
-        iOS: iOS,
-        compact: compact,
-        onBeforeToggle: () => controller?.onUserChatInteraction(immediate: true),
-      );
-
   bool _showAttachmentPickerLocal = false;
   bool _pasteHandledOnKeyDown = false;
   final _fieldKey = GlobalKey();
@@ -292,7 +257,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
               foregroundDecoration: iOS
                   ? BoxDecoration(
                       border: Border.fromBorderSide(BorderSide(
-                        color: (isRecording & iOS)
+                        color: (isRecording && iOS)
                             ? context.theme.colorScheme.primary.withValues(alpha: 1.0)
                             : context.theme.colorScheme.outlineVariant.withValues(alpha: 0.25),
                         width: 1,
@@ -365,7 +330,12 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         autocorrect: true,
                         controller: subjController,
                         scrollPhysics: const CustomBouncingScrollPhysics(),
-                        style: context.theme.extension<BubbleText>()!.bubbleText.copyWith(fontWeight: FontWeight.bold),
+                        textAlignVertical: iOS ? null : TextAlignVertical.center,
+                        style: context.theme.extension<BubbleText>()!.bubbleText.copyWith(
+                              fontSize: material ? 14.0 : null,
+                              fontWeight: FontWeight.bold,
+                              leadingDistribution: !iOS ? TextLeadingDistribution.even : null,
+                            ),
                         keyboardType: TextInputType.multiline,
                         maxLines: 14,
                         minLines: 1,
@@ -373,9 +343,13 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         enableIMEPersonalizedLearning: !SettingsSvc.settings.incognitoKeyboard.value,
                         textInputAction: TextInputAction.next,
                         cursorColor: context.theme.colorScheme.primary,
-                        cursorHeight: context.theme.extension<BubbleText>()!.bubbleText.fontSize! * 1.25,
+                        cursorHeight: (material ? 14.0 : context.theme.extension<BubbleText>()!.bubbleText.fontSize!) * 1.25,
                         decoration: InputDecoration(
-                          contentPadding: EdgeInsets.all(iOS && !kIsDesktop && !kIsWeb ? 10 : 12.5),
+                          contentPadding: iOS && !kIsDesktop && !kIsWeb
+                              ? const EdgeInsets.all(10)
+                              : (material
+                                  ? const EdgeInsets.fromLTRB(16, 8, 16, 8)
+                                  : const EdgeInsets.all(12.5)),
                           isDense: true,
                           isCollapsed: true,
                           hintText: "Subject",
@@ -387,6 +361,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                               .extension<BubbleText>()!
                               .bubbleText
                               .copyWith(
+                                  fontSize: material ? 14.0 : null,
                                   color: material
                                       ? context.theme.colorScheme.onSurfaceVariant
                                       : context.theme.colorScheme.outline,
@@ -407,13 +382,21 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         SettingsSvc.settings.enablePrivateAPI.value &&
                         SettingsSvc.settings.privateSubjectLine.value &&
                         chat!.isIMessage &&
-                        iOS)
-                      Divider(
-                        height: 1.5,
-                        thickness: 1.5,
-                        indent: 10,
-                        color: context.theme.colorScheme.surfaceContainerHighest,
-                      ),
+                        (iOS || material))
+                      iOS
+                          ? Divider(
+                              height: 1.5,
+                              thickness: 1.5,
+                              indent: 10,
+                              color: context.theme.colorScheme.surfaceContainerHighest,
+                            )
+                          : Divider(
+                              height: 1,
+                              thickness: 1,
+                              indent: 16,
+                              endIndent: 16,
+                              color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                            ),
                               ],
                             ),
                           ),
@@ -421,9 +404,14 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                       ),
                     Obx(() {
                       final baseBubbleText = context.theme.extension<BubbleText>()!.bubbleText;
-                      final fontSize = baseBubbleText.fontSize ?? 15.0;
+                      final effectiveBodyStyle = material
+                          ? baseBubbleText.copyWith(fontSize: 16.0, leadingDistribution: TextLeadingDistribution.even)
+                          : (!iOS
+                              ? baseBubbleText.copyWith(leadingDistribution: TextLeadingDistribution.even)
+                              : baseBubbleText);
+                      final fontSize = effectiveBodyStyle.fontSize ?? 16.0;
                       final lineHeight = MediaQuery.textScalerOf(context).scale(
-                        fontSize * (baseBubbleText.height ?? 1.4),
+                        fontSize * (effectiveBodyStyle.height ?? 1.4),
                       );
                       final hasUpperContent = (!isChatCreator &&
                               controller != null &&
@@ -434,7 +422,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                                       SettingsSvc.settings.privateSubjectLine.value &&
                                       (chat?.isIMessage ?? false)))) ||
                           initialAttachments.isNotEmpty;
-                      final verticalChrome = (iOS && !kIsDesktop && !kIsWeb ? 10.0 : 13.0) * 2 + 4.0;
+                      final verticalChrome = (iOS && !kIsDesktop && !kIsWeb ? 10.0 : (material ? 8.0 : 13.0)) * 2 + 4.0;
                       final int bodyMaxLines;
                       if (pillConstraints.hasBoundedHeight) {
                         final budget = pillConstraints.maxHeight * (hasUpperContent ? 0.5 : 0.95);
@@ -442,6 +430,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                       } else {
                         bodyMaxLines = 14;
                       }
+                      final useBottomAlignedRow = material && !isChatCreator && controller != null;
                       final field = TextField(
                         textCapitalization: TextCapitalization.sentences,
                         focusNode: controller?.focusNode ?? focusNode,
@@ -449,9 +438,7 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         controller: txtController,
                         scrollPhysics: const CustomBouncingScrollPhysics(),
                         textAlignVertical: iOS ? null : TextAlignVertical.center,
-                        style: !iOS
-                            ? baseBubbleText.copyWith(leadingDistribution: TextLeadingDistribution.even)
-                            : baseBubbleText,
+                        style: effectiveBodyStyle,
                         keyboardType: TextInputType.multiline,
                         // With the formatting panel up, selection changes would otherwise bring the keyboard back.
                         // Turning it off again (a tap closes the panel) reopens the input, and the keyboard with it.
@@ -465,11 +452,11 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                             ? TextInputAction.send
                             : TextInputAction.newline,
                         cursorColor: context.theme.colorScheme.primary,
-                        cursorHeight: baseBubbleText.fontSize! * 1.25,
+                        cursorHeight: fontSize * 1.25,
                         decoration: InputDecoration(
                           contentPadding: EdgeInsets.symmetric(
-                            horizontal: iOS ? 10 : (material && !isChatCreator && controller != null ? 4 : 16),
-                            vertical: iOS && !kIsDesktop && !kIsWeb ? 10 : 13,
+                            horizontal: iOS ? 10 : (useBottomAlignedRow ? 4 : 16),
+                            vertical: iOS && !kIsDesktop && !kIsWeb ? 10 : (material ? 8 : 13),
                           ),
                           isDense: true,
                           isCollapsed: true,
@@ -477,145 +464,34 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           enabledBorder: InputBorder.none,
                           border: InputBorder.none,
                           focusedBorder: InputBorder.none,
-                          filled: (isRecording & iOS),
-                          fillColor: (isRecording & iOS)
-                              ? context.theme.colorScheme.primary.withValues(alpha: 0.3)
+                          filled: (isRecording && iOS),
+                          fillColor: (isRecording && iOS)
+                              ? context.theme.colorScheme.primary.withValues(alpha: 0.16)
                               : Colors.transparent,
-                          hintStyle: baseBubbleText.copyWith(
+                          hintStyle: effectiveBodyStyle.copyWith(
                             color: material
                                 ? context.theme.colorScheme.onSurfaceVariant
                                 : context.theme.colorScheme.outline,
-                            leadingDistribution: !iOS ? TextLeadingDistribution.even : null,
                           ),
-                          prefixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 48),
-                          prefixIcon: material && !isChatCreator && controller != null
-                              ? Padding(
-                                  padding: const EdgeInsets.only(left: 4.0),
-                                  child: (kIsDesktop || kIsWeb)
-                                      ? DesktopAttachmentMenu(
-                                          controller: controller!,
-                                          inRow: SettingsSvc.settings.textFieldButtons,
-                                          builder: (_, toggle) => IconButton(
-                                            tooltip: 'Add attachment',
-                                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                                            padding: EdgeInsets.zero,
-                                            icon: Icon(
-                                              Icons.add_circle_outline,
-                                              color: context.theme.colorScheme.onSurfaceVariant,
-                                              size: 24,
-                                            ),
-                                            onPressed: toggle,
-                                          ),
-                                        )
-                                      : Builder(builder: (context) {
-                                          final isOpen = controller!.showAttachmentPicker.value;
-                                          return IconButton(
-                                            tooltip: isOpen ? 'Close attachments' : 'Add attachment',
-                                            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                                            padding: EdgeInsets.zero,
-                                            icon: isOpen
-                                                ? Container(
-                                                    width: 28,
-                                                    height: 28,
-                                                    decoration: BoxDecoration(
-                                                      shape: BoxShape.circle,
-                                                      color: context.theme.colorScheme.surfaceContainerHighest,
-                                                    ),
-                                                    child: Icon(
-                                                      Icons.close_rounded,
-                                                      color: context.theme.colorScheme.onSurfaceVariant,
-                                                      size: 18,
-                                                    ),
-                                                  )
-                                                : Icon(
-                                                    Icons.add_circle_outline,
-                                                    color: context.theme.colorScheme.onSurfaceVariant,
-                                                    size: 24,
-                                                  ),
-                                            onPressed: () {
-                                              if (!isOpen) {
-                                                controller!.focusNode.unfocus();
-                                                controller!.subjectFocusNode.unfocus();
-                                              } else {
-                                                controller!.showGenmojiLibrary.value = false;
-                                              }
-                                              controller!.showAttachmentPicker.value = !isOpen;
-                                            },
-                                          );
-                                        }),
-                                )
-                              : null,
-                          suffixIconConstraints: BoxConstraints(minHeight: iOS ? 0 : 48),
-                          suffixIcon: samsung && !isChatCreator
-                              ? (_sttAvailable && !isRecording
-                                  ? Padding(
-                                      padding: const EdgeInsets.only(right: 4.0),
-                                      child: _buildDictationButton(context),
-                                    )
-                                  : null)
-                              : (material && !isChatCreator && controller != null)
-                                  ? Padding(
-                                      padding: const EdgeInsets.only(right: 4.0),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          if (_sttAvailable && !isRecording) _buildDictationButton(context),
-                                          if (kIsWeb || kIsDesktop)
-                                            Builder(
-                                              builder: (buttonContext) => IconButton(
-                                                tooltip: 'Emoji',
-                                                constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
-                                                padding: EdgeInsets.zero,
-                                                icon: Icon(
-                                                  Icons.emoji_emotions_outlined,
-                                                  color: context.theme.colorScheme.onSurfaceVariant,
-                                                  size: 22,
-                                                ),
-                                                onPressed: () => showEmojiPickerPopover(buttonContext, controller!),
-                                              ),
-                                            ),
-                                          IconButton(
-                                            tooltip: 'Gallery',
-                                            constraints: const BoxConstraints(minWidth: 38, minHeight: 40),
-                                            padding: EdgeInsets.zero,
-                                            icon: Icon(
-                                              Icons.image_outlined,
-                                              color: context.theme.colorScheme.onSurfaceVariant,
-                                              size: 22,
-                                            ),
-                                            onPressed: () {
-                                              if (kIsDesktop || kIsWeb) {
-                                                AttachmentActions.pickFiles(controller!);
-                                              } else {
-                                                controller!.focusNode.unfocus();
-                                                controller!.subjectFocusNode.unfocus();
-                                                controller!.showAttachmentPicker.value = false;
-                                                showGmsgCameraGallerySheet(context, controller!);
-                                              }
-                                            },
-                                          ),
-                                        ],
-                                      ),
-                                    )
+                          suffixIconConstraints: useBottomAlignedRow
+                              ? null
+                              : BoxConstraints(minHeight: iOS ? 0 : 48),
+                          suffixIcon: useBottomAlignedRow
+                              ? null
+                              : samsung && !isChatCreator
+                                  ? null
                                   : Padding(
                                       padding: EdgeInsets.only(right: iOS ? 0.0 : 4.0),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          if (_sttAvailable && !isRecording)
-                                            _buildDictationButton(context, compact: iOS),
-                                          TextFieldSuffix(
-                                            subjectTextController: subjController,
-                                            textController: txtController,
-                                            controller: controller,
-                                            recorderController: recorderController,
-                                            audioRecorder: widget.audioRecorder,
-                                            sendMessage: sendMessage,
-                                            isChatCreator: isChatCreator,
-                                            alwaysShowSend: widget.alwaysShowSend,
-                                            hasInitialAttachments: initialAttachments.isNotEmpty,
-                                          ),
-                                        ],
+                                      child: TextFieldSuffix(
+                                        subjectTextController: subjController,
+                                        textController: txtController,
+                                        controller: controller,
+                                        recorderController: recorderController,
+                                        audioRecorder: widget.audioRecorder,
+                                        sendMessage: sendMessage,
+                                        isChatCreator: isChatCreator,
+                                        alwaysShowSend: widget.alwaysShowSend,
+                                        hasInitialAttachments: initialAttachments.isNotEmpty,
                                       ),
                                     ),
                         ),
@@ -738,9 +614,6 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           controller?.showTextFormattingPanel.value = false;
                         },
                         onSubmitted: (String value) {
-                          if (_dictation.isListening.value) {
-                            unawaited(_dictation.stop());
-                          }
                           controller?.focusNode.requestFocus();
                           if (isNullOrEmpty(value) &&
                               (controller?.pickedAttachments.isEmpty ?? false) &&
@@ -752,14 +625,135 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                         contentInsertionConfiguration:
                             ContentInsertionConfiguration(onContentInserted: onContentCommit),
                       );
-                      return Stack(
+                      final fieldStack = Stack(
                         children: [
                           KeyedSubtree(key: _fieldKey, child: field),
                           Positioned.fill(
                             child: TextEffectOverlay(
                               controller: txtController,
                               fieldKey: _fieldKey,
-                              style: context.theme.extension<BubbleText>()!.bubbleText,
+                              style: effectiveBodyStyle,
+                            ),
+                          ),
+                        ],
+                      );
+                      if (!useBottomAlignedRow) return fieldStack;
+                      // Keep inline Material actions bottom-aligned with the external Send button
+                      // when the composer expands onto multiple lines (InputDecoration centers them).
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          SizedBox(
+                            height: 56,
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsetsDirectional.only(start: 4.0),
+                                child: (kIsDesktop || kIsWeb)
+                                    ? DesktopAttachmentMenu(
+                                        controller: controller!,
+                                        inRow: SettingsSvc.settings.textFieldButtons,
+                                        builder: (_, toggle) => IconButton(
+                                          tooltip: 'Add attachment',
+                                          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                                          padding: EdgeInsets.zero,
+                                          icon: Icon(
+                                            Icons.add_circle_outline,
+                                            color: context.theme.colorScheme.onSurfaceVariant,
+                                            size: 24,
+                                          ),
+                                          onPressed: toggle,
+                                        ),
+                                      )
+                                    : Obx(() {
+                                        final isOpen = controller!.showAttachmentPicker.value;
+                                        return IconButton(
+                                          tooltip: isOpen ? 'Close attachments' : 'Add attachment',
+                                          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                                          padding: EdgeInsets.zero,
+                                          icon: isOpen
+                                              ? Container(
+                                                  width: 28,
+                                                  height: 28,
+                                                  decoration: BoxDecoration(
+                                                    shape: BoxShape.circle,
+                                                    color: context.theme.colorScheme.surfaceContainerHighest,
+                                                  ),
+                                                  child: Icon(
+                                                    Icons.close_rounded,
+                                                    color: context.theme.colorScheme.onSurfaceVariant,
+                                                    size: 18,
+                                                  ),
+                                                )
+                                              : Icon(
+                                                  Icons.add_circle_outline,
+                                                  color: context.theme.colorScheme.onSurfaceVariant,
+                                                  size: 24,
+                                                ),
+                                          onPressed: () {
+                                            if (!isOpen) {
+                                              controller!.focusNode.unfocus();
+                                              controller!.subjectFocusNode.unfocus();
+                                            } else {
+                                              controller!.showGenmojiLibrary.value = false;
+                                            }
+                                            controller!.showAttachmentPicker.value = !isOpen;
+                                          },
+                                        );
+                                      }),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(minHeight: 56),
+                              child: Center(child: fieldStack),
+                            ),
+                          ),
+                          SizedBox(
+                            height: 56,
+                            child: Center(
+                              child: Padding(
+                                padding: const EdgeInsetsDirectional.only(end: 4.0),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (kIsWeb || kIsDesktop)
+                                      Builder(
+                                        builder: (buttonContext) => IconButton(
+                                          tooltip: 'Emoji',
+                                          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                                          padding: EdgeInsets.zero,
+                                          icon: Icon(
+                                            Icons.emoji_emotions_outlined,
+                                            color: context.theme.colorScheme.onSurfaceVariant,
+                                            size: 24,
+                                          ),
+                                          onPressed: () => showEmojiPickerPopover(buttonContext, controller!),
+                                        ),
+                                      ),
+                                    IconButton(
+                                      tooltip: 'Gallery',
+                                      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                                      padding: EdgeInsets.zero,
+                                      icon: Icon(
+                                        Icons.image_outlined,
+                                        color: context.theme.colorScheme.onSurfaceVariant,
+                                        size: 24,
+                                      ),
+                                      onPressed: () {
+                                        if (kIsDesktop || kIsWeb) {
+                                          AttachmentActions.pickFiles(controller!);
+                                        } else {
+                                          controller!.focusNode.unfocus();
+                                          controller!.subjectFocusNode.unfocus();
+                                          controller!.showAttachmentPicker.value = false;
+                                          showGmsgCameraGallerySheet(context, controller!);
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                         ],
@@ -821,22 +815,24 @@ class TextFieldComponentState extends State<TextFieldComponent> {
             fit: FlexFit.loose,
             child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Padding(
-                padding: const EdgeInsets.only(right: 10),
+                padding: const EdgeInsetsDirectional.only(end: 10),
                 child: Builder(builder: (context) {
                   Widget button(VoidCallback onPressed) => IconButton(
                         style: IconButton.styleFrom(
-                          backgroundColor: context.theme.colorScheme.outline.withValues(alpha: 0.2),
+                          backgroundColor: iOS
+                              ? context.theme.colorScheme.outline.withValues(alpha: 0.2)
+                              : context.theme.colorScheme.surfaceContainerHigh,
                           shape: const CircleBorder(),
                           padding: EdgeInsets.zero,
-                          minimumSize: const Size(36, 36),
-                          fixedSize: const Size(36, 36),
+                          minimumSize: iOS ? const Size(36, 36) : const Size(48, 48),
+                          fixedSize: iOS ? const Size(36, 36) : const Size(48, 48),
                         ),
                         icon: Icon(
                           Icons.add,
-                          color: context.theme.colorScheme.outline,
-                          size: 22,
+                          color: iOS ? context.theme.colorScheme.outline : context.theme.colorScheme.onSurfaceVariant,
+                          size: iOS ? 22 : 24,
                         ),
-                        visualDensity: Platform.isAndroid ? VisualDensity.compact : null,
+                        visualDensity: iOS && Platform.isAndroid ? VisualDensity.compact : null,
                         onPressed: onPressed,
                       );
                   // Desktop and web have no attachment sheet: `+` opens a menu of the same actions instead.
@@ -987,10 +983,6 @@ class TextFieldComponentState extends State<TextFieldComponent> {
 
     // Escape: dismiss active composer panels/overlays without wiping pickedAttachments
     if (isEscapeKey) {
-      if (_dictation.isListening.value) {
-        unawaited(_dictation.stop());
-        return KeyEventResult.handled;
-      }
       final ctrl = controller;
       if (ctrl == null) return KeyEventResult.ignored;
 

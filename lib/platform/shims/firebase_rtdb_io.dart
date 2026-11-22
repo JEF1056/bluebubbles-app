@@ -31,8 +31,12 @@ Future<String?> fetchFirebaseServerUrl({
 
   if (databaseUrl != null && databaseUrl.isNotEmpty) {
     final db = FirebaseDatabase(app: app);
-    final event = await db.reference().child('config').child('serverUrl').onValue.first;
-    return event.snapshot.value?.toString();
+    try {
+      final event = await db.reference().child('config').child('serverUrl').onValue.first;
+      return event.snapshot.value?.toString();
+    } finally {
+      await db.goOffline();
+    }
   }
   final db = FirebaseFirestore.instanceFor(app: app);
   final doc = await db.collection('server').doc('config').get();
@@ -44,5 +48,9 @@ Future<void> setFirebaseNextRestart({
   required int timestampMs,
 }) async {
   final db = FirebaseDatabase(databaseURL: databaseUrl);
-  await db.reference().child('config').child('nextRestart').set(timestampMs);
+  try {
+    await db.reference().child('config').child('nextRestart').set(timestampMs);
+  } finally {
+    await db.goOffline();
+  }
 }

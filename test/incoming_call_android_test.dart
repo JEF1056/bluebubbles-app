@@ -1,16 +1,21 @@
+import 'package:bluebubbles/app/components/app_notice_bar.dart';
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/incoming_facetime_screen.dart';
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
+import 'package:bluebubbles/models/facetime.dart';
 import 'package:bluebubbles/services/backend/action_handler.dart';
+import 'package:bluebubbles/services/backend/java_dart_interop/intents_service.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/method_channel_service.dart';
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:bluebubbles/services/network/api/facetime_api.dart';
 import 'package:bluebubbles/services/network/method_channel_actions.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart' hide Response;
+import 'package:get_it/get_it.dart';
 
 class _TestMethodChannelService extends MethodChannelService {
   _TestMethodChannelService() {
@@ -53,12 +58,17 @@ class _FakeBaseApi implements BaseApi {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  tearDown(() {
+  tearDown(() async {
+    debugDefaultTargetPlatformOverride = null;
+    AppNoticeController.instance.resetForTest();
     ActiveCallController.instance.clear();
     faceTimeOverlays.clear();
+    await GetIt.I.reset();
     Get.reset();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(const MethodChannel('com.bluebubbles.messaging'), null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('plugins.flutter.io/url_launcher'), null);
   });
 
   testWidgets('IncomingFaceTimeScreen hides video actions and labels iPhone Call for telephony',
@@ -295,5 +305,109 @@ void main() {
     ]);
     expect(recorded[0].arguments, {'call_uuid': 'out-1', 'is_outgoing': true});
     expect(recorded[1].arguments, {'call_uuid': 'out-1', 'muted': true});
+  });
+
+  test('IntentsService.answerFaceTime routes Android non-telephony FaceTime Audio through ActiveCallController',
+      () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    AppNoticeController.instance.registerHost();
+
+    final recorded = <MethodCall>[];
+    var telecomEnabled = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('com.bluebubbles.messaging'),
+      (call) async {
+        recorded.add(call);
+        if (call.method == 'is-telecom-enabled') return telecomEnabled;
+        return true;
+      },
+    );
+    final svc = _TestMethodChannelService();
+    svc.actions = MethodChannelActions(svc);
+    GetIt.I.registerSingleton<MethodChannelService>(svc);
+
+    final telecomCalls = <Map<String, Object?>>[];
+    var serverAnswerCalls = 0;
+    var launchedLinks = 0;
+    final ctrl = ActiveCallController(
+      onStartTelecomAudio: ({
+        required callUuid,
+        required callerName,
+        callerAddress,
+        isTelephony = false,
+      }) async {
+        telecomCalls.add({
+          'callUuid': callUuid,
+          'callerName': callerName,
+          'isTelephony': isTelephony,
+        });
+        return telecomEnabled;
+      },
+      onAnswerServerCall: (uuid, {audioOnly = false, displayName, chatGuid}) async {
+        serverAnswerCalls++;
+        return PlacedFaceTimeCall(
+          link: 'https://facetime.apple.com/join#$uuid',
+          call: FaceTimeCall(callUuid: uuid, isVideo: !audioOnly),
+        );
+      },
+      onLaunchJoinLink: (_) async {
+        launchedLinks++;
+        return true;
+      },
+      onDismissOverlay: (_, {keepCallState = false}) {},
+    );
+    addTearDown(ctrl.dispose);
+
+    final intents = IntentsService()..callControllerOverride = ctrl;
+
+    // 1. Incoming FaceTime Video answered audio-only with Telecom enabled -> Telecom, no web link.
+    // Note: ActiveCallController invokes onAnswerServerCall as the test hook for server handoff when routed.
+    ctrl.startIncoming(callUuid: 'ft-audio-1', callerName: 'Alice', isVideo: true);
+    await intents.answerFaceTime('ft-audio-1', audioOnly: true);
+    expect(telecomCalls, [
+      {'callUuid': 'ft-audio-1', 'callerName': 'Alice', 'isTelephony': false},
+    ]);
+    expect(serverAnswerCalls, 1);
+    expect(launchedLinks, 0);
+    expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+    expect(ctrl.state.isTelecomCall, isTrue);
+
+    // 2. Incoming non-telephony FaceTime Audio (!wasVideo) answered without explicit audioOnly -> Telecom.
+    ctrl.startIncoming(callUuid: 'ft-audio-2', callerName: 'Bob', isVideo: false);
+    await intents.answerFaceTime('ft-audio-2');
+    expect(telecomCalls.last, {'callUuid': 'ft-audio-2', 'callerName': 'Bob', 'isTelephony': false});
+    expect(serverAnswerCalls, 2);
+    expect(launchedLinks, 0);
+
+    // 3. Telecom disabled -> opens Calling Accounts + snackbar, never falls back to web link.
+    telecomEnabled = false;
+    recorded.clear();
+    ctrl.startIncoming(callUuid: 'ft-audio-3', callerName: 'Carol', isVideo: false);
+    await intents.answerFaceTime('ft-audio-3', audioOnly: true);
+    expect(recorded.map((m) => m.method), contains('open-calling-accounts'));
+    expect(AppNoticeController.instance.current.value?.title, 'Enable Calling Accounts');
+    expect(serverAnswerCalls, 2);
+    expect(launchedLinks, 0);
+
+    // 4. Incoming FaceTime Video answered as video -> delegates to ActiveCallController.answerCall, no Calling Accounts.
+    recorded.clear();
+    ctrl.startIncoming(callUuid: 'ft-video-1', callerName: 'Dan', isVideo: true);
+    await intents.answerFaceTime('ft-video-1');
+    expect(recorded.map((m) => m.method), isNot(contains('open-calling-accounts')));
+    expect(serverAnswerCalls, 3);
+    expect(launchedLinks, 1);
+    expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+    expect(ctrl.state.isVideo, isTrue);
+    expect(ctrl.state.joinLink, 'https://facetime.apple.com/join#ft-video-1');
+
+    // 5. Cold-start audio intent (no prior state) answers as audio via Telecom without opening Calling Accounts.
+    telecomEnabled = true;
+    recorded.clear();
+    ctrl.clear();
+    await intents.answerFaceTime('ft-cold-audio', audioOnly: true);
+    expect(telecomCalls.last, {'callUuid': 'ft-cold-audio', 'callerName': 'FaceTime Call', 'isTelephony': false});
+    expect(recorded.map((m) => m.method), isNot(contains('open-calling-accounts')));
+    expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+    expect(ctrl.state.isVideo, isFalse);
   });
 }

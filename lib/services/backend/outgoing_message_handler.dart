@@ -675,22 +675,27 @@ class OutgoingMessageHandler {
     if ((m.text?.isEmpty ?? true) && (m.subject?.isEmpty ?? true) && r == null) return [];
 
     if (!SettingsSvc.serverDetails.isMinBigSur && r == null) {
-      // Split URL messages on OS X to prevent message matching glitches.
-      String mainText = m.text!;
+      final text = m.text ?? '';
       String? secondaryText;
-      final match = parseLinks(m.text!.replaceAll('\n', ' ')).firstOrNull;
-      if (match != null) {
-        if (match.start == 0) {
-          mainText = m.text!.substring(0, match.end).trimRight();
-          secondaryText = m.text!.substring(match.end).trimLeft();
-        } else if (match.end == m.text!.length) {
-          mainText = m.text!.substring(0, match.start).trimRight();
-          secondaryText = m.text!.substring(match.start).trimLeft();
+      final messages = <Message>[];
+      if (text.isNotEmpty) {
+        // Split URL messages on OS X to prevent message matching glitches.
+        String mainText = text;
+        final match = parseLinks(text.replaceAll('\n', ' ')).firstOrNull;
+        if (match != null) {
+          if (match.start == 0) {
+            mainText = text.substring(0, match.end).trimRight();
+            secondaryText = text.substring(match.end).trimLeft();
+          } else if (match.end == text.length) {
+            mainText = text.substring(0, match.start).trimRight();
+            secondaryText = text.substring(match.start).trimLeft();
+          }
+          m.text = mainText;
         }
       }
 
       // m already has a stable GUID, assigned by _ensureTempGuid before prep began.
-      final messages = <Message>[m..text = mainText];
+      messages.add(m);
       if (!isNullOrEmpty(secondaryText)) {
         final secondary = Message(
           text: secondaryText,
@@ -731,9 +736,16 @@ class OutgoingMessageHandler {
     final List<Message> saved = [];
     for (final message in messages) {
       final existing = Message.findOne(guid: message.guid);
-      // A sticker tapback's image is on disk before its reaction is saved, so the reaction draws it at once
-      if (existing == null && sticker?.bytes != null && !kIsWeb) {
-        await (await File(sticker!.path).create(recursive: true)).writeAsBytes(sticker.bytes!);
+      // A sticker's image is stored before its reaction is saved, so the reaction draws it at once
+      if (existing == null && sticker?.bytes != null) {
+        if (kIsWeb) {
+          if (sticker!.guid != null) {
+            await WebMediaCache.instance.put(WebMediaCache.attachmentsStore, sticker.guid!, sticker.bytes!);
+            sticker.isDownloaded = true;
+          }
+        } else {
+          await (await File(sticker!.path).create(recursive: true)).writeAsBytes(sticker.bytes!);
+        }
       }
       final Message hydrated = existing ??
           (await c.addMessage(
@@ -742,6 +754,11 @@ class OutgoingMessageHandler {
             attachments: [?sticker],
           ))
               .message;
+      // html Attachment.toMap omits bytes, so re-attach them on the hydrated copy for optimistic render/send
+      if (kIsWeb && sticker?.bytes != null && hydrated.dbAttachments.isNotEmpty) {
+        hydrated.dbAttachments.first.bytes ??= sticker!.bytes;
+        hydrated.dbAttachments.first.isDownloaded = true;
+      }
       saved.add(hydrated);
 
       final msgSvcRegistered = Get.isRegistered<MessagesService>(tag: c.guid);
@@ -920,13 +937,13 @@ class OutgoingMessageHandler {
           ? SendMessageInterface.sendTextMessage(
               chatGuid: c.guid,
               tempGuid: tempGuid,
-              message: m.text!,
+              message: m.text ?? '',
               method: _resolveMethod(m),
               selectedMessageGuid: m.threadOriginatorGuid,
               effectId: m.expressiveSendStyleId,
               subject: m.subject,
               partIndex: int.tryParse(m.threadOriginatorPart?.split(':').firstOrNull ?? ''),
-              ddScan: SettingsSvc.serverDetails.supportsLinkScan && m.text!.hasUrl,
+              ddScan: SettingsSvc.serverDetails.supportsLinkScan && (m.text?.hasUrl ?? false),
             )
           : ReactionTypes.sendsSticker(r)
           ? _sendSticker(c, m, selected!, r)
@@ -999,14 +1016,26 @@ class OutgoingMessageHandler {
   /// attachment, which also carries a placed sticker's placement.
   Future<Map<String, dynamic>> _sendSticker(Chat c, Message m, Message selected, String r) async {
     final sticker = m.dbAttachments.firstOrNull;
-    final file = sticker == null || kIsWeb ? null : File(sticker.path);
-    if (file == null || !await file.exists()) throw Exception('This sticker has no image to send');
+    Uint8List? bytes = sticker?.bytes;
+    if (bytes == null && sticker != null) {
+      if (kIsWeb) {
+        if (sticker.guid != null) {
+          bytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, sticker.guid!);
+        }
+      } else {
+        final file = File(sticker.path);
+        if (await file.exists()) {
+          bytes = await file.readAsBytes();
+        }
+      }
+    }
+    if (bytes == null) throw Exception('This sticker has no image to send');
     final response = await HttpSvc.sticker.send(
       chatGuid: c.guid,
       tempGuid: m.guid!,
       messageGuid: selected.guid!,
       partIndex: m.associatedMessagePart ?? 0,
-      bytes: await file.readAsBytes(),
+      bytes: bytes,
       fileName: sticker!.transferName ?? 'sticker.png',
       tapback: ReactionTypes.isStickerTapback(r),
       remove: r == ReactionTypes.REMOVED_STICKER,
@@ -1085,7 +1114,7 @@ class OutgoingMessageHandler {
     }
 
     Uint8List? webBytes;
-    String? webBytesMissing;
+    String? missingMediaError;
     int fileSize = attachment.totalBytes ?? 0;
     if (kIsWeb) {
       final attachmentGuid = attachment.guid;
@@ -1094,27 +1123,28 @@ class OutgoingMessageHandler {
         webBytes = await WebMediaCache.instance.get(WebMediaCache.attachmentsStore, attachmentGuid);
       }
       if (attachmentGuid == null || webBytes == null || webBytes.isEmpty) {
-        webBytesMissing = 'Attachment bytes not found for ${attachment.transferName ?? attachmentGuid ?? 'unknown'}';
-        Logger.error(webBytesMissing, tag: _tag);
+        missingMediaError = 'Attachment bytes not found for ${attachment.transferName ?? attachmentGuid ?? 'unknown'}';
+        Logger.error(missingMediaError, tag: _tag);
       }
     } else {
       // Fail fast if the file was not staged correctly during prepAttachments.
       final file = File(attachment.path);
       if (!file.existsSync()) {
-        Logger.error('Attachment file not found at ${attachment.path}', tag: _tag);
-        return;
+        missingMediaError = 'Attachment file not found at ${attachment.path}';
+        Logger.error(missingMediaError, tag: _tag);
+      } else {
+        fileSize = file.lengthSync();
       }
-      fileSize = file.lengthSync();
     }
 
     return _sendWithRace(
       tempGuid: tempGuid,
       chat: c,
       httpCall: () {
+        if (missingMediaError != null) {
+          return Future<Map<String, dynamic>>.error(Exception(missingMediaError));
+        }
         if (kIsWeb) {
-          if (webBytesMissing != null) {
-            return Future<Map<String, dynamic>>.error(Exception(webBytesMissing));
-          }
           final attachmentGuid = attachment.guid!;
           final cancelToken = CancelToken();
           latestCancelToken = cancelToken;
@@ -1590,8 +1620,10 @@ class OutgoingMessageHandler {
     // instead of falling back to a server download.
     if (!kIsWeb && existingGuid != replacement.guid && existingGuid.startsWith('temp')) {
       try {
-        final oldMessageDir = Directory(join(FilesystemSvc.messagesPath, existingGuid));
-        final newMessageDir = Directory(join(FilesystemSvc.messagesPath, replacement.guid!));
+        final safeOldGuid = FilesystemService.sanitizeGuid(existingGuid);
+        final safeNewGuid = FilesystemService.sanitizeGuid(replacement.guid);
+        final oldMessageDir = Directory(join(FilesystemSvc.messagesPath, safeOldGuid));
+        final newMessageDir = Directory(join(FilesystemSvc.messagesPath, safeNewGuid));
         if (oldMessageDir.existsSync() && !newMessageDir.existsSync()) {
           oldMessageDir.renameSync(newMessageDir.path);
         }

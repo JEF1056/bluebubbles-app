@@ -7,15 +7,61 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 
-/// High-contrast, violet-free palette tokens for FaceTime calling surfaces.
+/// High-contrast, violet-free GM3 Dialer/Meet palette tokens for FaceTime calling surfaces.
 abstract final class FaceTimePalette {
-  static const Color blue = Color(0xFF147EFB);
-  static const Color green = Color(0xFF22C55E);
-  static const Color red = Color(0xFFEA4335);
-  static const Color darkCanvas = Color(0xFF0B0F14);
-  static const Color darkSurface = Color(0xFF141B24);
-  static const Color darkElevated = Color(0xFF1D2633);
+  static const Color blue = Color(0xFF0B57D0);
+  static const Color blueDark = Color(0xFFA8C7FA);
+  static const Color green = Color(0xFF34A853);
+  static const Color answerIcon = Color(0xFF00C853);
+  static const Color red = Color(0xFFD93025);
+  static const Color redDarkSkin = Color(0xFFEE675C);
+  static const Color darkCanvas = Color(0xFF131314);
+  static const Color darkSurface = Color(0xFF1E1F20);
+  static const Color darkElevated = Color(0xFF282A2C);
+  static const Color darkHighest = Color(0xFF333537);
+  static const Color onCanvas = Color(0xFFF1F3F4);
+  static const Color secondaryText = Color(0xFFC4C7C5);
+  static const Color overlay = Color(0x99000000);
   static const Color amber = Color(0xFFF59E0B);
+  static const Color videoToggleOffBg = Color(0x4DFFFFFF);
+  static const Color videoToggleOffStroke = Color(0x59FFFFFF);
+  static const Color hairline = Color(0x1FFFFFFF);
+}
+
+/// GM3 GoogleDialer / Meet dimensions and radii for FaceTime calling surfaces.
+abstract final class FaceTimeDims {
+  static const double endCallSize = 64.0;
+  static const double endCallIconSize = 36.0;
+  static const double endCallBottomMargin = 24.0;
+  static const double videoEndCallBottomMargin = 36.0;
+
+  static const double actionButtonSize = 48.0;
+  static const double actionIconSize = 24.0;
+  static const double actionLabelGap = 8.0;
+  static const double actionVerticalPad = 8.0;
+
+  static const double videoToggleSize = 60.0;
+  static const double videoTogglePad = 12.0;
+
+  static const double previewSize = 72.0;
+  static const double previewRadius = 8.0;
+  static const double previewBottomMargin = 24.0;
+
+  static const double contactTopMargin = 24.0;
+  static const double contactSideMargin = 24.0;
+
+  static const double dialpadKeyHeight = 64.0;
+  static const double dialpadMaxWidth = 480.0;
+  static const double dialpadDigitSize = 36.0;
+  static const double dialpadLettersSize = 12.0;
+  static const double dialpadIncallLettersSize = 9.0;
+  static const double dialpadDigitsFieldSize = 20.0;
+  static const double dtmfOptionRadius = 16.0;
+  static const double dtmfOptionStroke = 1.0;
+
+  static const double ongoingPillRadius = 16.0;
+  static const double estimatePillRadius = 20.0;
+  static const double sheetTopRadius = 28.0;
 }
 
 bool facetimeReducedMotionOf(BuildContext context) {
@@ -104,11 +150,7 @@ class FaceTimeAvatar extends StatelessWidget {
     return DecoratedBox(
       decoration: const BoxDecoration(
         shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF1E3A5F), FaceTimePalette.darkElevated],
-        ),
+        color: FaceTimePalette.darkElevated,
       ),
       child: Center(
         child: initials.isNotEmpty

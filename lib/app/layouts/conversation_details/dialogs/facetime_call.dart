@@ -1,14 +1,19 @@
+import 'dart:async';
+
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
 import 'package:bluebubbles/app/components/facetime/outgoing_facetime_sheet.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/address_picker.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
@@ -136,6 +141,21 @@ Future<void> startAudioCall(BuildContext context, Chat chat) async {
   );
 }
 
+/// Whether iPhone Cellular Continuity calls can be offered for this handle.
+bool canContinuityCall({
+  required bool hasPhone,
+  bool? isDesktop,
+  bool? isWeb,
+  bool? isAndroid,
+  bool? supportsFaceTimeCalls,
+  bool? enablePrivateAPI,
+}) =>
+    !(isDesktop ?? kIsDesktop) &&
+    ((isWeb ?? kIsWeb) || (isAndroid ?? Platform.isAndroid)) &&
+    hasPhone &&
+    (supportsFaceTimeCalls ?? SettingsSvc.getServerDetails().supportsFaceTimeCalls) &&
+    (enablePrivateAPI ?? SettingsSvc.settings.enablePrivateAPI.value);
+
 Future<void> startAudioCallForHandle(
   BuildContext context,
   Chat chat,
@@ -146,12 +166,7 @@ Future<void> startAudioCallForHandle(
   final resolvedContact = contact ?? handle.contactsV2.firstOrNull;
   final hasPhone = !kIsDesktop && dialablePhonesForHandle(handle, contact: resolvedContact).isNotEmpty;
   final hasFaceTimeAudio = chat.isIMessage && canFaceTimeAddress(handle.address);
-  final hasContinuity = !kIsDesktop &&
-      !kIsWeb &&
-      Platform.isAndroid &&
-      hasPhone &&
-      SettingsSvc.getServerDetails().supportsFaceTimeCalls &&
-      SettingsSvc.settings.enablePrivateAPI.value;
+  final hasContinuity = canContinuityCall(hasPhone: hasPhone);
   final callerName = callerNameOverride ?? (handle.displayName.isNotEmpty ? handle.displayName : handle.address);
 
   if (!hasFaceTimeAudio && !hasContinuity) {
@@ -167,55 +182,66 @@ Future<void> startAudioCallForHandle(
   }
 
   if (!context.mounted) return;
+  final reducedMotion = facetimeReducedMotionOf(context);
   await showModalBottomSheet<void>(
     context: context,
+    isScrollControlled: true,
     useRootNavigator: true,
     useSafeArea: true,
-    showDragHandle: true,
-    builder: (sheetCtx) => SafeArea(
-      top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (hasPhone)
-            ListTile(
-              leading: const Icon(Icons.phone_outlined),
-              title: const Text('Phone (SIM)'),
-              subtitle: const Text('Call using this device'),
-              onTap: () {
-                Navigator.of(sheetCtx).pop();
-                showAddressPicker(resolvedContact, handle, context);
-              },
-            ),
-          if (hasFaceTimeAudio)
-            ListTile(
-              leading: const Icon(Icons.record_voice_over_outlined),
-              title: const Text('FaceTime Audio'),
-              subtitle: const Text('Call via Mac FaceTime'),
-              onTap: () {
-                Navigator.of(sheetCtx).pop();
-                _startFaceTimeForHandle(context, handle: handle, callerName: callerName, video: false, chatGuid: chat.guid);
-              },
-            ),
-          if (hasContinuity)
-            ListTile(
-              leading: const Icon(Icons.phone_iphone_outlined),
-              title: const Text('iPhone Cellular (via Mac)'),
-              subtitle: const Text('Relay cellular call through paired iPhone'),
-              onTap: () {
-                Navigator.of(sheetCtx).pop();
-                _startFaceTimeForHandle(
-                  context,
-                  handle: handle,
-                  callerName: callerName,
-                  video: false,
-                  isTelephony: true,
-                  chatGuid: chat.guid,
-                );
-              },
-            ),
+    backgroundColor: Colors.transparent,
+    sheetAnimationStyle: reducedMotion ? AnimationStyle.noAnimation : null,
+    builder: (sheetCtx) => _CallChooserSheet(
+      children: [
+        if (hasPhone)
+          _CallChooserOption(
+            icon: Icons.phone_outlined,
+            accentColor: FaceTimePalette.green,
+            title: 'Phone (SIM)',
+            subtitle: 'Call using this device',
+            reducedMotion: reducedMotion,
+            onTap: () {
+              Navigator.of(sheetCtx).pop();
+              showAddressPicker(resolvedContact, handle, context);
+            },
+          ),
+        if (hasFaceTimeAudio) ...[
+          if (hasPhone) const SizedBox(height: 10),
+          _CallChooserOption(
+            icon: Icons.record_voice_over_outlined,
+            accentColor: Theme.of(sheetCtx).brightness == Brightness.dark
+                ? FaceTimePalette.blueDark
+                : FaceTimePalette.blue,
+            title: 'FaceTime Audio',
+            subtitle: 'Call via Mac FaceTime',
+            reducedMotion: reducedMotion,
+            onTap: () {
+              Navigator.of(sheetCtx).pop();
+              _startFaceTimeForHandle(context, handle: handle, callerName: callerName, video: false, chatGuid: chat.guid);
+            },
+          ),
         ],
-      ),
+        if (hasContinuity) ...[
+          if (hasPhone || hasFaceTimeAudio) const SizedBox(height: 10),
+          _CallChooserOption(
+            icon: Icons.phone_iphone_outlined,
+            accentColor: FaceTimePalette.green,
+            title: 'iPhone Cellular (via Mac)',
+            subtitle: 'Relay cellular call through paired iPhone',
+            reducedMotion: reducedMotion,
+            onTap: () {
+              Navigator.of(sheetCtx).pop();
+              _startFaceTimeForHandle(
+                context,
+                handle: handle,
+                callerName: callerName,
+                video: false,
+                isTelephony: true,
+                chatGuid: chat.guid,
+              );
+            },
+          ),
+        ],
+      ],
     ),
   );
 }
@@ -316,6 +342,18 @@ Future<void> _startFaceTimeForHandle(
 }) async {
   final address = handle.address;
 
+  if (kIsWeb) {
+    await _startWebFaceTimeForHandle(
+      context,
+      handle: handle,
+      callerName: callerName,
+      video: video,
+      isTelephony: isTelephony,
+      chatGuid: chatGuid,
+    );
+    return;
+  }
+
   // Pre-open a blank tab synchronously on user tap before any await so Web
   // browsers preserve transient user activation when the server returns the join link.
   final PendingCallTab? pendingTab = (kIsWeb && video != null) ? openPendingCallTab() : null;
@@ -367,11 +405,38 @@ Future<void> _startFaceTimeForHandle(
         return permissions[Permission.microphone] == PermissionStatus.granted &&
             permissions[Permission.phone] == PermissionStatus.granted;
       },
+      requestVideoPermissions: () async {
+        final permissions = await [
+          Permission.microphone,
+          Permission.camera,
+          Permission.phone,
+          Permission.bluetoothConnect,
+        ].request();
+        return permissions[Permission.microphone] == PermissionStatus.granted &&
+            permissions[Permission.camera] == PermissionStatus.granted &&
+            permissions[Permission.phone] == PermissionStatus.granted;
+      },
       onPlaceNativeAudioCall: () => MethodChannelSvc.actions.placeFaceTimeCall(
         address: address,
         callerName: callerName,
         isTelephony: isTelephony,
       ),
+      onPlaceNativeCall: (isVideo) async {
+        if (isVideo && !isTelephony) {
+          final result = await MethodChannelSvc.channel.invokeMethod<bool>('place-facetime-call', {
+            'address': address,
+            'caller_name': callerName,
+            'is_telephony': false,
+            'is_video': true,
+          });
+          return result == true;
+        }
+        return MethodChannelSvc.actions.placeFaceTimeCall(
+          address: address,
+          callerName: callerName,
+          isTelephony: isTelephony,
+        );
+      },
       onStartServerCall: (isVideo) => HttpSvc.faceTime.call(
         address,
         video: isVideo,
@@ -393,4 +458,311 @@ Future<void> _startFaceTimeForHandle(
       },
     ),
   );
+}
+
+Future<void> _startWebFaceTimeForHandle(
+  BuildContext context, {
+  required Handle handle,
+  required String callerName,
+  bool? video,
+  bool isTelephony = false,
+  String? chatGuid,
+}) async {
+  bool? chosenVideo = video;
+  if (chosenVideo == null && !isTelephony) {
+    final reducedMotion = facetimeReducedMotionOf(context);
+    chosenVideo = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      sheetAnimationStyle: reducedMotion ? AnimationStyle.noAnimation : null,
+      builder: (sheetCtx) {
+        final isDark = Theme.of(sheetCtx).brightness == Brightness.dark;
+        final accent = isDark ? FaceTimePalette.blueDark : FaceTimePalette.blue;
+        return _CallChooserSheet(
+          children: [
+            _CallChooserOption(
+              icon: Icons.videocam_outlined,
+              accentColor: accent,
+              title: 'FaceTime Video',
+              reducedMotion: reducedMotion,
+              onTap: () => Navigator.of(sheetCtx).pop(true),
+            ),
+            const SizedBox(height: 10),
+            _CallChooserOption(
+              icon: Icons.call_outlined,
+              accentColor: accent,
+              title: 'FaceTime Audio',
+              reducedMotion: reducedMotion,
+              onTap: () => Navigator.of(sheetCtx).pop(false),
+            ),
+          ],
+        );
+      },
+    );
+    if (chosenVideo == null || !context.mounted) return;
+  }
+
+  final wantVideo = (chosenVideo ?? false) && !isTelephony;
+  final controller = ActiveCallController.instance;
+  final PendingCallTab? pendingTab =
+      (wantVideo && controller.cachedWebRtcConfig?.videoSupported != true) ? openPendingCallTab() : null;
+
+  Uint8List? avatarBytes;
+  if (GetIt.I.isRegistered<ContactServiceV2>()) {
+    try {
+      final contact =
+          ContactsSvcV2.findContactForAddressSync(handle.address) ?? await ContactsSvcV2.getContact(handle.address);
+      if (contact?.avatarPath != null) {
+        avatarBytes = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
+      }
+    } catch (_) {}
+  }
+
+  if (!context.mounted) {
+    pendingTab?.close();
+    return;
+  }
+
+  final rootNav = Navigator.of(context, rootNavigator: true);
+
+  if (wantVideo) {
+    final config = await controller.getWebRtcConfig();
+    if (!context.mounted) {
+      pendingTab?.close();
+      return;
+    }
+    if (!config.videoSupported) {
+      final reducedMotion = facetimeReducedMotionOf(context);
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useRootNavigator: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        sheetAnimationStyle: reducedMotion ? AnimationStyle.noAnimation : null,
+        builder: (_) => OutgoingFaceTimeSheet(
+          callerName: callerName,
+          callerAddress: handle.address,
+          chatHandle: handle,
+          avatarBytes: avatarBytes,
+          initialVideo: true,
+          isAndroid: false,
+          isIOS: facetimeIsIOSSkin(),
+          isTelephony: false,
+          initialPendingTab: pendingTab,
+          onPreOpenTab: openPendingCallTab,
+          onTryOpenJoinLink: tryLaunchFaceTimeJoinLink,
+          checkTelecomEnabled: () async => false,
+          onOpenCallingAccounts: () async {},
+          requestCallPermissions: () async => false,
+          onPlaceNativeAudioCall: () async => false,
+          onStartServerCall: (isVideo) => HttpSvc.faceTime.call(
+            handle.address,
+            video: isVideo,
+            isTelephony: false,
+            displayName: callerName,
+            chatGuid: chatGuid,
+          ),
+          onOpenJoinLink: (link) => openFaceTimeJoinLink(
+            link,
+            context: rootNav.mounted ? rootNav.context : null,
+          ),
+          onHangUpRingingCall: (callUuid) async {
+            try {
+              await HttpSvc.faceTime.leaveFaceTime(callUuid, displayName: callerName, chatGuid: chatGuid);
+            } catch (e, s) {
+              Logger.warn("Failed to hang up FaceTime call", error: e, trace: s, tag: 'FaceTime');
+              showSnackbar("FaceTime", "Couldn't hang up the call", type: SnackbarType.error);
+            }
+          },
+        ),
+      );
+      return;
+    }
+    pendingTab?.close();
+  }
+
+  controller.attachPendingCallTab(null);
+  var fellBackToLink = false;
+  final startedFuture = controller.startWebOutgoingCall(
+    address: handle.address,
+    callerName: callerName,
+    avatarBytes: avatarBytes,
+    video: wantVideo,
+    isTelephony: isTelephony,
+    chatGuid: chatGuid,
+    onFallbackJoinLink: (link) {
+      fellBackToLink = true;
+      hideInAppCallScreen();
+      if (rootNav.mounted) {
+        unawaited(openFaceTimeJoinLink(link, context: rootNav.context));
+      }
+    },
+  );
+
+  if (!fellBackToLink && rootNav.mounted) {
+    openInAppCallScreen(
+      context: rootNav.context,
+      controller: controller,
+      videoView: wantVideo ? Obx(() => controller.remoteVideoWidget.value ?? const SizedBox.shrink()) : null,
+      onToggleSpeaker: (_) => controller.toggleSpeaker(),
+      initialSpeakerOn: controller.isSpeakerOn.value,
+    );
+  }
+
+  final ok = await startedFuture;
+  if (!ok) {
+    hideInAppCallScreen();
+    if (controller.lastFailure != null) {
+      showSnackbar("FaceTime", controller.lastFailure!.message, type: SnackbarType.error);
+    }
+  }
+}
+
+class _CallChooserSheet extends StatelessWidget {
+  const _CallChooserSheet({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final sheetSurface = isDark ? FaceTimePalette.darkSurface : theme.colorScheme.surfaceContainerLow;
+    final sheetBorder = isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.45);
+    final dragHandleColor =
+        isDark ? FaceTimePalette.secondaryText.withValues(alpha: 0.45) : theme.colorScheme.outlineVariant;
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: sheetSurface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(FaceTimeDims.sheetTopRadius)),
+          border: Border(top: BorderSide(color: sheetBorder)),
+        ),
+        padding: const EdgeInsets.fromLTRB(FaceTimeDims.contactSideMargin, 12, FaceTimeDims.contactSideMargin, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: dragHandleColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CallChooserOption extends StatefulWidget {
+  const _CallChooserOption({
+    required this.icon,
+    required this.accentColor,
+    required this.title,
+    this.subtitle,
+    required this.reducedMotion,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color accentColor;
+  final String title;
+  final String? subtitle;
+  final bool reducedMotion;
+  final VoidCallback onTap;
+
+  @override
+  State<_CallChooserOption> createState() => _CallChooserOptionState();
+}
+
+class _CallChooserOptionState extends State<_CallChooserOption> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final tileColor = isDark ? FaceTimePalette.darkElevated : theme.colorScheme.surfaceContainerHighest;
+    final borderColor = isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.35);
+    final titleColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
+    final subtitleColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
+
+    return AnimatedScale(
+      scale: _pressed && !widget.reducedMotion ? 0.96 : 1.0,
+      duration: widget.reducedMotion ? Duration.zero : const Duration(milliseconds: 100),
+      curve: Curves.easeOut,
+      child: Material(
+        color: tileColor,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
+          side: BorderSide(color: borderColor),
+        ),
+        child: InkWell(
+          onTap: widget.onTap,
+          onHighlightChanged: (v) {
+            if (_pressed != v) setState(() => _pressed = v);
+          },
+          borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 60),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(
+                children: [
+                  Container(
+                    width: FaceTimeDims.actionButtonSize,
+                    height: FaceTimeDims.actionButtonSize,
+                    decoration: BoxDecoration(
+                      color: widget.accentColor.withValues(alpha: isDark ? 0.16 : 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(widget.icon, color: widget.accentColor, size: FaceTimeDims.actionIconSize),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          widget.title,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: titleColor,
+                          ),
+                        ),
+                        if (widget.subtitle != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            widget.subtitle!,
+                            style: theme.textTheme.bodySmall?.copyWith(color: subtitleColor),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Icon(Icons.chevron_right_rounded, color: subtitleColor, size: 20),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

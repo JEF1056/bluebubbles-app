@@ -150,7 +150,7 @@ Future<T?> _showAnimatedDialog<T>({
     barrierColor: Colors.black54,
     useRootNavigator: useRootNavigator,
     transitionDuration: disableAnimations ? Duration.zero : const Duration(milliseconds: 180),
-    pageBuilder: (ctx, _, _) => themes.wrap(builder(ctx)),
+    pageBuilder: (ctx, _, _) => themes.wrap(Builder(builder: builder)),
     transitionBuilder: (ctx, animation, _, child) {
       if (disableAnimations) return child;
       final curved = CurvedAnimation(

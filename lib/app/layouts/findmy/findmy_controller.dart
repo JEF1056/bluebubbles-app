@@ -94,6 +94,214 @@ bool findMyHandlesMatch(String? a, String? b) {
   return false;
 }
 
+bool _friendHasValidCoords(FindMyFriend f) =>
+    f.latitude != null &&
+    f.longitude != null &&
+    f.latitude!.isFinite &&
+    f.longitude!.isFinite &&
+    !(f.latitude == 0 && f.longitude == 0);
+
+ContactV2? _lookupContactForFindMyFriend(
+  FindMyFriend friend, {
+  ContactV2? Function(String address)? contactLookup,
+}) {
+  final linked = friend.handle?.contactsV2.firstOrNull;
+  if (linked != null) return linked;
+  final addr = friend.handleAddress ?? friend.handle?.address;
+  if (addr == null || addr.trim().isEmpty) return null;
+  if (contactLookup != null) return contactLookup(addr);
+  if (GetIt.I.isRegistered<ContactServiceV2>()) {
+    try {
+      return ContactsSvcV2.findContactForAddressSync(addr);
+    } catch (_) {}
+  }
+  return null;
+}
+
+bool _contactContainsAddress(ContactV2 contact, String address) =>
+    contact.addresses.any((entry) => findMyHandlesMatch(entry, address));
+
+bool _contactsRepresentSamePerson(ContactV2? a, ContactV2? b, String? addrA, String? addrB) {
+  if (a != null && b != null) {
+    if (identical(a, b)) return true;
+    final idA = a.nativeContactId.trim();
+    final idB = b.nativeContactId.trim();
+    if (idA.isNotEmpty && idB.isNotEmpty && idA == idB) return true;
+    if (a.id != 0 && a.id == b.id) return true;
+  }
+  if (a != null && addrB != null && addrB.trim().isNotEmpty && _contactContainsAddress(a, addrB)) return true;
+  if (b != null && addrA != null && addrA.trim().isNotEmpty && _contactContainsAddress(b, addrA)) return true;
+  return false;
+}
+
+bool _isEmailAddress(String? addr) => addr != null && addr.contains('@');
+
+String _displayNameForDedup(FindMyFriend friend, ContactV2? contact) {
+  if (contact != null) {
+    final cName = contact.displayName.isNotEmpty ? contact.displayName : contact.computedDisplayName;
+    if (cName.trim().isNotEmpty) return cName.trim();
+  }
+  return friend.resolveDisplayName(hideContactInfo: false).trim();
+}
+
+bool _isResolvedContactName(FindMyFriend friend, ContactV2? contact) {
+  final name = _displayNameForDedup(friend, contact);
+  if (name.isEmpty || name == 'Unknown Friend' || name.contains('@')) return false;
+  if (contact != null) return true;
+  final addr = friend.handleAddress ?? friend.handle?.address ?? '';
+  if (addr.isNotEmpty && normalizeFindMyHandle(name) == normalizeFindMyHandle(addr)) return false;
+  return friend.handle != null && friend.handle!.contactsV2.isNotEmpty;
+}
+
+int _friendIdentityScore(FindMyFriend friend, ContactV2? contact) {
+  var score = 0;
+  if (_isResolvedContactName(friend, contact)) score += 4;
+  final addr = friend.handleAddress ?? friend.handle?.address;
+  if (!_isEmailAddress(addr)) score += 2;
+  if (friend.handle != null) score += 1;
+  return score;
+}
+
+bool _sameAppleIdLocationAlias(
+  FindMyFriend a,
+  ContactV2? contactA,
+  FindMyFriend b,
+  ContactV2? contactB,
+) {
+  if (!_friendHasValidCoords(a) || !_friendHasValidCoords(b)) return false;
+  // Require one unresolved raw email and one resolved contact to avoid merging distinct people nearby.
+  final addrA = a.handleAddress ?? a.handle?.address;
+  final addrB = b.handleAddress ?? b.handle?.address;
+  final aUnresolvedEmail = _isEmailAddress(addrA) && !_isResolvedContactName(a, contactA);
+  final bUnresolvedEmail = _isEmailAddress(addrB) && !_isResolvedContactName(b, contactB);
+  final aResolved = _isResolvedContactName(a, contactA);
+  final bResolved = _isResolvedContactName(b, contactB);
+  if (!((aUnresolvedEmail && bResolved) || (bUnresolvedEmail && aResolved))) return false;
+
+  if ((a.latitude! - b.latitude!).abs() > 1e-5 || (a.longitude! - b.longitude!).abs() > 1e-5) {
+    return false;
+  }
+  final tsA = a.lastUpdated?.millisecondsSinceEpoch;
+  final tsB = b.lastUpdated?.millisecondsSinceEpoch;
+  if (tsA == null || tsB == null) return false;
+  return (tsA - tsB).abs() <= 5000;
+}
+
+FindMyFriend _mergeDuplicateFriends(
+  FindMyFriend a,
+  ContactV2? contactA,
+  FindMyFriend b,
+  ContactV2? contactB,
+) {
+  final scoreA = _friendIdentityScore(a, contactA);
+  final scoreB = _friendIdentityScore(b, contactB);
+  final identity = scoreB > scoreA ? b : a;
+  final otherIdentity = identical(identity, a) ? b : a;
+
+  final aHasCoords = _friendHasValidCoords(a);
+  final bHasCoords = _friendHasValidCoords(b);
+  final FindMyFriend loc;
+  final FindMyFriend fallbackLoc;
+  if (aHasCoords && !bHasCoords) {
+    loc = a;
+    fallbackLoc = b;
+  } else if (bHasCoords && !aHasCoords) {
+    loc = b;
+    fallbackLoc = a;
+  } else if (shouldSupersedeFriendLocation(a, b)) {
+    loc = b;
+    fallbackLoc = a;
+  } else {
+    loc = a;
+    fallbackLoc = b;
+  }
+
+  return FindMyFriend(
+    latitude: loc.latitude,
+    longitude: loc.longitude,
+    longAddress: loc.longAddress ?? fallbackLoc.longAddress,
+    shortAddress: loc.shortAddress ?? fallbackLoc.shortAddress,
+    title: identity.title ?? otherIdentity.title,
+    subtitle: loc.subtitle ?? fallbackLoc.subtitle,
+    handle: identity.handle ?? otherIdentity.handle,
+    handleAddress: identity.handleAddress ?? otherIdentity.handleAddress,
+    lastUpdated: loc.lastUpdated ?? fallbackLoc.lastUpdated,
+    status: loc.status ?? fallbackLoc.status,
+    locatingInProgress: loc.locatingInProgress,
+    isLive: loc.isLive ?? fallbackLoc.isLive,
+    horizontalAccuracy: loc.horizontalAccuracy ?? fallbackLoc.horizontalAccuracy,
+    verticalAccuracy: loc.verticalAccuracy ?? fallbackLoc.verticalAccuracy,
+    speed: loc.speed ?? fallbackLoc.speed,
+    altitude: loc.altitude ?? fallbackLoc.altitude,
+    isOld: loc.isOld,
+    isInaccurate: loc.isInaccurate,
+    locationFinished: loc.locationFinished ?? fallbackLoc.locationFinished,
+  );
+}
+
+/// Deduplicates Find My friends that represent the same person (matching handle,
+/// shared contact card, or an unresolved email alias sharing identical GPS fix).
+/// Prefers the resolved non-email contact entry while preserving the freshest location.
+List<FindMyFriend> deduplicateFindMyFriends(
+  Iterable<FindMyFriend> friends, {
+  ContactV2? Function(String address)? contactLookup,
+  Map<String, String>? aliasToPrimaryIdOut,
+  Set<String>? droppedStableIdsOut,
+}) {
+  final result = <FindMyFriend>[];
+  final contacts = <ContactV2?>[];
+
+  for (final incoming in friends) {
+    final incomingContact = _lookupContactForFindMyFriend(incoming, contactLookup: contactLookup);
+    final incomingAddr = incoming.handleAddress ?? incoming.handle?.address;
+
+    int matchIndex = -1;
+    for (int i = 0; i < result.length; i++) {
+      final existing = result[i];
+      final existingContact = contacts[i];
+      final existingAddr = existing.handleAddress ?? existing.handle?.address;
+      final sameHandle = (existing.stableId != null && existing.stableId == incoming.stableId) ||
+          findMyHandlesMatch(existingAddr, incomingAddr);
+      final sameContact = _contactsRepresentSamePerson(existingContact, incomingContact, existingAddr, incomingAddr);
+      final sameLocationAlias = _sameAppleIdLocationAlias(existing, existingContact, incoming, incomingContact);
+      if (sameHandle || sameContact || sameLocationAlias) {
+        matchIndex = i;
+        break;
+      }
+    }
+
+    if (matchIndex == -1) {
+      result.add(incoming);
+      contacts.add(incomingContact);
+    } else {
+      final existing = result[matchIndex];
+      final existingContact = contacts[matchIndex];
+      final merged = _mergeDuplicateFriends(existing, existingContact, incoming, incomingContact);
+      final mergedContact = _lookupContactForFindMyFriend(merged, contactLookup: contactLookup) ??
+          existingContact ??
+          incomingContact;
+      result[matchIndex] = merged;
+      contacts[matchIndex] = mergedContact;
+
+      final primaryId = merged.stableId;
+      if (primaryId != null && primaryId.isNotEmpty) {
+        for (final candidate in [existing, incoming]) {
+          final cid = candidate.stableId;
+          if (cid != null && cid != primaryId) {
+            droppedStableIdsOut?.add(cid);
+          }
+          final normAddr = normalizeFindMyHandle(candidate.handleAddress ?? candidate.handle?.address);
+          if (normAddr.isNotEmpty) {
+            aliasToPrimaryIdOut?[normAddr] = primaryId;
+          }
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 /// Great-circle Haversine distance in meters between two WGS84 coordinates.
 double haversineDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
   const earthRadiusMeters = 6371000.0;
@@ -109,17 +317,12 @@ double haversineDistanceMeters(double lat1, double lon1, double lat2, double lon
 }
 
 /// Formats friend distance from user's real device coordinates.
-/// Returns `Nearby` ONLY when <= 100m, otherwise formatted miles (e.g. `1.4 mi`),
-/// or `""` when distance is unknown.
+/// Returns `Nearby` ONLY when <= [kFindMyNearbyMeters], otherwise formatted miles
+/// (e.g. `<0.1 mi`, `1.4 mi`), or `""` when distance is unknown.
 String formatFindMyFriendDistance(double? meters) {
   if (meters == null || !meters.isFinite || meters < 0) return "";
-  if (meters <= 100.0) return "Nearby";
-  final miles = meters / 1609.344;
-  if (miles < 10.0) {
-    final formatted = miles.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
-    return "$formatted mi";
-  }
-  return "${miles.round()} mi";
+  if (meters <= kFindMyNearbyMeters) return "Nearby";
+  return formatFindMyMiles(meters);
 }
 
 final RegExp _streetKeywordRegex = RegExp(
@@ -216,7 +419,7 @@ String formatNominatimAddress(Map<String, dynamic> data) {
   return data['display_name']?.toString().trim() ?? '';
 }
 
-class FindMyController extends GetxController {
+class FindMyController extends GetxController with WidgetsBindingObserver {
   FindMyController({
     DateTime Function()? now,
     this.autoFetch = true,
@@ -244,7 +447,7 @@ class FindMyController extends GetxController {
         _positionStreamFn = positionStream,
         _livePollInterval = livePollInterval ?? const Duration(seconds: 5),
         _liveFallbackInterval = liveFallbackInterval ?? const Duration(seconds: 25),
-        _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(minutes: 3),
+        _liveKeepaliveInterval = liveKeepaliveInterval ?? const Duration(seconds: 45),
         _geocodeMinInterval = geocodeMinInterval ?? const Duration(seconds: 1),
         _readPrefListFn = readPrefList,
         _writePrefListFn = writePrefList,
@@ -401,13 +604,24 @@ class FindMyController extends GetxController {
   Timer? _refreshFeedbackTimer;
   Timer? _stalenessTimer;
   Timer? _liveHeartbeatTimer;
+  bool _observingLifecycle = false;
   StreamSubscription? _redactedModeListener;
   StreamSubscription? _hideContactInfoListener;
   StreamSubscription? _findMyLocationListener;
+  StreamSubscription? _contactsCacheListener;
+  final Map<String, String> _friendAliasToPrimaryId = <String, String>{};
 
   @override
   void onInit() {
     super.onInit();
+    try {
+      WidgetsBinding.instance.addObserver(this);
+      _observingLifecycle = true;
+      final lifecycleState = WidgetsBinding.instance.lifecycleState;
+      _isForeground = lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
+    } catch (_) {
+      // Pure Dart unit tests without TestWidgetsFlutterBinding don't initialize WidgetsBinding.
+    }
     _loadPinPrefs();
     _loadMapPrefs();
     if (autoFetch) {
@@ -418,10 +632,15 @@ class FindMyController extends GetxController {
     _setupRedactionListeners();
   }
 
+  bool get _isAppForegroundForTimer => _isForeground;
+
   void _startStalenessTimer() {
-    if (_stalenessTimer != null || !_isAlive) return;
-    _stalenessTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      if (!_isAlive) return;
+    if (_stalenessTimer != null || !_isAlive || !_isAppForegroundForTimer) return;
+    _stalenessTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      if (!_isAlive || !_isAppForegroundForTimer) {
+        _stopStalenessTimer();
+        return;
+      }
       freshnessTick.value++;
     });
   }
@@ -434,11 +653,13 @@ class FindMyController extends GetxController {
   /// Starts full Find My page data fetching & live socket listeners (idempotent).
   void activatePage() {
     if (_pageActivated) {
+      _startStalenessTimer();
       _scheduleInitialAutoFitIfNeeded();
       refreshOnView(refreshFriends: tabIndex.value == 0, refreshDevices: tabIndex.value != 0);
       return;
     }
     _pageActivated = true;
+    _startStalenessTimer();
     _scheduleInitialAutoFitIfNeeded();
     getLocations(refreshFriends: true, refreshDevices: true);
 
@@ -459,6 +680,9 @@ class FindMyController extends GetxController {
   /// Stops page-only continuous GPS streaming and resets page-scoped map state.
   void deactivatePage() {
     _pageActivated = false;
+    if (!isBackgroundShared) {
+      _stopStalenessTimer();
+    }
     _waitingMapReadyForAutoFit = false;
     _hasAutoFittedInitialPins = false;
     _hasUserInteractedWithMap = false;
@@ -1165,57 +1389,69 @@ class FindMyController extends GetxController {
     }
   }
 
+  void _applyUserPosition(Position pos, bool allowAutoMove) {
+    location.value = pos;
+    _resortFriendsLists();
+    buildLocationMarker(pos);
+    if (allowAutoMove &&
+        !hasMovedToCurrentLocation.value &&
+        !_hasAutoFittedInitialPins &&
+        !_hasUserInteractedWithMap &&
+        selectedFriendId.value == null &&
+        selectedDeviceId.value == null &&
+        _pendingFocusFriendId == null) {
+      hasMovedToCurrentLocation.value = true;
+      _hasAutoFittedInitialPins = true;
+      _runWhenMapReady(() {
+        if (!_isAlive ||
+            _hasUserInteractedWithMap ||
+            selectedFriendId.value != null ||
+            selectedDeviceId.value != null ||
+            _pendingFocusFriendId != null) {
+          return;
+        }
+        final offsetY = detailSheetOffsetProvider?.call() ?? 0.0;
+        animateCameraTo(
+          LatLng(pos.latitude, pos.longitude),
+          defaultInitialZoom,
+          offset: Offset(0, -offsetY),
+          pitch: is3DEnabled.value ? default3DPitch : 0.0,
+        );
+      });
+    }
+  }
+
+  void _startLocationStream() {
+    if (!_isAlive || locationSub != null || (_positionStreamFn == null && kIsDesktop)) return;
+    final stream = _positionStreamFn != null
+        ? _positionStreamFn()
+        : Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              distanceFilter: 15,
+            ),
+          );
+    locationSub = stream.listen(
+      (event) {
+        if (_isAlive) _applyUserPosition(event, true);
+      },
+      onError: (Object error, StackTrace stack) {
+        _logWarn("FindMy position stream error", error: error, trace: stack);
+      },
+      cancelOnError: true,
+    );
+  }
+
   Future<void> _initUserLocation({bool requestPermission = true, bool startStream = true}) async {
     if (_fetchingUserLocation || !_isAlive) return;
     _fetchingUserLocation = true;
 
-    void applyPosition(Position pos, bool allowAutoMove) {
-      location.value = pos;
-      _resortFriendsLists();
-      buildLocationMarker(pos);
-      if (allowAutoMove &&
-          !hasMovedToCurrentLocation.value &&
-          !_hasAutoFittedInitialPins &&
-          !_hasUserInteractedWithMap &&
-          selectedFriendId.value == null &&
-          selectedDeviceId.value == null &&
-          _pendingFocusFriendId == null) {
-        hasMovedToCurrentLocation.value = true;
-        _hasAutoFittedInitialPins = true;
-        _runWhenMapReady(() {
-          if (!_isAlive ||
-              _hasUserInteractedWithMap ||
-              selectedFriendId.value != null ||
-              selectedDeviceId.value != null ||
-              _pendingFocusFriendId != null) {
-            return;
-          }
-          final offsetY = detailSheetOffsetProvider?.call() ?? 0.0;
-          animateCameraTo(
-            LatLng(pos.latitude, pos.longitude),
-            defaultInitialZoom,
-            offset: Offset(0, -offsetY),
-            pitch: is3DEnabled.value ? default3DPitch : 0.0,
-          );
-        });
-      }
-    }
-
     try {
       final loc = await _performFetchCurrentPosition(requestPermission: requestPermission);
       if (!_isAlive || loc == null) return;
-      applyPosition(loc, startStream);
+      _applyUserPosition(loc, startStream);
       if (startStream && (_positionStreamFn != null || !kIsDesktop) && locationSub == null) {
-        final stream = _positionStreamFn != null ? _positionStreamFn() : Geolocator.getPositionStream();
-        locationSub = stream.listen(
-          (event) {
-            if (_isAlive) applyPosition(event, true);
-          },
-          onError: (Object error, StackTrace stack) {
-            _logWarn("FindMy position stream error", error: error, trace: stack);
-          },
-          cancelOnError: true,
-        );
+        _startLocationStream();
       }
     } catch (e, s) {
       _logWarn("Failed to fetch initial FindMy location", error: e, trace: s);
@@ -1322,7 +1558,7 @@ class FindMyController extends GetxController {
       return;
     }
     final devId = selectedDeviceId.value;
-    if (devId != null && (devId.startsWith('utag:') || devId.startsWith('gfind:'))) {
+    if (devId != null) {
       await hardRefresh(
         refreshFriends: false,
         refreshDevices: true,
@@ -1564,12 +1800,25 @@ class FindMyController extends GetxController {
     return formatFindMyEta(distanceMetersTo(friend.latitude, friend.longitude));
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      onAppResumed();
+    } else if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      onAppPaused();
+    }
+  }
+
   void onAppPaused() {
     _isForeground = false;
     _stopStalenessTimer();
     _liveHeartbeatTimer?.cancel();
     _liveHeartbeatTimer = null;
-    if (locationSub?.isPaused == false) locationSub!.pause();
+    locationSub?.cancel();
+    locationSub = null;
     if (_activeLiveStreamHandle != null) {
       unawaited(_stopLiveFriendStream());
     }
@@ -1577,10 +1826,16 @@ class FindMyController extends GetxController {
 
   void onAppResumed() {
     _isForeground = true;
-    if (_isAlive && (_interactive || isBackgroundShared)) {
+    if (_isAlive && (_pageActivated || _interactive || isBackgroundShared)) {
       _startStalenessTimer();
     }
-    locationSub?.resume();
+    if (_isAlive && _pageActivated && locationSub == null && (_positionStreamFn != null || !kIsDesktop)) {
+      if (location.value == null && !_fetchingUserLocation) {
+        unawaited(_initUserLocation(requestPermission: false, startStream: true));
+      } else {
+        _startLocationStream();
+      }
+    }
     final friendId = selectedFriendId.value;
     final handle = _selectedFriendHandle() ?? _selectedFriendTargetHandle;
     if (friendId != null &&
@@ -1670,26 +1925,73 @@ class FindMyController extends GetxController {
     _applyFriendsList(rawData, targeted: targeted);
   }
 
+  void _deduplicateFriendsInPlace() {
+    if (friends.isEmpty) return;
+    final droppedIds = <String>{};
+    final deduped = deduplicateFindMyFriends(
+      friends,
+      aliasToPrimaryIdOut: _friendAliasToPrimaryId,
+      droppedStableIdsOut: droppedIds,
+    );
+    friends.value = deduped;
+    for (final droppedId in droppedIds) {
+      markers.remove(droppedId);
+      animatedPoints.remove(droppedId);
+      if (selectedFriendId.value == droppedId) {
+        final mapped = _friendAliasToPrimaryId[normalizeFindMyHandle(droppedId)];
+        if (mapped != null) selectedFriendId.value = mapped;
+      }
+    }
+  }
+
   void _applyFriendsList(List<dynamic> rawData, {bool targeted = false}) {
     try {
       final incomingList = rawData.map((e) => FindMyFriend.fromJson(e)).toList().cast<FindMyFriend>();
       var anyUpdated = false;
       if (!targeted) {
-        friends.value = incomingList;
+        final previousFriendIds = friends.map((e) => e.stableId).whereType<String>().toSet();
+        final droppedIds = <String>{};
+        friends.value = deduplicateFindMyFriends(
+          incomingList,
+          aliasToPrimaryIdOut: _friendAliasToPrimaryId,
+          droppedStableIdsOut: droppedIds,
+        );
+        final nextValidFriendIds = friends
+            .where((e) => _hasValidFriendCoords(e.latitude, e.longitude))
+            .map((e) => e.stableId)
+            .whereType<String>()
+            .toSet();
+        for (final staleId in {...droppedIds, ...previousFriendIds.difference(nextValidFriendIds)}) {
+          markers.remove(staleId);
+          animatedPoints.remove(staleId);
+        }
         anyUpdated = true;
       } else {
         for (final incoming in incomingList) {
-          final existingIndex = incoming.stableId == null
-              ? -1
-              : friends.indexWhere((e) => e.stableId == incoming.stableId);
+          final incomingNorm = normalizeFindMyHandle(incoming.handleAddress ?? incoming.handle?.address);
+          final mappedPrimaryId = incomingNorm.isNotEmpty ? _friendAliasToPrimaryId[incomingNorm] : null;
+          final existingIndex = friends.indexWhere(
+            (e) =>
+                (incoming.stableId != null && e.stableId == incoming.stableId) ||
+                (mappedPrimaryId != null && e.stableId == mappedPrimaryId) ||
+                findMyHandlesMatch(e.handleAddress ?? e.handle?.address, incoming.handleAddress ?? incoming.handle?.address),
+          );
           final existing = existingIndex == -1 ? null : friends[existingIndex];
           if (existingIndex == -1) {
             friends.add(incoming);
             anyUpdated = true;
           } else if (shouldSupersedeFriendLocation(existing, incoming)) {
-            friends[existingIndex] = incoming;
+            friends[existingIndex] = _mergeDuplicateFriends(
+              existing!,
+              _lookupContactForFindMyFriend(existing),
+              incoming,
+              _lookupContactForFindMyFriend(incoming),
+            );
             anyUpdated = true;
           }
+        }
+        if (anyUpdated) {
+          _deduplicateFriendsInPlace();
         }
       }
 
@@ -1697,7 +1999,17 @@ class FindMyController extends GetxController {
         _resortFriendsLists();
 
         final toBuild = targeted
-            ? incomingList.where((item) => (item.latitude ?? 0) != 0 && (item.longitude ?? 0) != 0)
+            ? friendsWithLocation.where(
+                (item) => incomingList.any(
+                  (inc) {
+                    final incNorm = normalizeFindMyHandle(inc.handleAddress ?? inc.handle?.address);
+                    final mapped = incNorm.isNotEmpty ? _friendAliasToPrimaryId[incNorm] : null;
+                    return (inc.stableId != null && item.stableId == inc.stableId) ||
+                        (mapped != null && item.stableId == mapped) ||
+                        findMyHandlesMatch(item.handleAddress ?? item.handle?.address, inc.handleAddress ?? inc.handle?.address);
+                  },
+                ),
+              )
             : friendsWithLocation;
         for (final e in toBuild) {
           buildFriendMarker(e);
@@ -1723,13 +2035,13 @@ class FindMyController extends GetxController {
   void _resortFriendsLists() {
     final userPos = location.value;
     friendsWithLocation.value = sortFindMyFriends(
-      friends.where((item) => (item.latitude ?? 0) != 0 && (item.longitude ?? 0) != 0),
+      friends.where((item) => _hasValidFriendCoords(item.latitude, item.longitude)),
       isFriendPinned,
       userLatitude: userPos?.latitude,
       userLongitude: userPos?.longitude,
     );
     friendsWithoutLocation.value = sortFindMyFriends(
-      friends.where((item) => (item.latitude ?? 0) == 0 && (item.longitude ?? 0) == 0),
+      friends.where((item) => !_hasValidFriendCoords(item.latitude, item.longitude)),
       isFriendPinned,
       userLatitude: userPos?.latitude,
       userLongitude: userPos?.longitude,
@@ -1742,7 +2054,7 @@ class FindMyController extends GetxController {
     final match = friends.firstWhereOrNull((f) => f.stableId == pendingId);
     if (match == null) return;
     _pendingFocusFriendId = null;
-    if ((match.latitude ?? 0) != 0 && (match.longitude ?? 0) != 0) {
+    if (_hasValidFriendCoords(match.latitude, match.longitude)) {
       _runWhenMapReady(() {
         if (!_isAlive) return;
         focusFriend(match);
@@ -1971,7 +2283,9 @@ class FindMyController extends GetxController {
     final resolvedShort = addressForFriend(friend, preferLong: false);
     final resolvedLong = addressForFriend(friend, preferLong: true);
     if (resolvedLong == null || !hasStreetAddressLine(resolvedLong)) {
-      unawaited(resolveFriendAddress(friend));
+      Future.microtask(() {
+        if (_isAlive) unawaited(resolveFriendAddress(friend));
+      });
     }
 
     final now = _now();
@@ -2111,14 +2425,15 @@ class FindMyController extends GetxController {
     _hardRefreshInFlight = true;
     _lastHardRefreshAt = now;
     canRefresh.value = false;
-    refreshing.value = true;
-    refreshing2.value = true;
+    if (refreshDevices) refreshing.value = true;
+    if (refreshFriends) refreshing2.value = true;
 
     try {
       await getLocations(
         refreshFriends: refreshFriends,
         refreshDevices: refreshDevices,
         force: true,
+        skipFetchWhenNotRefreshing: !refreshFriends || !refreshDevices,
         focusedHandle: focusedHandle ?? _selectedFriendHandle(),
         focusedDeviceId: focusedDeviceId ?? selectedDeviceId.value,
       );
@@ -2167,6 +2482,18 @@ class FindMyController extends GetxController {
   void _setupRedactionListeners() {
     _redactedModeListener?.cancel();
     _hideContactInfoListener?.cancel();
+    _contactsCacheListener?.cancel();
+    if (GetIt.I.isRegistered<ContactServiceV2>()) {
+      _contactsCacheListener = ContactsSvcV2.cacheVersion.listen((_) {
+        if (!_isAlive || friends.isEmpty) return;
+        final before = friends.length;
+        _deduplicateFriendsInPlace();
+        if (friends.length != before) {
+          _resortFriendsLists();
+          _rebuildAllMarkers();
+        }
+      });
+    }
     if (!GetIt.I.isRegistered<SettingsService>()) return;
     _redactedModeListener = SettingsSvc.settings.redactedMode.listen((_) => _rebuildAllMarkers());
     _hideContactInfoListener = SettingsSvc.settings.hideContactInfo.listen((_) => _rebuildAllMarkers());
@@ -2380,29 +2707,49 @@ class FindMyController extends GetxController {
       _logInfo("Received new location for ${friend.handle?.address}");
       if ((friend.latitude ?? 0) == 0 && (friend.longitude ?? 0) == 0) return;
 
+      final incomingNorm = normalizeFindMyHandle(friend.handleAddress ?? friend.handle?.address);
+      final mappedPrimaryId = incomingNorm.isNotEmpty ? _friendAliasToPrimaryId[incomingNorm] : null;
       final existingFriendIndex = friends.indexWhere(
         (e) =>
             (e.stableId != null && e.stableId == friend.stableId) ||
+            (mappedPrimaryId != null && e.stableId == mappedPrimaryId) ||
             findMyHandlesMatch(e.handleAddress ?? e.handle?.address, friend.handleAddress ?? friend.handle?.address),
       );
       final existingFriend = existingFriendIndex == -1 ? null : friends[existingFriendIndex];
 
       if (shouldSupersedeFriendLocation(existingFriend, friend)) {
-        _logInfo("Updating map for ${friend.stableId}");
+        final mergedFriend = existingFriend == null
+            ? friend
+            : _mergeDuplicateFriends(
+                existingFriend,
+                _lookupContactForFindMyFriend(existingFriend),
+                friend,
+                _lookupContactForFindMyFriend(friend),
+              );
+        _logInfo("Updating map for ${mergedFriend.stableId}");
         if (existingFriendIndex == -1) {
-          friends.add(friend);
+          friends.add(mergedFriend);
         } else {
-          friends[existingFriendIndex] = friend;
+          friends[existingFriendIndex] = mergedFriend;
         }
+        _deduplicateFriendsInPlace();
+
+        final activeFriend = friends.firstWhereOrNull(
+              (e) =>
+                  (mergedFriend.stableId != null && e.stableId == mergedFriend.stableId) ||
+                  findMyHandlesMatch(
+                      e.handleAddress ?? e.handle?.address, mergedFriend.handleAddress ?? mergedFriend.handle?.address),
+            ) ??
+            mergedFriend;
 
         _resortFriendsLists();
 
-        buildFriendMarker(friend);
+        buildFriendMarker(activeFriend);
         livePulseNonce.value++;
-        unawaited(resolveFriendAddress(friend));
-        if (selectedFriendId.value != null && selectedFriendId.value == friend.stableId) {
+        unawaited(resolveFriendAddress(activeFriend));
+        if (selectedFriendId.value != null && selectedFriendId.value == activeFriend.stableId) {
           _lastLiveStreamUpdateAt = _now();
-          if (!friend.locatingInProgress && locatingFriendId.value == friend.stableId) {
+          if (!activeFriend.locatingInProgress && locatingFriendId.value == activeFriend.stableId) {
             locatingFriendId.value = null;
           }
           _syncLiveHeartbeat();
@@ -2482,8 +2829,7 @@ class FindMyController extends GetxController {
         });
 
     try {
-      // Fetch friends data
-      if (refreshFriends || !skipFetchWhenNotRefreshing) {
+      Future<void> fetchAndApplyFriends() async {
         if (refreshFriends) _refreshFriendsInFlight = true;
         final friendSeq = _friendRefreshSeq;
         Response response2;
@@ -2517,8 +2863,7 @@ class FindMyController extends GetxController {
         );
       }
 
-      // Fetch devices data
-      if (refreshDevices || !skipFetchWhenNotRefreshing) {
+      Future<void> fetchAndApplyDevices() async {
         if (refreshDevices) _refreshDevicesInFlight = true;
         Response response;
         try {
@@ -2581,7 +2926,17 @@ class FindMyController extends GetxController {
                 devices.refresh();
               }
             } else {
+              final previousDeviceIds = devices.map((e) => e.id).whereType<String>().toSet();
               devices.value = incomingDevices;
+              final nextValidDeviceIds = devices
+                  .where((e) => _hasValidFriendCoords(e.location?.latitude, e.location?.longitude))
+                  .map((e) => e.id)
+                  .whereType<String>()
+                  .toSet();
+              for (final staleId in previousDeviceIds.difference(nextValidDeviceIds)) {
+                markers.remove(staleId);
+                animatedPoints.remove(staleId);
+              }
             }
 
             for (final e in devices.where((e) => _hasValidFriendCoords(e.location?.latitude, e.location?.longitude))) {
@@ -2601,6 +2956,14 @@ class FindMyController extends GetxController {
           fetching.value = false;
           refreshing.value = false;
         }
+      }
+
+      final tasks = <Future<void>>[
+        if (refreshFriends || !skipFetchWhenNotRefreshing) fetchAndApplyFriends(),
+        if (refreshDevices || !skipFetchWhenNotRefreshing) fetchAndApplyDevices(),
+      ];
+      if (tasks.isNotEmpty) {
+        await Future.wait(tasks);
       }
     } finally {
       if (_isAlive) {
@@ -2734,6 +3097,10 @@ class FindMyController extends GetxController {
 
   @override
   void onClose() {
+    if (_observingLifecycle) {
+      _observingLifecycle = false;
+      WidgetsBinding.instance.removeObserver(this);
+    }
     _ringAutoClearTimer?.cancel();
     _ringAutoClearTimer = null;
     _cancelPendingFriendRefresh();
@@ -2746,6 +3113,7 @@ class FindMyController extends GetxController {
     _redactedModeListener?.cancel();
     _hideContactInfoListener?.cancel();
     _findMyLocationListener?.cancel();
+    _contactsCacheListener?.cancel();
     locationSub?.cancel();
     mapLibreController = null;
     mapStyleController = null;

@@ -34,15 +34,15 @@ class DesktopAttachmentMenu extends StatefulWidget {
   State<DesktopAttachmentMenu> createState() => _DesktopAttachmentMenuState();
 }
 
-const Map<TextFieldButton, (IconData, Color)> desktopMenuIcons = {
-  TextFieldButton.Files: (Icons.folder_rounded, Color(0xFF007AFF)),
-  TextFieldButton.Genmoji: (Icons.add_reaction_rounded, Color(0xFFFF2D55)),
-  TextFieldButton.Stickers: (Icons.sticky_note_2_rounded, Color(0xFF5856D6)),
-  TextFieldButton.Handwritten: (Icons.draw_rounded, Color(0xFFAF52DE)),
-  TextFieldButton.Schedule: (Icons.schedule_rounded, Color(0xFFFF9500)),
-  TextFieldButton.Location: (Icons.location_on_rounded, Color(0xFF32ADE6)),
-  TextFieldButton.Gif: (Icons.gif_box_rounded, Color(0xFF34C759)),
-  TextFieldButton.Emoji: (Icons.emoji_emotions_rounded, Color(0xFFFFCC00)),
+const Map<TextFieldButton, IconData> desktopMenuIcons = {
+  TextFieldButton.Files: Icons.folder_rounded,
+  TextFieldButton.Genmoji: Icons.add_reaction_rounded,
+  TextFieldButton.Stickers: Icons.sticky_note_2_rounded,
+  TextFieldButton.Handwritten: Icons.draw_rounded,
+  TextFieldButton.Schedule: Icons.schedule_rounded,
+  TextFieldButton.Location: Icons.location_on_rounded,
+  TextFieldButton.Gif: Icons.gif_box_rounded,
+  TextFieldButton.Emoji: Icons.emoji_emotions_rounded,
 };
 
 /// A menu item as the menu draws it, for a flight landing in the menu when it couldn't snapshot the real one.
@@ -51,19 +51,15 @@ Widget desktopMenuTileLook(BuildContext context, TextFieldButton b, {double? wid
     SizedBox(width: width, child: _menuItem(context, b, () {}));
 
 Widget _menuItem(BuildContext context, TextFieldButton b, VoidCallback onPressed) {
-  final (icon, color) = desktopMenuIcons[b]!;
+  final icon = desktopMenuIcons[b]!;
+  final scheme = context.theme.colorScheme;
   return MenuItemButton(
     onPressed: onPressed,
     style: MenuItemButton.styleFrom(
-      minimumSize: const Size(220, 44),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
+      minimumSize: const Size(220, 48),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
     ),
-    leadingIcon: Container(
-      width: 28,
-      height: 28,
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.15), shape: BoxShape.circle),
-      child: Icon(icon, size: 17, color: color),
-    ),
+    leadingIcon: Icon(icon, size: 24, color: scheme.onSurfaceVariant),
     child: Padding(
       padding: const EdgeInsets.only(left: 4),
       child: Text(b.label, style: context.theme.textTheme.bodyLarge),
@@ -163,18 +159,18 @@ class _DesktopAttachmentMenuState extends State<DesktopAttachmentMenu> {
         alignmentOffset: const Offset(0, 6),
         style: MenuStyle(
           backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainerHigh),
-          elevation: const WidgetStatePropertyAll(8),
+          elevation: const WidgetStatePropertyAll(2),
           // The padding is the spacers below, so a drag over it is still over the menu
           padding: const WidgetStatePropertyAll(EdgeInsets.zero),
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-              side: BorderSide(color: scheme.outline.withValues(alpha: 0.15)),
+              borderRadius: BorderRadius.circular(10),
+              side: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.45)),
             ),
           ),
         ),
         menuChildren: [
-          _target(const SizedBox(width: 220, height: 6)),
+          _target(const SizedBox(width: 220, height: 8)),
           // Every button has a place, open or closed, so a dragged one's preview slides open in its own spot
           for (final b in TextFieldButton.values.platformSupportedButtons)
             TextFieldButtonDrag.slides(
@@ -188,9 +184,27 @@ class _DesktopAttachmentMenuState extends State<DesktopAttachmentMenu> {
                 show: shown(b),
               ),
             ),
-          _target(const SizedBox(width: 220, height: 6)),
+          _target(const SizedBox(width: 220, height: 8)),
         ],
-        builder: (context, menu, _) => _target(widget.builder(context, () => menu.isOpen ? menu.close() : menu.open())),
+        builder: (context, menu, _) => _target(widget.builder(context, () {
+          if (menu.isOpen) {
+            menu.close();
+            return;
+          }
+          // Anchor above the top edge of the composer pill when multiline text expands it.
+          final anchorBox = context.findRenderObject() as RenderBox?;
+          final composerBox = controller.textFieldKey.currentContext?.findRenderObject() as RenderBox?;
+          if (anchorBox != null && anchorBox.attached && composerBox != null && composerBox.attached) {
+            final anchorTop = anchorBox.localToGlobal(Offset.zero).dy;
+            final composerTop = composerBox.localToGlobal(Offset.zero).dy;
+            final dy = composerTop - anchorTop;
+            if (dy < -1.0) {
+              menu.open(position: Offset(0, dy - 6.0));
+              return;
+            }
+          }
+          menu.open();
+        })),
       );
     });
   }

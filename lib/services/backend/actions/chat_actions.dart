@@ -565,7 +565,7 @@ class ChatActions {
 
       // Mark the chat as unread if we updated the last message & it's not from us
       if (toggleUnread && !(lastMessage.isFromMe ?? false)) {
-        chat.toggleHasUnreadAsync(true, privateMark: false);
+        chat.hasUnreadMessage = true;
       }
     }
 

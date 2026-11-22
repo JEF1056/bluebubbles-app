@@ -26,7 +26,7 @@ class FindMyPage extends StatefulWidget {
   State<StatefulWidget> createState() => _FindMyPageState();
 }
 
-class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateMixin {
   late final FindMyController controller;
   late final bool _ownsController;
   static const double _detailSnapPoint = 0.48;
@@ -34,7 +34,6 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     final wasRegistered = Get.isRegistered<FindMyController>();
     _ownsController = !wasRegistered;
     controller = wasRegistered ? Get.find<FindMyController>() : Get.put(FindMyController(), permanent: true);
@@ -100,19 +99,7 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      controller.onAppResumed();
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      controller.onAppPaused();
-    }
-  }
-
-  @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     controller.onRequestDetailSheetOpen = null;
     controller.detailSheetOffsetProvider = null;
     controller.fitAllPinsPaddingProvider = null;

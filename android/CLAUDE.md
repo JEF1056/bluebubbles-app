@@ -14,6 +14,9 @@ Source: `app/src/main/kotlin/com/bluebubbles/messaging/`
 | `services/backend_ui_interop/` | DartWorkManager / DartWorker for background Dart |
 | `services/filesystem/` | File path resolution |
 
+- `SocketIOForegroundService` uses 2s–120s socket reconnect backoff and gates connection on `ConnectivityManager.registerDefaultNetworkCallback`.
+- `DartWorker` keeps its headless Flutter engine alive for 60s when the foreground socket is active, or 30s otherwise.
+
 ## Dart ↔ Android Bridge
 Flutter side: `lib/services/backend/java_dart_interop/`
 - `method_channel_service.dart` — channel setup

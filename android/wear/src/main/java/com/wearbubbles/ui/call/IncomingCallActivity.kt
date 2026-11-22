@@ -39,7 +39,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -57,6 +56,8 @@ import androidx.wear.compose.material.Text
 import com.wearbubbles.notifications.ActiveCallState
 import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.CallPhase
+import com.wearbubbles.ui.theme.WearBubblesTheme
+import com.wearbubbles.ui.theme.centeredTextStyle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -82,13 +83,22 @@ class IncomingCallActivity : ComponentActivity() {
         }
 
         setContent {
-            val callState by CallNotificationHelper.activeCallState.collectAsStateWithLifecycle()
-            callState?.let { state ->
-                IncomingCallScreen(state = state)
+            WearBubblesTheme {
+                val callState by CallNotificationHelper.activeCallState.collectAsStateWithLifecycle()
+                callState?.let { state ->
+                    IncomingCallScreen(state = state)
+                }
             }
         }
     }
 }
+
+private val DialerCanvasBlack = Color(0xFF000000)
+private val DialerElevatedSurface = Color(0xFF282A2C)
+private val DialerPrimaryText = Color(0xFFF1F3F4)
+private val DialerSecondaryText = Color(0xFFC4C7C5)
+private val DialerDeclineRed = Color(0xFFD93025)
+private val DialerAnswerGreen = Color(0xFF34A853)
 
 @Composable
 private fun IncomingCallScreen(state: ActiveCallState) {
@@ -103,16 +113,10 @@ private fun IncomingCallScreen(state: ActiveCallState) {
         }
     }
 
-    val bgBrush = remember {
-        Brush.verticalGradient(
-            colors = listOf(Color(0xFF0E1520), Color(0xFF000000))
-        )
-    }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(bgBrush)
+            .background(DialerCanvasBlack)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -130,7 +134,7 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                     modifier = Modifier
                         .size(52.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF1F2A3A)),
+                        .background(DialerElevatedSurface),
                     contentAlignment = Alignment.Center
                 ) {
                     if (avatarBitmap != null) {
@@ -143,9 +147,12 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                     } else {
                         Text(
                             text = state.callerName.firstOrNull()?.uppercase() ?: "?",
-                            color = Color.White,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.SemiBold
+                            color = DialerPrimaryText,
+                            style = centeredTextStyle(
+                                fontSize = 20.sp,
+                                lineHeight = 24.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         )
                     }
                 }
@@ -154,9 +161,12 @@ private fun IncomingCallScreen(state: ActiveCallState) {
 
                 Text(
                     text = state.callerName,
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    color = DialerPrimaryText,
+                    style = centeredTextStyle(
+                        fontSize = 18.sp,
+                        lineHeight = 22.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center
@@ -166,9 +176,13 @@ private fun IncomingCallScreen(state: ActiveCallState) {
 
                 when (state.phase) {
                     CallPhase.RINGING -> Text(
-                        text = if (state.isVideo) "FaceTime Video • Audio only" else "FaceTime Audio",
-                        color = Color(0xFF9AA4B2),
-                        fontSize = 12.sp,
+                        text = ringingCallSubtitle(isVideo = state.isVideo, isTelephony = state.isTelephony),
+                        color = DialerSecondaryText,
+                        style = centeredTextStyle(
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center
@@ -188,7 +202,7 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                     modifier = Modifier
                         .size(52.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFFFF453A))
+                        .background(DialerDeclineRed)
                         .semantics { contentDescription = if (state.phase == CallPhase.ONGOING) "End Call" else "Decline" }
                         .clickable(enabled = !actionInFlight, role = Role.Button) {
                             actionInFlight = true
@@ -217,7 +231,7 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                         modifier = Modifier
                             .size(52.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF30D158))
+                            .background(DialerAnswerGreen)
                             .semantics { contentDescription = "Answer Audio" }
                             .clickable(enabled = !actionInFlight, role = Role.Button) {
                                 actionInFlight = true
@@ -269,10 +283,20 @@ private fun CallTimerText(startedAtElapsedMs: Long) {
     val secs = elapsedSeconds % 60L
     Text(
         text = String.format(Locale.US, "%02d:%02d • Audio", mins, secs),
-        color = Color(0xFF30D158),
-        fontSize = 12.sp,
+        color = DialerAnswerGreen,
+        style = centeredTextStyle(
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium
+        ).copy(fontFeatureSettings = "tnum"),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center
     )
+}
+
+internal fun ringingCallSubtitle(isVideo: Boolean, isTelephony: Boolean): String = when {
+    isTelephony -> "iPhone Call"
+    isVideo -> "FaceTime Video • Audio only"
+    else -> "FaceTime Audio"
 }

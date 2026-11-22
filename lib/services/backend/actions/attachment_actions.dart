@@ -110,7 +110,11 @@ class AttachmentActions {
         }
 
         attachment.id = Database.attachments.put(attachment);
-      } on UniqueViolationException catch (_) {}
+      } on UniqueViolationException catch (_) {
+        final conflict = AttachmentActions.findOne(attachment.guid ?? '');
+        if (conflict?.id == null) rethrow;
+        attachment.id = conflict!.id;
+      }
 
       // Return just the ID for efficient transfer across isolates
       return attachment.id!;
@@ -132,7 +136,6 @@ class AttachmentActions {
 
     /// convert List<List<Attachment>> into just List<Attachment> (flatten it)
     final attachments = map.values.flattened.toList();
-    moveRekeyedFiles(adoptRekeyedGuids(attachments));
 
     /// find existing attachments using query descriptor
     final guids = attachments.map((e) => e.guid!).toList();
@@ -150,10 +153,14 @@ class AttachmentActions {
       queryDescriptor: queryDescriptor,
     );
 
-    return Database.runInTransaction(TxMode.write, () {
+    final moves = <RekeyedFileMove>[];
+    Database.runInTransaction(TxMode.write, () {
+      moves.addAll(adoptRekeyedGuids(attachments));
+
       /// map existing attachment IDs and preserve message relationships
       for (Attachment a in attachments) {
-        final existing = existingAttachments.firstWhereOrNull((e) => e.guid == a.guid);
+        final existing = existingAttachments.firstWhereOrNull((e) => e.guid == a.guid) ??
+            (a.guid != null ? AttachmentActions.findOne(a.guid!) : null);
         if (existing != null) {
           a.id = existing.id;
 
@@ -172,6 +179,7 @@ class AttachmentActions {
         }
       } on UniqueViolationException catch (_) {}
     });
+    moveRekeyedFiles(moves);
   }
 
   static Future<int> replaceAttachmentAsync(dynamic data) async {

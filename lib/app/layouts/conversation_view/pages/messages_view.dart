@@ -34,6 +34,7 @@ class MessagesView extends StatefulWidget {
   final ConversationViewController controller;
   final String? initialScrollToGuid;
   final double bottomPadding;
+  final ValueListenable<double>? bottomPaddingListenable;
   final ValueNotifier<int>? unreadWhileScrolledCount;
 
   const MessagesView({
@@ -42,6 +43,7 @@ class MessagesView extends StatefulWidget {
     this.initialScrollToGuid,
     required this.controller,
     this.bottomPadding = 0.0,
+    this.bottomPaddingListenable,
     this.unreadWhileScrolledCount,
   });
 
@@ -659,7 +661,14 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         // for minor smoothing of local scroll gestures.
         scrollCacheExtent: const ScrollCacheExtent.pixels(500),
         slivers: <Widget>[
-          if (widget.bottomPadding > 0)
+          if (widget.bottomPaddingListenable != null)
+            SliverToBoxAdapter(
+              child: ValueListenableBuilder<double>(
+                valueListenable: widget.bottomPaddingListenable!,
+                builder: (_, height, _) => SizedBox(height: height),
+              ),
+            )
+          else if (widget.bottomPadding > 0)
             SliverToBoxAdapter(
               child: SizedBox(height: widget.bottomPadding),
             ),

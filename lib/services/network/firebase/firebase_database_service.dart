@@ -74,7 +74,8 @@ class FirebaseDatabaseService extends GetxService {
       }
     } catch (e, s) {
       Logger.error("Failed to fetch Firebase Config!", error: e, trace: s);
-      if (e is Response && e.statusCode == 404) {
+      final statusCode = e is DioException ? e.response?.statusCode : (e is Response ? e.statusCode : null);
+      if (statusCode == 404) {
         await FCMData.deleteFcmData();
       }
 

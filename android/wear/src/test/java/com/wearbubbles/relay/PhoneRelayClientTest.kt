@@ -1,6 +1,7 @@
 package com.wearbubbles.relay
 
 import com.google.android.gms.wearable.Node
+import com.google.gson.JsonParser
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -184,5 +185,22 @@ class PhoneRelayClientTest {
         cache.invalidate()
         assertFalse(cache.getOrRefreshConnected(force = false) { fetches++; nextNode })
         assertEquals(4, fetches)
+    }
+
+    @Test
+    fun `buildAnswerCallAudioPayload includes isTelephony flag`() {
+        val parsedTrue = JsonParser.parseString(
+            String(PhoneRelayClient.buildAnswerCallAudioPayload("cell-1", "Mom", "+15551234567", isTelephony = true))
+        ).asJsonObject
+        assertEquals("cell-1", parsedTrue.get("callUuid").asString)
+        assertEquals("Mom", parsedTrue.get("callerName").asString)
+        assertEquals("+15551234567", parsedTrue.get("callerAddress").asString)
+        assertTrue(parsedTrue.get("isTelephony").asBoolean)
+
+        val parsedFalse = JsonParser.parseString(
+            String(PhoneRelayClient.buildAnswerCallAudioPayload("ft-1", "Alice", null, isTelephony = false))
+        ).asJsonObject
+        assertEquals("ft-1", parsedFalse.get("callUuid").asString)
+        assertFalse(parsedFalse.get("isTelephony").asBoolean)
     }
 }

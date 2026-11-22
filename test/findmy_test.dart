@@ -15,6 +15,8 @@ import 'package:bluebubbles/database/global/findmy_friend.dart';
 import 'package:bluebubbles/database/io/contact_v2.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/ui/findmy_helpers.dart';
+import 'package:bluebubbles/services/network/api/base_api.dart';
+import 'package:bluebubbles/services/network/api/icloud_api.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
@@ -714,8 +716,12 @@ void main() {
       );
 
       expect(formatFindMyProximity(10, deviceWithYou: true), 'With You');
-      expect(formatFindMyProximity(30), 'With You');
-      expect(formatFindMyProximity(500), 'Nearby');
+      expect(formatFindMyProximity(500, deviceWithYou: true), 'With You');
+      expect(formatFindMyProximity(10, isThisDevice: true, deviceWithYou: true), '');
+      expect(formatFindMyProximity(20.0), 'Nearby');
+      expect(formatFindMyProximity(20.1), '<0.1 mi');
+      expect(formatFindMyProximity(30), '<0.1 mi');
+      expect(formatFindMyProximity(500), '0.3 mi');
       expect(formatFindMyProximity(56327), '35 mi');
       expect(formatFindMyEta(600), '1 min');
       expect(formatFindMyEta(104500), contains('hr'));
@@ -1510,24 +1516,53 @@ void main() {
       expect(controller.friendsController.offset, 0);
     });
 
-    test('repeated onAppPaused + single onAppResumed resumes locationSub', () async {
-      final controller = FindMyController(autoFetch: false);
-      final streamController = StreamController<Position>();
+    test('repeated onAppPaused cancels locationSub + single onAppResumed re-subscribes when active', () async {
+      var streamCalls = 0;
+      final streamController = StreamController<Position>.broadcast();
+      final pos = Position(
+        longitude: -122.4194,
+        latitude: 37.7749,
+        timestamp: DateTime(2026, 11, 19, 12, 0),
+        accuracy: 10,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+      );
+      final controller = FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () async => pos,
+        positionStream: () {
+          streamCalls++;
+          return streamController.stream;
+        },
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async => Response(
+          requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+          statusCode: 200,
+          data: {'data': []},
+        ),
+      );
       addTearDown(() async {
         controller.onClose();
         await streamController.close();
       });
 
-      controller.locationSub = streamController.stream.listen((_) {});
-      expect(controller.locationSub!.isPaused, isFalse);
+      controller.activatePage();
+      await pumpEventQueue();
+      expect(controller.locationSub, isNotNull);
+      expect(streamCalls, 1);
 
       controller.onAppPaused();
       controller.onAppPaused();
       controller.onAppPaused();
-      expect(controller.locationSub!.isPaused, isTrue);
+      expect(controller.locationSub, isNull);
 
       controller.onAppResumed();
-      expect(controller.locationSub!.isPaused, isFalse);
+      await pumpEventQueue();
+      expect(controller.locationSub, isNotNull);
+      expect(streamCalls, 2);
     });
 
     test('getLocations catches position errors and auto-fits pins once map is ready when location is null',
@@ -1932,13 +1967,14 @@ void main() {
       await pumpEventQueue();
       expect(friendRefreshCalls, beforeTabSwitch + 1);
 
-      // Staleness timer pauses in background and restarts on resume.
+      // Staleness timer stops and locationSub cancels in background, and re-subscribes on resume.
       controller.onAppPaused();
-      expect(controller.locationSub!.isPaused, isTrue);
+      expect(controller.locationSub, isNull);
       fakeNow = fakeNow.add(const Duration(seconds: 15));
       controller.onAppResumed();
       await pumpEventQueue();
-      expect(controller.locationSub!.isPaused, isFalse);
+      expect(controller.locationSub, isNotNull);
+      expect(streamCalls, 2);
       expect(friendRefreshCalls, beforeTabSwitch + 2);
     });
 
@@ -2512,6 +2548,137 @@ void main() {
       expect(find.text('LEFT'), findsOneWidget);
       expect(find.text('RIGHT'), findsOneWidget);
     });
+
+    test('refreshSelected skips refreshFriends and passes force:true + deviceId for Apple, gfind, and utag devices',
+        () async {
+      var fakeNow = DateTime(2026, 11, 21, 12, 0, 0);
+      var friendCalls = 0;
+      final deviceCalls = <({String? deviceId, bool force})>[];
+      final controller = FindMyController(
+        now: () => fakeNow,
+        autoFetch: false,
+        fetchCurrentPosition: () async => null,
+        positionStream: () => const Stream.empty(),
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) async {
+          friendCalls++;
+          return Response(
+            requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+            statusCode: 200,
+            data: {'data': []},
+          );
+        },
+        refreshDevicesRequest: ({deviceId, force = false}) async {
+          deviceCalls.add((deviceId: deviceId, force: force));
+          return Response(
+            requestOptions: RequestOptions(path: '/icloud/findmy/devices/refresh'),
+            statusCode: 200,
+            data: {'data': []},
+          );
+        },
+      );
+      addTearDown(controller.onClose);
+
+      for (final id in ['apple-mac-1', 'gfind:pixel-1', 'utag:tag-1']) {
+        controller.selectedFriendId.value = null;
+        controller.selectedDeviceId.value = id;
+        await controller.refreshSelected();
+        fakeNow = fakeNow.add(const Duration(seconds: 5));
+      }
+
+      expect(friendCalls, 0);
+      expect(deviceCalls, [
+        (deviceId: 'apple-mac-1', force: true),
+        (deviceId: 'gfind:pixel-1', force: true),
+        (deviceId: 'utag:tag-1', force: true),
+      ]);
+    });
+
+    test('getLocations refreshes friends and devices concurrently', () async {
+      final friendsCompleter = Completer<Response>();
+      final devicesCompleter = Completer<Response>();
+      var friendsStarted = false;
+      var devicesStarted = false;
+
+      final controller = FindMyController(
+        autoFetch: false,
+        fetchCurrentPosition: () async => null,
+        positionStream: () => const Stream.empty(),
+        refreshFriendsRequest: ({handle, force = false, live = false, cancelToken}) {
+          friendsStarted = true;
+          return friendsCompleter.future;
+        },
+        refreshDevicesRequest: ({deviceId, force = false}) {
+          devicesStarted = true;
+          return devicesCompleter.future;
+        },
+      );
+      addTearDown(controller.onClose);
+
+      final future = controller.getLocations(
+        refreshFriends: true,
+        refreshDevices: true,
+        force: true,
+      );
+      await pumpEventQueue();
+
+      // Both requests must be in flight simultaneously before either resolves.
+      expect(friendsStarted, isTrue);
+      expect(devicesStarted, isTrue);
+
+      friendsCompleter.complete(Response(
+        requestOptions: RequestOptions(path: '/icloud/findmy/friends/refresh'),
+        statusCode: 200,
+        data: {'data': []},
+      ));
+      devicesCompleter.complete(Response(
+        requestOptions: RequestOptions(path: '/icloud/findmy/devices/refresh'),
+        statusCode: 200,
+        data: {'data': []},
+      ));
+      await future;
+    });
+
+    test('iCloudApi refreshFriends and refreshDevices enforce >= 20s receiveTimeout and forward force/deviceId',
+        () async {
+      final captured = <RequestOptions>[];
+      final dio = Dio(BaseOptions(receiveTimeout: null));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            captured.add(options);
+            handler.resolve(Response(
+              requestOptions: options,
+              statusCode: 200,
+              data: {'status': 200, 'data': []},
+            ));
+          },
+        ),
+      );
+      final api = iCloudApi(_FakeFindMyBaseApi(dio));
+
+      await api.refreshDevices(deviceId: 'gfind:pixel-1', force: true);
+      await api.refreshFriends(handle: 'alice@example.com', force: true);
+
+      dio.options.receiveTimeout = const Duration(seconds: 5);
+      await api.refreshDevices(deviceId: 'utag:tag-1', force: true);
+      await api.refreshFriends(force: true);
+
+      dio.options.receiveTimeout = const Duration(seconds: 30);
+      await api.refreshDevices(force: true);
+      await api.refreshFriends(force: true);
+
+      expect(captured, hasLength(6));
+      for (final req in captured) {
+        expect(req.receiveTimeout, isNotNull);
+        expect(req.receiveTimeout!, greaterThanOrEqualTo(const Duration(seconds: 20)));
+      }
+      expect(captured[0].data, {'force': true, 'deviceId': 'gfind:pixel-1'});
+      expect(captured[1].data, {'force': true, 'handle': 'alice@example.com'});
+      expect(captured[2].data, {'force': true, 'deviceId': 'utag:tag-1'});
+      expect(captured[3].data, {'force': true});
+      expect(captured[4].receiveTimeout, const Duration(seconds: 360));
+      expect(captured[5].receiveTimeout, const Duration(seconds: 60));
+    });
   });
 }
 
@@ -2576,4 +2743,32 @@ class _NoopFindMyLogger extends BaseLogger {
 
   @override
   void error(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+}
+
+class _FakeFindMyBaseApi implements BaseApi {
+  _FakeFindMyBaseApi(this.dio);
+
+  @override
+  final Dio dio;
+
+  @override
+  String get origin => 'http://localhost:1234';
+
+  @override
+  String get apiRoot => 'http://localhost:1234/api/v1';
+
+  @override
+  String get apiRootV2 => 'http://localhost:1234/api/v2';
+
+  @override
+  Map<String, String> get headers => const {};
+
+  @override
+  Map<String, dynamic> buildQueryParams([Map<String, dynamic> params = const {}]) => params;
+
+  @override
+  Future<Response> runApiGuarded(Future<Response> Function() func, {bool checkOrigin = true}) => func();
+
+  @override
+  Future<Response> returnSuccessOrError(Response r) async => r;
 }

@@ -79,14 +79,6 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
         },
       ));
     }
-    if (widget.part.isEdited) {
-      properties.add((
-        label: "Edited",
-        onTap: () {
-          controller.showEdits.toggle();
-        },
-      ));
-    }
 
     return properties;
   }
@@ -94,10 +86,8 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      // Observe granular MessageState fields for thread replies and edits
+      // Observe granular MessageState fields for thread replies
       controller.associatedMessages.length;
-      // Also observe showEdits since that's toggled directly
-      controller.showEdits.value;
 
       final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
       final props = _getPropertyActions();

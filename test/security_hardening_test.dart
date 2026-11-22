@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:bluebubbles/database/global/server_payload.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart' show ServerDetails;
 import 'package:bluebubbles/services/network/api/server_api.dart';
 import 'package:bluebubbles/services/network/http_overrides.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/crypto_utils.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
@@ -299,6 +301,44 @@ void main() {
       expect(attachment.path, '${attachment.directory}/.._secret.txt');
       expect(attachment.path.startsWith('${attachment.directory}/'), isTrue);
       expect(attachment.path.substring(attachment.directory.length + 1).contains('/'), isFalse);
+
+      expect(FilesystemService.sanitizeGuid('../../etc'), 'etc');
+      expect(FilesystemService.sanitizeGuid('../..'), 'unknown');
+      expect(FilesystemService.sanitizeGuid(null), 'unknown');
+
+      final traversalAttachment = Attachment(guid: '../../evil', transferName: '../secret.txt');
+      expect(traversalAttachment.directory.endsWith('/evil'), isTrue);
+      expect(traversalAttachment.path.contains('..'), isTrue); // filename only (`.._secret.txt`), not a path segment
+      expect(traversalAttachment.path, '${traversalAttachment.directory}/.._secret.txt');
+    });
+  });
+
+  group('Wave 1: ServerPayload decrypt order and isLegacy flag', () {
+    test('decrypts encrypted data before jsonDecode and detects legacy vs typed payloads', () {
+      const passphrase = 'test-server-password';
+      final ciphertext = encryptAESCryptoJS(
+        jsonEncode({'guid': 'msg-1', 'text': 'hello'}),
+        passphrase,
+      );
+
+      final typed = ServerPayload.fromJson(
+        {
+          'type': 'NEW_MESAGE',
+          'encrypted': true,
+          'encoding': 'JSON_OBJECT',
+          'data': ciphertext,
+        },
+        passphrase: passphrase,
+      );
+      expect(typed.isLegacy, isFalse);
+      expect(typed.isDict, isTrue);
+      expect(typed.data['guid'], 'msg-1');
+      expect(typed.data['text'], 'hello');
+
+      final legacy = ServerPayload.fromJson({'guid': 'legacy-1'});
+      expect(legacy.isLegacy, isTrue);
+      expect(legacy.isDict, isTrue);
+      expect(legacy.data['guid'], 'legacy-1');
     });
   });
 

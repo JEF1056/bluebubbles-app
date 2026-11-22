@@ -475,24 +475,30 @@ Offset projectLatLngToScreenOffset(
   );
 }
 
-/// Compact iOS-style proximity label ("With You", "Nearby", "35 mi").
+/// Proximity threshold (~house width / ~65 ft) for marking a friend or device "Nearby".
+const double kFindMyNearbyMeters = 20.0;
+
+/// Formats [meters] as US miles, using `<0.1 mi` below 0.05 mi so it never renders `"0 mi"`.
+String formatFindMyMiles(double meters) {
+  final miles = meters / 1609.344;
+  if (miles < 10.0) {
+    final formatted = miles.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
+    return formatted == '0' ? '<0.1 mi' : '$formatted mi';
+  }
+  return '${miles.round()} mi';
+}
+
+/// Compact iOS-style proximity label ("With You", "Nearby", "<0.1 mi", "35 mi").
 String formatFindMyProximity(
   double? meters, {
   bool deviceWithYou = false,
   bool isThisDevice = false,
 }) {
   if (isThisDevice) return "";
-  if (deviceWithYou || (meters != null && meters.isFinite && meters >= 0 && meters < 60)) {
-    return "With You";
-  }
+  if (deviceWithYou) return "With You";
   if (meters == null || !meters.isFinite || meters < 0) return "";
-  if (meters < 805) return "Nearby";
-  final miles = meters / 1609.344;
-  if (miles < 10) {
-    final formatted = miles.toStringAsFixed(1).replaceFirst(RegExp(r'\.0$'), '');
-    return "$formatted mi";
-  }
-  return "${miles.round()} mi";
+  if (meters <= kFindMyNearbyMeters) return "Nearby";
+  return formatFindMyMiles(meters);
 }
 
 /// Estimated travel time label for Directions pill button (e.g. "1 hr 22 min").

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:universal_io/io.dart';
 
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_audio_player.dart';
@@ -48,17 +50,26 @@ class _AudioPlayerState extends State<AudioPlayer> with AutomaticKeepAliveClient
       vsync: this, duration: const Duration(milliseconds: 400), animationBehavior: AnimationBehavior.preserve);
   final playerState = Rx<PlayerState?>(null);
   final maxDuration = 0.obs;
+  StreamSubscription<PlayerState>? _playerStateSub;
+  VoidCallback? _controllerListener;
+  bool _ownsController = false;
 
   @override
   void initState() {
     super.initState();
-    if (attachment != null) controller = cvController?.audioPlayers[attachment!.guid];
+    if (attachment?.guid != null) controller = cvController?.audioPlayers[attachment!.guid];
     initBytes();
   }
 
   @override
   void dispose() {
-    if (attachment == null) {
+    _playerStateSub?.cancel();
+    _playerStateSub = null;
+    if (_controllerListener != null) {
+      controller?.removeListener(_controllerListener!);
+      _controllerListener = null;
+    }
+    if (_ownsController) {
       controller?.dispose();
     }
     animController.dispose();
@@ -66,21 +77,40 @@ class _AudioPlayerState extends State<AudioPlayer> with AutomaticKeepAliveClient
   }
 
   void initBytes() async {
-    if (attachment != null) controller = cvController?.audioPlayers[attachment!.guid];
+    if (attachment?.guid != null) controller = cvController?.audioPlayers[attachment!.guid];
     if (controller == null) {
-      controller = PlayerController()
-        ..addListener(() {
-          maxDuration.value = controller!.maxDuration;
-        });
-      controller!.onPlayerStateChanged.listen((event) {
-        if ((controller!.playerState == PlayerState.paused || controller!.playerState == PlayerState.stopped) &&
+      final created = PlayerController();
+      void listener() {
+        maxDuration.value = created.maxDuration;
+      }
+      created.addListener(listener);
+      final sub = created.onPlayerStateChanged.listen((event) {
+        if ((created.playerState == PlayerState.paused || created.playerState == PlayerState.stopped) &&
             animController.value > 0) {
           animController.reverse();
         }
-        playerState.value = controller!.playerState;
+        playerState.value = created.playerState;
       });
-      await controller!.preparePlayer(path: file.path!);
-      if (attachment != null) cvController?.audioPlayers[attachment!.guid!] = controller!;
+      try {
+        await created.preparePlayer(path: file.path!);
+      } catch (_) {
+        await sub.cancel();
+        created.removeListener(listener);
+        created.dispose();
+        rethrow;
+      }
+      final cached = cvController != null && attachment?.guid != null;
+      if (!mounted) {
+        await sub.cancel();
+        created.removeListener(listener);
+        created.dispose();
+        return;
+      }
+      _controllerListener = listener;
+      _playerStateSub = sub;
+      controller = created;
+      _ownsController = !cached;
+      if (cached) cvController!.audioPlayers[attachment!.guid!] = created;
     }
     playerState.value = controller?.playerState;
     maxDuration.value = controller?.maxDuration ?? 0;
@@ -164,17 +194,30 @@ class _DesktopAudioPlayerState extends State<AudioPlayer>
   final isPlaying = false.obs;
   final position = Duration.zero.obs;
   final duration = Duration.zero.obs;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration>? _durationSub;
+  StreamSubscription<bool>? _playingSub;
+  StreamSubscription<bool>? _completedSub;
+  bool _ownsController = false;
 
   @override
   void initState() {
     super.initState();
-    if (attachment != null) controller = cvController?.audioPlayersDesktop[attachment!.guid];
+    if (attachment?.guid != null) controller = cvController?.audioPlayersDesktop[attachment!.guid];
     initBytes();
   }
 
   @override
   void dispose() {
-    if (attachment == null) {
+    _positionSub?.cancel();
+    _positionSub = null;
+    _durationSub?.cancel();
+    _durationSub = null;
+    _playingSub?.cancel();
+    _playingSub = null;
+    _completedSub?.cancel();
+    _completedSub = null;
+    if (_ownsController) {
       controller?.dispose();
     }
     animController.dispose();
@@ -182,24 +225,47 @@ class _DesktopAudioPlayerState extends State<AudioPlayer>
   }
 
   void initBytes() async {
-    if (attachment != null) controller = cvController?.audioPlayersDesktop[attachment!.guid];
+    if (attachment?.guid != null) controller = cvController?.audioPlayersDesktop[attachment!.guid];
     if (controller == null) {
-      controller = Player()
-        ..stream.position.listen((pos) => position.value = pos)
-        ..stream.duration.listen((dur) => duration.value = dur)
-        ..stream.playing.listen((playing) => isPlaying.value = playing)
-        ..stream.completed.listen((bool completed) async {
-          if (completed) {
-            await controller!.seek(Duration.zero);
-            if (Platform.isLinux) {
-              await controller!.pause();
-            }
-            animController.reverse();
+      final created = Player();
+      final posSub = created.stream.position.listen((pos) => position.value = pos);
+      final durSub = created.stream.duration.listen((dur) => duration.value = dur);
+      final playSub = created.stream.playing.listen((playing) => isPlaying.value = playing);
+      final compSub = created.stream.completed.listen((bool completed) async {
+        if (completed) {
+          await created.seek(Duration.zero);
+          if (Platform.isLinux) {
+            await created.pause();
           }
-        });
-      await controller!.setPlaylistMode(PlaylistMode.none);
-      await controller!.open(Media(file.path!), play: false);
-      if (attachment != null) cvController?.audioPlayersDesktop[attachment!.guid!] = controller!;
+          animController.reverse();
+        }
+      });
+      Future<void> cleanupCreated() async {
+        await posSub.cancel();
+        await durSub.cancel();
+        await playSub.cancel();
+        await compSub.cancel();
+        await created.dispose();
+      }
+      try {
+        await created.setPlaylistMode(PlaylistMode.none);
+        await created.open(Media(file.path!), play: false);
+      } catch (_) {
+        await cleanupCreated();
+        rethrow;
+      }
+      final cached = cvController != null && attachment?.guid != null;
+      if (!mounted) {
+        await cleanupCreated();
+        return;
+      }
+      _positionSub = posSub;
+      _durationSub = durSub;
+      _playingSub = playSub;
+      _completedSub = compSub;
+      controller = created;
+      _ownsController = !cached;
+      if (cached) cvController!.audioPlayersDesktop[attachment!.guid!] = created;
     }
     isPlaying.value = controller?.state.playing ?? false;
     position.value = controller?.state.position ?? Duration.zero;

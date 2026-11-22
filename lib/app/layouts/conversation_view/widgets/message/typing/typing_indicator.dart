@@ -186,14 +186,15 @@ class AnimatedDot extends StatefulWidget {
 class _AnimatedDotState extends State<AnimatedDot> with SingleTickerProviderStateMixin, ThemeHelpers {
   late final AnimationController _controller;
   late final Animation animation;
+  bool _animationsDisabled = false;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700), animationBehavior: AnimationBehavior.preserve);
+        vsync: this, duration: const Duration(milliseconds: 700));
     _controller.addStatusListener((state) {
-      if (state == AnimationStatus.completed && mounted) {
+      if (state == AnimationStatus.completed && mounted && !_animationsDisabled) {
         _controller.forward(from: 0.0);
       }
     });
@@ -202,8 +203,19 @@ class _AnimatedDotState extends State<AnimatedDot> with SingleTickerProviderStat
       begin: 0.0,
       end: math.pi,
     ).animate(_controller);
+  }
 
-    _controller.forward(from: 0.0);
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final disabled = MediaQuery.disableAnimationsOf(context);
+    if (disabled == _animationsDisabled && (_controller.isAnimating || disabled)) return;
+    _animationsDisabled = disabled;
+    if (_animationsDisabled) {
+      _controller.stop();
+    } else if (!_controller.isAnimating) {
+      _controller.forward(from: 0.0);
+    }
   }
 
   @override

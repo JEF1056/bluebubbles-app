@@ -2,6 +2,7 @@ package com.bluebubbles.messaging.services.telecom
 
 import android.telecom.Connection
 import com.bluebubbles.messaging.services.network.HttpService
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -258,5 +259,101 @@ class FaceTimeRoutingTest {
         FaceTimeConnectionService.endCall("prebind-end-1", onlyIfRinging = false, recordIfPending = true)
         assertEquals("tel", FaceTimeRoutingPolicy.resolveHandleScheme("alice@icloud.com", isTelephony = true))
         assertEquals("mailto", FaceTimeRoutingPolicy.resolveHandleScheme("+15551234567".let { "alice@icloud.com" }, isTelephony = false))
+    }
+
+    @Test
+    fun `wear call uuid uses explicit uuid when present and falls back to caller hash`() {
+        assertEquals("call-uuid-1", CreateIncomingFaceTimeNotification.resolveWearCallUuid("call-uuid-1", "Alice"))
+        assertEquals("ft_${"Alice".hashCode()}", CreateIncomingFaceTimeNotification.resolveWearCallUuid(null, "Alice"))
+        assertEquals("ft_${"Alice".hashCode()}", CreateIncomingFaceTimeNotification.resolveWearCallUuid("   ", "Alice"))
+    }
+
+    @Test
+    fun `incoming facetime notification timeout is 60s only when not ongoing`() {
+        assertEquals(60_000L, CreateIncomingFaceTimeNotification.resolveNotificationTimeoutMs(isOngoing = false))
+        assertNull(CreateIncomingFaceTimeNotification.resolveNotificationTimeoutMs(isOngoing = true))
+    }
+
+    @Test
+    fun `bounded uuid set evicts oldest entry via lru instead of wholesale clear`() {
+        val set = BoundedUuidSet(maxSize = 32)
+        for (i in 1..32) {
+            set.add("uuid-$i")
+        }
+        assertEquals(32, set.size())
+        // Touch uuid-1 to make it MRU so uuid-2 becomes oldest
+        set.add("uuid-1")
+        set.add("uuid-33")
+        assertEquals(32, set.size())
+        assertTrue(set.contains("uuid-1"))
+        assertFalse(set.contains("uuid-2"))
+        assertTrue(set.contains("uuid-33"))
+    }
+
+    @Test
+    fun `incoming call uuid dedupe suppresses duplicate fast-path and dart notifications`() {
+        CreateIncomingFaceTimeNotification.clearSeenIncomingCallsForTest()
+        assertTrue(CreateIncomingFaceTimeNotification.markIncomingCallSeen("call-dedupe-1"))
+        assertFalse(CreateIncomingFaceTimeNotification.markIncomingCallSeen("call-dedupe-1"))
+        assertTrue(CreateIncomingFaceTimeNotification.markIncomingCallSeen("call-dedupe-2"))
+        CreateIncomingFaceTimeNotification.clearSeenIncomingCallsForTest()
+    }
+
+    @Test
+    fun `webrtc offer payload includes uplinkVideo when wantVideo is true and falls back cleanly when local camera unavailable`() {
+        val withUplink = WebRtcAudioClient.buildOfferPayloadMap(
+            callUuid = "call-1",
+            sdp = "v=0",
+            wantVideo = true,
+            hasLocalVideo = true,
+            answerCall = false
+        )
+        assertEquals("call-1", withUplink["callUuid"])
+        assertEquals("v=0", withUplink["sdp"])
+        assertEquals("offer", withUplink["type"])
+        assertEquals(true, withUplink["video"])
+        assertEquals(true, withUplink["uplinkVideo"])
+        assertFalse(withUplink.containsKey("answerCall"))
+
+        val downlinkOnly = WebRtcAudioClient.buildOfferPayloadMap(
+            callUuid = "call-2",
+            sdp = "v=0",
+            wantVideo = true,
+            hasLocalVideo = false,
+            answerCall = true
+        )
+        assertEquals(true, downlinkOnly["video"])
+        assertEquals(false, downlinkOnly["uplinkVideo"])
+        assertEquals(true, downlinkOnly["answerCall"])
+
+        val audioOnly = WebRtcAudioClient.buildOfferPayloadMap(
+            callUuid = "call-3",
+            sdp = "v=0",
+            wantVideo = false,
+            hasLocalVideo = false,
+            answerCall = false
+        )
+        assertFalse(audioOnly.containsKey("video"))
+        assertFalse(audioOnly.containsKey("uplinkVideo"))
+    }
+
+    @Test
+    fun `webrtc camera state payload encodes callUuid and enabled flag`() {
+        val disabled = WebRtcAudioClient.buildCameraStatePayloadMap("call-cam-1", false)
+        assertEquals("call-cam-1", disabled["callUuid"])
+        assertEquals(false, disabled["enabled"])
+
+        val enabled = WebRtcAudioClient.buildCameraStatePayloadMap("call-cam-1", true)
+        assertEquals(true, enabled["enabled"])
+    }
+
+    @Test
+    fun `facetime local video and camera controls return null or false without active connection`() {
+        assertNull(FaceTimeConnectionService.getCallLocalVideoTextureId("missing-call"))
+        assertFalse(FaceTimeConnectionService.setCallCameraEnabled("missing-call", true))
+        assertFalse(FaceTimeConnectionService.flipCallCamera("missing-call"))
+        assertEquals("get-facetime-local-video-texture", GetFaceTimeLocalVideoTextureHandler.tag)
+        assertEquals("set-facetime-camera-enabled", SetFaceTimeCameraEnabledHandler.tag)
+        assertEquals("flip-facetime-camera", FlipFaceTimeCameraHandler.tag)
     }
 }

@@ -70,7 +70,7 @@ class FindMyBleHost private constructor(
         private const val PREF_UWB_PROMPTED = "uwb_permission_prompted"
 
         private const val SCAN_TIMEOUT_MS = 120_000L
-        private const val EMIT_INTERVAL_MS = 250L
+        private const val EMIT_INTERVAL_MS = 1_000L
         private const val QUICK_SCAN_TIMEOUT_MS = 3_500L
         private const val GATT_TIMEOUT_MS = 10_000L
 

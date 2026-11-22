@@ -180,7 +180,7 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
 
 /// Extracted recording button to reduce Obx rebuild scope and prevent
 /// unnecessary rebuilds of the complex recording UI
-class _RecordingButton extends StatelessWidget {
+class _RecordingButton extends StatefulWidget {
   const _RecordingButton({
     required this.isWeb,
     required this.isDesktop,
@@ -204,277 +204,305 @@ class _RecordingButton extends StatelessWidget {
   final Function(String) onDeleteRecording;
 
   @override
+  State<_RecordingButton> createState() => _RecordingButtonState();
+}
+
+class _RecordingButtonState extends State<_RecordingButton> {
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (_pressed == value) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Obx(() {
       final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
       final isMaterial = SettingsSvc.settings.skin.value == Skins.Material;
       final buttonSize = isIOS ? const Size(32, 32) : const Size(48, 48);
+      final showRecording = widget.showRecording;
+      final isChatCreator = widget.isChatCreator;
+      final controller = widget.controller;
+      final audioRecorder = widget.audioRecorder;
+      final recorderController = widget.recorderController;
 
-      return TextButton(
-        style: TextButton.styleFrom(
-          backgroundColor: isMaterial && !isChatCreator
-              ? (showRecording
-                  ? context.theme.colorScheme.errorContainer
-                  : context.theme.colorScheme.primaryContainer)
-              : !isIOS || (isIOS && !isChatCreator && !showRecording)
-                  ? null
-                  : !isChatCreator && !showRecording
-                      ? context.theme.colorScheme.outline
-                      : context.theme.colorScheme.primary.withValues(alpha: 0.4),
-          shape: const CircleBorder(),
-          padding: EdgeInsets.zero,
-          fixedSize: buttonSize,
-          maximumSize: buttonSize,
-          minimumSize: buttonSize,
-          tapTargetSize: isIOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
-        ),
-        child: SizedBox(
-          width: buttonSize.width,
-          height: buttonSize.height,
-          child: Center(
-            child: !isChatCreator && !showRecording
-                ? Icon(
-                    isIOS
-                        ? CupertinoIcons.mic_fill
-                        : isMaterial
-                            ? Icons.graphic_eq
-                            : Icons.mic_none,
-                    color: isIOS
-                        ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
-                        : isMaterial
-                            ? context.theme.colorScheme.onPrimaryContainer
-                            : context.theme.colorScheme.onSurfaceVariant,
-                    size: isIOS ? 18 : 22,
-                  )
-                : Icon(
-                    isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
-                    color: isIOS
-                        ? context.theme.colorScheme.primary
-                        : isMaterial
-                            ? context.theme.colorScheme.onErrorContainer
-                            : context.theme.colorScheme.onSurfaceVariant,
-                    size: isIOS ? 15 : 22,
-                  ),
-          ),
-        ),
-        onPressed: () async {
-          if (controller == null) return;
-          controller!.onUserChatInteraction(immediate: true);
-          controller!.showRecording.toggle();
+      return Listener(
+        onPointerDown: (_) => _setPressed(true),
+        onPointerUp: (_) => _setPressed(false),
+        onPointerCancel: (_) => _setPressed(false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.96 : 1.0,
+          duration: const Duration(milliseconds: 90),
+          curve: Curves.easeOutCubic,
+          child: TextButton(
+            key: const Key('voice-record-button'),
+            style: TextButton.styleFrom(
+              backgroundColor: isMaterial && !isChatCreator
+                  ? (showRecording
+                      ? context.theme.colorScheme.errorContainer
+                      : context.theme.colorScheme.primaryContainer)
+                  : !isIOS || (isIOS && !isChatCreator && !showRecording)
+                      ? null
+                      : !isChatCreator && !showRecording
+                          ? context.theme.colorScheme.outline
+                          : context.theme.colorScheme.primary.withValues(alpha: 0.4),
+              shape: const CircleBorder(),
+              padding: EdgeInsets.zero,
+              fixedSize: buttonSize,
+              maximumSize: buttonSize,
+              minimumSize: buttonSize,
+              tapTargetSize: isIOS ? MaterialTapTargetSize.shrinkWrap : MaterialTapTargetSize.padded,
+            ),
+            child: SizedBox(
+              width: buttonSize.width,
+              height: buttonSize.height,
+              child: Center(
+                child: !isChatCreator && !showRecording
+                    ? Icon(
+                        isIOS
+                            ? CupertinoIcons.mic_fill
+                            : isMaterial
+                                ? Icons.graphic_eq
+                                : Icons.mic_none,
+                        color: isIOS
+                            ? context.theme.colorScheme.outline.withValues(alpha: 0.8)
+                            : isMaterial
+                                ? context.theme.colorScheme.onPrimaryContainer
+                                : context.theme.colorScheme.onSurfaceVariant,
+                        size: isIOS ? 18 : 24,
+                      )
+                    : Icon(
+                        isIOS ? CupertinoIcons.stop_fill : Icons.stop_circle,
+                        color: isIOS
+                            ? context.theme.colorScheme.primary
+                            : isMaterial
+                                ? context.theme.colorScheme.onErrorContainer
+                                : context.theme.colorScheme.onSurfaceVariant,
+                        size: isIOS ? 15 : 24,
+                      ),
+              ),
+            ),
+            onPressed: () async {
+              if (controller == null) return;
+              controller.onUserChatInteraction(immediate: true);
+              controller.showRecording.toggle();
 
-          if (controller!.showRecording.value) {
-            if (controller!.isDictating.value) {
-              await controller!.stopDictation?.call();
-            }
-            // Start recording
-            if (isWeb) {
-              try {
-                final hasPerm = await audioRecorder.hasPermission();
-                if (!hasPerm) {
-                  controller!.showRecording.value = false;
-                  showSnackbar(
-                    "Error",
-                    "Microphone access was denied. Please allow microphone permissions in your browser.",
-                    type: SnackbarType.error,
-                  );
+              if (controller.showRecording.value) {
+                if (controller.isDictating.value) {
+                  await controller.stopDictation?.call();
+                }
+                // Start recording
+                if (widget.isWeb) {
+                  try {
+                    final hasPerm = await audioRecorder.hasPermission();
+                    if (!hasPerm) {
+                      controller.showRecording.value = false;
+                      showSnackbar(
+                        "Error",
+                        "Microphone access was denied. Please allow microphone permissions in your browser.",
+                        type: SnackbarType.error,
+                      );
+                      return;
+                    }
+                    final encoder = await pickWebAudioEncoder(audioRecorder);
+                    await audioRecorder.start(
+                      RecordConfig(encoder: encoder, bitRate: 128000),
+                      path: '',
+                    );
+                    if (!await audioRecorder.isRecording()) {
+                      controller.showRecording.value = false;
+                      showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
+                          type: SnackbarType.error);
+                    } else if (SettingsSvc.settings.soundVolume.value > 0) {
+                      unawaited(playAppSound(
+                        AppSounds.recordingStart,
+                        volume: SettingsSvc.settings.soundVolume.value / 100.0,
+                      ));
+                    }
+                  } catch (e, stack) {
+                    controller.showRecording.value = false;
+                    showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
+                        type: SnackbarType.error);
+                    Logger.error("Error starting web recording", error: e, trace: stack);
+                  }
                   return;
                 }
-                final encoder = await pickWebAudioEncoder(audioRecorder);
-                await audioRecorder.start(
-                  RecordConfig(encoder: encoder, bitRate: 128000),
-                  path: '',
-                );
-                if (!await audioRecorder.isRecording()) {
-                  controller!.showRecording.value = false;
+                if (widget.isDesktop) {
+                  try {
+                    File temp = File(join(
+                      FilesystemSvc.appDocDir.path,
+                      "temp",
+                      "recorder",
+                      "${controller.chat.guid.characters.where((c) => c.isAlphabetOnly || c.isNumericOnly).join()}.m4a",
+                    ));
+                    temp.createSync(recursive: true);
+                    // Windows Media Foundation AAC encoder strictly supports up to 192 kbps (192000 bps).
+                    // Requesting an unsupported bitrate causes MF_E_INVALIDMEDIATYPE (0xC00D36B4).
+                    await audioRecorder.start(const RecordConfig(bitRate: 192000), path: temp.path);
+                    if (SettingsSvc.settings.soundVolume.value > 0) {
+                      unawaited(playAppSound(
+                        AppSounds.recordingStart,
+                        volume: SettingsSvc.settings.soundVolume.value / 100.0,
+                      ));
+                    }
+                  } catch (e, stack) {
+                    controller.showRecording.value = false;
+                    showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
+                        type: SnackbarType.error);
+                    Logger.error("Error starting desktop recording", error: e, trace: stack);
+                  }
+                  return;
+                }
+                try {
+                  await recorderController!.record(
+                    recorderSettings: const RecorderSettings(
+                      sampleRate: 44100,
+                      bitRate: 320000,
+                    ),
+                  );
+                  // If the recorder still isn't in a recording state after the call,
+                  // treat it as a failure and reset the UI.
+                  if (!recorderController.isRecording) {
+                    controller.showRecording.value = false;
+                    showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
+                        type: SnackbarType.error);
+                  } else if (SettingsSvc.settings.soundVolume.value > 0) {
+                    unawaited(playAppSound(
+                      AppSounds.recordingStart,
+                      volume: SettingsSvc.settings.soundVolume.value / 100.0,
+                    ));
+                  }
+                } catch (e, stack) {
+                  controller.showRecording.value = false;
                   showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
                       type: SnackbarType.error);
-                } else if (SettingsSvc.settings.soundVolume.value > 0) {
-                  unawaited(playAppSound(
-                    AppSounds.recordingStart,
-                    volume: SettingsSvc.settings.soundVolume.value / 100.0,
-                  ));
+                  Logger.error("Error starting recording", error: e, trace: stack);
                 }
-              } catch (e, stack) {
-                controller!.showRecording.value = false;
-                showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
-                    type: SnackbarType.error);
-                Logger.error("Error starting web recording", error: e, trace: stack);
-              }
-              return;
-            }
-            if (isDesktop) {
-              try {
-                File temp = File(join(
-                  FilesystemSvc.appDocDir.path,
-                  "temp",
-                  "recorder",
-                  "${controller!.chat.guid.characters.where((c) => c.isAlphabetOnly || c.isNumericOnly).join()}.m4a",
-                ));
-                temp.createSync(recursive: true);
-                // Windows Media Foundation AAC encoder strictly supports up to 192 kbps (192000 bps).
-                // Requesting an unsupported bitrate causes MF_E_INVALIDMEDIATYPE (0xC00D36B4).
-                await audioRecorder.start(const RecordConfig(bitRate: 192000), path: temp.path);
+              } else {
+                // Stop recording and show dialog
+                final String? stoppedPath;
+                late final PlatformFile file;
+
+                if (widget.isWeb) {
+                  try {
+                    stoppedPath = await audioRecorder.stop();
+                  } catch (e, stack) {
+                    showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                    Logger.error("Error stopping web recording", error: e, trace: stack);
+                    return;
+                  }
+                  if (stoppedPath == null) {
+                    showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                    return;
+                  }
+                  ({Uint8List bytes, String mimeType})? blobData;
+                  try {
+                    blobData = await readWebBlobUrlBytes(stoppedPath);
+                  } catch (e, stack) {
+                    Logger.error("Error reading web recording blob", error: e, trace: stack);
+                  } finally {
+                    revokeWebObjectUrl(stoppedPath);
+                  }
+                  if (blobData == null || blobData.bytes.isEmpty) {
+                    showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                    return;
+                  }
+                  final ext = audioExtensionForMime(blobData.mimeType);
+                  file = PlatformFile(
+                    name: "voice_memo_${DateTime.now().millisecondsSinceEpoch}.$ext",
+                    bytes: blobData.bytes,
+                    size: blobData.bytes.length,
+                  );
+                } else if (widget.isDesktop) {
+                  stoppedPath = await audioRecorder.stop();
+                  if (stoppedPath == null) {
+                    showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                    return;
+                  }
+                  final _file = File(stoppedPath);
+                  file = PlatformFile(
+                    name: basename(_file.path),
+                    path: _file.path,
+                    bytes: await _file.readAsBytes(),
+                    size: await _file.length(),
+                  );
+                } else {
+                  stoppedPath = await recorderController!.stop();
+                  if (stoppedPath == null) {
+                    showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
+                    return;
+                  }
+                  final _file = File(stoppedPath);
+                  file = PlatformFile(
+                    name: basename(_file.path),
+                    path: _file.path,
+                    bytes: await _file.readAsBytes(),
+                    size: await _file.length(),
+                  );
+                }
                 if (SettingsSvc.settings.soundVolume.value > 0) {
                   unawaited(playAppSound(
-                    AppSounds.recordingStart,
+                    AppSounds.recordingStop,
                     volume: SettingsSvc.settings.soundVolume.value / 100.0,
                   ));
                 }
-              } catch (e, stack) {
-                controller!.showRecording.value = false;
-                showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
-                    type: SnackbarType.error);
-                Logger.error("Error starting desktop recording", error: e, trace: stack);
-              }
-              return;
-            }
-            try {
-              await recorderController!.record(
-                recorderSettings: const RecorderSettings(
-                  sampleRate: 44100,
-                  bitRate: 320000,
-                ),
-              );
-              // If the recorder still isn't in a recording state after the call,
-              // treat it as a failure and reset the UI.
-              if (!recorderController!.isRecording) {
-                controller!.showRecording.value = false;
-                showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
-                    type: SnackbarType.error);
-              } else if (SettingsSvc.settings.soundVolume.value > 0) {
-                unawaited(playAppSound(
-                  AppSounds.recordingStart,
-                  volume: SettingsSvc.settings.soundVolume.value / 100.0,
-                ));
-              }
-            } catch (e, stack) {
-              controller!.showRecording.value = false;
-              showSnackbar("Error", "Failed to start recording. Please check microphone permissions.",
-                  type: SnackbarType.error);
-              Logger.error("Error starting recording", error: e, trace: stack);
-            }
-          } else {
-            // Stop recording and show dialog
-            final String? stoppedPath;
-            late final PlatformFile file;
 
-            if (isWeb) {
-              try {
-                stoppedPath = await audioRecorder.stop();
-              } catch (e, stack) {
-                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
-                Logger.error("Error stopping web recording", error: e, trace: stack);
-                return;
-              }
-              if (stoppedPath == null) {
-                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
-                return;
-              }
-              ({Uint8List bytes, String mimeType})? blobData;
-              try {
-                blobData = await readWebBlobUrlBytes(stoppedPath);
-              } catch (e, stack) {
-                Logger.error("Error reading web recording blob", error: e, trace: stack);
-              } finally {
-                revokeWebObjectUrl(stoppedPath);
-              }
-              if (blobData == null || blobData.bytes.isEmpty) {
-                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
-                return;
-              }
-              final ext = audioExtensionForMime(blobData.mimeType);
-              file = PlatformFile(
-                name: "voice_memo_${DateTime.now().millisecondsSinceEpoch}.$ext",
-                bytes: blobData.bytes,
-                size: blobData.bytes.length,
-              );
-            } else if (isDesktop) {
-              stoppedPath = await audioRecorder.stop();
-              if (stoppedPath == null) {
-                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
-                return;
-              }
-              final _file = File(stoppedPath);
-              file = PlatformFile(
-                name: basename(_file.path),
-                path: _file.path,
-                bytes: await _file.readAsBytes(),
-                size: await _file.length(),
-              );
-            } else {
-              stoppedPath = await recorderController!.stop();
-              if (stoppedPath == null) {
-                showSnackbar("Error", "Failed to save voice memo. Please try again.", type: SnackbarType.error);
-                return;
-              }
-              final _file = File(stoppedPath);
-              file = PlatformFile(
-                name: basename(_file.path),
-                path: _file.path,
-                bytes: await _file.readAsBytes(),
-                size: await _file.length(),
-              );
-            }
-            if (SettingsSvc.settings.soundVolume.value > 0) {
-              unawaited(playAppSound(
-                AppSounds.recordingStop,
-                volume: SettingsSvc.settings.soundVolume.value / 100.0,
-              ));
-            }
+                final String path = stoppedPath;
+                if (!context.mounted) return;
 
-            final String path = stoppedPath;
-            if (!context.mounted) return;
-
-            await showBBDialog(
-              context: context,
-              barrierDismissible: false,
-              title: "Send it?",
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    "Review your audio snippet before sending it",
-                    style: context.theme.textTheme.bodyLarge,
+                await showBBDialog(
+                  context: context,
+                  barrierDismissible: false,
+                  title: "Send it?",
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        "Review your audio snippet before sending it",
+                        style: context.theme.textTheme.bodyLarge,
+                      ),
+                      Container(height: 10.0),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: context.width * 0.6),
+                        child: AudioPlayer(
+                          key: Key("AudioMessage-$path"),
+                          file: file,
+                          attachment: null,
+                        ),
+                      )
+                    ],
                   ),
-                  Container(height: 10.0),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: context.width * 0.6),
-                    child: AudioPlayer(
-                      key: Key("AudioMessage-$path"),
-                      file: file,
-                      attachment: null,
+                  actions: <BBDialogAction>[
+                    BBDialogAction(
+                      text: "Discard",
+                      isDestructive: true,
+                      onPressed: () {
+                        widget.onDeleteRecording(path);
+                        Navigator.of(context, rootNavigator: true).pop();
+                      },
                     ),
-                  )
-                ],
-              ),
-              actions: <BBDialogAction>[
-                BBDialogAction(
-                  text: "Discard",
-                  isDestructive: true,
-                  onPressed: () {
-                    onDeleteRecording(path);
-                    Navigator.of(context, rootNavigator: true).pop();
-                  },
-                ),
-                BBDialogAction(
-                  text: "Send",
-                  isDefault: true,
-                  onPressed: () async {
-                    controller!.onUserChatInteraction(immediate: true);
-                    await controller!.send(SendData(
-                      attachments: [file],
-                      text: "",
-                      subject: "",
-                      isAudioMessage: true,
-                    ));
-                    onDeleteRecording(path);
-                    Navigator.of(context, rootNavigator: true).pop();
-                  },
-                ),
-              ],
-            );
-          }
-        },
+                    BBDialogAction(
+                      text: "Send",
+                      isDefault: true,
+                      onPressed: () async {
+                        controller.onUserChatInteraction(immediate: true);
+                        await controller.send(SendData(
+                          attachments: [file],
+                          text: "",
+                          subject: "",
+                          isAudioMessage: true,
+                        ));
+                        widget.onDeleteRecording(path);
+                        Navigator.of(context, rootNavigator: true).pop();
+                      },
+                    ),
+                  ],
+                );
+              }
+            },
+          ),
+        ),
       );
     });
   }

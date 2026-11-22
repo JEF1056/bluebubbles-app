@@ -37,6 +37,7 @@ class PlaceFaceTimeCallHandler : MethodCallHandlerImpl() {
         val address: String? = call.argument("address")
         val callerName: String? = call.argument("caller_name")
         val isTelephony: Boolean = call.argument("is_telephony") ?: false
+        val isVideo: Boolean = call.argument("is_video") ?: false
         if (address.isNullOrBlank()) {
             result.success(false)
             return
@@ -45,7 +46,8 @@ class PlaceFaceTimeCallHandler : MethodCallHandlerImpl() {
             context = context,
             address = address,
             callerName = callerName,
-            isTelephony = isTelephony
+            isTelephony = isTelephony,
+            isVideo = isVideo
         )
         result.success(placed)
     }
@@ -97,13 +99,15 @@ class AnswerFaceTimeAudioHandler : MethodCallHandlerImpl() {
         val callerName: String = (call.argument<String>("caller_name") ?: "").ifBlank { "Unknown Caller" }
         val callerAddress: String? = call.argument("caller_address")
         val isTelephony: Boolean = call.argument("is_telephony") ?: false
+        val isVideo: Boolean = call.argument("is_video") ?: false
         val routed = FaceTimeConnectionService.addIncomingCall(
             context = context,
             callUuid = callUuid,
             callerName = callerName,
             address = callerAddress,
             autoAnswer = true,
-            isTelephony = isTelephony
+            isTelephony = isTelephony,
+            isVideo = isVideo
         )
         if (routed) {
             cancelIncomingCallNotifications(context, callUuid)
@@ -194,5 +198,124 @@ class SetFaceTimeMutedHandler : MethodCallHandlerImpl() {
         }
         val muted = call.argument<Boolean>("muted") ?: false
         result.success(FaceTimeConnectionService.setCallMuted(callUuid, muted))
+    }
+}
+
+class SetFaceTimeSpeakerHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "set-facetime-speaker"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        val enabled = call.argument<Boolean>("enabled") ?: call.argument<Boolean>("speaker") ?: false
+        result.success(FaceTimeConnectionService.setCallSpeakerphone(context, callUuid, enabled))
+    }
+}
+
+class ToggleFaceTimeSpeakerHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "toggle-facetime-speaker"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        val next = !FaceTimeConnectionService.isCallSpeakerphoneOn(context, callUuid)
+        FaceTimeConnectionService.setCallSpeakerphone(context, callUuid, next)
+        result.success(next)
+    }
+}
+
+class IsFaceTimeSpeakerOnHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "is-facetime-speaker-on"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        result.success(FaceTimeConnectionService.isCallSpeakerphoneOn(context, callUuid))
+    }
+}
+
+class GetFaceTimeVideoTextureHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "get-facetime-video-texture"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        val textureId = try {
+            FaceTimeConnectionService.getCallVideoTextureId(callUuid)
+        } catch (_: Exception) {
+            null
+        }
+        result.success(textureId)
+    }
+}
+
+class GetFaceTimeLocalVideoTextureHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "get-facetime-local-video-texture"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        val textureId = try {
+            FaceTimeConnectionService.getCallLocalVideoTextureId(callUuid)
+        } catch (_: Exception) {
+            null
+        }
+        result.success(textureId)
+    }
+}
+
+class SetFaceTimeCameraEnabledHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "set-facetime-camera-enabled"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        val enabled = call.argument<Boolean>("enabled") ?: false
+        result.success(FaceTimeConnectionService.setCallCameraEnabled(callUuid, enabled))
+    }
+}
+
+class FlipFaceTimeCameraHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "flip-facetime-camera"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        result.success(FaceTimeConnectionService.flipCallCamera(callUuid))
     }
 }

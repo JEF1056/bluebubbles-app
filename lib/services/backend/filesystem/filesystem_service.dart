@@ -132,7 +132,11 @@ class FilesystemService {
 
   /// Strips non-alphanumeric characters from [guid] so it is safe for use as
   /// a filesystem path component (matches the pattern used by AvatarCrop, etc.).
-  static String sanitizeGuid(String guid) => guid.characters.where((c) => c.isAlphabetOnly || c.isNumericOnly).join();
+  static String sanitizeGuid(String? guid) {
+    if (guid == null || guid.isEmpty) return 'unknown';
+    final sanitized = guid.characters.where((c) => c.isAlphabetOnly || c.isNumericOnly).join();
+    return sanitized.isEmpty ? 'unknown' : sanitized;
+  }
 
   /// Returns the canonical path where a chat's group avatar is stored.
   /// The file does not necessarily exist yet; callers must create it if needed.

@@ -461,8 +461,20 @@ fun WearSyncPill(
     visible: Boolean,
     modifier: Modifier = Modifier,
     label: String = "Syncing…",
-    overlay: Boolean = false
+    overlay: Boolean = false,
+    debounceMs: Long = 300L
 ) {
+    // Match Flutter's 300ms debounce so fast refreshes don't flash a pill over cached content.
+    var debouncedVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(visible, debounceMs) {
+        if (!visible) {
+            debouncedVisible = false
+        } else {
+            if (debounceMs > 0L) delay(debounceMs)
+            debouncedVisible = true
+        }
+    }
+
     val palette = LocalWearPalette.current
     val reducedMotion = rememberReducedMotion()
     val enter = when {
@@ -477,7 +489,7 @@ fun WearSyncPill(
     }
 
     AnimatedVisibility(
-        visible = visible,
+        visible = debouncedVisible,
         enter = enter,
         exit = exit,
         modifier = modifier

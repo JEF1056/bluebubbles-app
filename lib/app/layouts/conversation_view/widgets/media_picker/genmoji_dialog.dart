@@ -227,8 +227,13 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
       backgroundColor: scheme.surfaceContainerHigh,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 6),
-      content: SizedBox(width: 300, child: content),
+      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
+      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 280, maxWidth: 340),
+        child: content,
+      ),
       actions: _actions.map((a) {
         if (a.isDefault) {
           return FilledButton(
@@ -268,8 +273,13 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
             constraints: const BoxConstraints(maxWidth: 220),
             child: AspectRatio(
               aspectRatio: 1,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(24),
+              child: Container(
+                foregroundDecoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.45)),
+                ),
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 350),
                   child: KeyedSubtree(key: ValueKey(_phase), child: _buildCanvas(context)),
@@ -355,7 +365,21 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
         hintText: "Describe a Genmoji",
         // The 500-character cap is a backstop, not something worth a counter under every prompt.
         counterText: "",
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        filled: true,
+        fillColor: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: context.theme.colorScheme.primary, width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         isDense: true,
       ),
     );
@@ -374,7 +398,7 @@ class _CanvasMessage extends StatelessWidget {
     return ColoredBox(
       color: context.theme.colorScheme.surface,
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -410,13 +434,17 @@ class _GenmojiNebula extends StatefulWidget {
 }
 
 class _GenmojiNebulaState extends State<_GenmojiNebula> with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))
-    ..repeat(reverse: true);
+  late final AnimationController _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
   Map<String, dynamic>? _config;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      if (_pulse.isAnimating) _pulse.stop();
+    } else if (!_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    }
     // Built once per showing: the particle set is keyed on its config, so recomputing it on
     // every rebuild would restart the animation.
     _config ??= {

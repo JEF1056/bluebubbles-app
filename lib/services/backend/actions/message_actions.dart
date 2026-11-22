@@ -31,14 +31,18 @@ class MessageActions {
   static Future<List<Message>?> getMessages() async {
     // Fetch a message with a limit of 1 using ObjectBox
     final oneDayAgo = DateTime.now().subtract(const Duration(days: 1));
-    final messages = (await Database.messages
+    final query = Database.messages
         .query(Message_.dateCreated.greaterThan(oneDayAgo.millisecondsSinceEpoch))
-        .build()
-        .findAsync());
-    if (messages.isNotEmpty) {
-      return messages;
+        .build();
+    try {
+      final messages = await query.findAsync();
+      if (messages.isNotEmpty) {
+        return messages;
+      }
+      return null;
+    } finally {
+      query.close();
     }
-    return null;
   }
 
   static Future<int> replaceMessage(dynamic data) async {
@@ -161,7 +165,7 @@ class MessageActions {
         }
       }
 
-      associatedMessages.sort((a, b) => a.originalROWID!.compareTo(b.originalROWID!));
+      associatedMessages.sort((a, b) => (a.originalROWID ?? 0).compareTo(b.originalROWID ?? 0));
 
       return {
         'associatedMessages': associatedMessages.map((e) => e.toMap()).toList(),
@@ -253,7 +257,14 @@ class MessageActions {
       try {
         if (inputChat != null) inputMessage.chat.target = inputChat;
         inputMessage.id = messageBox.put(inputMessage);
-      } on UniqueViolationException catch (_) {}
+      } on UniqueViolationException catch (_) {
+        final conflictQuery = messageBox.query(Message_.guid.equals(inputMessage.guid ?? '')).build();
+        conflictQuery.limit = 1;
+        final conflict = conflictQuery.findFirst();
+        conflictQuery.close();
+        if (conflict?.id == null) rethrow;
+        inputMessage.id = conflict!.id;
+      }
 
       // Return just the ID for efficient transfer across isolates
       return inputMessage.id!;

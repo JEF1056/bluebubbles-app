@@ -110,13 +110,18 @@ class CloudMessagingService {
       final response = await HttpSvc.fcm.getServiceAccount().catchError((err) {
         if (err is Response) {
           return err;
+        } else if (err is DioException && err.response != null) {
+          return err.response!;
         } else {
-          return Response(requestOptions: RequestOptions(), statusCode: 500);
+          return Response(
+            requestOptions: RequestOptions(),
+            statusCode: err is DioException ? err.response?.statusCode ?? 500 : 500,
+          );
         }
       });
 
       // If we get valid FCM data, redo the FCM auth, otherwise error out
-      if (response.statusCode == 200 && response.data['data'] is Map<String, dynamic>) {
+      if (response.statusCode == 200 && response.data is Map && response.data['data'] is Map<String, dynamic>) {
         Map<String, dynamic> fcmMeta = response.data['data'];
         Logger.info('Received FCM data from the server. Attempting to re-authenticate', tag: 'FCM-Auth');
 

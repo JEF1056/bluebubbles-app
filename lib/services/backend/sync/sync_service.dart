@@ -37,12 +37,16 @@ class SyncService {
   );
   Worker? _setupWorker;
   Worker? _syncingWorker;
+  bool _inManagedIncrementalSync = false;
 
   SyncService() {
     _syncingWorker = ever<bool>(isIncrementalSyncing, (syncing) {
       if (syncing) {
         _syncSetupGate();
         _statusTracker.onSyncStarted();
+      } else if (!_inManagedIncrementalSync) {
+        // Clear the syncing hairline for callers that toggle isIncrementalSyncing directly (e.g. Connection Panel).
+        _statusTracker.onSyncFinished(success: true);
       }
     });
   }
@@ -237,8 +241,10 @@ class SyncService {
     _catchUpTimer = null;
 
     _lastIncrementalSyncTimestamp = now;
+    _inManagedIncrementalSync = true;
     isIncrementalSyncing.value = true;
     bool chatSyncFailed = false;
+    bool statusFinished = false;
 
     try {
       // Per-page tracking: record message IDs and chat subtitle message IDs that were
@@ -379,6 +385,10 @@ class SyncService {
         }
       }
 
+      // Stop the global syncing bar once chat/message data is fresh; background contact sync should not keep it spinning.
+      _statusTracker.onSyncFinished(success: !chatSyncFailed);
+      statusFinished = true;
+
       var contactSyncResult = true;
       var contactUploadResult = true;
       final address = SettingsSvc.settings.serverAddress.value;
@@ -435,8 +445,11 @@ class SyncService {
         if (contactUploadResult) clearErrorIssue('contact_sync_upload');
       }
     } finally {
-      _statusTracker.onSyncFinished(success: !chatSyncFailed);
+      if (!statusFinished) {
+        _statusTracker.onSyncFinished(success: !chatSyncFailed);
+      }
       isIncrementalSyncing.value = false;
+      _inManagedIncrementalSync = false;
       if (_retryImmediatelyAfterInFlight) {
         final nextUseGlobalIsolate = _pendingUseGlobalIsolate || useGlobalIsolate;
         _retryImmediatelyAfterInFlight = false;

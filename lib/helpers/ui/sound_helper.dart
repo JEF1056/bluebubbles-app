@@ -87,18 +87,42 @@ Future<void> playAppSound(
 
     if (kIsDesktop) {
       final player = Player();
-      player.stream.completed
-          .firstWhere((done) => done)
-          .then((_) => Future.delayed(const Duration(milliseconds: 500), player.dispose));
-      await player.setVolume(clampedVol * 100.0);
-      await player.open(Media(path));
+      var disposed = false;
+      Future<void> disposePlayer() async {
+        if (disposed) return;
+        disposed = true;
+        await player.dispose();
+      }
+
+      unawaited(
+        player.stream.completed
+            .firstWhere((done) => done)
+            .timeout(const Duration(seconds: 15))
+            .catchError((Object _) => true)
+            .then((_) => Future.delayed(const Duration(milliseconds: 500), disposePlayer)),
+      );
+      try {
+        await player.setVolume(clampedVol * 100.0);
+        await player.open(Media(path));
+      } catch (_) {
+        await disposePlayer();
+        rethrow;
+      }
     } else {
       final controller = PlayerController();
-      await controller.preparePlayer(path: path, volume: clampedVol, shouldExtractWaveform: false);
-      await controller.startPlayer();
-      unawaited(
-        controller.onCompletion.first.whenComplete(controller.dispose).catchError((Object _) {}),
-      );
+      try {
+        await controller.preparePlayer(path: path, volume: clampedVol, shouldExtractWaveform: false);
+        await controller.startPlayer();
+        unawaited(
+          controller.onCompletion.first
+              .timeout(const Duration(seconds: 15))
+              .catchError((Object _) {})
+              .whenComplete(controller.dispose),
+        );
+      } catch (_) {
+        controller.dispose();
+        rethrow;
+      }
     }
   } catch (e, stack) {
     Logger.warn('Failed to play app sound $assetPath', error: e, trace: stack);

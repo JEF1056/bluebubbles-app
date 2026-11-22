@@ -37,46 +37,121 @@ class ConversationView extends StatefulWidget {
   final bool fromChatCreator;
   final bool autoOpened;
 
-  /// Builds the conversation body column and keyboard-inset wrapper. Exposed
-  /// for layout overlap tests across mobile/keyboard and web viewport sizes.
+  /// Builds the conversation body layout and keyboard-inset wrapper.
+  ///
+  /// When [floatingComposer] is true (Material skin on Android & Web), [messagesArea]
+  /// extends underneath [composer] while [scrollDownButton] and [onComposerHeightChanged]
+  /// adapt synchronously as [composer] expands on multiline text, replies, or attachments.
   @visibleForTesting
   static Widget buildBodyLayout({
     required Widget messagesArea,
     required Widget composer,
+    Widget? scrollDownButton,
+    bool floatingComposer = false,
+    ValueChanged<double>? onComposerHeightChanged,
   }) {
-    // Use the same Column layout across all skins so MessagesView and ScrollDownButton
-    // always resize cleanly above the composer without hardcoded bottom padding, and cap
-    // composer height below the extended AppBar on tight mobile/web viewports.
-    final Widget bodyChild = LayoutBuilder(
-      builder: (context, constraints) {
-        final topPadding = MediaQuery.paddingOf(context).top;
-        final usableHeight = math.max(0.0, constraints.maxHeight - topPadding);
-        final maxComposerHeight = usableHeight > 260.0
-            ? math.max(180.0, usableHeight - 80.0)
-            : usableHeight;
-        return Column(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            Expanded(child: messagesArea),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: maxComposerHeight),
-              child: composer,
-            ),
-          ],
-        );
-      },
-    );
+    if (!floatingComposer) {
+      final Widget stackedMessages = scrollDownButton != null
+          ? Stack(children: [messagesArea, scrollDownButton])
+          : messagesArea;
+      final Widget bodyChild = LayoutBuilder(
+        builder: (context, constraints) {
+          final topPadding = MediaQuery.paddingOf(context).top;
+          final usableHeight = math.max(0.0, constraints.maxHeight - topPadding);
+          final maxComposerHeight = usableHeight > 260.0
+              ? math.max(180.0, usableHeight - 80.0)
+              : usableHeight;
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Expanded(child: stackedMessages),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxComposerHeight),
+                child: composer,
+              ),
+            ],
+          );
+        },
+      );
+      return Builder(
+        builder: (context) {
+          final viewInsetsBottom = MediaQuery.viewInsetsOf(context).bottom;
+          final bottomInset =
+              viewInsetsBottom > 0 ? viewInsetsBottom : MediaQuery.viewPaddingOf(context).bottom;
+          return Padding(
+            padding: EdgeInsets.only(bottom: bottomInset),
+            child: bodyChild,
+          );
+        },
+      );
+    }
+
     return Builder(
       builder: (context) {
         final viewInsetsBottom = MediaQuery.viewInsetsOf(context).bottom;
-        final bottomInset =
-            viewInsetsBottom > 0 ? viewInsetsBottom : MediaQuery.viewPaddingOf(context).bottom;
+        final bottomSafeInset =
+            math.max(0.0, MediaQuery.viewPaddingOf(context).bottom - viewInsetsBottom);
+        final topPadding = MediaQuery.paddingOf(context).top;
         return Padding(
-          padding: EdgeInsets.only(bottom: bottomInset),
-          child: bodyChild,
+          padding: EdgeInsets.only(bottom: viewInsetsBottom),
+          child: CustomMultiChildLayout(
+            delegate: _FloatingComposerLayoutDelegate(
+              topPadding: topPadding,
+              bottomSafeInset: bottomSafeInset,
+              onComposerHeightChanged: onComposerHeightChanged,
+            ),
+            children: [
+              LayoutId(id: _FloatingComposerSlot.messages, child: messagesArea),
+              if (scrollDownButton != null)
+                LayoutId(id: _FloatingComposerSlot.scrollDown, child: scrollDownButton),
+              LayoutId(id: _FloatingComposerSlot.composer, child: composer),
+            ],
+          ),
         );
       },
     );
+  }
+
+  /// Seed resting bottom padding for the floating composer before frame 0 so
+  /// edge-to-edge Android (non-zero `viewPadding.bottom`) does not jump after layout.
+  @visibleForTesting
+  static double initialComposerBottomPadding(
+    BuildContext context, {
+    double baseComposerHeight = 68.0,
+  }) {
+    final mq = context.getInheritedWidgetOfExactType<MediaQuery>()?.data;
+    if (mq == null) return baseComposerHeight;
+    final bottomSafeInset = math.max(0.0, mq.viewPadding.bottom - mq.viewInsets.bottom);
+    return baseComposerHeight + bottomSafeInset;
+  }
+
+  /// Updates [bottomPadding] to [targetHeight] and compensates [scrollController]
+  /// so bottom messages stay visible near the bottom (`offset <= 24.0`) and
+  /// scrolled history does not jump (`offset > 24.0`).
+  @visibleForTesting
+  static void applyComposerBottomPadding({
+    required ValueNotifier<double> bottomPadding,
+    required double targetHeight,
+    ScrollController? scrollController,
+    double nearBottomThreshold = 24.0,
+  }) {
+    final delta = targetHeight - bottomPadding.value;
+    if (delta.abs() <= 0.5) return;
+    bottomPadding.value = targetHeight;
+
+    if (scrollController == null || !scrollController.hasClients || scrollController.positions.length != 1) {
+      return;
+    }
+    final offset = scrollController.offset;
+    if (offset <= nearBottomThreshold) {
+      if (delta > 0 && offset > 0.0) {
+        scrollController.jumpTo(0.0);
+      } else if (delta < 0 && offset > 0.0) {
+        scrollController.jumpTo(math.max(0.0, offset + delta));
+      }
+    } else {
+      scrollController.jumpTo(math.max(0.0, offset + delta));
+    }
   }
 
   @override
@@ -98,6 +173,29 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   late final Widget _bodyContent;
   late final PreferredSizeWidget _appBar;
   final ValueNotifier<int> _unreadWhileScrolledCount = ValueNotifier<int>(0);
+  // Matches resting single-line Material composer height (48px pill + 20px vertical padding)
+  // so frame 0 has no visible jump before the first layout callback reports exact height.
+  final ValueNotifier<double> _composerBottomPadding = ValueNotifier<double>(68.0);
+  double? _pendingComposerHeight;
+  bool _didInitComposerPadding = false;
+
+  void _onComposerHeightChanged(double height) {
+    if ((height - _composerBottomPadding.value).abs() <= 0.5) return;
+    if (_pendingComposerHeight == height) return;
+    _pendingComposerHeight = height;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final target = _pendingComposerHeight;
+      _pendingComposerHeight = null;
+      if (target != null) {
+        ConversationView.applyComposerBottomPadding(
+          bottomPadding: _composerBottomPadding,
+          targetHeight: target,
+          scrollController: controller.scrollController,
+        );
+      }
+    });
+  }
 
   Chat get chat => widget.chat;
 
@@ -171,23 +269,23 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
         parentController: controller,
       ),
     );
+    final floatingComposer = !iOS && !samsung;
     final bodyLayout = ConversationView.buildBodyLayout(
-      messagesArea: Stack(
-        children: [
-          MessagesView(
-            key: Key(chat.guid),
-            customService: widget.customService,
-            initialScrollToGuid: widget.initialScrollToGuid,
-            controller: controller,
-            unreadWhileScrolledCount: _unreadWhileScrolledCount,
-          ),
-          ScrollDownButton(
-            controller: controller,
-            unreadWhileScrolledCount: _unreadWhileScrolledCount,
-          ),
-        ],
+      messagesArea: MessagesView(
+        key: Key(chat.guid),
+        customService: widget.customService,
+        initialScrollToGuid: widget.initialScrollToGuid,
+        controller: controller,
+        bottomPaddingListenable: floatingComposer ? _composerBottomPadding : null,
+        unreadWhileScrolledCount: _unreadWhileScrolledCount,
+      ),
+      scrollDownButton: ScrollDownButton(
+        controller: controller,
+        unreadWhileScrolledCount: _unreadWhileScrolledCount,
       ),
       composer: composer,
+      floatingComposer: floatingComposer,
+      onComposerHeightChanged: floatingComposer ? _onComposerHeightChanged : null,
     );
     final content = GradientBackground(
       controller: controller,
@@ -195,6 +293,9 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
         clipBehavior: Clip.none,
         children: [
           const Positioned.fill(child: ScreenEffectsWidget()),
+          bodyLayout,
+          // Painted above bodyLayout so messages passing behind the gesture bar do not
+          // show through underneath an open attachment or game picker tray.
           Builder(
             builder: (context) {
               final bottomInset = MediaQuery.paddingOf(context).bottom;
@@ -206,7 +307,9 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                     height: bottomInset,
                     child: IgnorePointer(
                       child: ColoredBox(
-                        color: controller.showAttachmentPicker.value || controller.showGamePicker.value
+                        color: controller.showAttachmentPicker.value ||
+                                controller.showGamePicker.value ||
+                                controller.showTextFormattingPanel.value
                             ? context.theme.colorScheme.surface
                             : Colors.transparent,
                       ),
@@ -214,7 +317,6 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
                   ));
             },
           ),
-          bodyLayout,
           // The body extends behind the header, whose height is in the top padding
           Builder(
             builder: (context) => Positioned(
@@ -247,6 +349,10 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!_didInitComposerPadding) {
+      _didInitComposerPadding = true;
+      _composerBottomPadding.value = ConversationView.initialComposerBottomPadding(context);
+    }
     final route = ModalRoute.of(context);
     if (route != null) NavigationSvc.paneRouteObserver.subscribe(this, route);
   }
@@ -276,6 +382,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   @override
   void dispose() {
     _unreadWhileScrolledCount.dispose();
+    _composerBottomPadding.dispose();
     _sectionWorker.dispose();
     NavigationSvc.paneRouteObserver.unsubscribe(this);
     controller.saveReplyToMessageState(); // P8bda
@@ -386,5 +493,75 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
         );
       }),
     );
+  }
+}
+
+enum _FloatingComposerSlot { messages, scrollDown, composer }
+
+class _FloatingComposerLayoutDelegate extends MultiChildLayoutDelegate {
+  _FloatingComposerLayoutDelegate({
+    required this.topPadding,
+    required this.bottomSafeInset,
+    this.onComposerHeightChanged,
+  });
+
+  final double topPadding;
+  final double bottomSafeInset;
+  final ValueChanged<double>? onComposerHeightChanged;
+
+  @override
+  void performLayout(Size size) {
+    final usableHeight = math.max(0.0, size.height - topPadding - bottomSafeInset);
+    final maxComposerHeight = math.min(
+      math.max(0.0, size.height - bottomSafeInset),
+      usableHeight > 260.0 ? math.max(180.0, usableHeight - 80.0) : usableHeight,
+    );
+
+    Size composerSize = Size.zero;
+    if (hasChild(_FloatingComposerSlot.composer)) {
+      composerSize = layoutChild(
+        _FloatingComposerSlot.composer,
+        BoxConstraints(
+          minWidth: size.width,
+          maxWidth: size.width,
+          minHeight: 0,
+          maxHeight: maxComposerHeight,
+        ),
+      );
+      positionChild(
+        _FloatingComposerSlot.composer,
+        Offset(0, math.max(0.0, size.height - bottomSafeInset - composerSize.height)),
+      );
+    }
+
+    final bottomObstruction = composerSize.height + bottomSafeInset;
+    onComposerHeightChanged?.call(bottomObstruction);
+
+    if (hasChild(_FloatingComposerSlot.messages)) {
+      layoutChild(_FloatingComposerSlot.messages, BoxConstraints.tight(size));
+      positionChild(_FloatingComposerSlot.messages, Offset.zero);
+    }
+
+    if (hasChild(_FloatingComposerSlot.scrollDown)) {
+      final aboveComposer = math.max(0.0, size.height - bottomObstruction);
+      final scrollDownSize = layoutChild(
+        _FloatingComposerSlot.scrollDown,
+        BoxConstraints.loose(Size(size.width, aboveComposer)),
+      );
+      positionChild(
+        _FloatingComposerSlot.scrollDown,
+        Offset(
+          (size.width - scrollDownSize.width) / 2,
+          math.max(0.0, aboveComposer - scrollDownSize.height),
+        ),
+      );
+    }
+  }
+
+  @override
+  bool shouldRelayout(_FloatingComposerLayoutDelegate oldDelegate) {
+    return topPadding != oldDelegate.topPadding ||
+        bottomSafeInset != oldDelegate.bottomSafeInset ||
+        onComposerHeightChanged != oldDelegate.onComposerHeightChanged;
   }
 }

@@ -1457,12 +1457,13 @@ class Store {
       onAttach: (c, s) {
         c.dbLatestMessage._syncBeforeOwnerPut(s);
         c.handles._initStandalone(s, c.handles._effectiveTargetIds(), () => chatBox.put(c));
+        // Auto-put unsaved target items before _encode() so persisted _targetIds include them.
+        c.handles._syncStandaloneIdsFromItems(autoPut: true);
+        c.handles._dirty = false;
         initToOneBacklink(s, c, c.id, c.messages, messageBox, (m) => m.chat, stampUniqueId: true);
         initToManyBacklink(s, c, c.id, c.customGroups, customGroupBox, (g) => g.chats, (x) => x.id);
       },
       afterPut: (c, s) {
-        c.handles._syncStandaloneIdsFromItems(autoPut: true);
-        c.handles._dirty = false;
         c.messages._flushBacklinkPending();
         c.customGroups._flushBacklinkPending();
       },
@@ -1481,8 +1482,6 @@ class Store {
       decode: _Codec.decodeContactV2,
       onAttach: (c, s) {
         c.handles._initStandalone(s, c.handles._effectiveTargetIds(), () => contactBox.put(c));
-      },
-      afterPut: (c, s) {
         c.handles._syncStandaloneIdsFromItems(autoPut: true);
         c.handles._dirty = false;
       },
@@ -1501,8 +1500,6 @@ class Store {
       decode: _Codec.decodeCustomGroup,
       onAttach: (g, s) {
         g.chats._initStandalone(s, g.chats._effectiveTargetIds(), () => customGroupBox.put(g));
-      },
-      afterPut: (g, s) {
         g.chats._syncStandaloneIdsFromItems(autoPut: true);
         g.chats._dirty = false;
       },

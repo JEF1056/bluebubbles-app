@@ -203,11 +203,11 @@ void main() {
         final expectedFill =
             brightness == Brightness.dark ? cs.surfaceContainerHighest : cs.surfaceContainerLowest;
         expect(dec.color, expectedFill);
-        expect(shape.side.color, cs.surface);
+        expect(shape.side.color, ReactionWidget.materialBorderColor(cs, brightness));
       }
     });
 
-    testWidgets('self-reaction highlights with primaryContainer fill', (tester) async {
+    testWidgets('self-reaction highlights with primaryContainer fill and themed primary hairline border', (tester) async {
       SettingsSvc.settings.skin.value = Skins.Material;
       final parent = Message(guid: 'parent-1', text: 'Hi', isFromMe: false, dateCreated: DateTime(2026));
       final ownLike = _rxn(guid: 'r-own', type: ReactionTypes.LIKE, isFromMe: true);
@@ -226,7 +226,19 @@ void main() {
         matching: find.byType(Container),
       )).firstWhere((c) => c.decoration is ShapeDecoration);
       final dec = badgeContainer.decoration! as ShapeDecoration;
-      expect(dec.color, _testTheme().colorScheme.primaryContainer);
+      final cs = _testTheme().colorScheme;
+      expect(dec.color, cs.primaryContainer);
+      expect((dec.shape as MaterialReactionBadgeShape).side.color,
+          ReactionWidget.materialBorderColor(cs, Brightness.light, isOwn: true));
+      // When custom wallpaper is active, fill alpha matches TextBubble (0.86).
+      expect(
+        ReactionWidget.materialFillColor(cs, Brightness.dark, hasWallpaper: true).a,
+        closeTo(ReactionWidget.materialWallpaperAlpha, 0.001),
+      );
+      expect(
+        ReactionWidget.materialFillColor(cs, Brightness.light, isOwn: true, hasWallpaper: true).a,
+        closeTo(ReactionWidget.materialWallpaperAlpha, 0.001),
+      );
     });
 
     testWidgets('multi-reaction merges matching emoji into 36x28 fused count lobe and renders distinct pills side-by-side',
@@ -579,6 +591,41 @@ void main() {
       // Reaction pill must still overlap the actual bubble bottom by -9dp (not float in sticker overhang).
       expect(badgeRect.top, closeTo(bubbleRect.bottom - ReactionHolder.materialBubbleOverlap, 0.5));
       expect(badgeRect.right, closeTo(bubbleRect.right - 4.0, 0.5));
+    });
+
+    testWidgets('centers Material tapback glyph and count lobe inside cutout border', (tester) async {
+      SettingsSvc.settings.skin.value = Skins.Material;
+      final parent = Message(guid: 'parent-center', text: 'Hi', isFromMe: false, dateCreated: DateTime(2026));
+      final r1 = _rxn(guid: 'r-c1', type: ReactionTypes.LOVE, handleId: 1);
+      final r2 = _rxn(guid: 'r-c2', type: ReactionTypes.EMOJI, emoji: '❤️', isFromMe: true);
+      final r3 = _rxn(guid: 'r-c3', type: ReactionTypes.LIKE, handleId: 2);
+      parent.associatedMessages.addAll([r1, r2, r3]);
+      final state = MessageState(parent)..parts.add(MessagePart(part: 0, text: 'Hi'));
+
+      await tester.pumpWidget(_wrapWithScope(
+        state: state,
+        child: ReactionHolder(reactions: [r1, r2, r3]),
+      ));
+      await tester.pumpAndSettle();
+
+      // Single badge (👍): 28x28 — emoji center must match badge center (not shifted by 1.5px border inset).
+      final likeWidget = find.ancestor(of: find.text('👍'), matching: find.byType(ReactionWidget));
+      final likeBadgeRect = tester.getRect(likeWidget);
+      final likeGlyphCenter = tester.getCenter(find.text('👍'));
+      expect(likeGlyphCenter.dx, closeTo(likeBadgeRect.center.dx, 0.1));
+      expect(likeGlyphCenter.dy, closeTo(likeBadgeRect.center.dy, 0.1));
+
+      // Multi badge (❤️ x2): 36x28 — emoji centered in left 28x28 circle, count centered in top-right 14x14 ear.
+      final loveWidget = find.ancestor(of: find.text('❤️'), matching: find.byType(ReactionWidget));
+      final loveBadgeRect = tester.getRect(loveWidget);
+      final loveGlyphCenter = tester.getCenter(find.text('❤️'));
+      expect(loveGlyphCenter.dx, closeTo(loveBadgeRect.left + ReactionWidget.materialBadgeSize / 2, 0.1));
+      expect(loveGlyphCenter.dy, closeTo(loveBadgeRect.top + ReactionWidget.materialBadgeSize / 2, 0.1));
+
+      final countCenter = tester.getCenter(find.text('2'));
+      const earSize = ReactionWidget.materialBadgeSize / 2;
+      expect(countCenter.dx, closeTo(loveBadgeRect.right - earSize / 2, 0.1));
+      expect(countCenter.dy, closeTo(loveBadgeRect.top + earSize / 2, 0.1));
     });
   });
 }

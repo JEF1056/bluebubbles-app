@@ -692,8 +692,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                       cvController: widget.cvController,
                                                                       placed: true,
                                                                     ),
-                                                                    if (!kIsWeb &&
-                                                                        SettingsSvc.getServerDetails().supportsStickers)
+                                                                    if (SettingsSvc.getServerDetails().supportsStickers)
                                                                       Positioned.fill(
                                                                         child: StickerDropTarget(
                                                                           message: message,
@@ -798,7 +797,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
     final propsShowsReplies = canShowReplyPill &&
         !e.isMediaCollection &&
         service.struct.threads(message.guid!, e.part, returnOriginator: false).isNotEmpty;
-    final hasNonReplyProperties = e.isEdited || message.expressiveSendStyleId != null;
+    final hasNonReplyProperties = message.expressiveSendStyleId != null;
 
     final widgets = <Widget>[];
     if (hasNonReplyProperties || (!widget.isReplyThread && threadReplies.isEmpty)) {

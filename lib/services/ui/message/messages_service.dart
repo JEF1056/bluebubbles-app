@@ -1390,7 +1390,9 @@ class MessagesService extends GetxController {
       final newAttGuid = isMultiAttachment ? OutgoingMultiAttachment.tempGuidFor(message.guid!, i) : message.guid!;
 
       // Read bytes while the file is still at the old (pre-rename) path.
-      a.bytes = await File(a.path).readAsBytes();
+      if (!kIsWeb) {
+        a.bytes = await File(a.path).readAsBytes();
+      }
 
       // Move the attachment directory so the file is immediately accessible
       // at the new guid-based path.  This lets _restoreInFlightAttachmentStates

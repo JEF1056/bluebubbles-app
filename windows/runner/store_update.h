@@ -5,11 +5,13 @@
 #include <flutter/method_channel.h>
 #include <windows.h>
 
+#include <atomic>
 #include <memory>
 
 // Channel for Microsoft Store in-app updates. Only finds updates when running
 // as the Store-signed package.
 std::unique_ptr<flutter::MethodChannel<>> CreateStoreUpdateChannel(
-    flutter::BinaryMessenger* messenger, HWND hwnd);
+    flutter::BinaryMessenger* messenger, HWND hwnd,
+    std::shared_ptr<std::atomic<bool>> alive);
 
 #endif  // RUNNER_STORE_UPDATE_H_

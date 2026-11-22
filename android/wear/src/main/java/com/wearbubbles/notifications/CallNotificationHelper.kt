@@ -16,10 +16,15 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.ui.call.IncomingCallActivity
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -39,18 +44,75 @@ data class ActiveCallState(
     val fromPhoneRelay: Boolean,
     val phase: CallPhase,
     val startedAtElapsedMs: Long = 0L,
-    val avatarPath: String? = null
+    val avatarPath: String? = null,
+    val isTelephony: Boolean = false
 )
 
 object CallNotificationHelper {
     private const val TAG = "CallNotificationHelper"
+    internal const val RING_TIMEOUT_MS = 60_000L
     const val ACTION_ANSWER_CALL = "com.wearbubbles.ACTION_ANSWER_CALL"
     const val ACTION_DECLINE_CALL = "com.wearbubbles.ACTION_DECLINE_CALL"
     const val ACTION_END_CALL = "com.wearbubbles.ACTION_END_CALL"
     const val EXTRA_CALL_UUID = "extra_call_uuid"
 
+    private val callScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val ringTimeoutLock = Any()
+    private var ringTimeoutJob: Job? = null
+
     private val _activeCallState = MutableStateFlow<ActiveCallState?>(null)
     val activeCallState: StateFlow<ActiveCallState?> = _activeCallState.asStateFlow()
+
+    internal fun setActiveCallStateForTest(state: ActiveCallState?) {
+        _activeCallState.value = state
+    }
+
+    internal suspend fun tryAnswerCallAudio(
+        callUuid: String,
+        isTelephony: Boolean,
+        relayAnswer: suspend () -> Boolean,
+        standaloneAnswer: suspend (String) -> Boolean
+    ): Boolean {
+        if (relayAnswer()) return true
+        if (isTelephony) return false
+        return standaloneAnswer(callUuid)
+    }
+
+    internal fun scheduleRingTimeout(
+        callUuid: String,
+        timeoutMs: Long = RING_TIMEOUT_MS,
+        scope: CoroutineScope = callScope,
+        onTimeout: (String) -> Unit
+    ): Job {
+        val job = scope.launch {
+            delay(timeoutMs)
+            val current = _activeCallState.value
+            if (current != null && current.callUuid == callUuid && current.phase == CallPhase.RINGING) {
+                onTimeout(callUuid)
+            }
+        }
+        synchronized(ringTimeoutLock) {
+            ringTimeoutJob?.cancel()
+            ringTimeoutJob = job
+        }
+        return job
+    }
+
+    internal fun cancelRingTimeout() {
+        synchronized(ringTimeoutLock) {
+            ringTimeoutJob?.cancel()
+            ringTimeoutJob = null
+        }
+    }
+
+    internal fun incomingFallbackNotificationText(isVideo: Boolean, isTelephony: Boolean): String = when {
+        isTelephony -> "Incoming iPhone Call"
+        isVideo -> "Incoming FaceTime Video"
+        else -> "Incoming FaceTime Audio"
+    }
+
+    internal fun ongoingNotificationText(isTelephony: Boolean): String =
+        if (isTelephony) "iPhone Call • Ongoing" else "FaceTime Audio • Ongoing"
 
     fun showIncomingCall(
         context: Context,
@@ -58,7 +120,8 @@ object CallNotificationHelper {
         callerName: String,
         callerAddress: String,
         isVideo: Boolean,
-        fromPhoneRelay: Boolean
+        fromPhoneRelay: Boolean,
+        isTelephony: Boolean = false
     ) {
         if (callUuid.isBlank()) return
         val appContext = context.applicationContext
@@ -67,16 +130,22 @@ object CallNotificationHelper {
             app?.phoneRelayClient?.getAvatarFile(addr)?.absolutePath
         }
 
+        val effectiveVideo = isVideo && !isTelephony
         val state = ActiveCallState(
             callUuid = callUuid,
-            callerName = callerName.ifBlank { callerAddress.ifBlank { "FaceTime Caller" } },
+            callerName = callerName.ifBlank { callerAddress.ifBlank { if (isTelephony) "iPhone Call" else "FaceTime Caller" } },
             callerAddress = callerAddress,
-            isVideo = isVideo,
+            isVideo = effectiveVideo,
             fromPhoneRelay = fromPhoneRelay,
             phase = CallPhase.RINGING,
-            avatarPath = avatarPath
+            avatarPath = avatarPath,
+            isTelephony = isTelephony
         )
         _activeCallState.value = state
+        scheduleRingTimeout(callUuid) { timedOutUuid ->
+            Log.i(TAG, "Incoming call $timedOutUuid timed out after ${RING_TIMEOUT_MS}ms")
+            endCall(appContext, timedOutUuid)
+        }
 
         if (!NotificationHelper.canPostNotifications(appContext)) return
         val manager = appContext.getSystemService(NotificationManager::class.java) ?: return
@@ -109,14 +178,14 @@ object CallNotificationHelper {
                         callerPerson,
                         declinePendingIntent,
                         answerPendingIntent
-                    ).setIsVideo(isVideo)
+                    ).setIsVideo(effectiveVideo)
                 )
                 .setFullScreenIntent(fullScreenPendingIntent, true)
         } else {
             // Android 14+ forbids CallStyle via notify() without a fullScreenIntent or foreground service.
             builder
                 .setContentTitle(state.callerName)
-                .setContentText(if (isVideo) "Incoming FaceTime Video" else "Incoming FaceTime Audio")
+                .setContentText(incomingFallbackNotificationText(isVideo = effectiveVideo, isTelephony = isTelephony))
                 .addAction(0, "Decline", declinePendingIntent)
                 .addAction(0, "Answer", answerPendingIntent)
         }
@@ -128,25 +197,44 @@ object CallNotificationHelper {
         }
     }
 
-    suspend fun answerCallAudio(context: Context, callUuid: String) = withContext(Dispatchers.IO) {
+    internal suspend fun answerCallAudio(
+        context: Context,
+        callUuid: String,
+        relayAnswer: (suspend (ActiveCallState?) -> Boolean)? = null,
+        standaloneAnswer: (suspend (String) -> Boolean)? = null
+    ): Boolean = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val current = _activeCallState.value
         val app = appContext as? WearBubblesApp
+        val isTelephony = current?.isTelephony == true
 
-        val handledByPhone = if (app != null && (current?.fromPhoneRelay == true || app.phoneRelayClient.refreshPhoneConnected())) {
-            app.phoneRelayClient.sendAnswerCallAudioAwait(
-                callUuid = callUuid,
-                callerName = current?.callerName,
-                callerAddress = current?.callerAddress
-            )
-        } else {
-            false
+        val answered = tryAnswerCallAudio(
+            callUuid = callUuid,
+            isTelephony = isTelephony,
+            relayAnswer = {
+                when {
+                    relayAnswer != null -> relayAnswer(current)
+                    app != null && (current?.fromPhoneRelay == true || app.phoneRelayClient.refreshPhoneConnected()) ->
+                        app.phoneRelayClient.sendAnswerCallAudioAwait(
+                            callUuid = callUuid,
+                            callerName = current?.callerName,
+                            callerAddress = current?.callerAddress,
+                            isTelephony = isTelephony
+                        )
+                    else -> false
+                }
+            },
+            standaloneAnswer = { uuid ->
+                standaloneAnswer?.invoke(uuid) ?: postStandaloneCallAction(appContext, "answer", uuid)
+            }
+        )
+        val handledByPhone = current?.fromPhoneRelay == true || answered
+        if (!answered) {
+            Log.w(TAG, "Answer failed for $callUuid (isTelephony=$isTelephony, handledByPhone=$handledByPhone); staying in current state")
+            return@withContext false
         }
 
-        if (!handledByPhone) {
-            postStandaloneCallAction(appContext, "answer", callUuid)
-        }
-
+        cancelRingTimeout()
         val startedAt = SystemClock.elapsedRealtime()
         val wasRinging = current?.phase == CallPhase.RINGING
         val updated = (current ?: ActiveCallState(
@@ -164,12 +252,14 @@ object CallNotificationHelper {
                 ?.cancel(NotificationHelper.CALL_NOTIFICATION_ID)
         }
         postOngoingCallNotification(appContext, updated)
+        true
     }
 
     suspend fun declineOrEndCall(context: Context, callUuid: String) = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val current = _activeCallState.value
         val app = appContext as? WearBubblesApp
+        val isTelephony = current?.isTelephony == true
 
         val handledByPhone = if (app != null && (current?.fromPhoneRelay == true || app.phoneRelayClient.refreshPhoneConnected())) {
             app.phoneRelayClient.sendDeclineCallAwait(callUuid)
@@ -177,7 +267,7 @@ object CallNotificationHelper {
             false
         }
 
-        if (!handledByPhone) {
+        if (!handledByPhone && !isTelephony) {
             val endpoint = if (current?.phase == CallPhase.ONGOING) "leave" else "decline"
             postStandaloneCallAction(appContext, endpoint, callUuid)
         }
@@ -185,9 +275,20 @@ object CallNotificationHelper {
         endCall(appContext, callUuid)
     }
 
-    fun endCall(context: Context, callUuid: String? = null) {
+    internal fun shouldEndCall(
+        current: ActiveCallState?,
+        callUuid: String?,
+        onlyIfRinging: Boolean
+    ): Boolean {
+        if (callUuid != null && current != null && current.callUuid != callUuid) return false
+        if (onlyIfRinging && current?.phase != CallPhase.RINGING) return false
+        return true
+    }
+
+    fun endCall(context: Context, callUuid: String? = null, onlyIfRinging: Boolean = false) {
         val current = _activeCallState.value
-        if (callUuid != null && current != null && current.callUuid != callUuid) return
+        if (!shouldEndCall(current, callUuid, onlyIfRinging)) return
+        cancelRingTimeout()
         _activeCallState.value = null
         CallForegroundService.stop(context.applicationContext)
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -207,7 +308,7 @@ object CallNotificationHelper {
         return buildOngoingCallNotification(context, state, useCallStyle = false)
     }
 
-    private fun buildOngoingCallNotification(
+    internal fun buildOngoingCallNotification(
         context: Context,
         state: ActiveCallState,
         useCallStyle: Boolean
@@ -224,7 +325,7 @@ object CallNotificationHelper {
         val builder = NotificationCompat.Builder(context, NotificationHelper.CHANNEL_CALLS)
             .setSmallIcon(R.drawable.ic_stat_icon)
             .setContentTitle(state.callerName)
-            .setContentText("FaceTime Audio • Ongoing")
+            .setContentText(ongoingNotificationText(state.isTelephony))
             .addPerson(callerPerson)
             .setContentIntent(touchIntent)
             .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -264,9 +365,8 @@ object CallNotificationHelper {
     private fun postOngoingCallNotification(context: Context, state: ActiveCallState) {
         if (!NotificationHelper.canPostNotifications(context)) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        val callStyleNotification = buildOngoingCallNotification(context, state, useCallStyle = true)
         try {
-            CallForegroundService.start(context, callStyleNotification)
+            CallForegroundService.start(context, state)
         } catch (e: Exception) {
             Log.w(TAG, "Foreground call service start blocked, falling back to non-CallStyle notify: ${e.message}")
             try {
@@ -278,12 +378,12 @@ object CallNotificationHelper {
         }
     }
 
-    private suspend fun postStandaloneCallAction(context: Context, action: String, callUuid: String) {
-        try {
+    private suspend fun postStandaloneCallAction(context: Context, action: String, callUuid: String): Boolean {
+        return try {
             val settings = SettingsDataStore(context)
             val serverUrl = settings.getServerUrl().trim().trimEnd('/')
             val password = settings.getPassword()
-            if (serverUrl.isBlank() || password.isBlank()) return
+            if (serverUrl.isBlank() || password.isBlank()) return false
             ApiClient.configureHeaders(serverUrl, settings.getCustomHeaders())
             val encodedUuid = URLEncoder.encode(callUuid, "UTF-8")
             val encodedPass = URLEncoder.encode(password, "UTF-8")
@@ -292,9 +392,10 @@ object CallNotificationHelper {
                 .url(url)
                 .post("{}".toRequestBody("application/json".toMediaType()))
                 .build()
-            ApiClient.okHttpClient.newCall(request).execute().close()
+            ApiClient.okHttpClient.newCall(request).execute().use { it.isSuccessful }
         } catch (e: Exception) {
             Log.w(TAG, "Standalone FaceTime $action failed for $callUuid: ${e.message}")
+            false
         }
     }
 

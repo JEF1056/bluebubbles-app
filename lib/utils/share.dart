@@ -173,36 +173,67 @@ class Share {
           context: Get.context!,
           title: "Send Location?",
           icon: Icons.location_on_outlined,
-          content: SizedBox(
-            width: 150,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (url != null)
-                  Image.network(
-                    url,
-                    gaplessPlayback: true,
-                    filterQuality: FilterQuality.none,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                    frameBuilder: (_, child, frame, _) {
-                      if (frame == null) {
-                        return Center(
-                          heightFactor: 1,
-                          child: buildProgressIndicator(Get.context!),
-                        );
-                      }
-                      return child;
-                    },
-                  ),
-                if (url != null) const SizedBox(height: 15),
-                Text(
-                  title ?? "No location details found",
-                  style: Get.context!.theme.textTheme.bodyMedium!.apply(fontWeightDelta: 2),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+          content: Builder(
+            builder: (ctx) {
+              final scheme = ctx.theme.colorScheme;
+              return ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 340),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (url != null) ...[
+                      Container(
+                        decoration: BoxDecoration(
+                          color: scheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: AspectRatio(
+                          aspectRatio: 16 / 10,
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.cover,
+                            gaplessPlayback: true,
+                            errorBuilder: (_, _, _) => Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.map_outlined, size: 28, color: scheme.onSurfaceVariant),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    "Map preview unavailable",
+                                    style: ctx.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            frameBuilder: (_, child, frame, _) {
+                              if (frame == null) {
+                                return Center(child: buildProgressIndicator(ctx));
+                              }
+                              return child;
+                            },
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Text(
+                      title ?? "No location details found",
+                      style: ctx.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurface,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
           actions: [
             BBDialogAction(

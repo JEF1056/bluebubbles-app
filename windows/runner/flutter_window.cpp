@@ -65,7 +65,8 @@ bool FlutterWindow::OnCreate() {
         }
       });
 
-  store_channel_ = CreateStoreUpdateChannel(flutter_controller_->engine()->messenger(), GetHandle());
+  alive_ = std::make_shared<std::atomic<bool>>(true);
+  store_channel_ = CreateStoreUpdateChannel(flutter_controller_->engine()->messenger(), GetHandle(), alive_);
 
   notification_channel_ = std::make_unique<flutter::MethodChannel<>>(
       flutter_controller_->engine()->messenger(), "bluebubbles/notifications",
@@ -84,6 +85,12 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (alive_) {
+    alive_->store(false);
+  }
+  store_channel_.reset();
+  splash_channel_.reset();
+  notification_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -124,7 +131,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_ && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

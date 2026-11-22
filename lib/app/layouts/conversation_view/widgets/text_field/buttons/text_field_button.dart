@@ -27,7 +27,7 @@ const List<TextFieldButton> defaultTextFieldButtons = [
 const Map<TextFieldButton, (bool, bool, bool, bool)> _buttonPlatformSupport = {
   TextFieldButton.Files: (false, true, true, true),
   TextFieldButton.Genmoji: (false, true, true, false),
-  TextFieldButton.Stickers: (false, true, true, false),
+  TextFieldButton.Stickers: (false, true, true, true),
   TextFieldButton.Handwritten: (false, true, true, true),
   TextFieldButton.Schedule: (false, true, true, true),
   TextFieldButton.Location: (false, true, false, true),

@@ -172,10 +172,11 @@ class _VideoPreview extends StatefulWidget {
   State<_VideoPreview> createState() => _VideoPreviewState();
 }
 
-class _VideoPreviewState extends State<_VideoPreview> {
+class _VideoPreviewState extends State<_VideoPreview> with WidgetsBindingObserver {
   late VideoPlayerController _videoController;
   bool _initialized = false;
   bool _muted = false;
+  bool _pausedByLifecycle = false;
 
   /// Whether the control bar is currently visible.
   bool _controlsVisible = true;
@@ -184,21 +185,49 @@ class _VideoPreviewState extends State<_VideoPreview> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _videoController = VideoPlayerController.file(File(widget.file.path));
     _videoController.initialize().then((_) {
-      if (mounted) {
-        setState(() => _initialized = true);
-        _videoController.setLooping(true);
-        _videoController.play();
-        _scheduleHide();
+      if (!mounted) return;
+      setState(() => _initialized = true);
+      _videoController.setLooping(true);
+      final lifecycle = WidgetsBinding.instance.lifecycleState;
+      if (lifecycle == AppLifecycleState.paused ||
+          lifecycle == AppLifecycleState.hidden ||
+          lifecycle == AppLifecycleState.inactive) {
+        _pausedByLifecycle = true;
+        return;
       }
+      _videoController.play();
+      _scheduleHide();
     });
     // Rebuild on every position tick so the seek bar updates smoothly.
     _videoController.addListener(_onVideoTick);
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_initialized) return;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      if (_videoController.value.isPlaying) {
+        _pausedByLifecycle = true;
+        unawaited(_videoController.pause());
+        _hideTimer?.cancel();
+        if (mounted) setState(() {});
+      }
+    } else if (state == AppLifecycleState.resumed && _pausedByLifecycle) {
+      _pausedByLifecycle = false;
+      unawaited(_videoController.play());
+      _scheduleHide();
+      if (mounted) setState(() {});
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _videoController.removeListener(_onVideoTick);
     _videoController.dispose();
@@ -228,6 +257,7 @@ class _VideoPreviewState extends State<_VideoPreview> {
   // ── Playback helpers ───────────────────────────────────────────────────
 
   void _togglePlay() {
+    _pausedByLifecycle = false;
     setState(() {
       if (_videoController.value.isPlaying) {
         _videoController.pause();

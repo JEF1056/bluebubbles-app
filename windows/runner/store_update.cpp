@@ -20,12 +20,16 @@ StoreContext GetStoreContext(HWND hwnd) {
   return context;
 }
 
-winrt::fire_and_forget CheckUpdate(HWND hwnd, MethodResultPtr result) {
+winrt::fire_and_forget CheckUpdate(HWND hwnd,
+                                   std::shared_ptr<std::atomic<bool>> alive,
+                                   MethodResultPtr result) {
   winrt::apartment_context ui;
   std::string error;
   try {
+    if (!alive->load() || !IsWindow(hwnd)) co_return;
     auto updates = co_await GetStoreContext(hwnd).GetAppAndOptionalStorePackageUpdatesAsync();
     co_await ui;
+    if (!alive->load()) co_return;
     if (updates.Size() == 0) {
       result->Success();
       co_return;
@@ -41,16 +45,21 @@ winrt::fire_and_forget CheckUpdate(HWND hwnd, MethodResultPtr result) {
   }
   // Can't co_await inside a catch, and an exception may surface on a background thread.
   co_await ui;
+  if (!alive->load()) co_return;
   result->Error("store_error", error);
 }
 
-winrt::fire_and_forget InstallUpdate(HWND hwnd, MethodResultPtr result) {
+winrt::fire_and_forget InstallUpdate(HWND hwnd,
+                                     std::shared_ptr<std::atomic<bool>> alive,
+                                     MethodResultPtr result) {
   winrt::apartment_context ui;
   std::string error;
   try {
+    if (!alive->load() || !IsWindow(hwnd)) co_return;
     auto context = GetStoreContext(hwnd);
     auto updates = co_await context.GetAppAndOptionalStorePackageUpdatesAsync();
     co_await ui;
+    if (!alive->load() || !IsWindow(hwnd)) co_return;
     if (updates.Size() == 0) {
       result->Success(flutter::EncodableValue(false));
       co_return;
@@ -60,6 +69,7 @@ winrt::fire_and_forget InstallUpdate(HWND hwnd, MethodResultPtr result) {
     RegisterApplicationRestart(nullptr, 0);
     auto install = co_await context.RequestDownloadAndInstallStorePackageUpdatesAsync(updates);
     co_await ui;
+    if (!alive->load()) co_return;
     bool completed = install.OverallState() == StorePackageUpdateState::Completed;
     if (!completed) UnregisterApplicationRestart();
     result->Success(flutter::EncodableValue(completed));
@@ -71,21 +81,23 @@ winrt::fire_and_forget InstallUpdate(HWND hwnd, MethodResultPtr result) {
   }
   co_await ui;
   UnregisterApplicationRestart();
+  if (!alive->load()) co_return;
   result->Error("store_error", error);
 }
 
 }  // namespace
 
 std::unique_ptr<flutter::MethodChannel<>> CreateStoreUpdateChannel(
-    flutter::BinaryMessenger* messenger, HWND hwnd) {
+    flutter::BinaryMessenger* messenger, HWND hwnd,
+    std::shared_ptr<std::atomic<bool>> alive) {
   auto channel = std::make_unique<flutter::MethodChannel<>>(
       messenger, "bluebubbles/store", &flutter::StandardMethodCodec::GetInstance());
   channel->SetMethodCallHandler(
-      [hwnd](const flutter::MethodCall<>& call, MethodResultPtr result) {
+      [hwnd, alive = std::move(alive)](const flutter::MethodCall<>& call, MethodResultPtr result) {
         if (call.method_name() == "checkUpdate") {
-          CheckUpdate(hwnd, std::move(result));
+          CheckUpdate(hwnd, alive, std::move(result));
         } else if (call.method_name() == "installUpdate") {
-          InstallUpdate(hwnd, std::move(result));
+          InstallUpdate(hwnd, alive, std::move(result));
         } else {
           result->NotImplemented();
         }

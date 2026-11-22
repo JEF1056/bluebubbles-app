@@ -45,7 +45,7 @@ class FindMyNearbySheet extends StatefulWidget {
 }
 
 class _FindMyNearbySheetState extends State<FindMyNearbySheet>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final FindMyBleService _ble = widget.bleService ?? widget.controller.bleService;
   late final AnimationController _pulseController;
 
@@ -54,6 +54,7 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
   FindMyBleScanEvent? _latestEvent;
   bool _loading = true;
   bool _canLaunchUwb = false;
+  bool _pausedByLifecycle = false;
   String? _errorText;
   String? _selectedComponent;
   DateTime _lastHapticAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -61,10 +62,11 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
-    )..repeat();
+    );
     final components = widget.device.ringComponents;
     if (components.isNotEmpty) {
       _selectedComponent = components.first;
@@ -73,27 +75,106 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncPulseAnimation();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      if (_scanSub != null) {
+        _pausedByLifecycle = true;
+        unawaited(_scanSub!.cancel());
+        _scanSub = null;
+        _syncPulseAnimation();
+      }
+    } else if (state == AppLifecycleState.resumed &&
+        _pausedByLifecycle &&
+        _spec != null &&
+        _errorText == null &&
+        !_loading &&
+        _scanSub == null) {
+      _pausedByLifecycle = false;
+      _subscribeScan(_spec!);
+    }
+  }
+
+  void _syncPulseAnimation() {
+    if (!mounted) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final activelyScanning = !_loading && _errorText == null && _scanSub != null;
+    if (activelyScanning && !reduceMotion) {
+      if (!_pulseController.isAnimating) {
+        _pulseController.repeat();
+      }
+    } else if (_pulseController.isAnimating) {
+      _pulseController.stop();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scanSub?.cancel();
+    _scanSub = null;
     _pulseController.dispose();
     super.dispose();
   }
 
+  void _subscribeScan(FindMyBleSpec spec) {
+    _scanSub?.cancel();
+    _scanSub = _ble.scanStream(spec).listen(
+      (event) {
+        if (!mounted) return;
+        setState(() {
+          _latestEvent = event;
+          if (event.timedOut) {
+            _errorText = "Scan timed out after 2 minutes.";
+          }
+        });
+        if (event.timedOut) {
+          unawaited(_scanSub?.cancel());
+          _scanSub = null;
+          _syncPulseAnimation();
+        }
+        _triggerHapticForZone(event);
+      },
+      onError: (Object err) {
+        if (!mounted) return;
+        unawaited(_scanSub?.cancel());
+        _scanSub = null;
+        setState(() {
+          _errorText = "BLE scan error: $err";
+        });
+        _syncPulseAnimation();
+      },
+    );
+    _syncPulseAnimation();
+  }
+
   Future<void> _startFlow() async {
-    await _scanSub?.cancel();
-    _scanSub = null;
+    _pausedByLifecycle = false;
+    if (_scanSub != null) {
+      await _scanSub!.cancel();
+      _scanSub = null;
+    }
     if (!mounted) return;
-    setState(() {
-      _loading = true;
-      _errorText = null;
-      _latestEvent = null;
-    });
+    if (!_loading || _errorText != null || _latestEvent != null) {
+      setState(() {
+        _loading = true;
+        _errorText = null;
+        _latestEvent = null;
+      });
+      _syncPulseAnimation();
+    }
 
     if (!_ble.isSupported) {
       setState(() {
         _loading = false;
         _errorText = "Nearby BLE finding is only supported on Android.";
       });
+      _syncPulseAnimation();
       return;
     }
 
@@ -107,6 +188,7 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
         _loading = false;
         _errorText = "Bluetooth scan permission is required to find nearby trackers.";
       });
+      _syncPulseAnimation();
       return;
     }
 
@@ -117,6 +199,7 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
         _loading = false;
         _errorText = "Turn on Bluetooth to scan for this tracker.";
       });
+      _syncPulseAnimation();
       return;
     }
 
@@ -126,6 +209,7 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
         _loading = false;
         _errorText = "Missing device ID.";
       });
+      _syncPulseAnimation();
       return;
     }
 
@@ -139,6 +223,7 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
         _loading = false;
         _errorText = "Could not fetch BLE scan spec from server.";
       });
+      _syncPulseAnimation();
       return;
     }
 
@@ -151,24 +236,7 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
       _loading = false;
     });
 
-    _scanSub = _ble.scanStream(spec).listen(
-      (event) {
-        if (!mounted) return;
-        setState(() {
-          _latestEvent = event;
-          if (event.timedOut) {
-            _errorText = "Scan timed out after 2 minutes.";
-          }
-        });
-        _triggerHapticForZone(event);
-      },
-      onError: (Object err) {
-        if (!mounted) return;
-        setState(() {
-          _errorText = "BLE scan error: $err";
-        });
-      },
-    );
+    _subscribeScan(spec);
   }
 
   void _triggerHapticForZone(FindMyBleScanEvent event) {

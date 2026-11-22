@@ -42,12 +42,19 @@ import com.bluebubbles.messaging.services.foreground.StartForegroundServiceHandl
 import com.bluebubbles.messaging.services.foreground.StopForegroundServiceHandler
 import com.bluebubbles.messaging.services.telecom.AnswerFaceTimeAudioHandler
 import com.bluebubbles.messaging.services.telecom.EndFaceTimeCallHandler
+import com.bluebubbles.messaging.services.telecom.FlipFaceTimeCameraHandler
+import com.bluebubbles.messaging.services.telecom.GetFaceTimeLocalVideoTextureHandler
+import com.bluebubbles.messaging.services.telecom.GetFaceTimeVideoTextureHandler
+import com.bluebubbles.messaging.services.telecom.IsFaceTimeSpeakerOnHandler
 import com.bluebubbles.messaging.services.telecom.IsTelecomEnabledHandler
 import com.bluebubbles.messaging.services.telecom.MarkFaceTimeCallActiveHandler
 import com.bluebubbles.messaging.services.telecom.OpenCallingAccountsHandler
 import com.bluebubbles.messaging.services.telecom.PlaceFaceTimeCallHandler
 import com.bluebubbles.messaging.services.telecom.RegisterPhoneAccountHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeCameraEnabledHandler
 import com.bluebubbles.messaging.services.telecom.SetFaceTimeMutedHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeSpeakerHandler
+import com.bluebubbles.messaging.services.telecom.ToggleFaceTimeSpeakerHandler
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -172,6 +179,13 @@ class MethodCallHandler {
             RegisterPhoneAccountHandler.tag -> RegisterPhoneAccountHandler().handleMethodCall(call, result, context)
             MarkFaceTimeCallActiveHandler.tag -> MarkFaceTimeCallActiveHandler().handleMethodCall(call, result, context)
             SetFaceTimeMutedHandler.tag -> SetFaceTimeMutedHandler().handleMethodCall(call, result, context)
+            SetFaceTimeSpeakerHandler.tag -> SetFaceTimeSpeakerHandler().handleMethodCall(call, result, context)
+            ToggleFaceTimeSpeakerHandler.tag -> ToggleFaceTimeSpeakerHandler().handleMethodCall(call, result, context)
+            IsFaceTimeSpeakerOnHandler.tag -> IsFaceTimeSpeakerOnHandler().handleMethodCall(call, result, context)
+            GetFaceTimeVideoTextureHandler.tag -> GetFaceTimeVideoTextureHandler().handleMethodCall(call, result, context)
+            GetFaceTimeLocalVideoTextureHandler.tag -> GetFaceTimeLocalVideoTextureHandler().handleMethodCall(call, result, context)
+            SetFaceTimeCameraEnabledHandler.tag -> SetFaceTimeCameraEnabledHandler().handleMethodCall(call, result, context)
+            FlipFaceTimeCameraHandler.tag -> FlipFaceTimeCameraHandler().handleMethodCall(call, result, context)
             AppSoundPlayer.tag -> AppSoundPlayer.handleMethodCall(call, result, context)
             "set-locus-context" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && context is Activity) {

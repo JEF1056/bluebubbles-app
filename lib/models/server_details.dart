@@ -22,6 +22,9 @@ class ServerDetails {
   /// Explicit server capability flag from `/server/info` (`supportsFaceTimeCalls`), if present.
   final bool? supportsFaceTimeCallsFlag;
 
+  /// Explicit server capability flag from `/server/info` (`supports_stickers`), if present.
+  final bool? supportsStickersFlag;
+
   const ServerDetails({
     required this.macOSVersion,
     required this.macOSMinorVersion,
@@ -33,6 +36,7 @@ class ServerDetails {
     this.apiVersions,
     this.serverBuildVersion,
     this.supportsFaceTimeCallsFlag,
+    this.supportsStickersFlag,
   });
 
   /// From `/server/info`'s `data`.
@@ -51,6 +55,7 @@ class ServerDetails {
       apiVersions: (data['api_versions'] as List? ?? const []).whereType<int>().toList(),
       serverBuildVersion: build == null || build.isEmpty ? null : build,
       supportsFaceTimeCallsFlag: data['supportsFaceTimeCalls'] as bool?,
+      supportsStickersFlag: data['supports_stickers'] as bool?,
     );
   }
 
@@ -66,6 +71,7 @@ class ServerDetails {
         'apiVersions': apiVersions,
         'serverBuildVersion': serverBuildVersion,
         'supportsFaceTimeCallsFlag': supportsFaceTimeCallsFlag,
+        'supportsStickersFlag': supportsStickersFlag,
       };
 
   factory ServerDetails.fromMap(Map<String, dynamic> map) => ServerDetails(
@@ -79,6 +85,7 @@ class ServerDetails {
         apiVersions: (map['apiVersions'] as List?)?.cast<int>(),
         serverBuildVersion: map['serverBuildVersion'] as String?,
         supportsFaceTimeCallsFlag: map['supportsFaceTimeCallsFlag'] as bool?,
+        supportsStickersFlag: map['supportsStickersFlag'] as bool?,
       );
 
   const ServerDetails.empty()
@@ -91,7 +98,8 @@ class ServerDetails {
         proxyService = null,
         apiVersions = null,
         serverBuildVersion = null,
-        supportsFaceTimeCallsFlag = null;
+        supportsFaceTimeCallsFlag = null,
+        supportsStickersFlag = null;
 
   bool get isV2Server => apiVersions?.contains(2) ?? false;
 
@@ -178,8 +186,9 @@ class ServerDetails {
   /// Send emoji tapbacks (`reaction: "emoji"`): supported on macOS Sequoia (15.0) or newer.
   bool get supportsEmojiTapbacks => isMinSequoia;
 
-  /// Browse the Mac's sticker library and add to it (`/api/v2/sticker`): a v2 server. Adding needs the Private API.
-  bool get supportsStickers => isV2Server;
+  /// Browse the Mac's sticker library and add to it (`/api/v2/sticker`): prefers explicit
+  /// `supports_stickers` from `server/info`, falling back to `isV2Server`. Adding needs the Private API.
+  bool get supportsStickers => supportsStickersFlag ?? isV2Server;
 
   /// React with a sticker from the Mac's library (`/api/v2/sticker`, `message/sticker` with `tapback`): a v2 server
   /// on macOS Sequoia (15.0) or newer, which is where `IMStickerTapback` arrived.

@@ -32,6 +32,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -367,6 +368,18 @@ class PhoneRelayClient(private val context: Context) {
         const val PATH_DECLINE_CALL = "/bb/decline-call"
 
         private val gsonStatic = Gson()
+
+        internal fun buildAnswerCallAudioPayload(
+            callUuid: String,
+            callerName: String? = null,
+            callerAddress: String? = null,
+            isTelephony: Boolean = false
+        ): ByteArray = JsonObject().apply {
+            addProperty("callUuid", callUuid)
+            if (!callerName.isNullOrBlank()) addProperty("callerName", callerName)
+            if (!callerAddress.isNullOrBlank()) addProperty("callerAddress", callerAddress)
+            addProperty("isTelephony", isTelephony)
+        }.toString().toByteArray()
 
         internal fun parseRelayChatsPayload(json: String): Pair<List<ChatEntity>, Boolean>? {
             val root = JsonParser.parseString(json).asJsonObject
@@ -822,23 +835,35 @@ class PhoneRelayClient(private val context: Context) {
     suspend fun sendAnswerCallAudioAwait(
         callUuid: String,
         callerName: String? = null,
-        callerAddress: String? = null
+        callerAddress: String? = null,
+        isTelephony: Boolean = false
     ): Boolean {
-        val payload = JsonObject().apply {
-            addProperty("callUuid", callUuid)
-            if (!callerName.isNullOrBlank()) addProperty("callerName", callerName)
-            if (!callerAddress.isNullOrBlank()) addProperty("callerAddress", callerAddress)
-        }.toString().toByteArray()
+        val payload = buildAnswerCallAudioPayload(
+            callUuid = callUuid,
+            callerName = callerName,
+            callerAddress = callerAddress,
+            isTelephony = isTelephony
+        )
         return sendToPhone(PATH_ANSWER_CALL_AUDIO, payload)
     }
 
     suspend fun sendDeclineCallAwait(callUuid: String): Boolean =
         sendJsonField(PATH_DECLINE_CALL, "callUuid", callUuid)
 
+    private val watchActiveLock = Any()
+    @Volatile
+    private var desiredWatchActive: Boolean = false
+    private var watchActiveJob: Job? = null
+
     fun notifyWatchActive(active: Boolean) {
-        scope.launch {
-            val payload = JsonObject().apply { addProperty("active", active) }.toString().toByteArray()
-            sendToPhone(PATH_WATCH_ACTIVE, payload)
+        synchronized(watchActiveLock) {
+            desiredWatchActive = active
+            watchActiveJob?.cancel()
+            watchActiveJob = scope.launch {
+                if (desiredWatchActive != active) return@launch
+                val payload = JsonObject().apply { addProperty("active", active) }.toString().toByteArray()
+                sendToPhone(PATH_WATCH_ACTIVE, payload)
+            }
         }
     }
 

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/web_ringtone.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_view.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/scheduling/scheduled_messages_panel.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -47,6 +49,7 @@ class NotificationsService {
   static const String ERROR_CHANNEL = "com.bluebubbles.errors";
   static const String REMINDER_CHANNEL = "com.bluebubbles.reminders";
   static const String FACETIME_CHANNEL = "com.bluebubbles.incoming_facetimes";
+  static const String MISSED_FACETIME_CHANNEL = "com.bluebubbles.missed_facetimes";
   static const String FOREGROUND_SERVICE_CHANNEL = "com.bluebubbles.foreground_service";
 
   static const String NEW_MESSAGE_TAG = "com.bluebubbles.messaging.NEW_MESSAGE_NOTIFICATION";
@@ -430,17 +433,28 @@ class NotificationsService {
         : "${callUuid == null ? "Incoming" : "Answer"} FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
 
     if (kIsWeb) {
+      startWebFaceTimeRingtone(
+        callUuid: callUuid,
+        volume: _effectiveFaceTimeRingtoneVolume(),
+      );
       if (webNotificationPermission != "granted") return false;
       await showWebNotificationEx(
         title: title,
         body: text,
         icon: chatIcon != null && chatIcon.isNotEmpty ? "data:image/png;base64,${base64Encode(chatIcon)}" : null,
         tag: callUuid,
+        requireInteraction: true,
+        renotify: callUuid != null && callUuid.isNotEmpty,
         onClick: callUuid != null
             ? () async {
-                await IntentsSvc.answerFaceTime(callUuid, isTelephony: isTelephony);
+                stopWebFaceTimeRingtone(callUuid: callUuid);
+                await IntentsSvc.answerFaceTime(
+                  callUuid,
+                  audioOnly: isAudio,
+                  isTelephony: isTelephony,
+                );
               }
-            : null,
+            : () => stopWebFaceTimeRingtone(),
       );
       return false;
     }
@@ -469,10 +483,78 @@ class NotificationsService {
   @visibleForTesting
   static int faceTimeNotificationId(String? callUuid) => _faceTimeNotificationId(callUuid);
 
-  Future<void> clearFaceTimeNotification(String callUuid, {bool onlyIfRinging = false}) async {
+  @visibleForTesting
+  static int missedFaceTimeNotificationId(String? callUuid) =>
+      callUuid != null && callUuid.isNotEmpty
+          ? ((_faceTimeNotificationId(callUuid) ^ 0x4D495353) & 0x7fffffff)
+          : _faceTimeNotificationId(null);
+
+  Future<void> createMissedFaceTimeNotification(
+    String? callUuid,
+    String caller, {
+    bool isAudio = false,
+    bool isTelephony = false,
+    String? callerAddress,
+  }) async {
+    final String title = caller;
+    final String body = isTelephony
+        ? "Missed iPhone Call"
+        : "Missed FaceTime ${isAudio ? 'Audio' : 'Video'} Call";
+
+    if (kIsWeb) {
+      if (webNotificationPermission != "granted") return;
+      await showWebNotificationEx(
+        title: title,
+        body: body,
+        tag: callUuid != null && callUuid.isNotEmpty ? 'missed-$callUuid' : null,
+        renotify: false,
+      );
+      return;
+    }
+
     if (kIsDesktop) {
+      await DesktopNotifications.showText(
+        title: title,
+        body: body,
+        onOpen: () async {
+          await showAndFocusWindow();
+        },
+      );
+      return;
+    }
+
+    await flnp.show(
+      id: missedFaceTimeNotificationId(callUuid),
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          MISSED_FACETIME_CHANNEL,
+          'Missed FaceTime Calls',
+          channelDescription: 'Displays missed FaceTime call notifications',
+          icon: 'ic_stat_icon',
+          priority: Priority.defaultPriority,
+          importance: Importance.defaultImportance,
+          color: HexColor("4990de"),
+        ),
+      ),
+    );
+  }
+
+  double _effectiveFaceTimeRingtoneVolume() {
+    if (GetIt.I.isRegistered<SettingsService>()) {
+      return (SettingsSvc.settings.soundVolume.value / 100.0).clamp(0.0, 1.0);
+    }
+    return 1.0;
+  }
+
+  Future<void> clearFaceTimeNotification(String callUuid, {bool onlyIfRinging = false}) async {
+    if (kIsWeb) {
+      stopWebFaceTimeRingtone(callUuid: callUuid);
+      await closeWebNotificationsByTag(callUuid);
+    } else if (kIsDesktop) {
       await clearDesktopFaceTimeNotif(callUuid);
-    } else if (!kIsWeb) {
+    } else {
       if (Platform.isAndroid) {
         await MethodChannelSvc.actions.endFaceTimeCall(
           callUuid: callUuid,
@@ -523,11 +605,12 @@ class NotificationsService {
           ? null
           : () async {
               await showAndFocusWindow();
-              await IntentsSvc.answerFaceTime(callUuid);
+              await IntentsSvc.answerFaceTime(callUuid, audioOnly: isAudio);
             },
       onDecline: callUuid == null
           ? null
           : () async {
+              await ActiveCallController.instance.declineCall();
               hideFaceTimeOverlay(callUuid);
               await clearDesktopFaceTimeNotif(key);
             },
@@ -659,7 +742,11 @@ class NotificationsService {
         ? "+$overflowCount earlier message${overflowCount > 1 ? "s" : ""}"
         : null;
 
-    await playDesktopNotificationSound();
+    try {
+      await playDesktopNotificationSound();
+    } catch (e, s) {
+      Logger.warn("Failed to play desktop notification sound", error: e, trace: s);
+    }
 
     // Always a fresh toast: replacing one in place while its banner is still up only updates Action Center —
     // Windows plays the sound but leaves the old text on screen.

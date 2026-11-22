@@ -5,24 +5,50 @@ import 'dart:math' as math;
 
 import 'package:web/web.dart' as web;
 
+final Map<String, web.Notification> _activeNotificationsByTag = <String, web.Notification>{};
+
 Future<void> showWebNotificationEx({
   required String title,
   String? body,
   String? icon,
   String? tag,
+  bool requireInteraction = false,
+  bool renotify = false,
   void Function()? onClick,
 }) async {
+  final hasTag = tag != null && tag.isNotEmpty;
   final options = web.NotificationOptions();
   if (body != null) options.body = body;
   if (icon != null) options.icon = icon;
-  if (tag != null) options.tag = tag;
+  if (hasTag) {
+    options.tag = tag;
+    // Browser Notification spec throws TypeError if renotify is set without a non-empty tag.
+    if (renotify) options.renotify = true;
+  }
+  if (requireInteraction) options.requireInteraction = true;
 
   void showWindowNotification() {
+    if (hasTag) {
+      try {
+        _activeNotificationsByTag.remove(tag)?.close();
+      } catch (_) {}
+    }
     final notif = web.Notification(title, options);
+    if (hasTag) {
+      _activeNotificationsByTag[tag] = notif;
+      notif.onclose = ((web.Event _) {
+        if (identical(_activeNotificationsByTag[tag], notif)) {
+          _activeNotificationsByTag.remove(tag);
+        }
+      }).toJS;
+    }
     if (onClick != null) {
       notif.onclick = ((web.Event _) {
         try {
           web.window.focus();
+        } catch (_) {}
+        try {
+          notif.close();
         } catch (_) {}
         onClick();
       }).toJS;
@@ -53,6 +79,30 @@ Future<void> showWebNotificationEx({
 
   try {
     showWindowNotification();
+  } catch (_) {}
+}
+
+Future<void> closeWebNotificationsByTag(String tag) async {
+  if (tag.isEmpty) return;
+  try {
+    _activeNotificationsByTag.remove(tag)?.close();
+  } catch (_) {}
+  try {
+    final nav = web.window.navigator as JSObject;
+    if (nav.has('serviceWorker')) {
+      final reg = await web.window.navigator.serviceWorker
+          .getRegistration()
+          .toDart
+          .timeout(const Duration(milliseconds: 500));
+      if (reg != null) {
+        final notifs = await reg.getNotifications(web.GetNotificationOptions(tag: tag)).toDart;
+        for (final notif in notifs.toDart) {
+          try {
+            notif.close();
+          } catch (_) {}
+        }
+      }
+    }
   } catch (_) {}
 }
 

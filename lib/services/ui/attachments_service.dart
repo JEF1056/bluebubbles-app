@@ -18,7 +18,6 @@ import 'package:image_size_getter/image_size_getter.dart' as isg;
 import 'package:path/path.dart';
 import 'package:bluebubbles/models/models.dart' show AttachmentUploadProgress;
 import 'package:bluebubbles/utils/file_utils.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:universal_io/io.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vcf_dart/vcf_dart.dart';
@@ -555,15 +554,11 @@ class AttachmentsService extends GetxService {
     }
   }
 
-  /// Whether auto-download is allowed by settings (and optional storage permission).
+  /// Whether auto-download is allowed by settings.
   ///
-  /// [requestStoragePermission] is for in-conversation downloads. The pin-grid
-  /// preview path passes false so a list tile never pops a permission dialog.
+  /// [requestStoragePermission] is kept for caller compatibility; attachments
+  /// download into app-private storage, which requires no runtime permission.
   Future<bool> canAutoDownload({bool requestStoragePermission = true}) async {
-    if (!kIsWeb && requestStoragePermission) {
-      final canSave = (await Permission.storage.request()).isGranted;
-      if (!canSave) return false;
-    }
     if (!SettingsSvc.settings.autoDownload.value) {
       return false;
     } else {

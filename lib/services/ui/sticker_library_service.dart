@@ -50,13 +50,35 @@ class StickerLibraryService {
   Future<void>? _loading;
   Future<void>? _syncing;
 
+  // In-memory thumbnail and full-image caches used on Web (and optionally in tests).
+  final Map<String, Uint8List> _webThumbnails = {};
+  final Map<String, Uint8List> _webFullImages = {};
+
+  /// Forces in-memory storage (skipping `dart:io` files) for widget tests running under `FakeAsync`.
+  @visibleForTesting
+  bool useMemoryCache = false;
+
+  bool get _memoryOnly => kIsWeb || useMemoryCache;
+
+  bool get _subscriptionLocked => GetIt.I.isRegistered<SubscriptionService>() && SubscriptionSvc.locked;
+
   Directory get _root => Directory(join(FilesystemSvc.appDocDir.path, 'stickers'));
   File get _indexFile => File(join(_root.path, 'library.json'));
   Directory get _thumbnailDir => Directory(join(_root.path, 'thumbnails'));
-  Directory get _fullDir => Directory(join(_root.path, 'full'));
+  Directory get _fullDir => Directory(join(_fullDirPath));
+  String get _fullDirPath => join(_root.path, 'full');
 
   File thumbnailFile(String identifier) => File(join(_thumbnailDir.path, _fileName(identifier)));
   File _fullFile(String identifier) => File(join(_fullDir.path, _fileName(identifier)));
+
+  /// In-memory thumbnail bytes when cached (used on Web and in tests).
+  Uint8List? thumbnailBytes(String identifier) => _webThumbnails[identifier];
+
+  /// Registers in-memory thumbnail bytes (e.g. for Web or tests).
+  void cacheThumbnailBytes(String identifier, Uint8List bytes) {
+    _webThumbnails[identifier] = bytes;
+    cachedThumbnails.add(identifier);
+  }
 
   /// Identifiers are UUIDs, but they come from the server: never let one name a path.
   static String _fileName(String identifier) => identifier.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
@@ -65,7 +87,10 @@ class StickerLibraryService {
   Future<void> load() => _loading ??= _load();
 
   Future<void> _load() async {
-    if (kIsWeb) return;
+    if (_memoryOnly) {
+      loaded.value = true;
+      return;
+    }
     try {
       if (await _indexFile.exists()) {
         final json = jsonDecode(await _indexFile.readAsString()) as Map<String, dynamic>;
@@ -96,7 +121,7 @@ class StickerLibraryService {
   Future<void> sync() => _syncing ??= _sync().whenComplete(() => _syncing = null);
 
   Future<void> _sync() async {
-    if (kIsWeb || SubscriptionSvc.locked) return;
+    if (_subscriptionLocked) return;
     await load();
     syncing.value = true;
     try {
@@ -104,9 +129,11 @@ class StickerLibraryService {
       entries.assignAll(stickers);
       unavailableReason.value = stickers.isEmpty ? reason : null;
       syncError.value = null;
-      await _writeIndex();
+      if (!_memoryOnly) {
+        await _writeIndex();
+      }
       // An unavailable library says nothing about which stickers are gone
-      if (unavailableReason.value == null) {
+      if (unavailableReason.value == null && GetIt.I.isRegistered<SharedPreferencesService>()) {
         await PrefsSvc.messaging.pruneStickerTapbacks(stickers.map((e) => e.identifier).toSet());
       }
       await _fetchMissingThumbnails();
@@ -123,7 +150,9 @@ class StickerLibraryService {
   Future<void> _fetchMissingThumbnails() async {
     final missing = entries.map((e) => e.identifier).where((id) => !cachedThumbnails.contains(id)).toList();
     if (missing.isEmpty) return;
-    await _thumbnailDir.create(recursive: true);
+    if (!_memoryOnly) {
+      await _thumbnailDir.create(recursive: true);
+    }
     for (var i = 0; i < missing.length; i += _parallel) {
       await Future.wait(missing.skip(i).take(_parallel).map(_fetchThumbnail));
     }
@@ -133,7 +162,11 @@ class StickerLibraryService {
   Future<void> _fetchThumbnail(String identifier) async {
     try {
       final bytes = await HttpSvc.sticker.image(identifier, thumbnail: true);
-      await thumbnailFile(identifier).writeAsBytes(bytes, flush: true);
+      if (_memoryOnly) {
+        _webThumbnails[identifier] = bytes;
+      } else {
+        await thumbnailFile(identifier).writeAsBytes(bytes, flush: true);
+      }
       cachedThumbnails.add(identifier);
     } catch (e) {
       Logger.warn("Couldn't fetch the thumbnail of sticker $identifier: $e", tag: 'StickerLibrary');
@@ -141,12 +174,17 @@ class StickerLibraryService {
   }
 
   Future<void> _pruneFiles() async {
+    final keepIds = entries.map((e) => e.identifier).toSet();
+    _webThumbnails.removeWhere((id, _) => !keepIds.contains(id));
+    _webFullImages.removeWhere((id, _) => !keepIds.contains(id));
     final keep = entries.map((e) => _fileName(e.identifier)).toSet();
-    for (final dir in [_thumbnailDir, _fullDir]) {
-      if (!await dir.exists()) continue;
-      await for (final file in dir.list()) {
-        if (file is File && !keep.contains(basename(file.path))) {
-          await file.delete().catchError((_) => file);
+    if (!_memoryOnly) {
+      for (final dir in [_thumbnailDir, _fullDir]) {
+        if (!await dir.exists()) continue;
+        await for (final file in dir.list()) {
+          if (file is File && !keep.contains(basename(file.path))) {
+            await file.delete().catchError((_) => file);
+          }
         }
       }
     }
@@ -154,6 +192,7 @@ class StickerLibraryService {
   }
 
   Future<void> _writeIndex() async {
+    if (_memoryOnly) return;
     await _root.create(recursive: true);
     await _indexFile.writeAsString(
       jsonEncode({'reason': unavailableReason.value, 'entries': entries.map((e) => e.toMap()).toList()}),
@@ -162,6 +201,13 @@ class StickerLibraryService {
 
   /// The full-size image of [sticker], to send. Downloaded once and kept.
   Future<Uint8List> imageForSending(LibrarySticker sticker) async {
+    if (_memoryOnly) {
+      final cached = _webFullImages[sticker.identifier];
+      if (cached != null) return cached;
+      final bytes = await HttpSvc.sticker.image(sticker.identifier);
+      _webFullImages[sticker.identifier] = bytes;
+      return bytes;
+    }
     final file = _fullFile(sticker.identifier);
     if (await file.exists()) return file.readAsBytes();
     final bytes = await HttpSvc.sticker.image(sticker.identifier);
@@ -192,9 +238,13 @@ class StickerLibraryService {
     await HttpSvc.sticker.delete(sticker.identifier);
     entries.removeWhere((e) => e.identifier == sticker.identifier);
     cachedThumbnails.remove(sticker.identifier);
-    await _writeIndex();
-    for (final file in [thumbnailFile(sticker.identifier), _fullFile(sticker.identifier)]) {
-      if (await file.exists()) await file.delete();
+    _webThumbnails.remove(sticker.identifier);
+    _webFullImages.remove(sticker.identifier);
+    if (!_memoryOnly) {
+      await _writeIndex();
+      for (final file in [thumbnailFile(sticker.identifier), _fullFile(sticker.identifier)]) {
+        if (await file.exists()) await file.delete();
+      }
     }
     unawaited(sync());
   }

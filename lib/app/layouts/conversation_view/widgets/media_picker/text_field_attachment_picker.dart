@@ -8,6 +8,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/a
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_picker_file.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_library_tile.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/gmsg_camera_gallery_sheet.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/sticker_library_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/sticker_library_tile.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
@@ -231,6 +232,7 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
   }
 
   Widget _buildActionList() {
+    final scheme = context.theme.colorScheme;
     return SliverToBoxAdapter(
       child: SizedBox(
         width: 175,
@@ -251,50 +253,52 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
               _QuickActionItem(
                 icon: Icons.camera_alt_rounded,
                 label: 'Photo',
-                color: const Color(0xFF34C759),
+                color: scheme.primary,
                 onTap: () => openFullCamera(type: 'camera'),
               ),
-              _QuickActionItem(
-                icon: Icons.videocam_rounded,
-                label: 'Video',
-                color: const Color(0xFFFF3B30),
-                onTap: () => openFullCamera(type: 'video'),
-              ),
+              if (SettingsSvc.getServerDetails().supportsStickers)
+                _QuickActionItem(
+                  icon: Icons.sticky_note_2_rounded,
+                  label: 'Stickers',
+                  color: scheme.secondary,
+                  selected: _showStickers,
+                  onTap: _toggleStickers,
+                ),
               _QuickActionItem(
                 icon: Icons.photo_library_rounded,
                 label: 'Gallery',
-                color: const Color(0xFF5856D6),
+                color: scheme.primary,
                 onTap: _handleGallery,
               ),
               _QuickActionItem(
                 icon: Icons.folder_rounded,
                 label: 'Files',
-                color: const Color(0xFF007AFF),
+                color: scheme.secondary,
                 onTap: () => AttachmentActions.pickFiles(controller),
               ),
               _QuickActionItem(
                 icon: Icons.location_on_rounded,
                 label: 'Location',
-                color: const Color(0xFF32ADE6),
+                color: scheme.tertiary,
                 onTap: () => AttachmentActions.shareLocation(controller),
               ),
               _QuickActionItem(
                 icon: Icons.schedule_rounded,
                 label: 'Schedule',
-                color: const Color(0xFFFF9500),
+                color: scheme.secondary,
                 onTap: () => AttachmentActions.schedule(context, controller),
               ),
               _QuickActionItem(
                 icon: Icons.draw_rounded,
                 label: 'Handwritten',
-                color: const Color(0xFFAF52DE),
+                color: scheme.tertiary,
                 onTap: () => AttachmentActions.handwritten(context, controller),
               ),
               if (OpenPigeon.offered && controller.chat.isIMessage)
                 _QuickActionItem(
                   icon: Icons.sports_esports_rounded,
                   label: 'Games',
-                  color: const Color(0xFFD4A72C),
+                  color: scheme.primary,
                   onTap: () => showOpenPigeonPicker(context, controller),
                 ),
               // v2 (Swift) server only. Switches the grid to the Mac's Genmoji library (and back);
@@ -303,17 +307,9 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
                 _QuickActionItem(
                   icon: Icons.add_reaction_rounded,
                   label: 'Genmoji',
-                  color: const Color(0xFFFF2D55),
+                  color: scheme.tertiary,
                   selected: _showGenmoji,
                   onTap: _toggleGenmoji,
-                ),
-              if (SettingsSvc.getServerDetails().supportsStickers)
-                _QuickActionItem(
-                  icon: Icons.sticky_note_2_rounded,
-                  label: 'Stickers',
-                  color: const Color(0xFF5856D6),
-                  selected: _showStickers,
-                  onTap: _toggleStickers,
                 ),
             ],
           ),
@@ -383,7 +379,8 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
                 const SizedBox(height: 12),
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    minimumSize: const Size(48, 48),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     backgroundColor: context.theme.colorScheme.primary,
                     foregroundColor: context.theme.colorScheme.onPrimary,
                   ),
@@ -573,7 +570,8 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
                     const SizedBox(height: 12),
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        minimumSize: const Size(48, 48),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                         backgroundColor: context.theme.colorScheme.primary,
                         foregroundColor: context.theme.colorScheme.onPrimary,
                       ),
@@ -597,15 +595,14 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
 
   List<Widget> get _stickerLeadingTiles => [
         _BackToPhotosTile(onTap: () => controller.showStickerLibrary.value = false),
-        if (SettingsSvc.settings.enablePrivateAPI.value) const StickerAddTile(),
+        if (canEditStickers) const StickerAddTile(),
       ];
 
-  /// The Mac's sticker library in the photo grid's place, laid out like the Genmoji grid: saved stickers, then
-  /// recents.
+  /// The Mac's sticker library in the photo grid's place, laid out like the Genmoji grid: recents, then saved.
   Widget _buildStickerGrid() => Obx(() {
-        if (SubscriptionSvc.locked) return _subscriptionRequired(ProFeature.stickers);
+        if (isStickerSubscriptionLocked) return _subscriptionRequired(ProFeature.stickers);
         final svc = StickerLibrarySvc;
-        final entries = [...svc.entries.where((e) => e.isSaved), ...svc.entries.where((e) => !e.isSaved)];
+        final entries = [...svc.entries.where((e) => !e.isSaved), ...svc.entries.where((e) => e.isSaved)];
         final leading = _stickerLeadingTiles;
         if (entries.isEmpty) {
           return SliverMainAxisGroup(slivers: [_leadingColumn(leading), _buildStickerStatus(svc)]);
@@ -624,6 +621,7 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
                 key: ValueKey("sticker-${sticker.identifier}"),
                 sticker: sticker,
                 draggable: true,
+                onTap: () => AttachmentActions.sendStandaloneSticker(controller, sticker),
               );
             },
             childCount: leading.length + entries.length,
@@ -648,7 +646,7 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
         width: 220,
       );
     }
-    final canAdd = SettingsSvc.settings.enablePrivateAPI.value;
+    final canAdd = canEditStickers;
     return _buildStatusSliver(
       icon: Icons.sticky_note_2_rounded,
       title: svc.unavailableReason.value != null ? "Library Unavailable" : "No Stickers Yet",
@@ -703,11 +701,13 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
         icon: Icons.photo_camera_outlined,
         onTap: () => openFullCamera(type: 'camera'),
       ),
-      GmsgAttachmentAction(
-        label: 'Video',
-        icon: Icons.videocam_outlined,
-        onTap: () => openFullCamera(type: 'video'),
-      ),
+      if (SettingsSvc.getServerDetails().supportsStickers)
+        GmsgAttachmentAction(
+          label: 'Stickers',
+          icon: Icons.sticky_note_2_outlined,
+          selected: _showStickers,
+          onTap: _toggleStickers,
+        ),
       GmsgAttachmentAction(
         label: 'GIFs',
         icon: Icons.gif_box_outlined,
@@ -753,7 +753,54 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
       actions: actions,
       expanded: _isMaterialExpanded,
       onExpandedChanged: (expanded) => setState(() => _isMaterialExpanded = expanded),
-      overrideBody: _showGenmoji ? _buildMaterialGenmojiBody(context) : null,
+      overrideBody: _showGenmoji
+          ? _buildMaterialGenmojiBody(context)
+          : _showStickers
+              ? _buildMaterialStickerBody(context)
+              : null,
+    );
+  }
+
+  Widget _buildMaterialStickerBody(BuildContext context) {
+    final hairline = Theme.of(context).colorScheme.outlineVariant.withValues(alpha: 0.45);
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Row(
+            children: [
+              ActionChip(
+                materialTapTargetSize: MaterialTapTargetSize.padded,
+                avatar: const Icon(Icons.arrow_back_rounded, size: 18),
+                label: const Text('Actions'),
+                onPressed: () => controller.showStickerLibrary.value = false,
+              ),
+              if (canEditStickers) ...[
+                const SizedBox(width: 8),
+                Obx(
+                  () => ActionChip(
+                    materialTapTargetSize: MaterialTapTargetSize.padded,
+                    avatar: StickerLibrarySvc.adding.value
+                        ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('Add Sticker'),
+                    onPressed: StickerLibrarySvc.adding.value ? null : pickAndAddSticker,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Divider(height: 1, thickness: 1, color: hairline),
+        Expanded(
+          child: StickerLibraryView(
+            controller: controller,
+            title: false,
+            showHeader: false,
+            draggable: true,
+          ),
+        ),
+      ],
     );
   }
 
@@ -764,16 +811,18 @@ class _AttachmentPickerState extends State<AttachmentPicker> with ThemeHelpers {
       return Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
             child: Row(
               children: [
                 ActionChip(
+                  materialTapTargetSize: MaterialTapTargetSize.padded,
                   avatar: const Icon(Icons.arrow_back_rounded, size: 18),
                   label: const Text('Actions'),
                   onPressed: () => controller.showGenmojiLibrary.value = false,
                 ),
                 const SizedBox(width: 8),
                 ActionChip(
+                  materialTapTargetSize: MaterialTapTargetSize.padded,
                   avatar: const Icon(Icons.add_rounded, size: 18),
                   label: const Text('New Genmoji'),
                   onPressed: () => AttachmentActions.createGenmoji(context, controller),
@@ -851,26 +900,29 @@ class _BackToPhotosTile extends StatelessWidget {
     return Semantics(
       button: true,
       label: "Back to photos",
-      child: Material(
-        color: scheme.surfaceContainerHighest,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.arrow_back_rounded, size: 16, color: scheme.onSurface),
-                  const SizedBox(width: 2),
-                  Icon(Icons.photo_library_rounded, size: 22, color: scheme.onSurface),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text("Photos", style: context.theme.textTheme.labelMedium),
-            ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+        child: Material(
+          color: scheme.surfaceContainerHighest,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.arrow_back_rounded, size: 16, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 2),
+                    Icon(Icons.photo_library_rounded, size: 24, color: scheme.onSurfaceVariant),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text("Photos", style: context.theme.textTheme.labelMedium),
+              ],
+            ),
           ),
         ),
       ),
@@ -904,15 +956,16 @@ class _QuickActionItem extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Container(
+          constraints: const BoxConstraints(minHeight: 48),
           decoration: BoxDecoration(
             color: bgColor,
             borderRadius: BorderRadius.circular(12),
             border: selected ? Border.all(color: color, width: 1.5) : null,
           ),
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
+          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
           child: Row(
             children: [
-              Icon(icon, color: color, size: 26),
+              Icon(icon, color: color, size: 24),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -964,107 +1017,108 @@ class GmsgAttachmentDrawer extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final screenHeight = MediaQuery.sizeOf(context).height;
-    final collapsedHeight = math.min(300.0, screenHeight * 0.42);
+    final collapsedHeight = math.min(282.0, screenHeight * 0.42);
     final expandedHeight = math.max(collapsedHeight + 40.0, (screenHeight * 0.62).clamp(320.0, 560.0));
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      height: expanded ? expandedHeight : collapsedHeight,
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainer,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+    return Material(
+      color: scheme.surfaceContainer,
+      elevation: 16,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onVerticalDragEnd: (details) {
-              final v = details.primaryVelocity ?? 0;
-              if (v < -150 && !expanded) onExpandedChanged(true);
-              if (v > 150 && expanded) onExpandedChanged(false);
-            },
-            child: SizedBox(
-              height: 36,
-              width: double.infinity,
-              child: IconButton(
-                tooltip: expanded ? 'Collapse' : 'Expand',
-                padding: EdgeInsets.zero,
-                icon: Icon(
-                  expanded ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
-                  color: scheme.onSurfaceVariant,
-                  size: 24,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        height: expanded ? expandedHeight : collapsedHeight,
+        child: Column(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragEnd: (details) {
+                final v = details.primaryVelocity ?? 0;
+                if (v < -150 && !expanded) onExpandedChanged(true);
+                if (v > 150 && expanded) onExpandedChanged(false);
+              },
+              child: SizedBox(
+                height: 48,
+                width: double.infinity,
+                child: IconButton(
+                  tooltip: expanded ? 'Collapse' : 'Expand',
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    expanded ? Icons.keyboard_arrow_down_rounded : Icons.keyboard_arrow_up_rounded,
+                    color: scheme.onSurfaceVariant,
+                    size: 24,
+                  ),
+                  onPressed: () => onExpandedChanged(!expanded),
                 ),
-                onPressed: () => onExpandedChanged(!expanded),
               ),
             ),
-          ),
-          Expanded(
-            child: overrideBody ??
-                NotificationListener<OverscrollNotification>(
-                  onNotification: (notification) {
-                    if (notification.overscroll > 4 && !expanded) {
-                      onExpandedChanged(true);
-                    } else if (notification.overscroll < -4 && expanded && notification.metrics.pixels <= 0) {
-                      onExpandedChanged(false);
-                    }
-                    return false;
-                  },
-                  child: GridView.builder(
-                    physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
-                    padding: EdgeInsets.fromLTRB(16, 4, 16, 24 + MediaQuery.viewPaddingOf(context).bottom),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 8,
-                    mainAxisExtent: 108,
-                  ),
-                  itemCount: actions.length,
-                  itemBuilder: (context, index) {
-                    final action = actions[index];
-                    return Semantics(
-                      button: true,
-                      label: action.label,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(16),
-                        onTap: action.onTap,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Container(
-                              width: 56,
-                              height: 56,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: action.selected ? scheme.primaryContainer : scheme.secondaryContainer,
-                              ),
-                              child: Icon(
-                                action.icon,
-                                size: 24,
-                                color: action.selected ? scheme.onPrimaryContainer : scheme.onSecondaryContainer,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              action.label,
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                    color: scheme.onSurface,
-                                  ),
-                            ),
-                          ],
-                        ),
+            Expanded(
+              child: overrideBody ??
+                  NotificationListener<OverscrollNotification>(
+                    onNotification: (notification) {
+                      if (notification.overscroll > 4 && !expanded) {
+                        onExpandedChanged(true);
+                      } else if (notification.overscroll < -4 && expanded && notification.metrics.pixels <= 0) {
+                        onExpandedChanged(false);
+                      }
+                      return false;
+                    },
+                    child: GridView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(parent: ClampingScrollPhysics()),
+                      padding: EdgeInsets.fromLTRB(8, 4, 8, 24 + MediaQuery.viewPaddingOf(context).bottom),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 4,
+                        mainAxisSpacing: 8,
+                        crossAxisSpacing: 8,
+                        mainAxisExtent: 108,
                       ),
-                    );
-                  },
+                      itemCount: actions.length,
+                      itemBuilder: (context, index) {
+                        final action = actions[index];
+                        return Semantics(
+                          button: true,
+                          label: action.label,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(4),
+                            onTap: action.onTap,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Container(
+                                  width: 56,
+                                  height: 56,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: action.selected ? scheme.primaryContainer : scheme.secondaryContainer,
+                                  ),
+                                  child: Icon(
+                                    action.icon,
+                                    size: 24,
+                                    color: action.selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  action.label,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                        color: scheme.onSurface,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                   ),
-                ),
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }

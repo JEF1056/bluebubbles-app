@@ -89,11 +89,12 @@ class MainActivity : ComponentActivity() {
         val relay = (applicationContext as WearBubblesApp).phoneRelayClient
         activeHeartbeatJob?.cancel()
         activeHeartbeatJob = lifecycleScope.launch {
+            launch { relay.refreshPhoneConnected() }
             relay.isPhoneConnected.collectLatest { connected ->
                 if (connected) {
                     while (isActive) {
                         relay.notifyWatchActive(true)
-                        delay(90_000L)
+                        delay(60_000L)
                     }
                 }
             }

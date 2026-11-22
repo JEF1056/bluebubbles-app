@@ -32,6 +32,14 @@ import java.net.URLDecoder
 
 class DataLayerListenerService : WearableListenerService() {
 
+    internal data class IncomingCallPayload(
+        val callUuid: String,
+        val callerName: String,
+        val callerAddress: String,
+        val isVideo: Boolean,
+        val isTelephony: Boolean
+    )
+
     companion object {
         private const val TAG = "DataLayerListener"
         internal const val DISCONNECT_DEBOUNCE_MS = 25_000L
@@ -41,6 +49,36 @@ class DataLayerListenerService : WearableListenerService() {
         private const val PATH_RESET_ACK = "/reset-ack"
         private const val PATH_REQUEST_STATUS = "/request-status"
         private const val PATH_WATCH_STATUS = "/watch-status"
+
+        internal fun parseIncomingCallPayload(json: String): IncomingCallPayload? {
+            val obj = try {
+                JsonParser.parseString(json).asJsonObject
+            } catch (_: Exception) {
+                null
+            } ?: return null
+            val callUuid = obj.get("callUuid")?.takeIf { !it.isJsonNull }?.asString ?: return null
+            if (callUuid.isBlank()) return null
+            val isTelephony = try {
+                obj.get("isTelephony")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            }
+            val isVideo = try {
+                obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            } && !isTelephony
+            val callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString
+                ?: if (isTelephony) "iPhone Call" else "FaceTime"
+            val callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            return IncomingCallPayload(
+                callUuid = callUuid,
+                callerName = callerName,
+                callerAddress = callerAddress,
+                isVideo = isVideo,
+                isTelephony = isTelephony
+            )
+        }
 
         private val disconnectJobLock = Any()
         @Volatile
@@ -289,15 +327,15 @@ class DataLayerListenerService : WearableListenerService() {
                 }
             }
             PhoneRelayClient.PATH_INCOMING_CALL -> {
-                val obj = parseJsonObject(dataStr) ?: return
-                val callUuid = obj.stringOrNull("callUuid") ?: return
+                val call = parseIncomingCallPayload(dataStr) ?: return
                 CallNotificationHelper.showIncomingCall(
                     context = applicationContext,
-                    callUuid = callUuid,
-                    callerName = obj.stringOrNull("callerName") ?: "FaceTime",
-                    callerAddress = obj.stringOrNull("callerAddress") ?: "",
-                    isVideo = obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
-                    fromPhoneRelay = true
+                    callUuid = call.callUuid,
+                    callerName = call.callerName,
+                    callerAddress = call.callerAddress,
+                    isVideo = call.isVideo,
+                    fromPhoneRelay = true,
+                    isTelephony = call.isTelephony
                 )
             }
             PhoneRelayClient.PATH_CALL_ENDED -> {

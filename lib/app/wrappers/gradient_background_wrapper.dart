@@ -148,6 +148,23 @@ class _GradientBackgroundState extends CustomState<GradientBackground, void, Con
               return const SizedBox.shrink();
             }
 
+            if (MediaQuery.disableAnimationsOf(context)) {
+              final anim = ThemeSvc.gradientTween.value.transform(0.0);
+              return Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topRight,
+                    end: Alignment.bottomLeft,
+                    stops: [anim.get("color1"), anim.get("color2")],
+                    colors: [
+                      context.theme.colorScheme.bubble(context, controller.chat.isIMessage).withValues(alpha: 0.5),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              );
+            }
+
             return MirrorAnimationBuilder<Movie>(
               tween: ThemeSvc.gradientTween.value,
               curve: Curves.fastOutSlowIn,

@@ -5,6 +5,8 @@ import androidx.core.os.bundleOf
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.UnifiedPushReceiver
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.Utils
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -25,6 +27,10 @@ class BlueBubblesFirebaseMessagingService: FirebaseMessagingService() {
             return
         }
         PersistentLog.d(applicationContext, Constants.logTag, "Received new message of type $type from FCM...")
+        if (type == "ft-call-status-changed") {
+            CreateIncomingFaceTimeNotification.handlePushCallStatusChanged(applicationContext, message.data["data"])
+        }
+        WearSyncManager.forwardPushEventIfWatchActive(applicationContext, type, message.data)
         DartWorkManager.createWorker(applicationContext, type, HashMap(message.data)) {}
 
         // check if the user configured "Send Events to Tasker"

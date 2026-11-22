@@ -69,8 +69,12 @@ object WearSyncManager {
     private const val PREFS_NAME = "wear_sync_prefs"
     private const val KEY_WATCH_CONNECTED = "watch_connected"
     private const val KEY_WATCH_CHECKED_AT = "watch_checked_at"
+    private const val KEY_WATCH_ACTIVE_UNTIL_MS = "watch_active_until_ms"
     private const val KEY_CALL_TELEPHONY_PREFIX = "call_telephony_"
-    private const val SOCKET_IDLE_TIMEOUT_MS = 120_000L
+    private const val KEY_CALL_META_PREFIX = "call_meta_"
+    private const val CALL_META_TTL_MS = 5 * 60_000L
+    internal const val SOCKET_IDLE_TIMEOUT_MS = 120_000L
+    private const val FORWARD_DEDUP_WINDOW_MS = 30_000L
 
     const val PATH_CREDENTIALS = "/bb/credentials"
     const val PATH_PROFILE = "/bb/profile"
@@ -122,6 +126,7 @@ object WearSyncManager {
 
     private val incomingCalls = ConcurrentHashMap<String, IncomingCallMeta>()
     private val watchAnsweredCalls = ConcurrentHashMap.newKeySet<String>()
+    private val endedCalls = ConcurrentHashMap<String, Long>()
     private val inFlightAttachments = ConcurrentHashMap.newKeySet<String>()
     private val attachmentSemaphore = Semaphore(2)
 
@@ -133,8 +138,16 @@ object WearSyncManager {
     private var relaySocket: Socket? = null
     @Volatile
     private var ownsRelaySocket: Boolean = false
+    @Volatile
+    private var relaySocketOrigin: String = ""
+    @Volatile
+    private var watchActiveUntilMs: Long = 0L
+    private val recentForwardedMessages = ConcurrentHashMap<String, Long>()
     private val relayListeners = mutableListOf<Pair<String, Emitter.Listener>>()
     private var socketTimeoutJob: Job? = null
+    internal val sharedRelayOkHttpClient: OkHttpClient by lazy {
+        SocketIOForegroundService.buildSocketOkHttpClient()
+    }
 
     @JvmStatic
     fun updateWatchConnectedCache(context: Context, connected: Boolean) {
@@ -154,21 +167,70 @@ object WearSyncManager {
         }
     }
 
-    private fun persistCallTelephony(context: Context, callUuid: String, isTelephony: Boolean) {
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_CALL_TELEPHONY_PREFIX + callUuid, isTelephony)
-            .apply()
+    private fun persistIncomingCallMeta(context: Context, callUuid: String, meta: IncomingCallMeta) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val json = JsonObject().apply {
+            addProperty("callerName", meta.callerName)
+            if (!meta.callerAddress.isNullOrBlank()) {
+                addProperty("callerAddress", meta.callerAddress)
+            }
+            addProperty("isVideo", meta.isVideo)
+            addProperty("isTelephony", meta.isTelephony)
+            addProperty("savedAtMs", now)
+        }.toString()
+        val editor = prefs.edit().putString(KEY_CALL_META_PREFIX + callUuid, json)
+        // Prune stale call metadata entries so prefs don't accumulate across process deaths.
+        for ((k, v) in prefs.all) {
+            if (k.startsWith(KEY_CALL_META_PREFIX) && k != KEY_CALL_META_PREFIX + callUuid && v is String) {
+                val savedAt = try {
+                    JsonParser.parseString(v).asJsonObject.get("savedAtMs")?.asLong ?: 0L
+                } catch (_: Exception) {
+                    0L
+                }
+                if (now - savedAt > CALL_META_TTL_MS) {
+                    editor.remove(k)
+                }
+            }
+        }
+        editor.apply()
     }
 
-    private fun takePersistedCallTelephony(context: Context, callUuid: String): Boolean {
+    private fun takePersistedIncomingCallMeta(context: Context, callUuid: String): IncomingCallMeta? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val key = KEY_CALL_TELEPHONY_PREFIX + callUuid
-        val value = prefs.getBoolean(key, false)
-        if (prefs.contains(key)) {
-            prefs.edit().remove(key).apply()
+        val metaKey = KEY_CALL_META_PREFIX + callUuid
+        val legacyKey = KEY_CALL_TELEPHONY_PREFIX + callUuid
+        val raw = prefs.getString(metaKey, null)
+        val hasLegacy = prefs.contains(legacyKey)
+        val legacyTelephony = if (hasLegacy) prefs.getBoolean(legacyKey, false) else false
+        if (raw != null || hasLegacy) {
+            prefs.edit().remove(metaKey).remove(legacyKey).apply()
         }
-        return value
+        if (raw != null) {
+            try {
+                val obj = JsonParser.parseString(raw).asJsonObject
+                val savedAt = obj.get("savedAtMs")?.asLong ?: 0L
+                if (System.currentTimeMillis() - savedAt <= CALL_META_TTL_MS) {
+                    return IncomingCallMeta(
+                        callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString ?: "Unknown Caller",
+                        callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull }?.asString,
+                        isVideo = obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+                        isTelephony = obj.get("isTelephony")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+                    )
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return if (hasLegacy) {
+            IncomingCallMeta(
+                callerName = "Unknown Caller",
+                callerAddress = null,
+                isVideo = false,
+                isTelephony = legacyTelephony
+            )
+        } else {
+            null
+        }
     }
 
     @JvmStatic
@@ -181,8 +243,10 @@ object WearSyncManager {
         isTelephony: Boolean = false
     ) {
         if (callUuid.isBlank()) return
-        incomingCalls[callUuid] = IncomingCallMeta(callerName, callerAddress, isVideo, isTelephony)
-        persistCallTelephony(context, callUuid, isTelephony)
+        endedCalls.remove(callUuid)
+        val meta = IncomingCallMeta(callerName, callerAddress, isVideo, isTelephony)
+        incomingCalls[callUuid] = meta
+        persistIncomingCallMeta(context, callUuid, meta)
         scope.launch {
             val payload = JsonObject().apply {
                 addProperty("callUuid", callUuid)
@@ -202,7 +266,10 @@ object WearSyncManager {
         if (callUuid.isBlank()) return
         incomingCalls.remove(callUuid)
         watchAnsweredCalls.remove(callUuid)
-        takePersistedCallTelephony(context, callUuid)
+        takePersistedIncomingCallMeta(context, callUuid)
+        val now = System.currentTimeMillis()
+        endedCalls.entries.removeIf { now - it.value > CALL_META_TTL_MS }
+        if (endedCalls.putIfAbsent(callUuid, now) != null) return
         scope.launch {
             val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString()
             sendMessageToWatchNodes(context, PATH_CALL_ENDED, payload.toByteArray())
@@ -223,14 +290,13 @@ object WearSyncManager {
         isTelephonyArg: Boolean? = null
     ) {
         if (callUuid.isBlank()) return
-        val cached = incomingCalls.remove(callUuid)
-        val persistedTelephony = takePersistedCallTelephony(context, callUuid)
+        val cached = incomingCalls.remove(callUuid) ?: takePersistedIncomingCallMeta(context, callUuid)
         watchAnsweredCalls.add(callUuid)
         val callerName = callerNameArg?.takeIf { it.isNotBlank() }
             ?: cached?.callerName
             ?: "Unknown Caller"
         val callerAddress = callerAddressArg?.takeIf { it.isNotBlank() } ?: cached?.callerAddress
-        val isTelephony = isTelephonyArg ?: cached?.isTelephony ?: persistedTelephony
+        val isTelephony = isTelephonyArg ?: cached?.isTelephony ?: false
         cancelCallNotifications(context, callUuid)
         val routed = com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.addIncomingCall(
             context = context,
@@ -1309,11 +1375,30 @@ object WearSyncManager {
     }
 
     fun setWatchActive(context: Context, active: Boolean) {
+        val appCtx = context.applicationContext
+        val untilMs = if (active) System.currentTimeMillis() + SOCKET_IDLE_TIMEOUT_MS else 0L
+        watchActiveUntilMs = untilMs
+        appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_WATCH_ACTIVE_UNTIL_MS, untilMs)
+            .apply()
         if (active) {
-            startSocketRelay(context.applicationContext)
+            startSocketRelay(appCtx)
         } else {
             stopSocketRelay()
         }
+    }
+
+    internal fun isWatchActive(context: Context, nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (watchActiveUntilMs > nowMs) return true
+        val persisted = context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getLong(KEY_WATCH_ACTIVE_UNTIL_MS, 0L)
+        if (persisted > nowMs) {
+            watchActiveUntilMs = persisted
+            return true
+        }
+        return false
     }
 
     internal fun isValidSocketOrigin(origin: String): Boolean {
@@ -1326,6 +1411,103 @@ object WearSyncManager {
         }
     }
 
+    internal fun buildRelaySocketOptions(
+        authKey: String,
+        extraHeaders: Map<String, List<String>>,
+        okHttpClient: OkHttpClient = sharedRelayOkHttpClient
+    ): IO.Options {
+        // Polling-first matches SocketIOForegroundService: engine.io-client 2.1 never falls back from transports[0] on handshake error.
+        val opts = IO.Options.builder()
+            .setQuery("guid=${encode(authKey)}")
+            .setTransports(arrayOf("polling", "websocket"))
+            .setForceNew(true)
+            .setReconnection(true)
+            .setReconnectionDelay(2_000L)
+            .setReconnectionDelayMax(120_000L)
+            .setExtraHeaders(extraHeaders)
+            .build()
+        opts.callFactory = okHttpClient
+        opts.webSocketFactory = okHttpClient
+        return opts
+    }
+
+    internal fun isRecentlyForwarded(dedupKey: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val prev = recentForwardedMessages[dedupKey] ?: return false
+        return nowMs - prev <= FORWARD_DEDUP_WINDOW_MS
+    }
+
+    internal fun markForwarded(dedupKey: String, nowMs: Long = System.currentTimeMillis()) {
+        if (recentForwardedMessages.size > 64) {
+            recentForwardedMessages.entries.removeIf { nowMs - it.value > FORWARD_DEDUP_WINDOW_MS }
+        }
+        recentForwardedMessages[dedupKey] = nowMs
+    }
+
+    internal fun shouldForwardDedup(dedupKey: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        if (isRecentlyForwarded(dedupKey, nowMs)) return false
+        markForwarded(dedupKey, nowMs)
+        return true
+    }
+
+    internal fun clearForwardDedupForTests() {
+        recentForwardedMessages.clear()
+    }
+
+    internal fun parseForwardableMessage(rawJson: String): Pair<String, JsonObject>? {
+        val obj = try {
+            JsonParser.parseString(rawJson).asObjOrNull()
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid")
+            ?: obj.str("chatGuid")
+            ?: return null
+        return chatGuid to mapMessageToRelayJson(obj, chatGuid)
+    }
+
+    private suspend fun forwardMessageJsonToWatch(context: Context, rawJson: String, isUpdate: Boolean) {
+        val (chatGuid, dto) = parseForwardableMessage(rawJson) ?: return
+        val guid = dto.str("guid") ?: return
+        val payloadStr = dto.toString()
+        val dedupKey = if (isUpdate) "upd:$guid:${payloadStr.hashCode()}" else "new:$guid"
+        if (isRecentlyForwarded(dedupKey)) return
+        val payloadBytes = payloadStr.toByteArray()
+        if (shouldUseDataAsset(payloadBytes)) {
+            syncMessages(context, chatGuid)
+            markForwarded(dedupKey)
+        } else {
+            val path = if (isUpdate) PATH_UPDATED_MESSAGE else PATH_NEW_MESSAGE
+            if (sendMessageToWatchNodes(context, path, payloadBytes)) {
+                markForwarded(dedupKey)
+            }
+        }
+    }
+
+    /**
+     * Fallback delivery path while the watch app is actively open: Android's Cached App Freezer
+     * can suspend background TCP reads when keepAppAlive is off, whereas high-priority FCM/UP wakes
+     * the process immediately with the exact same message JSON. Zero BT traffic when watch is closed.
+     */
+    @JvmStatic
+    fun forwardPushEventIfWatchActive(context: Context, type: String, payload: Map<String, Any?>) {
+        if (type != "new-message" && type != "updated-message") return
+        val appCtx = context.applicationContext
+        if (!isWatchActive(appCtx)) return
+        val rawJson = when (val data = payload["data"]) {
+            is String -> data
+            is Map<*, *> -> gson.toJson(data)
+            else -> return
+        }
+        if (rawJson.isBlank()) return
+        val isUpdate = type == "updated-message"
+        scope.launch {
+            forwardMessageJsonToWatch(appCtx, rawJson, isUpdate)
+            if (relaySocket?.connected() != true && relaySocket?.isActive != true) {
+                startSocketRelay(appCtx)
+            }
+        }
+    }
+
     @Synchronized
     private fun startSocketRelay(context: Context) {
         socketTimeoutJob?.cancel()
@@ -1334,18 +1516,23 @@ object WearSyncManager {
             stopSocketRelay()
         }
         val fgSocket = SocketIOForegroundService.activeSocket
+        val settings = SettingsHelper(context)
         if (relaySocket != null) {
             if (fgSocket != null && fgSocket.connected() && relaySocket === fgSocket) return
-            if (ownsRelaySocket && relaySocket?.connected() == true) return
+            if (ownsRelaySocket && relaySocketOrigin == settings.origin &&
+                (relaySocket?.connected() == true || relaySocket?.isActive == true)
+            ) {
+                return
+            }
             detachRelaySocketLocked()
         }
         if (fgSocket != null && fgSocket.connected()) {
-            attachRelayListenersLocked(context, fgSocket)
+            attachRelayListenersLocked(context, fgSocket, logLifecycle = false)
             relaySocket = fgSocket
             ownsRelaySocket = false
+            relaySocketOrigin = settings.origin
             return
         }
-        val settings = SettingsHelper(context)
         if (!settings.hasServerUrl() || !settings.hasAuthKey()) return
         if (!isValidSocketOrigin(settings.origin)) {
             PersistentLog.w(context, TAG, "startSocketRelay skipped: invalid origin '${settings.origin}'")
@@ -1354,36 +1541,49 @@ object WearSyncManager {
         try {
             val extraHeaders = mutableMapOf<String, List<String>>()
             settings.getAllHeaders().forEach { (k, v) -> extraHeaders[k] = listOf(v) }
-            val opts = IO.Options.builder()
-                .setQuery("guid=${encode(settings.guidAuthKey)}")
-                .setTransports(arrayOf("websocket", "polling"))
-                .setReconnection(true)
-                .setExtraHeaders(extraHeaders)
-                .build()
+            val opts = buildRelaySocketOptions(settings.guidAuthKey, extraHeaders)
             val sock = IO.socket(settings.origin, opts)
-            attachRelayListenersLocked(context, sock)
+            attachRelayListenersLocked(context, sock, logLifecycle = true)
             sock.connect()
             relaySocket = sock
             ownsRelaySocket = true
+            relaySocketOrigin = settings.origin
         } catch (e: Exception) {
             PersistentLog.w(context, TAG, "startSocketRelay failed: ${e.message}")
         }
     }
 
-    private fun attachRelayListenersLocked(context: Context, sock: Socket) {
-        listOf("new-message" to PATH_NEW_MESSAGE, "updated-message" to PATH_UPDATED_MESSAGE).forEach { (event, path) ->
+    private fun attachRelayListenersLocked(context: Context, sock: Socket, logLifecycle: Boolean) {
+        if (logLifecycle) {
+            val connectListener = Emitter.Listener {
+                PersistentLog.d(context, TAG, "Wear relay socket connected")
+            }
+            sock.on(Socket.EVENT_CONNECT, connectListener)
+            relayListeners.add(Socket.EVENT_CONNECT to connectListener)
+
+            val connectErrorListener = Emitter.Listener { args ->
+                val detail = SocketIOForegroundService.parseConnectErrorMessage(args.firstOrNull())
+                PersistentLog.w(context, TAG, "Wear relay socket connect error: $detail")
+            }
+            sock.on(Socket.EVENT_CONNECT_ERROR, connectErrorListener)
+            relayListeners.add(Socket.EVENT_CONNECT_ERROR to connectErrorListener)
+
+            val disconnectListener = Emitter.Listener { args ->
+                val reason = SocketIOForegroundService.parseDisconnectReason(args.firstOrNull())
+                PersistentLog.d(context, TAG, "Wear relay socket disconnected: $reason")
+            }
+            sock.on(Socket.EVENT_DISCONNECT, disconnectListener)
+            relayListeners.add(Socket.EVENT_DISCONNECT to disconnectListener)
+        }
+        listOf("new-message" to false, "updated-message" to true).forEach { (event, isUpdate) ->
             val listener = Emitter.Listener { args ->
-                val raw = args.firstOrNull() as? JSONObject ?: return@Listener
+                val raw = when (val first = args.firstOrNull()) {
+                    is JSONObject -> first.toString()
+                    is String -> first
+                    else -> return@Listener
+                }
                 scope.launch {
-                    val obj = JsonParser.parseString(raw.toString()).asObjOrNull() ?: return@launch
-                    val chatGuid = obj.arr("chats")?.firstOrNull()?.asObjOrNull()?.str("guid") ?: return@launch
-                    val dto = mapMessageToRelayJson(obj, chatGuid)
-                    val payloadBytes = dto.toString().toByteArray()
-                    if (shouldUseDataAsset(payloadBytes)) {
-                        syncMessages(context, chatGuid)
-                    } else {
-                        sendMessageToWatchNodes(context, path, payloadBytes)
-                    }
+                    forwardMessageJsonToWatch(context, raw, isUpdate)
                 }
             }
             sock.on(event, listener)
@@ -1429,6 +1629,7 @@ object WearSyncManager {
         relayListeners.clear()
         relaySocket = null
         ownsRelaySocket = false
+        relaySocketOrigin = ""
     }
 
     @Synchronized
@@ -1542,7 +1743,8 @@ object WearSyncManager {
         }
     }
 
-    private suspend fun sendMessageToWatchNodes(context: Context, path: String, payload: ByteArray) {
+    private suspend fun sendMessageToWatchNodes(context: Context, path: String, payload: ByteArray): Boolean {
+        var sentAny = false
         try {
             val nodes = Wearable.getCapabilityClient(context)
                 .getCapability(WATCH_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
@@ -1552,15 +1754,21 @@ object WearSyncManager {
             for (node in nodes) {
                 try {
                     msgClient.sendMessage(node.id, path, payload).await()
+                    sentAny = true
                 } catch (_: Exception) {
                 }
             }
         } catch (e: Exception) {
             PersistentLog.w(context, TAG, "sendMessageToWatchNodes($path) failed: ${e.message}")
         }
+        return sentAny
     }
 
-    private val baseOkHttpClient: OkHttpClient by lazy { OkHttpClient() }
+    private val baseOkHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .dns(SocketIOForegroundService.ipv4FirstDns)
+            .build()
+    }
 
     internal fun shouldAttachCustomHeaders(requestUrl: HttpUrl, serverUrl: HttpUrl?): Boolean {
         if (serverUrl == null) return false

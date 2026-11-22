@@ -22,7 +22,7 @@ class LaserController implements Listenable {
   final Random random = Random();
   Size windowSize;
 
-  late Ticker ticker;
+  Ticker? ticker;
   late Point<double> position;
   late double size;
   double globalHue = 42;
@@ -41,6 +41,7 @@ class LaserController implements Listenable {
     lastAutoLaunch = Duration.zero;
     position = Point(
         (bubbleDimensions.left + bubbleDimensions.right) / 2, (bubbleDimensions.top + bubbleDimensions.bottom) / 2);
+    ticker?.dispose();
     ticker = vsync.createTicker(update)..start();
   }
 
@@ -65,7 +66,8 @@ class LaserController implements Listenable {
 
   void dispose() {
     listeners.clear();
-    ticker.dispose();
+    ticker?.dispose();
+    ticker = null;
   }
 
   void update(Duration elapsedDuration) {
@@ -137,8 +139,9 @@ class LaserController implements Listenable {
     }
 
     if (elapsedDuration.inSeconds > 5 && requestedToStop) {
-      ticker.stop();
-      ticker.dispose();
+      ticker?.stop();
+      ticker?.dispose();
+      ticker = null;
       isPlaying = false;
       requestedToStop = false;
       laser = null;

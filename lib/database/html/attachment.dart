@@ -206,9 +206,16 @@ class Attachment {
 
   static String get baseDirectory => FilesystemSvc.attachmentsPath;
 
-  String get directory => "$baseDirectory/$guid";
+  String get directory => "$baseDirectory/${FilesystemService.sanitizeGuid(guid)}";
 
-  String get path => "$directory/$transferName";
+  static String sanitizeTransferName(String? transferName) {
+    final raw = "$transferName";
+    final sanitized = raw.replaceAll('/', '_');
+    if (sanitized == '.' || sanitized == '..') return sanitized.replaceAll('.', '_');
+    return sanitized;
+  }
+
+  String get path => "$directory/${sanitizeTransferName(transferName)}";
 
   String get convertedExtension => (mimeType?.contains('image/hei') ?? false) && !isSeeThrough ? "jpg" : "png";
 

@@ -1,11 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/outgoing_facetime_sheet.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/facetime.dart';
+import 'package:bluebubbles/services/facetime/web_webrtc_client.dart';
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:bluebubbles/services/network/api/facetime_api.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeBaseApi implements BaseApi {
@@ -482,7 +486,16 @@ void main() {
         {'title': 'Call failed', 'message': 'No answer.'},
       ]);
 
-      // ended_error overrides generic reason message
+      // ended_error overrides generic reason message when call was active
+      ctrl.applyServerSession({
+        'uuid': 'fail-2',
+        'status': 'outgoing',
+        'status_id': 4,
+        'display_name': 'Grace',
+        'is_video': true,
+        'active_device_id': 'web-1',
+        'active_device_name': 'Web',
+      });
       ctrl.applyServerSession({
         'uuid': 'fail-2',
         'status': 'disconnected',
@@ -493,8 +506,31 @@ void main() {
       expect(ctrl.lastFailure?.message, 'FaceTime link expired');
       expect(errors.last, {'title': 'Call failed', 'message': 'FaceTime link expired'});
 
-      // Normal user_ended does not trigger error banner
+      // First-seen disconnect (never active locally) and ended_reason == 'missed' never trigger error snackbars
       final errorsBefore = errors.length;
+      ctrl.applyServerSession({
+        'uuid': 'first-seen-1',
+        'status': 'disconnected',
+        'status_id': 6,
+        'ended_reason': 'call_failed',
+        'ended_error': 'Stale call failure',
+      });
+      expect(errors.length, errorsBefore);
+      expect(ctrl.lastFailure?.callUuid, 'fail-2');
+
+      ctrl.startIncoming(callUuid: 'missed-1', callerName: 'Grace', isVideo: true);
+      ctrl.applyServerSession({
+        'uuid': 'missed-1',
+        'status': 'disconnected',
+        'status_id': 6,
+        'ended_reason': 'missed',
+        'ended_error': 'Ignored missed error text',
+      });
+      expect(ctrl.state.phase, ActiveCallPhase.idle);
+      expect(errors.length, errorsBefore);
+      expect(ctrl.lastFailure?.callUuid, 'fail-2');
+
+      // Normal user_ended does not trigger error banner
       ctrl.applyServerSession({
         'uuid': 'ok-1',
         'status': 'disconnected',
@@ -584,5 +620,393 @@ void main() {
       expect(transferred, isFalse);
       expect(errors, ['Call already ended', 'Handoff unavailable']);
     });
+
+    test('Web video WebRTC answerCall and transferHere notify server with video_bridge mode', () async {
+      final transport = _FakeWebRtcTransport();
+      final answerCalls = <Map<String, dynamic>>[];
+      final handoffModes = <Map<String, dynamic>>[];
+
+      final ctrl = ActiveCallController(
+        isWebOverride: true,
+        webRtcClient: WebWebRtcClient(
+          transport: transport,
+          adapterFactory: () => _FakeWebRtcAdapter(),
+        ),
+        deviceId: 'web-1',
+        deviceName: 'Chrome',
+        onAnswerServerCall: (uuid, {audioOnly = false, displayName, chatGuid}) async {
+          answerCalls.add({'uuid': uuid, 'audioOnly': audioOnly});
+          return null;
+        },
+        onHandoffServerCall: (uuid, {mode}) async {
+          handoffModes.add({'uuid': uuid, 'mode': mode});
+          return null;
+        },
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(ctrl.dispose);
+
+      ctrl.startIncoming(callUuid: 'web-vid-1', callerName: 'Alex', isVideo: true);
+      expect(await ctrl.answerCall(), isTrue);
+      expect(answerCalls, [
+        {'uuid': 'web-vid-1', 'audioOnly': false},
+      ]);
+      expect(ctrl.state.isVideo, isTrue);
+
+      ctrl.applyServerSession({
+        'uuid': 'web-vid-2',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Blake',
+        'is_video': true,
+        'active_device_id': 'mac-1',
+        'active_device_name': 'Mac',
+      });
+      expect(await ctrl.transferHere(audioOnly: false), isTrue);
+      expect(handoffModes, [
+        {'uuid': 'web-vid-2', 'mode': 'video_bridge'},
+      ]);
+      expect(ctrl.state.isVideo, isTrue);
+      expect(ctrl.state.isHeldHere, isTrue);
+
+      // Production answerCall path (onAnswerServerCall == null) uses _handoffServer(mode: 'video_bridge')
+      // and preserves the live call if server metadata sync throws.
+      final prodHandoffs = <Map<String, dynamic>>[];
+      final prodErrors = <String>[];
+      var throwOnHandoff = false;
+      final prodCtrl = ActiveCallController(
+        isWebOverride: true,
+        webRtcClient: WebWebRtcClient(
+          transport: transport,
+          adapterFactory: () => _FakeWebRtcAdapter(),
+        ),
+        deviceId: 'web-2',
+        deviceName: 'Chrome',
+        onHandoffServerCall: (uuid, {mode}) async {
+          prodHandoffs.add({'uuid': uuid, 'mode': mode});
+          if (throwOnHandoff) throw const FaceTimeException('Sync timeout');
+          return null;
+        },
+        onShowError: (_, msg) => prodErrors.add(msg),
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(prodCtrl.dispose);
+
+      prodCtrl.startIncoming(callUuid: 'web-vid-3', callerName: 'Morgan', isVideo: true);
+      expect(await prodCtrl.answerCall(), isTrue);
+      expect(prodHandoffs, [
+        {'uuid': 'web-vid-3', 'mode': 'video_bridge'},
+      ]);
+      expect(prodCtrl.state.phase, ActiveCallPhase.ongoing);
+
+      throwOnHandoff = true;
+      prodCtrl.startIncoming(callUuid: 'web-vid-4', callerName: 'Morgan', isVideo: true);
+      expect(await prodCtrl.answerCall(), isTrue);
+      expect(prodCtrl.state.phase, ActiveCallPhase.ongoing);
+      expect(prodErrors, isEmpty);
+    });
+
+    test('Android native video answerCall and transferHere route via Telecom video_bridge without Apple join link',
+        () async {
+      final startedTelecom = <Map<String, dynamic>>[];
+      final handoffCalls = <Map<String, dynamic>>[];
+      final launchedLinks = <String>[];
+      var telecomShouldStart = true;
+
+      final ctrl = ActiveCallController(
+        deviceId: 'android-1',
+        deviceName: 'Pixel',
+        onStartTelecomCall: ({
+          required String callUuid,
+          required String callerName,
+          String? callerAddress,
+          bool isTelephony = false,
+          bool isVideo = false,
+        }) async {
+          startedTelecom.add({'uuid': callUuid, 'isTelephony': isTelephony, 'isVideo': isVideo});
+          return telecomShouldStart;
+        },
+        onHandoffServerCall: (uuid, {mode}) async {
+          handoffCalls.add({'uuid': uuid, 'mode': mode});
+          return PlacedFaceTimeCall(
+            link: 'https://facetime.apple.com/join#fallback',
+            call: FaceTimeCall(callUuid: uuid, isVideo: mode == 'video' || mode == 'video_bridge'),
+          );
+        },
+        onLaunchJoinLink: (link) async {
+          launchedLinks.add(link);
+          return true;
+        },
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(ctrl.dispose);
+
+      ctrl.startIncoming(callUuid: 'and-vid-1', callerName: 'Casey', isVideo: true);
+      expect(await ctrl.answerCall(), isTrue);
+      expect(startedTelecom.last, {'uuid': 'and-vid-1', 'isTelephony': false, 'isVideo': true});
+      expect(handoffCalls.last, {'uuid': 'and-vid-1', 'mode': 'video_bridge'});
+      expect(launchedLinks, isEmpty);
+      expect(ctrl.state.isVideo, isTrue);
+      expect(ctrl.state.isTelecomCall, isTrue);
+
+      ctrl.applyServerSession({
+        'uuid': 'and-vid-2',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Casey',
+        'is_video': true,
+        'active_device_id': 'mac-1',
+        'active_device_name': 'Mac',
+      });
+      expect(await ctrl.transferHere(audioOnly: false), isTrue);
+      expect(startedTelecom.last, {'uuid': 'and-vid-2', 'isTelephony': false, 'isVideo': true});
+      expect(handoffCalls.last, {'uuid': 'and-vid-2', 'mode': 'video_bridge'});
+      expect(launchedLinks, isEmpty);
+      expect(ctrl.state.isVideo, isTrue);
+      expect(ctrl.state.isTelecomCall, isTrue);
+      expect(ctrl.state.isHeldHere, isTrue);
+
+      // When Telecom fails to start on transferHere, fallback uses join-link mode 'video' and launches link.
+      telecomShouldStart = false;
+      ctrl.applyServerSession({
+        'uuid': 'and-vid-3',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Casey',
+        'is_video': true,
+        'active_device_id': 'mac-1',
+        'active_device_name': 'Mac',
+      });
+      expect(await ctrl.transferHere(audioOnly: false), isTrue);
+      expect(handoffCalls.last, {'uuid': 'and-vid-3', 'mode': 'video'});
+      expect(launchedLinks, ['https://facetime.apple.com/join#fallback']);
+      expect(ctrl.state.isTelecomCall, isFalse);
+
+      // Audio-only onStartTelecomAudio callback must not claim video calls.
+      var audioCbCalls = 0;
+      final audioOnlyCtrl = ActiveCallController(
+        deviceId: 'android-2',
+        deviceName: 'Pixel',
+        onStartTelecomAudio: ({
+          required String callUuid,
+          required String callerName,
+          String? callerAddress,
+          bool isTelephony = false,
+        }) async {
+          audioCbCalls++;
+          return true;
+        },
+        onHandoffServerCall: (uuid, {mode}) async => PlacedFaceTimeCall(
+          link: 'https://facetime.apple.com/join#video-only',
+          call: FaceTimeCall(callUuid: uuid, isVideo: true),
+        ),
+        onLaunchJoinLink: (link) async {
+          launchedLinks.add(link);
+          return true;
+        },
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(audioOnlyCtrl.dispose);
+      audioOnlyCtrl.applyServerSession({
+        'uuid': 'and-vid-4',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Casey',
+        'is_video': true,
+        'active_device_id': 'mac-1',
+        'active_device_name': 'Mac',
+      });
+      expect(await audioOnlyCtrl.transferHere(audioOnly: false), isTrue);
+      expect(audioCbCalls, 0);
+      expect(launchedLinks.last, 'https://facetime.apple.com/join#video-only');
+    });
+
+    test('notifyTelecomActive triggers handoff from idle and preserves audio mode on transferHere(audioOnly: null)',
+        () async {
+      final handoffs = <Map<String, dynamic>>[];
+      final ctrl = ActiveCallController(
+        deviceId: 'android-1',
+        deviceName: 'Pixel',
+        onHandoffServerCall: (uuid, {mode}) async {
+          handoffs.add({'uuid': uuid, 'mode': mode});
+          return PlacedFaceTimeCall(
+            link: 'https://facetime.apple.com/join#xfer',
+            call: FaceTimeCall(callUuid: uuid, isVideo: mode == 'video' || mode == 'video_bridge'),
+          );
+        },
+        onLaunchJoinLink: (_) async => true,
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(ctrl.dispose);
+
+      ctrl.handleFacetimeCallState({'phase': 'active', 'call_uuid': 'idle-vid-1', 'is_video': true});
+      await pumpEventQueue();
+      expect(handoffs, [
+        {'uuid': 'idle-vid-1', 'mode': 'video_bridge'},
+      ]);
+      expect(ctrl.state.isVideo, isTrue);
+      expect(ctrl.state.isTelecomCall, isTrue);
+
+      ctrl.applyServerSession({
+        'uuid': 'idle-vid-1',
+        'status': 'disconnected',
+        'status_id': 6,
+        'ended_reason': 'user_ended',
+      });
+      ctrl.applyServerSession({
+        'uuid': 'aud-xfer-1',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Dana',
+        'is_video': false,
+        'active_device_id': 'mac-1',
+        'active_device_name': 'Mac',
+      });
+      expect(await ctrl.transferHere(), isTrue);
+      expect(handoffs.last, {'uuid': 'aud-xfer-1', 'mode': 'audio'});
+      expect(ctrl.state.isVideo, isFalse);
+    });
+
+    testWidgets('OutgoingFaceTimeSheet routes Android outbound video natively into ongoing state', (tester) async {
+      final ctrl = ActiveCallController(deviceId: 'android-1', deviceName: 'Pixel');
+      addTearDown(ctrl.dispose);
+      final nativeCalls = <bool>[];
+      var serverCalls = 0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: OutgoingFaceTimeSheet(
+              callerName: 'Eli',
+              callerAddress: 'eli@icloud.com',
+              initialVideo: true,
+              isAndroid: true,
+              callController: ctrl,
+              checkTelecomEnabled: () async => true,
+              onOpenCallingAccounts: () async {},
+              requestCallPermissions: () async => true,
+              onPlaceNativeAudioCall: () async => false,
+              onPlaceNativeCall: (isVideo) async {
+                nativeCalls.add(isVideo);
+                return true;
+              },
+              onStartServerCall: (_) async {
+                serverCalls++;
+                return const PlacedFaceTimeCall(call: FaceTimeCall(callUuid: 'out-1'));
+              },
+              onOpenJoinLink: (_) async {},
+              onHangUpRingingCall: (_) async {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(nativeCalls, [true]);
+      expect(serverCalls, 0);
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.isVideo, isTrue);
+      expect(ctrl.state.isTelecomCall, isTrue);
+    });
   });
+}
+
+class _FakeWebRtcTransport implements WebRtcSignalingTransport {
+  void Function(Map<String, dynamic>)? _answerHandler;
+
+  @override
+  Future<dynamic> fetchBridgeConfig({Duration timeout = const Duration(seconds: 3)}) async => {
+        'iceServers': <Map<String, dynamic>>[],
+        'videoSupported': true,
+      };
+
+  @override
+  void emitOffer({
+    required String callUuid,
+    required String sdp,
+    required bool video,
+    bool uplinkVideo = false,
+    required bool answerCall,
+  }) {
+    scheduleMicrotask(() {
+      _answerHandler?.call({
+        'callUuid': callUuid,
+        'type': 'answer',
+        'sdp': 'v=0\r\nfake-answer-$callUuid',
+        'uplinkVideo': uplinkVideo,
+      });
+    });
+  }
+
+  @override
+  void emitIceCandidate({required String callUuid, required String candidate, String? sdpMid, int? sdpMLineIndex}) {}
+
+  @override
+  void emitMute({required String callUuid, required bool muted}) {}
+
+  @override
+  void emitCamera({required String callUuid, required bool enabled}) {}
+
+  @override
+  void emitHangup({required String callUuid}) {}
+
+  @override
+  void onAnswer(void Function(Map<String, dynamic> data) handler) => _answerHandler = handler;
+
+  @override
+  void onIceCandidate(void Function(Map<String, dynamic> data) handler) {}
+
+  @override
+  void offListeners() => _answerHandler = null;
+}
+
+class _FakeWebRtcAdapter implements WebRtcPeerAdapter {
+  @override
+  bool get isSupported => true;
+
+  @override
+  bool get hasLocalVideo => true;
+
+  @override
+  bool get canFlipCamera => false;
+
+  @override
+  bool get isFrontCamera => true;
+
+  @override
+  Future<void> initialize({required List<WebRtcIceServer> iceServers, required bool wantVideo}) async {}
+
+  @override
+  Future<WebRtcSessionDescription> createAndSetOffer() async =>
+      const WebRtcSessionDescription(type: 'offer', sdp: 'v=0\r\nfake-offer');
+
+  @override
+  Future<void> setRemoteAnswer(String sdp, String type) async {}
+
+  @override
+  Future<void> addIceCandidate(WebRtcIceCandidate candidate) async {}
+
+  @override
+  void setMicMuted(bool muted) {}
+
+  @override
+  Future<void> setCameraEnabled(bool enabled) async {}
+
+  @override
+  Future<void> flipCamera() async {}
+
+  @override
+  void setOnIceCandidate(void Function(WebRtcIceCandidate candidate)? callback) {}
+
+  @override
+  void setOnRemoteVideoWidget(void Function(Widget? widget)? callback) {}
+
+  @override
+  void setOnLocalVideoWidget(void Function(Widget? widget)? callback) {}
+
+  @override
+  void setOnConnectionStateChanged(void Function(String state)? callback) {}
+
+  @override
+  Future<void> close() async {}
 }

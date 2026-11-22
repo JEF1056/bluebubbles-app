@@ -75,8 +75,11 @@ Widget buildMaterialTapbackPill(
                             : Builder(builder: (context) {
                                 final text = Text(
                                   ReactionTypes.reactionToEmoji[e] ?? "X",
+                                  textScaler: TextScaler.noScaling,
                                   style: const TextStyle(
                                     fontSize: 20,
+                                    height: 1.0,
+                                    leadingDistribution: TextLeadingDistribution.even,
                                     fontFamilyFallback: ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"],
                                   ),
                                   textAlign: TextAlign.center,

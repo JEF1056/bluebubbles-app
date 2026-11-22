@@ -1,14 +1,12 @@
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/desktop_attachment_menu.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/sticker_library_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button_drag.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/conversation_text_field_local_controller.dart';
-import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/share.dart';
-import 'package:file_picker/file_picker.dart' as pf;
-import 'package:file_picker/file_picker.dart' hide PlatformFile;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show OverflowBoxFit;
@@ -32,8 +30,6 @@ class TextFieldIconBar extends StatelessWidget {
 
   final ConversationViewController controller;
   final ConversationTextFieldLocalController localController;
-
-  Chat get _chat => controller.chat;
 
   bool get _showAttachmentPicker => controller.showAttachmentPicker.value;
 
@@ -130,79 +126,7 @@ class TextFieldIconBar extends StatelessWidget {
             )
           : button(() {
               if (kIsWeb) {
-                showBBDialog(
-                  context: context,
-                  title: "What would you like to do?",
-                  content: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      ListTile(
-                        leading: const Icon(Icons.folder_rounded),
-                        title: Text("Upload file", style: Theme.of(context).textTheme.bodyLarge),
-                        onTap: () async {
-                          final res = await FilePicker.pickFiles();
-                          for (pf.PlatformFile e in res) {
-                            final size = await e.length() ?? 0;
-                            if (size / 1024000 > 1000) {
-                              showSnackbar("Error", "This file is over 1 GB! Please compress it before sending.",
-                                  type: SnackbarType.error);
-                              continue;
-                            }
-                            controller.pickedAttachments.add(PlatformFile(
-                              path: null,
-                              name: e.name,
-                              size: size,
-                              bytes: await e.readAsBytes(),
-                            ));
-                          }
-                          Get.back();
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.gif_box_rounded),
-                        title: Text("GIF", style: Theme.of(context).textTheme.bodyLarge),
-                        onTap: () {
-                          Get.back();
-                          AttachmentActions.pickGif(context, controller);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.schedule_rounded),
-                        title: Text("Schedule", style: Theme.of(context).textTheme.bodyLarge),
-                        onTap: () {
-                          Get.back();
-                          AttachmentActions.schedule(context, controller);
-                        },
-                      ),
-                      if (!kIsWeb && SettingsSvc.getServerDetails().supportsGenmoji)
-                        ListTile(
-                          leading: const Icon(Icons.add_reaction_rounded),
-                          title: Text("Genmoji", style: Theme.of(context).textTheme.bodyLarge),
-                          onTap: () {
-                            Get.back();
-                            AttachmentActions.run(TextFieldButton.Genmoji, context, controller);
-                          },
-                        ),
-                      ListTile(
-                        leading: const Icon(Icons.draw_rounded),
-                        title: Text("Handwritten", style: Theme.of(context).textTheme.bodyLarge),
-                        onTap: () {
-                          Get.back();
-                          AttachmentActions.handwritten(context, controller);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.location_on_rounded),
-                        title: Text("Send location", style: Theme.of(context).textTheme.bodyLarge),
-                        onTap: () async {
-                          Share.location(_chat);
-                          Get.back();
-                        },
-                      ),
-                    ],
-                  ),
-                );
+                showWebAttachmentMenu(context, controller);
               } else {
                 if (!_showAttachmentPicker) {
                   controller.focusNode.unfocus();
@@ -288,4 +212,141 @@ class _RowSlot extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// Web `+` attachment menu, rendered with the unified `showBBDialog` surface,
+/// tonal icon badges, and 1px hairline dividers.
+Future<void> showWebAttachmentMenu(BuildContext context, ConversationViewController controller) {
+  final options = <({IconData icon, String label, VoidCallback onTap})>[
+    (
+      icon: Icons.folder_rounded,
+      label: "Upload file",
+      onTap: () {
+        Navigator.of(context, rootNavigator: true).pop();
+        AttachmentActions.pickFiles(controller);
+      },
+    ),
+    (
+      icon: Icons.gif_box_rounded,
+      label: "GIF",
+      onTap: () {
+        Navigator.of(context, rootNavigator: true).pop();
+        AttachmentActions.pickGif(context, controller);
+      },
+    ),
+    if (SettingsSvc.getServerDetails().supportsStickers)
+      (
+        icon: Icons.sticky_note_2_rounded,
+        label: "Stickers",
+        onTap: () {
+          Navigator.of(context, rootNavigator: true).pop();
+          showStickerLibraryPopover(context, controller);
+        },
+      ),
+    (
+      icon: Icons.schedule_rounded,
+      label: "Schedule",
+      onTap: () {
+        Navigator.of(context, rootNavigator: true).pop();
+        AttachmentActions.schedule(context, controller);
+      },
+    ),
+    if (!kIsWeb && SettingsSvc.getServerDetails().supportsGenmoji)
+      (
+        icon: Icons.add_reaction_rounded,
+        label: "Genmoji",
+        onTap: () {
+          Navigator.of(context, rootNavigator: true).pop();
+          AttachmentActions.run(TextFieldButton.Genmoji, context, controller);
+        },
+      ),
+    (
+      icon: Icons.draw_rounded,
+      label: "Handwritten",
+      onTap: () {
+        Navigator.of(context, rootNavigator: true).pop();
+        AttachmentActions.handwritten(context, controller);
+      },
+    ),
+    (
+      icon: Icons.location_on_rounded,
+      label: "Send location",
+      onTap: () {
+        Navigator.of(context, rootNavigator: true).pop();
+        Share.location(controller.chat);
+      },
+    ),
+  ];
+
+  return showBBDialog<void>(
+    context: context,
+    title: "Attach",
+    icon: Icons.add_circle_outline_rounded,
+    content: Builder(
+      builder: (ctx) {
+        final scheme = ctx.theme.colorScheme;
+        final hairline = scheme.outlineVariant.withValues(alpha: 0.45);
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 340),
+          child: SingleChildScrollView(
+            child: Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainer,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: hairline),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < options.length; i++) ...[
+                    if (i > 0) Divider(height: 1, thickness: 1, color: hairline),
+                    Material(
+                      type: MaterialType.transparency,
+                      child: InkWell(
+                        onTap: options[i].onTap,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 34,
+                                height: 34,
+                                decoration: BoxDecoration(
+                                  color: scheme.primary.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(options[i].icon, size: 19, color: scheme.primary),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  options[i].label,
+                                  style: ctx.textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w500,
+                                    color: scheme.onSurface,
+                                  ),
+                                ),
+                              ),
+                              Icon(Icons.chevron_right_rounded, size: 18, color: scheme.onSurfaceVariant),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+    actions: [
+      BBDialogAction(
+        text: "Cancel",
+        onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
+      ),
+    ],
+  );
 }

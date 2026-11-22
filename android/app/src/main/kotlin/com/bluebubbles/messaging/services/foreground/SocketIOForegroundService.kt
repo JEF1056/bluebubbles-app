@@ -7,6 +7,8 @@ import android.app.Service
 import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -19,7 +21,9 @@ import com.bluebubbles.messaging.R
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
 import com.bluebubbles.messaging.services.notifications.NotificationChannelHandler
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
 import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import io.socket.client.IO
 import io.socket.client.Socket
@@ -38,6 +42,13 @@ import org.json.JSONObject
 
 
 class SocketIOForegroundService : Service() {
+
+    internal enum class NetworkAction {
+        CONNECT,
+        RECONNECT,
+        DISCONNECT,
+        NONE,
+    }
 
     companion object {
         // Consts for notification messages
@@ -99,6 +110,39 @@ class SocketIOForegroundService : Service() {
         internal fun shouldReconnectOnDisconnect(reason: String): Boolean =
             reason == "io server disconnect"
 
+        internal fun applyReconnectBackoff(opts: IO.Options) {
+            opts.reconnectionDelay = 2_000L
+            opts.reconnectionDelayMax = 600_000L
+        }
+
+        internal fun shouldAttemptConnect(
+            hasNetwork: Boolean,
+            isBeingDestroyed: Boolean,
+            hasSocket: Boolean,
+            isConnected: Boolean,
+        ): Boolean = !isBeingDestroyed && hasNetwork && hasSocket && !isConnected
+
+        internal fun resolveNetworkAction(
+            networkAvailable: Boolean,
+            isSameAsActive: Boolean,
+            hasActiveNetwork: Boolean,
+            isBeingDestroyed: Boolean,
+            hasStarted: Boolean,
+            hasSocket: Boolean,
+            isConnected: Boolean,
+        ): NetworkAction = when {
+            isBeingDestroyed -> NetworkAction.NONE
+            !networkAvailable -> {
+                if (hasActiveNetwork && !isSameAsActive) NetworkAction.NONE
+                else if (hasSocket) NetworkAction.DISCONNECT
+                else NetworkAction.NONE
+            }
+            hasStarted && hasSocket && !isConnected -> {
+                if (hasActiveNetwork && !isSameAsActive) NetworkAction.RECONNECT else NetworkAction.CONNECT
+            }
+            else -> NetworkAction.NONE
+        }
+
         @Volatile
         private var activeInstance: SocketIOForegroundService? = null
 
@@ -126,14 +170,22 @@ class SocketIOForegroundService : Service() {
     private val reconnectHandler = Handler(Looper.getMainLooper())
     private val reconnectRunnable = Runnable {
         reconnectScheduled = false
-        if (!isBeingDestroyed && mSocket != null && !mSocket!!.connected()) {
+        val socket = mSocket
+        if (shouldAttemptConnect(hasNetwork, isBeingDestroyed, socket != null, socket?.connected() == true)) {
             PersistentLog.e(applicationContext, Constants.logTag, "Attempting reconnection now...")
-            mSocket!!.connect()
+            socket!!.connect()
         }
     }
 
     @Volatile
     private var reconnectScheduled: Boolean = false
+
+    @Volatile
+    private var hasNetwork: Boolean = true
+
+    private var activeNetwork: Network? = null
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     private val eventBlacklist: Array<String> = arrayOf(
         "typing-indicator",
@@ -176,6 +228,7 @@ class SocketIOForegroundService : Service() {
             }
 
             hasStarted = true
+            registerNetworkCallback()
             connectSocketFromPrefs()
         } catch (e: Exception) {
             PersistentLog.e(applicationContext, Constants.logTag, "Failed to initialize foreground service", e)
@@ -248,6 +301,7 @@ class SocketIOForegroundService : Service() {
 
             val encodedPw = URLEncoder.encode(storedPassword, "UTF-8")
             opts.query = "password=$encodedPw"
+            applyReconnectBackoff(opts)
             val okHttpClient = buildSocketOkHttpClient()
             opts.callFactory = okHttpClient
             opts.webSocketFactory = okHttpClient
@@ -367,7 +421,11 @@ class SocketIOForegroundService : Service() {
                 }
             }
 
-            mSocket!!.connect()
+            if (hasNetwork) {
+                mSocket!!.connect()
+            } else {
+                PersistentLog.d(applicationContext, Constants.logTag, "Deferring socket connect until network is available")
+            }
         } catch (e: Exception) {
             if (isBeingDestroyed) {
                 return
@@ -383,6 +441,10 @@ class SocketIOForegroundService : Service() {
     }
 
     private fun tryReconnect() {
+        if (!hasNetwork) {
+            PersistentLog.d(applicationContext, Constants.logTag, "No active network, skipping scheduled reconnect.")
+            return
+        }
         // Guard: if a reconnect is already pending, don't schedule another one.
         if (reconnectScheduled) {
             PersistentLog.d(applicationContext, Constants.logTag, "Reconnect already scheduled, skipping.")
@@ -444,11 +506,108 @@ class SocketIOForegroundService : Service() {
         return null
     }
 
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        connectivityManager = cm
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                reconnectHandler.post {
+                    if (isBeingDestroyed) return@post
+                    val previousActive = activeNetwork
+                    val isSameAsActive = previousActive == network
+                    val hasActiveNetwork = previousActive != null
+                    activeNetwork = network
+                    hasNetwork = true
+                    val socket = mSocket
+                    val action = resolveNetworkAction(
+                        networkAvailable = true,
+                        isSameAsActive = isSameAsActive,
+                        hasActiveNetwork = hasActiveNetwork,
+                        isBeingDestroyed = isBeingDestroyed,
+                        hasStarted = hasStarted,
+                        hasSocket = socket != null,
+                        isConnected = socket?.connected() == true,
+                    )
+                    when (action) {
+                        NetworkAction.RECONNECT -> {
+                            reconnectScheduled = false
+                            reconnectHandler.removeCallbacks(reconnectRunnable)
+                            socket?.disconnect()
+                            socket?.connect()
+                        }
+                        NetworkAction.CONNECT -> {
+                            reconnectScheduled = false
+                            reconnectHandler.removeCallbacks(reconnectRunnable)
+                            socket?.connect()
+                        }
+                        else -> {}
+                    }
+                }
+            }
+
+            override fun onLost(network: Network) {
+                reconnectHandler.post {
+                    if (isBeingDestroyed) return@post
+                    val previousActive = activeNetwork
+                    val isSameAsActive = previousActive == network
+                    val hasActiveNetwork = previousActive != null
+                    if (hasActiveNetwork && !isSameAsActive) {
+                        return@post
+                    }
+                    activeNetwork = null
+                    hasNetwork = false
+                    val socket = mSocket
+                    val action = resolveNetworkAction(
+                        networkAvailable = false,
+                        isSameAsActive = isSameAsActive,
+                        hasActiveNetwork = hasActiveNetwork,
+                        isBeingDestroyed = isBeingDestroyed,
+                        hasStarted = hasStarted,
+                        hasSocket = socket != null,
+                        isConnected = socket?.connected() == true,
+                    )
+                    if (action == NetworkAction.DISCONNECT) {
+                        reconnectScheduled = false
+                        reconnectHandler.removeCallbacks(reconnectRunnable)
+                        socket?.disconnect()
+                    }
+                }
+            }
+        }
+        networkCallback = callback
+        try {
+            cm.registerDefaultNetworkCallback(callback)
+            try {
+                val current = cm.activeNetwork
+                activeNetwork = current
+                hasNetwork = current != null
+            } catch (_: Exception) {
+                activeNetwork = null
+                hasNetwork = true
+            }
+        } catch (_: Exception) {
+            networkCallback = null
+            connectivityManager = null
+            activeNetwork = null
+            hasNetwork = true
+        }
+    }
+
     override fun onDestroy() {
         isBeingDestroyed = true
         hasStarted = false
         reconnectScheduled = false
         reconnectHandler.removeCallbacks(reconnectRunnable)
+        networkCallback?.let { cb ->
+            try {
+                connectivityManager?.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {
+            }
+        }
+        networkCallback = null
+        connectivityManager = null
+        activeNetwork = null
         PersistentLog.d(applicationContext, Constants.logTag, "BlueBubbles Service is being destroyed!")
 
         super.onDestroy()
@@ -474,9 +633,15 @@ class SocketIOForegroundService : Service() {
                     1 -> {
                         if (!FaceTimeConnectionService.markCallActive(callUuid, recordIfPending = isOutgoing)) {
                             FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = true)
+                            CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(applicationContext, callUuid)
+                            WearSyncManager.notifyCallEndedIfNotWatchAnswered(applicationContext, callUuid)
                         }
                     }
-                    6 -> FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
+                    6 -> {
+                        FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
+                        CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(applicationContext, callUuid)
+                        WearSyncManager.notifyCallEnded(applicationContext, callUuid)
+                    }
                 }
             }
         } catch (e: Exception) {

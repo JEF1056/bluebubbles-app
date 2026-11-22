@@ -245,7 +245,7 @@ class _StickerHolderState extends State<StickerHolder> {
           _bytes[key] = bytes;
           attachment.bytes ??= bytes;
           _markReady(key, attachment);
-        } else {
+        } else if (!guid.startsWith("temp")) {
           _downloading.add(guid);
           AttachmentDownloader.startDownload(
             attachment,

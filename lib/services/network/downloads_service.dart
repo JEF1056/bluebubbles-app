@@ -48,7 +48,7 @@ class AttachmentDownloadService extends GetxService {
     downloaders.remove(guid);
     final emptyKeys = <String>[];
     for (final entry in _downloaders.entries) {
-      entry.value.removeWhere((e) => e.attachment.guid == guid);
+      entry.value.removeWhere((e) => e._queueKey == guid || e.attachment.guid == guid);
       if (entry.value.isEmpty) {
         emptyKeys.add(entry.key);
       }
@@ -130,7 +130,9 @@ class AttachmentDownloadService extends GetxService {
   }
 
   void _addToQueue(AttachmentDownloadController downloader) {
-    downloaders.add(downloader.attachment.guid!);
+    if (downloader._queueKey.isNotEmpty) {
+      downloaders.add(downloader._queueKey);
+    }
     final chatGuid = downloader.attachment.message.target?.chat.target?.guid ?? "unknown";
     if (_downloaders.containsKey(chatGuid)) {
       _downloaders[chatGuid]!.add(downloader);
@@ -141,11 +143,23 @@ class AttachmentDownloadService extends GetxService {
   }
 
   void _removeFromQueue(AttachmentDownloadController downloader) {
-    downloaders.remove(downloader.attachment.guid!);
+    if (downloader._queueKey.isNotEmpty) {
+      downloaders.remove(downloader._queueKey);
+    }
+    if (downloader.attachment.guid != null) {
+      downloaders.remove(downloader.attachment.guid!);
+    }
     final chatGuid = downloader.attachment.message.target?.chat.target?.guid ?? "unknown";
-    _downloaders[chatGuid]?.removeWhere((e) => e.attachment.guid == downloader.attachment.guid);
+    _downloaders[chatGuid]?.removeWhere(
+      (e) => identical(e, downloader) || e._queueKey == downloader._queueKey || e.attachment.guid == downloader.attachment.guid,
+    );
     if (_downloaders[chatGuid]?.isEmpty ?? false) _downloaders.remove(chatGuid);
-    Get.delete<AttachmentDownloadController>(tag: downloader.attachment.guid!);
+    if (downloader._queueKey.isNotEmpty) {
+      Get.delete<AttachmentDownloadController>(tag: downloader._queueKey);
+    }
+    if (downloader.attachment.guid != null && downloader.attachment.guid != downloader._queueKey) {
+      Get.delete<AttachmentDownloadController>(tag: downloader.attachment.guid!);
+    }
     _fetchNext();
   }
 
@@ -193,6 +207,12 @@ class AttachmentDownloadController extends GetxController {
   /// and the checks that follow it can't run the error path twice.
   bool _failed = false;
 
+  /// Original attachment GUID captured eagerly as the queue / GetX tag before any repair.
+  final String _queueKey;
+
+  @visibleForTesting
+  String get queueKey => _queueKey;
+
   /// A 404 tries [_repairStaleGuid] once per controller.
   bool _repairTried = false;
 
@@ -201,7 +221,7 @@ class AttachmentDownloadController extends GetxController {
     Function(PlatformFile)? onComplete,
     Function? onError,
     this.bypassCache = false,
-  }) {
+  }) : _queueKey = attachment.guid ?? '' {
     if (onComplete != null) completeFuncs.add(onComplete);
     if (onError != null) errorFuncs.add(onError);
   }
@@ -515,6 +535,10 @@ class AttachmentDownloadController extends GetxController {
         await AttachmentsSvc.saveToDisk(file.value!, isAutoDownload: true);
       } else if (file.value?.bytes != null) {
         await File(join(await FilesystemSvc.downloadsDirectory, file.value!.name)).writeAsBytes(file.value!.bytes!);
+      } else if (!kIsWeb && file.value?.path != null) {
+        final dest = File(join(await FilesystemSvc.downloadsDirectory, file.value!.name));
+        await dest.parent.create(recursive: true);
+        await File(file.value!.path!).copy(dest.path);
       }
     }
   }

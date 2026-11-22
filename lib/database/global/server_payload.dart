@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:bluebubbles/services/backend/settings/settings_service.dart';
 import 'package:bluebubbles/utils/crypto_utils.dart';
 import 'package:collection/collection.dart';
+import 'package:get_it/get_it.dart';
 
 enum PayloadEncoding { JSON_OBJECT, BASE64, JSON_STRING }
 
@@ -45,23 +46,28 @@ class ServerPayload {
     required this.isPartial,
     required this.encoding,
     required this.encryptionType,
+    String? passphrase,
   }) {
-    if (isEncrypted) {
+    if (isEncrypted && data is String) {
       if (encryptionType == EncryptionType.AES_PB) {
-        data = decryptAESCryptoJS(data, SettingsSvc.settings.guidAuthKey.value);
+        final key = passphrase ??
+            (GetIt.I.isRegistered<SettingsService>() ? SettingsSvc.settings.guidAuthKey.value : '');
+        data = decryptAESCryptoJS(data, key);
       }
     }
     if ([PayloadEncoding.JSON_OBJECT, PayloadEncoding.JSON_STRING].contains(encoding) && data is String) {
       data = jsonDecode(data);
       encoding = PayloadEncoding.JSON_OBJECT;
     }
+    if (data is Map && data is! Map<String, dynamic>) {
+      data = data.cast<String, dynamic>();
+    }
   }
 
-  factory ServerPayload.fromJson(Map<String, dynamic> json) => ServerPayload(
+  factory ServerPayload.fromJson(Map<String, dynamic> json, {String? passphrase}) => ServerPayload(
         originalJson: json,
-        data: ((json["data"] ?? json) is String ? jsonDecode(json["data"] ?? json) : (json["data"] ?? json))
-            .cast<String, dynamic>(),
-        isLegacy: json.containsKey("type"),
+        data: json["data"] ?? json,
+        isLegacy: !json.containsKey("type"),
         type: PayloadType.values.firstWhereOrNull((element) => element.name == json["type"]) ?? PayloadType.OTHER,
         subtype: json["subtype"],
         isEncrypted: json["encrypted"] ?? false,
@@ -70,5 +76,6 @@ class ServerPayload {
             PayloadEncoding.JSON_OBJECT,
         encryptionType: EncryptionType.values.firstWhereOrNull((element) => element.name == json["encryptionType"]) ??
             EncryptionType.AES_PB,
+        passphrase: passphrase,
       );
 }

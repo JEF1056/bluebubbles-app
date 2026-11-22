@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/attachment_actions.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_holder.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/library_sticker.dart';
@@ -8,17 +9,40 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 
-/// Picks an image on this device and adds it to the Mac's sticker library, where it lands in Recents. A refusal shows
-/// the server's reason.
-Future<void> pickAndAddSticker() async {
-  final file = await FilePicker.pickFile(type: FileType.image);
-  if (file == null) return;
+/// Whether the sticker subscription gate is active (safe in tests where [SubscriptionService] isn't registered).
+bool get isStickerSubscriptionLocked => GetIt.I.isRegistered<SubscriptionService>() && SubscriptionSvc.locked;
+
+/// Whether stickers can be added to or removed from the Mac's library here.
+bool get canEditStickers =>
+    (SettingsSvc.settings.enablePrivateAPI.value || SettingsSvc.getServerDetails().privateApiEnabled != false) &&
+    !isStickerSubscriptionLocked;
+
+/// Picks an image on Mobile or Web and adds it to the Mac's sticker library, where it lands in Recents. A refusal
+/// shows the server's reason.
+Future<void> pickAndAddSticker({
+  Future<({Uint8List bytes, String name})?> Function()? onPickImage,
+}) async {
+  Uint8List? bytes;
+  String? name;
+  if (onPickImage != null) {
+    final picked = await onPickImage();
+    if (picked == null) return;
+    bytes = picked.bytes;
+    name = picked.name;
+  } else {
+    final file = await FilePicker.pickFile(type: FileType.image);
+    if (file == null) return;
+    bytes = await file.readAsBytes();
+    name = file.name;
+  }
   try {
-    await StickerLibrarySvc.add(await file.readAsBytes(), file.name);
+    await StickerLibrarySvc.add(bytes, name);
   } catch (e, s) {
     Logger.warn("Failed to add a sticker to the library", error: e, trace: s, tag: "StickerLibrary");
     showSnackbar("Error", stickerRefusal(e).message ?? "Couldn't add the sticker", type: SnackbarType.error);
@@ -26,7 +50,39 @@ Future<void> pickAndAddSticker() async {
 }
 
 /// Whether stickers can be removed from the Mac's library here: the server's Private API does it.
-bool get canRemoveStickers => SettingsSvc.settings.enablePrivateAPI.value && !SubscriptionSvc.locked;
+bool get canRemoveStickers => canEditStickers;
+
+/// Builds a sticker thumbnail widget using in-memory bytes (Web / tests) or on-disk file cache (native).
+Widget buildStickerThumbnailImage(
+  String identifier, {
+  double? width,
+  double? height,
+  BoxFit fit = BoxFit.contain,
+  Widget? errorWidget,
+}) {
+  final memBytes = StickerLibrarySvc.thumbnailBytes(identifier);
+  if (memBytes != null) {
+    return Image.memory(
+      memBytes,
+      width: width,
+      height: height,
+      fit: fit,
+      gaplessPlayback: true,
+      errorBuilder: (_, _, _) => errorWidget ?? const SizedBox.shrink(),
+    );
+  }
+  if (!kIsWeb) {
+    return Image.file(
+      StickerLibrarySvc.thumbnailFile(identifier),
+      width: width,
+      height: height,
+      fit: fit,
+      gaplessPlayback: true,
+      errorBuilder: (_, _, _) => errorWidget ?? const SizedBox.shrink(),
+    );
+  }
+  return errorWidget ?? const SizedBox.shrink();
+}
 
 /// Asks, then removes [sticker] from the Mac's library. A refusal shows the server's reason.
 Future<void> confirmRemoveSticker(BuildContext context, LibrarySticker sticker) async {
@@ -38,7 +94,7 @@ Future<void> confirmRemoveSticker(BuildContext context, LibrarySticker sticker) 
       mainAxisSize: MainAxisSize.min,
       children: [
         if (StickerLibrarySvc.cachedThumbnails.contains(sticker.identifier)) ...[
-          Image.file(StickerLibrarySvc.thumbnailFile(sticker.identifier), width: 88, height: 88),
+          buildStickerThumbnailImage(sticker.identifier, width: 88, height: 88),
           const SizedBox(height: 12),
         ],
         const Text("This sticker will be removed from your Mac's stickers.", textAlign: TextAlign.center),
@@ -195,12 +251,12 @@ class _StickerLibraryTileState extends State<StickerLibraryTile> {
           angle: t.rotation,
           child: Transform.scale(scale: t.scale, child: child),
         ),
-        child: Image.file(
-          StickerLibrarySvc.thumbnailFile(sticker.identifier),
+        child: buildStickerThumbnailImage(
+          sticker.identifier,
           width: StickerLibraryTile.dragSize,
           height: StickerLibraryTile.dragSize,
           fit: BoxFit.contain,
-          errorBuilder: (_, _, _) => const SizedBox.square(dimension: StickerLibraryTile.dragSize),
+          errorWidget: const SizedBox.square(dimension: StickerLibraryTile.dragSize),
         ),
       ),
     );
@@ -215,7 +271,7 @@ class _StickerLibraryTileState extends State<StickerLibraryTile> {
       widget.onDragUpdate?.call(details);
     }
 
-    if (kIsDesktop) {
+    if (kIsDesktop || kIsWeb) {
       return Draggable<StickerDrag>(
         data: _drag,
         dragAnchorStrategy: pointerDragAnchorStrategy,
@@ -258,75 +314,103 @@ class _StickerLibraryTileState extends State<StickerLibraryTile> {
 
   Widget _tile(BuildContext context) {
     final scheme = context.theme.colorScheme;
+    final hairline = scheme.outlineVariant.withValues(alpha: 0.45);
     final placeholder = Center(
-      child: Icon(Icons.sticky_note_2_outlined, size: 28, color: scheme.outline.withValues(alpha: 0.4)),
+      child: Icon(Icons.sticky_note_2_outlined, size: 24, color: scheme.onSurfaceVariant.withValues(alpha: 0.45)),
     );
-    return Semantics(
-      button: widget.onTap != null,
-      label: sticker.label ?? "Sticker",
-      child: Material(
-        color: scheme.surfaceContainerHighest,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: widget.onTap,
-          // A draggable tile's long press starts the drag, and offers removal when released in place
-          onLongPress: canRemoveStickers && !kIsDesktop && !widget.draggable
-              ? () => confirmRemoveSticker(context, sticker)
-              : null,
-          onSecondaryTap: canRemoveStickers ? () => confirmRemoveSticker(context, sticker) : null,
-          child: Padding(
-            padding: const EdgeInsets.all(10),
-            child: Obx(
-              () => StickerLibrarySvc.cachedThumbnails.contains(sticker.identifier)
-                  ? Image.file(
-                      StickerLibrarySvc.thumbnailFile(sticker.identifier),
-                      fit: BoxFit.contain,
-                      gaplessPlayback: true,
-                      errorBuilder: (_, _, _) => placeholder,
-                    )
-                  : placeholder,
+    return Obx(() {
+      final sending = AttachmentActions.sendingStickers.contains(sticker.identifier);
+      return Semantics(
+        button: widget.onTap != null,
+        label: sticker.label ?? "Sticker",
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+          child: Material(
+            color: scheme.surfaceContainer,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: hairline),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: sending ? null : widget.onTap,
+              // A mobile draggable tile's long press starts the drag, and offers removal when released in place.
+              // On desktop/Web or non-draggable tiles, long-press or right-click removes directly.
+              onLongPress: canRemoveStickers && (!widget.draggable || kIsDesktop || kIsWeb)
+                  ? () => confirmRemoveSticker(context, sticker)
+                  : null,
+              onSecondaryTap: canRemoveStickers ? () => confirmRemoveSticker(context, sticker) : null,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: StickerLibrarySvc.cachedThumbnails.contains(sticker.identifier)
+                        ? buildStickerThumbnailImage(
+                            sticker.identifier,
+                            fit: BoxFit.contain,
+                            errorWidget: placeholder,
+                          )
+                        : placeholder,
+                  ),
+                  if (sending)
+                    ColoredBox(
+                      color: scheme.scrim.withValues(alpha: 0.25),
+                      child: const Center(child: CupertinoActivityIndicator()),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 }
 
 class StickerAddTile extends StatelessWidget {
-  const StickerAddTile({super.key});
+  const StickerAddTile({super.key, this.onTap});
+
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final scheme = context.theme.colorScheme;
     return Semantics(
       button: true,
-      label: "Add a sticker from this device",
-      child: Material(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        clipBehavior: Clip.antiAlias,
-        child: Ink(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [scheme.primary, scheme.tertiary],
-            ),
-          ),
+      label: "Add Sticker",
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+        child: Material(
+          color: scheme.primaryContainer,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          clipBehavior: Clip.antiAlias,
           child: Obx(() {
             final adding = StickerLibrarySvc.adding.value;
             return InkWell(
-              onTap: adding ? null : pickAndAddSticker,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  adding
-                      ? CupertinoActivityIndicator(color: scheme.onPrimary)
-                      : Icon(Icons.add_photo_alternate_rounded, color: scheme.onPrimary, size: 30),
-                  const SizedBox(height: 6),
-                  Text("Add", style: context.theme.textTheme.labelLarge!.copyWith(color: scheme.onPrimary)),
-                ],
+              onTap: adding ? null : (onTap ?? pickAndAddSticker),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    adding
+                        ? CupertinoActivityIndicator(color: scheme.onPrimaryContainer)
+                        : Icon(Icons.add_photo_alternate_rounded, color: scheme.onPrimaryContainer, size: 24),
+                    const SizedBox(height: 6),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        "Add Sticker",
+                        maxLines: 1,
+                        style: context.theme.textTheme.labelMedium!.copyWith(
+                          color: scheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           }),

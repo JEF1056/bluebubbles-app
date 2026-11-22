@@ -29,7 +29,9 @@ class ReactionWidget extends StatefulWidget {
   static const double materialCountExtraWidth = 8.0;
   static const double materialEmojiFontSize = 16.0;
   static const double materialCountFontSize = 11.0;
-  static const double materialCutoutBorderWidth = 1.5;
+  static const double materialCutoutBorderWidth = 1.0;
+  /// Matches [TextBubble]'s bubble alpha when a custom chat wallpaper is active.
+  static const double materialWallpaperAlpha = 0.86;
 
   /// Total pill width for a Material badge with [count] reactions (`ewsm.c#L340`).
   static double materialWidthForCount(int count, {bool isSticker = false}) {
@@ -41,38 +43,60 @@ class ReactionWidget extends StatefulWidget {
 
   /// Tonal fill matching Google Messages `ewsm.w#L3003-3018` (`surfaceContainerHighest` dark,
   /// `surfaceContainerLowest` light), highlighted with `primaryContainer` for self-reactions.
+  /// Applies [materialWallpaperAlpha] when a custom wallpaper is active to match message bubbles.
   static Color materialFillColor(
     ColorScheme cs,
     Brightness brightness, {
     bool isOwn = false,
     bool hasError = false,
+    bool hasWallpaper = false,
   }) {
-    if (hasError) return cs.errorContainer;
-    if (isOwn) return cs.primaryContainer;
-    return brightness == Brightness.dark ? cs.surfaceContainerHighest : cs.surfaceContainerLowest;
+    final Color base;
+    if (hasError) {
+      base = cs.errorContainer;
+    } else if (isOwn) {
+      base = cs.primaryContainer;
+    } else {
+      base = brightness == Brightness.dark ? cs.surfaceContainerHighest : cs.surfaceContainerLowest;
+    }
+    return hasWallpaper ? base.withValues(alpha: materialWallpaperAlpha) : base;
   }
 
-  /// Elevation shadow matching Google Messages `ewsm.c#L346-368` (`badgeShadow`).
+  /// Subtle themed hairline border so tapback pills separate cleanly from bubbles without a harsh dark ring.
+  static Color materialBorderColor(
+    ColorScheme cs,
+    Brightness brightness, {
+    bool isOwn = false,
+    bool hasError = false,
+  }) {
+    if (hasError) return cs.error.withValues(alpha: 0.72);
+    if (isOwn) {
+      return cs.primary.withValues(alpha: brightness == Brightness.dark ? 0.32 : 0.22);
+    }
+    return cs.outlineVariant.withValues(alpha: brightness == Brightness.dark ? 0.35 : 0.45);
+  }
+
+  /// Soft elevation shadow for Material tapback badges.
   static List<BoxShadow> materialShadows(ColorScheme cs, Brightness brightness) {
     if (brightness == Brightness.dark) {
       return [
         BoxShadow(
-          color: Colors.black.withValues(alpha: 0.45),
-          blurRadius: 4.0,
-          offset: const Offset(0, 1.5),
+          color: Colors.black.withValues(alpha: 0.28),
+          blurRadius: 6.0,
+          offset: const Offset(0, 2.0),
         ),
       ];
     }
     return [
       BoxShadow(
-        color: cs.primary.withValues(alpha: 0.28),
-        blurRadius: 7.0,
+        color: cs.primary.withValues(alpha: 0.10),
+        blurRadius: 6.0,
         offset: const Offset(0, 2.0),
       ),
       BoxShadow(
-        color: cs.shadow.withValues(alpha: 0.08),
-        blurRadius: 2.0,
-        offset: const Offset(0, 1.0),
+        color: cs.shadow.withValues(alpha: 0.10),
+        blurRadius: 5.0,
+        offset: const Offset(0, 1.5),
       ),
     ];
   }
@@ -127,10 +151,14 @@ class MaterialReactionOverflowBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = context.theme;
     final cs = theme.colorScheme;
-    final fill = ReactionWidget.materialFillColor(cs, theme.brightness);
+    final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
+    final fill = ReactionWidget.materialFillColor(cs, theme.brightness, hasWallpaper: hasWallpaper);
     final shape = MaterialReactionBadgeShape(
       hasCount: false,
-      side: BorderSide(color: cs.surface, width: ReactionWidget.materialCutoutBorderWidth),
+      side: BorderSide(
+        color: ReactionWidget.materialBorderColor(cs, theme.brightness),
+        width: ReactionWidget.materialCutoutBorderWidth,
+      ),
     );
     return Semantics(
       button: true,
@@ -161,6 +189,7 @@ class MaterialReactionOverflowBadge extends StatelessWidget {
                 fontSize: 12.0,
                 fontWeight: FontWeight.w600,
                 height: 1.0,
+                leadingDistribution: TextLeadingDistribution.even,
                 color: cs.onSurface,
               ),
             ),
@@ -488,11 +517,13 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
     final earHeight = baseHeight / 2;
     final earWidth = max(earHeight, earHeight + (extraWidth - 8.0).clamp(0.0, 32.0));
 
+    final hasWallpaper = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
     final fill = ReactionWidget.materialFillColor(
       cs,
       theme.brightness,
       isOwn: hasOwn,
       hasError: hasError,
+      hasWallpaper: hasWallpaper,
     );
     final countFg = hasError
         ? cs.onErrorContainer
@@ -503,11 +534,20 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
       hasCount: hasCount,
       countExtraWidth: extraWidth,
       side: BorderSide(
-        color: hasError ? cs.error : cs.surface,
+        color: ReactionWidget.materialBorderColor(
+          cs,
+          theme.brightness,
+          isOwn: hasOwn,
+          hasError: hasError,
+        ),
         width: ReactionWidget.materialCutoutBorderWidth,
       ),
     );
 
+    // Container applies ShapeDecoration.padding (shape.dimensions == borderInset on all sides)
+    // to its child Stack, so position the glyph and count ear relative to the inset Stack.
+    const borderInset = ReactionWidget.materialCutoutBorderWidth;
+    final innerCircleSize = baseHeight - borderInset * 2;
     final badge = Container(
       width: badgeWidth,
       height: baseHeight,
@@ -523,15 +563,15 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
             textDirection: Directionality.of(context),
             start: 0,
             top: 0,
-            width: baseHeight,
-            height: baseHeight,
+            width: innerCircleSize,
+            height: innerCircleSize,
             child: Center(child: _materialGlyph(current)),
           ),
           if (hasCount)
             Positioned.directional(
               textDirection: Directionality.of(context),
-              end: 0,
-              top: 0,
+              end: -borderInset,
+              top: -borderInset,
               width: earWidth,
               height: earHeight,
               child: Center(
@@ -542,6 +582,7 @@ class ReactionWidgetState extends State<ReactionWidget> with SingleTickerProvide
                     fontSize: ReactionWidget.materialCountFontSize,
                     fontWeight: FontWeight.w600,
                     height: 1.0,
+                    leadingDistribution: TextLeadingDistribution.even,
                     color: countFg,
                   ),
                 ),

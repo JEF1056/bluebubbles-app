@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/new_chat_creator.dart';
-import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/scheduling/scheduled_messages_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/server_management_panel.dart';
 import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
@@ -27,6 +26,9 @@ IntentsService get IntentsSvc => GetIt.I<IntentsService>();
 
 class IntentsService {
   late final StreamSubscription sub;
+
+  @visibleForTesting
+  ActiveCallController? callControllerOverride;
 
   /// When a notification tap triggers navigation to a specific chat, this is
   /// set synchronously (before any async gap) so that [onAppResume] can skip
@@ -122,16 +124,20 @@ class IntentsService {
           final uri =
               Uri.tryParse(intent.data!.replaceFirst("imessage://", "imessage:").replaceFirst("&body=", "?body="));
           if (uri != null) {
-            final address = uri.path;
-            final handle = Handle.findOne(addressAndService: HandleLookupKey(address, "iMessage"));
-            NavigationSvc.pushAndRemoveUntil(
-              Get.context!,
-              NewChatCreator(
-                initialSelected: [SelectedContact(displayName: handle?.displayName ?? address, address: address)],
-                initialText: uri.queryParameters['body'],
-              ),
-              (route) => route.isFirst,
-            );
+            await StartupTasks.waitForUI();
+            final ctx = Get.context;
+            if (ctx != null) {
+              final address = uri.path;
+              final handle = Handle.findOne(addressAndService: HandleLookupKey(address, "iMessage"));
+              NavigationSvc.pushAndRemoveUntil(
+                ctx,
+                NewChatCreator(
+                  initialSelected: [SelectedContact(displayName: handle?.displayName ?? address, address: address)],
+                  initialText: uri.queryParameters['body'],
+                ),
+                (route) => route.isFirst,
+              );
+            }
           }
         } else if (intent.extra?["chatGuid"] != null) {
           final guid = intent.extra!["chatGuid"]!;
@@ -139,7 +145,10 @@ class IntentsService {
         } else if (intent.extra?["callUuid"] != null) {
           await StartupTasks.waitForUI();
           final isTelephony = intent.extra?["isTelephony"] == true;
-          final isAudio = isTelephony || intent.extra?["audioOnly"] == true;
+          final isAudio = isTelephony ||
+              intent.extra?["audioOnly"] == true ||
+              intent.extra?["isAudio"] == true ||
+              intent.extra?["isVideo"] == false;
           if (intent.extra?["answer"] == true) {
             await answerFaceTime(
               intent.extra?["callUuid"]!,
@@ -164,7 +173,8 @@ class IntentsService {
     bool audioOnly = false,
     bool isTelephony = false,
   }) async {
-    final prevState = ActiveCallController.instance.state;
+    final controller = callControllerOverride ?? ActiveCallController.instance;
+    final prevState = controller.state;
     final matchesPrev = prevState.callUuid == callUuid;
     final effectiveTelephony = isTelephony || (matchesPrev && prevState.isTelephony);
     final callerName = matchesPrev && prevState.callerName.isNotEmpty
@@ -174,22 +184,10 @@ class IntentsService {
     final avatarBytes = matchesPrev ? prevState.avatarBytes : null;
     final chatGuid = matchesPrev ? prevState.chatGuid : null;
     final wasVideo = matchesPrev ? prevState.isVideo : !(audioOnly || effectiveTelephony);
+    final isAudioAnswer = effectiveTelephony || audioOnly || !wasVideo;
+    final isAndroid = !kIsWeb && (Platform.isAndroid || defaultTargetPlatform == TargetPlatform.android);
 
-    if (effectiveTelephony) {
-      if (!kIsWeb && Platform.isAndroid) {
-        final answered = await ActiveCallController.instance.answerCall(audioOnly: true);
-        if (answered) {
-          return;
-        }
-        hideFaceTimeOverlay(callUuid);
-        await MethodChannelSvc.actions.openCallingAccounts();
-        showSnackbar(
-          "Enable Calling Accounts",
-          "Turn on BlueBubbles in Calling Accounts to answer iPhone calls.",
-          type: SnackbarType.info,
-        );
-        return;
-      }
+    if (effectiveTelephony && !isAndroid) {
       hideFaceTimeOverlay(callUuid);
       return showSnackbar(
         "Unsupported",
@@ -198,48 +196,53 @@ class IntentsService {
       );
     }
 
-    await showFaceTimeConnectingOverlay(
-      callUuid,
-      caller: callerName,
-      chatIcon: avatarBytes,
-      isAudio: audioOnly || !wasVideo,
-    );
+    if (isAndroid && isAudioAnswer) {
+      final telecomEnabled = !GetIt.I.isRegistered<MethodChannelService>() ||
+          await MethodChannelSvc.actions.isTelecomEnabled();
+      if (!telecomEnabled) {
+        hideFaceTimeOverlay(callUuid);
+        if (GetIt.I.isRegistered<MethodChannelService>()) {
+          await MethodChannelSvc.actions.openCallingAccounts();
+        }
+        showSnackbar(
+          "Enable Calling Accounts",
+          effectiveTelephony
+              ? "Turn on BlueBubbles in Calling Accounts to answer iPhone calls."
+              : "Turn on BlueBubbles in Calling Accounts to answer FaceTime Audio calls.",
+          type: SnackbarType.info,
+        );
+        return;
+      }
+      if (!matchesPrev) {
+        controller.setConnecting(
+          callUuid: callUuid,
+          callerName: callerName,
+          callerAddress: callerAddress,
+          avatarBytes: avatarBytes,
+          isVideo: false,
+          isTelephony: effectiveTelephony,
+          chatGuid: chatGuid,
+        );
+      }
+      await controller.answerCall(audioOnly: true, context: Get.context);
+      return;
+    }
 
-    String? link;
-    try {
-      final placed = await HttpSvc.faceTime.answerFaceTime(
-        callUuid,
-        audioOnly: audioOnly && !kIsWeb,
-        displayName: callerName,
+    if (!matchesPrev) {
+      controller.setConnecting(
+        callUuid: callUuid,
+        callerName: callerName,
+        callerAddress: callerAddress,
+        avatarBytes: avatarBytes,
+        isVideo: !audioOnly && wasVideo,
+        isTelephony: effectiveTelephony,
         chatGuid: chatGuid,
       );
-      link = placed.link;
-    } catch (e, s) {
-      Logger.warn("Failed to fetch FaceTime answer link", error: e, trace: s, tag: 'IntentsService');
     }
-
-    final current = ActiveCallController.instance.state;
-    final stillConnecting = current.callUuid == callUuid && current.phase == ActiveCallPhase.connecting;
-
-    hideFaceTimeOverlay(callUuid, keepCallState: true);
-    if (!stillConnecting) return;
-
-    if (link == null || link.isEmpty) {
-      ActiveCallController.instance.clearPendingIfMatches(callUuid);
-      return showSnackbar("Failed to answer FaceTime", "Unable to generate FaceTime link!", type: SnackbarType.error);
-    }
-
-    ActiveCallController.instance.startOngoing(
-      callUuid: callUuid,
-      callerName: callerName,
-      callerAddress: callerAddress,
-      avatarBytes: avatarBytes,
-      isVideo: !audioOnly && wasVideo,
-      joinLink: link,
-      chatGuid: chatGuid,
+    await controller.answerCall(
+      audioOnly: audioOnly || !wasVideo,
+      context: Get.context,
     );
-
-    await openFaceTimeJoinLink(link, context: Get.context);
   }
 
   Future<void> openChat(String? guid,
@@ -249,8 +252,10 @@ class IntentsService {
     if (guid == null) {
       Logger.debug("Opening new chat creator..", tag: "IntentsService");
       await StartupTasks.waitForUI();
+      final ctx = Get.context;
+      if (ctx == null) return;
       NavigationSvc.pushAndRemoveUntil(
-        Get.context!,
+        ctx,
         NewChatCreator(
           initialAttachments: attachments,
           initialText: text,
@@ -259,16 +264,22 @@ class IntentsService {
       );
     } else if (guid == "-1") {
       Logger.debug("Popping all routes...", tag: "IntentsService");
+      await StartupTasks.waitForUI();
       if (ChatsSvc.activeChat != null) {
         NavigationSvc.closeSections();
-        NavigationSvc.closeAllConversationView(Get.context!);
+        final ctx = Get.context;
+        if (ctx != null) {
+          NavigationSvc.closeAllConversationView(ctx);
+        }
         await ChatsSvc.setAllInactive();
       }
     } else if (guid == "-2") {
       Logger.debug("Opening server management panel...", tag: "IntentsService");
+      await StartupTasks.waitForUI();
       NavigationSvc.openSettings(initialPage: ServerManagementPanel());
     } else if (guid.contains("scheduled")) {
       Logger.debug("Opening scheduled messages panel...", tag: "IntentsService");
+      await StartupTasks.waitForUI();
       NavigationSvc.openSettings(initialPage: const ScheduledMessagesPanel());
     } else {
       Logger.debug("Opening existing chat (Attachments: ${attachments.length}; Text: ${text?.shorten(10) ?? 'N/A'})",
@@ -315,11 +326,14 @@ class IntentsService {
           // the ConversationView text field is pre-filled on first build.
           setPickedAttachments();
 
-          await NavigationSvc.pushAndRemoveUntil(
-            Get.context!,
-            ConversationView(chat: chat),
-            (route) => route.isFirst,
-          );
+          final ctx = Get.context;
+          if (ctx != null) {
+            await NavigationSvc.pushAndRemoveUntil(
+              ctx,
+              ConversationView(chat: chat),
+              (route) => route.isFirst,
+            );
+          }
         } else {
           Logger.debug("Chat is already open, not navigating", tag: "IntentsService");
           // It may still be open under Settings or Find My: bring it back into view

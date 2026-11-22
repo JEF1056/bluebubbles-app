@@ -390,7 +390,14 @@ class GlobalIsolate {
     // Create a standard request message
     final message = IsolateRequest(uuid: requestId, type: type, data: input).toMap();
 
-    _sendPort!.send(message);
+    final sendPort = _sendPort;
+    if (sendPort == null) {
+      _pendingRequests.remove(requestId);
+      timer?.cancel();
+      completer.completeError('Isolate SendPort is unavailable');
+      return completer.future;
+    }
+    sendPort.send(message);
 
     return completer.future;
   }
@@ -518,7 +525,7 @@ class GlobalIsolate {
     if (!_shutdownPending) return;
     if (_pendingRequests.isNotEmpty) return;
     Logger.info('$isolateDebugName draining complete. Stopping isolate.');
-    stop();
+    unawaited(_stopWhenInitialised());
   }
 
   /// Schedules isolate shutdown to happen [idleTimeout] after the latest activity.

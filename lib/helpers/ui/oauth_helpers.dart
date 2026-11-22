@@ -545,24 +545,28 @@ Future<List<Map>> fetchFirebaseProjects(String token) async {
   try {
     // query firebase projects
     final response = await HttpSvc.firebase.getFirebaseProjects(token);
-    final projects = response.data['results'];
+    final rawData = response.data;
+    final projects = rawData is Map ? rawData['results'] : null;
     List<Object> errors = [];
     // find projects with RTDB or cloud firestore
-    if (projects.isNotEmpty) {
-      for (Map e in projects) {
-        if (e['resources']['realtimeDatabaseInstance'] != null) {
+    if (projects is List && projects.isNotEmpty) {
+      for (final item in projects) {
+        if (item is! Map) continue;
+        final e = item;
+        final resources = e['resources'];
+        final rtdbInstance = resources is Map ? resources['realtimeDatabaseInstance'] : null;
+        if (rtdbInstance != null) {
           try {
-            final serverUrlResponse =
-                await HttpSvc.firebase.getServerUrlRTDB(e['resources']['realtimeDatabaseInstance'], token);
-            e['serverUrl'] = serverUrlResponse.data['serverUrl'];
+            final serverUrlResponse = await HttpSvc.firebase.getServerUrlRTDB(rtdbInstance, token);
+            e['serverUrl'] = serverUrlResponse.data?['serverUrl'];
             usableProjects.add(e);
           } catch (ex) {
             errors.add("Realtime Database Error: $ex");
           }
-        } else {
+        } else if (e['projectId'] != null) {
           try {
             final serverUrlResponse = await HttpSvc.firebase.getServerUrlCF(e['projectId'], token);
-            e['serverUrl'] = serverUrlResponse.data['fields']['serverUrl']['stringValue'];
+            e['serverUrl'] = serverUrlResponse.data?['fields']?['serverUrl']?['stringValue'];
             usableProjects.add(e);
           } catch (ex) {
             errors.add("Firestore Database Error: $ex");

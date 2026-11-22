@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
@@ -159,8 +158,8 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Full-bleed frosted caller backdrop
-            if (hasPhoto)
+            // Full-bleed caller backdrop (flat darkCanvas when no photo, blurred photo + scrim when photo present)
+            if (hasPhoto) ...[
               ImageFiltered(
                 imageFilter: ImageFilter.blur(sigmaX: 38, sigmaY: 38),
                 child: Transform.scale(
@@ -172,53 +171,30 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
                     errorBuilder: (_, _, _) => const SizedBox.shrink(),
                   ),
                 ),
-              )
-            else
-              BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: RadialGradient(
-                      center: const Alignment(0, -0.25),
-                      radius: 1.1,
-                      colors: [
-                        FaceTimePalette.blue.withValues(alpha: 0.22),
-                        FaceTimePalette.darkSurface,
-                        FaceTimePalette.darkCanvas,
-                      ],
-                    ),
-                  ),
+              ),
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: FaceTimePalette.darkCanvas.withValues(alpha: 0.72),
                 ),
               ),
-
-            // Dark readability scrim
-            DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withValues(alpha: hasPhoto ? 0.56 : 0.35),
-                    FaceTimePalette.darkCanvas.withValues(alpha: hasPhoto ? 0.72 : 0.60),
-                    FaceTimePalette.darkCanvas.withValues(alpha: 0.92),
-                  ],
-                ),
-              ),
-            ),
+            ],
 
             // Foreground layout
             SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: FaceTimeDims.contactSideMargin,
+                  vertical: FaceTimeDims.contactTopMargin,
+                ),
                 child: Column(
                   children: [
                     // Top call type pill
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.12),
+                        color: FaceTimePalette.darkSurface,
                         borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+                        border: Border.all(color: FaceTimePalette.hairline),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -226,16 +202,20 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
                           Icon(
                             isAudio ? Icons.call_rounded : Icons.videocam_rounded,
                             size: 16,
-                            color: connecting ? FaceTimePalette.blue : FaceTimePalette.green,
+                            color: connecting ? FaceTimePalette.blueDark : FaceTimePalette.green,
                           ),
                           const SizedBox(width: 8),
-                          Text(
-                            statusBadge,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.2,
+                          Flexible(
+                            child: Text(
+                              statusBadge,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: FaceTimePalette.onCanvas,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2,
+                              ),
                             ),
                           ),
                         ],
@@ -280,21 +260,21 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
                               height: 144,
                               child: CircularProgressIndicator(
                                 strokeWidth: 3,
-                                color: FaceTimePalette.blue,
+                                color: FaceTimePalette.blueDark,
                               ),
                             ),
                           FaceTimeAvatar(
                             callerName: widget.callerName,
                             avatarBytes: widget.avatarBytes,
                             size: 124,
-                            borderColor: Colors.white.withValues(alpha: 0.22),
-                            borderWidth: 2,
+                            borderColor: FaceTimePalette.hairline,
+                            borderWidth: 1,
                           ),
                         ],
                       ),
                     ),
 
-                    const SizedBox(height: 20),
+                    const SizedBox(height: FaceTimeDims.contactTopMargin),
 
                     Text(
                       widget.callerName,
@@ -302,20 +282,20 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.4,
-                        height: 1.15,
+                        color: FaceTimePalette.onCanvas,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.3,
+                        height: 1.2,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       statusSubtitle,
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.78),
-                        fontSize: 15,
+                      style: const TextStyle(
+                        color: FaceTimePalette.secondaryText,
+                        fontSize: 14,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
@@ -337,7 +317,7 @@ class _IncomingFaceTimeScreenState extends State<IncomingFaceTimeScreen> with Si
                               onAnswerVideo: _triggerAnswerVideo,
                             ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                   ],
                 ),
               ),
@@ -368,55 +348,68 @@ class _IncomingActions extends StatelessWidget {
   Widget build(BuildContext context) {
     if (isAudio) {
       return Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _CircleCallAction(
-            icon: Icons.call_end_rounded,
-            label: 'Decline',
-            backgroundColor: FaceTimePalette.red,
-            foregroundColor: Colors.white,
-            size: 68,
-            onPressed: onDecline,
+          Expanded(
+            child: _CircleCallAction(
+              icon: Icons.call_end_rounded,
+              label: 'Decline',
+              backgroundColor: FaceTimePalette.red,
+              foregroundColor: Colors.white,
+              size: FaceTimeDims.endCallSize,
+              iconSize: FaceTimeDims.endCallIconSize,
+              onPressed: onDecline,
+            ),
           ),
-          _CircleCallAction(
-            icon: Icons.call_rounded,
-            label: 'Answer Audio',
-            backgroundColor: FaceTimePalette.green,
-            foregroundColor: Colors.white,
-            size: 68,
-            onPressed: onAnswerAudio,
+          Expanded(
+            child: _CircleCallAction(
+              icon: Icons.call_rounded,
+              label: 'Answer Audio',
+              backgroundColor: FaceTimePalette.green,
+              foregroundColor: Colors.white,
+              size: FaceTimeDims.endCallSize,
+              iconSize: 32,
+              onPressed: onAnswerAudio,
+            ),
           ),
         ],
       );
     }
 
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
-        _CircleCallAction(
-          icon: Icons.call_end_rounded,
-          label: 'Decline',
-          backgroundColor: FaceTimePalette.red,
-          foregroundColor: Colors.white,
-          size: 64,
-          onPressed: onDecline,
+        Expanded(
+          child: _CircleCallAction(
+            icon: Icons.call_end_rounded,
+            label: 'Decline',
+            backgroundColor: FaceTimePalette.red,
+            foregroundColor: Colors.white,
+            size: FaceTimeDims.endCallSize,
+            iconSize: FaceTimeDims.endCallIconSize,
+            onPressed: onDecline,
+          ),
         ),
-        _CircleCallAction(
-          icon: Icons.call_rounded,
-          label: 'Audio Only',
-          backgroundColor: Colors.white.withValues(alpha: 0.16),
-          foregroundColor: Colors.white,
-          borderColor: Colors.white.withValues(alpha: 0.24),
-          size: 64,
-          onPressed: onAnswerAudio,
+        Expanded(
+          child: _CircleCallAction(
+            icon: Icons.call_rounded,
+            label: 'Audio Only',
+            backgroundColor: FaceTimePalette.darkElevated,
+            foregroundColor: FaceTimePalette.onCanvas,
+            borderColor: FaceTimePalette.hairline,
+            size: FaceTimeDims.endCallSize,
+            iconSize: FaceTimeDims.actionIconSize,
+            onPressed: onAnswerAudio,
+          ),
         ),
-        _CircleCallAction(
-          icon: Icons.videocam_rounded,
-          label: 'Answer Video',
-          backgroundColor: FaceTimePalette.green,
-          foregroundColor: Colors.white,
-          size: 64,
-          onPressed: onAnswerVideo,
+        Expanded(
+          child: _CircleCallAction(
+            icon: Icons.videocam_rounded,
+            label: 'Answer Video',
+            backgroundColor: FaceTimePalette.green,
+            foregroundColor: Colors.white,
+            size: FaceTimeDims.endCallSize,
+            iconSize: 32,
+            onPressed: onAnswerVideo,
+          ),
         ),
       ],
     );
@@ -460,6 +453,7 @@ class _CircleCallAction extends StatelessWidget {
     required this.backgroundColor,
     required this.foregroundColor,
     required this.size,
+    required this.iconSize,
     required this.onPressed,
     this.borderColor,
   });
@@ -470,11 +464,12 @@ class _CircleCallAction extends StatelessWidget {
   final Color foregroundColor;
   final Color? borderColor;
   final double size;
+  final double iconSize;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final effectiveSize = size < 48 ? 48.0 : size;
+    final effectiveSize = size < FaceTimeDims.actionButtonSize ? FaceTimeDims.actionButtonSize : size;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -494,20 +489,23 @@ class _CircleCallAction extends StatelessWidget {
                 width: effectiveSize,
                 height: effectiveSize,
                 child: Center(
-                  child: Icon(icon, color: foregroundColor, size: 28),
+                  child: Icon(icon, color: foregroundColor, size: iconSize),
                 ),
               ),
             ),
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: FaceTimeDims.actionLabelGap),
         ExcludeSemantics(
           child: Text(
             label,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.92),
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: FaceTimePalette.onCanvas,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),

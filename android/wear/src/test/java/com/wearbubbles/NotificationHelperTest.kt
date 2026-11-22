@@ -1,9 +1,13 @@
 package com.wearbubbles
 
+import com.wearbubbles.notifications.ActiveCallState
 import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.CallPhase
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
+import com.wearbubbles.ui.call.ringingCallSubtitle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -123,5 +127,131 @@ class NotificationHelperTest {
         } finally {
             NotificationHelper.resetLifecycleForTest()
         }
+    }
+
+    @Test
+    fun `telephony incoming call payload and labels propagate iPhone Call strings`() {
+        val telephony = DataLayerListenerService.parseIncomingCallPayload(
+            """{"callUuid":"cell-1","callerName":"Mom","callerAddress":"+15551234567","isVideo":true,"isTelephony":true}"""
+        )!!
+        assertEquals("cell-1", telephony.callUuid)
+        assertEquals("Mom", telephony.callerName)
+        assertEquals("+15551234567", telephony.callerAddress)
+        assertFalse(telephony.isVideo)
+        assertTrue(telephony.isTelephony)
+
+        val state = ActiveCallState(
+            callUuid = telephony.callUuid,
+            callerName = telephony.callerName,
+            callerAddress = telephony.callerAddress,
+            isVideo = telephony.isVideo,
+            fromPhoneRelay = true,
+            phase = CallPhase.RINGING,
+            isTelephony = telephony.isTelephony
+        )
+        assertTrue(state.isTelephony)
+        assertEquals("iPhone Call", ringingCallSubtitle(isVideo = state.isVideo, isTelephony = state.isTelephony))
+        assertEquals("Incoming iPhone Call", CallNotificationHelper.incomingFallbackNotificationText(isVideo = false, isTelephony = true))
+        assertEquals("iPhone Call • Ongoing", CallNotificationHelper.ongoingNotificationText(isTelephony = true))
+
+        val facetimeVideo = DataLayerListenerService.parseIncomingCallPayload(
+            """{"callUuid":"ft-1","callerName":"Alice","isVideo":true}"""
+        )!!
+        assertFalse(facetimeVideo.isTelephony)
+        assertTrue(facetimeVideo.isVideo)
+        assertEquals("FaceTime Video • Audio only", ringingCallSubtitle(isVideo = true, isTelephony = false))
+        assertEquals("FaceTime Audio", ringingCallSubtitle(isVideo = false, isTelephony = false))
+        assertEquals("FaceTime Audio • Ongoing", CallNotificationHelper.ongoingNotificationText(isTelephony = false))
+    }
+
+    @Test
+    fun `ring timeout fires only when call is still ringing and not cancelled`() = runBlocking {
+        assertEquals(60_000L, CallNotificationHelper.RING_TIMEOUT_MS)
+        val timedOut = mutableListOf<String>()
+        try {
+            CallNotificationHelper.setActiveCallStateForTest(
+                ActiveCallState("call-1", "Alice", "+1555", isVideo = false, fromPhoneRelay = true, phase = CallPhase.RINGING)
+            )
+            val job = CallNotificationHelper.scheduleRingTimeout("call-1", timeoutMs = 40L, scope = this) {
+                timedOut.add(it)
+            }
+            job.join()
+            assertEquals(listOf("call-1"), timedOut)
+
+            // Cancelled before firing (e.g. answered or ended)
+            val cancelledJob = CallNotificationHelper.scheduleRingTimeout("call-2", timeoutMs = 80L, scope = this) {
+                timedOut.add(it)
+            }
+            delay(20L)
+            CallNotificationHelper.cancelRingTimeout()
+            cancelledJob.join()
+            assertEquals(listOf("call-1"), timedOut)
+
+            // Phase already ONGOING -> does not fire
+            CallNotificationHelper.setActiveCallStateForTest(
+                ActiveCallState("call-3", "Bob", "+1555", isVideo = false, fromPhoneRelay = true, phase = CallPhase.ONGOING)
+            )
+            val ongoingJob = CallNotificationHelper.scheduleRingTimeout("call-3", timeoutMs = 30L, scope = this) {
+                timedOut.add(it)
+            }
+            ongoingJob.join()
+            assertEquals(listOf("call-1"), timedOut)
+        } finally {
+            CallNotificationHelper.cancelRingTimeout()
+            CallNotificationHelper.setActiveCallStateForTest(null)
+        }
+    }
+
+    @Test
+    fun `tryAnswerCallAudio skips standalone HTTP for telephony and requires success`() = runBlocking {
+        var standaloneCalls = 0
+        // Telephony relay failure must not fall back to standalone HTTP
+        assertFalse(
+            CallNotificationHelper.tryAnswerCallAudio(
+                callUuid = "tel-1",
+                isTelephony = true,
+                relayAnswer = { false },
+                standaloneAnswer = { standaloneCalls++; true }
+            )
+        )
+        assertEquals(0, standaloneCalls)
+
+        // FaceTime relay failure falls back to standalone HTTP; false if HTTP also fails
+        assertFalse(
+            CallNotificationHelper.tryAnswerCallAudio(
+                callUuid = "ft-1",
+                isTelephony = false,
+                relayAnswer = { false },
+                standaloneAnswer = { standaloneCalls++; false }
+            )
+        )
+        assertEquals(1, standaloneCalls)
+
+        // FaceTime standalone HTTP success returns true
+        assertTrue(
+            CallNotificationHelper.tryAnswerCallAudio(
+                callUuid = "ft-2",
+                isTelephony = false,
+                relayAnswer = { false },
+                standaloneAnswer = { standaloneCalls++; true }
+            )
+        )
+        assertEquals(2, standaloneCalls)
+    }
+
+    @Test
+    fun `shouldEndCall respects onlyIfRinging for status_id 1 vs 6`() {
+        val ringing = ActiveCallState("call-1", "Alice", "+1555", isVideo = false, fromPhoneRelay = false, phase = CallPhase.RINGING)
+        val ongoing = ringing.copy(phase = CallPhase.ONGOING)
+
+        // status_id == 1 (onlyIfRinging = true): ends RINGING, preserves ONGOING (answered on this watch)
+        assertTrue(CallNotificationHelper.shouldEndCall(ringing, "call-1", onlyIfRinging = true))
+        assertFalse(CallNotificationHelper.shouldEndCall(ongoing, "call-1", onlyIfRinging = true))
+        assertFalse(CallNotificationHelper.shouldEndCall(null, "call-1", onlyIfRinging = true))
+
+        // status_id == 6 (onlyIfRinging = false): ends both RINGING and ONGOING for matching UUID
+        assertTrue(CallNotificationHelper.shouldEndCall(ringing, "call-1", onlyIfRinging = false))
+        assertTrue(CallNotificationHelper.shouldEndCall(ongoing, "call-1", onlyIfRinging = false))
+        assertFalse(CallNotificationHelper.shouldEndCall(ongoing, "other-uuid", onlyIfRinging = false))
     }
 }

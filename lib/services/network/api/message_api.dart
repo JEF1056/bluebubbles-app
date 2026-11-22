@@ -29,7 +29,7 @@ class MessageApi {
     CancelToken? cancelToken,
   }) async {
     // we don't have a query that supports providing updated and onlyMe
-    assert(updated != true && onlyMe != true);
+    assert(!(updated && onlyMe));
     Map<String, dynamic> params = {};
     if (after != null) params['after'] = after.millisecondsSinceEpoch;
     if (before != null) params['before'] = before.millisecondsSinceEpoch;
@@ -247,7 +247,7 @@ class MessageApi {
     bool? isAudioMessage,
   }) async {
     final total = file.size;
-    final totalChunks = (total / attachmentChunkSize).ceil();
+    final totalChunks = max(1, (total / attachmentChunkSize).ceil());
     final fields = <String, dynamic>{
       "attachmentGuid": tempGuid,
       "chatGuid": chatGuid,

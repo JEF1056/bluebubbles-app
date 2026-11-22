@@ -78,11 +78,14 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     super.dispose();
   }
 
+  bool get _isEdited => controller.parts.any((p) => p.isEdited);
+
   bool get shouldShow {
     if (controller.audioWasKept.value != null) return true;
     if (message.isGroupEvent) return false;
     if (widget.forceShow || _isSendingDisplayed) return true;
     if (controller.isFullyUnsent || (controller.parts.lastOrNull?.isUnsent ?? false)) return false;
+    if (_isEdited) return true;
 
     // Visibility for "last read / delivered / sent / received" is computed by
     // MessagesService._recomputeDeliveredIndicators and stored reactively on
@@ -155,6 +158,9 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
 
     if (controller.audioWasKept.value != null) {
       return status("Kept", controller.audioWasKept.value!, icon: Icons.check_circle_outline);
+    }
+    if (_isEdited) {
+      return status("Edited", widget.forceShow ? dateCreated : null);
     }
     if (!(message.isFromMe ?? false)) {
       return status("Received", dateCreated);
@@ -237,6 +243,18 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
           return const SizedBox.shrink();
         }
 
+        Widget wrapEditedTap(Widget child) {
+          if (!_isEdited) return child;
+          return MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => controller.showEdits.toggle(),
+              child: child,
+            ),
+          );
+        }
+
         if (material) {
           final status = _materialStatus(hasBackground);
           _ticker.sync(status.timestamp, isRelative: isRelative);
@@ -244,7 +262,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
           if (!hasIcon && status.spans.isEmpty) {
             return const SizedBox.shrink();
           }
-          return Padding(
+          return wrapEditedTap(Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -278,10 +296,17 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
                     duration: M3EMotion.effectsFast.duration,
                     switchInCurve: M3EMotion.effectsFast.curve,
                     switchOutCurve: M3EMotion.effectsFast.curve,
+                    layoutBuilder: (currentChild, previousChildren) => Stack(
+                      alignment: AlignmentDirectional.centerStart,
+                      children: [
+                        ...previousChildren,
+                        ?currentChild,
+                      ],
+                    ),
                     child: status.spans.isEmpty
                         ? const SizedBox.shrink()
                         : Padding(
-                            key: ValueKey('${status.semanticLabel}_${widget.forceShow}'),
+                            key: ValueKey(status.semanticLabel),
                             padding: EdgeInsets.only(left: hasIcon ? 4 : 0),
                             child: Text.rich(TextSpan(children: status.spans)),
                           ),
@@ -289,19 +314,19 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
                 ),
               ],
             ),
-          );
+          ));
         }
 
         final status = _resolveStatus(material: false, hasBackground: hasBackground);
         _ticker.sync(status.timestamp, isRelative: isRelative);
         final spans = status.spans;
         return spans.isNotEmpty
-            ? Padding(
+            ? wrapEditedTap(Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 15).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
                 child: Text.rich(TextSpan(
                   children: spans,
                 )),
-              )
+              ))
             : const SizedBox.shrink();
       }),
     );

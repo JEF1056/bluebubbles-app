@@ -5,6 +5,7 @@
 #include <flutter/flutter_view_controller.h>
 #include <flutter/method_channel.h>
 
+#include <atomic>
 #include <memory>
 
 #include "win32_window.h"
@@ -38,6 +39,9 @@ class FlutterWindow : public Win32Window {
 
   // Delivers toast activations forwarded from a second instance (see toast_forwarder.h).
   std::unique_ptr<flutter::MethodChannel<>> notification_channel_;
+
+  // Cleared in OnDestroy() so async store coroutines drop results after teardown.
+  std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
 
   void ForwardToastActivation(const COPYDATASTRUCT& cds);
 };

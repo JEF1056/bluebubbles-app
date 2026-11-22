@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:universal_io/io.dart';
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/helpers/backend/settings_helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -424,8 +425,16 @@ class SocketService {
         s.on("participant-removed", (data) => MessageHandlerSvc.handleEvent("participant-removed", data, 'DartSocket')),
         s.on("participant-added", (data) => MessageHandlerSvc.handleEvent("participant-added", data, 'DartSocket')),
         s.on("participant-left", (data) => MessageHandlerSvc.handleEvent("participant-left", data, 'DartSocket')),
-        s.on("incoming-facetime",
-            (data) => MessageHandlerSvc.handleEvent("incoming-facetime", jsonDecode(data), 'DartSocket')),
+        s.on("incoming-facetime", (data) {
+          try {
+            final decoded = data is String ? jsonDecode(data) : data;
+            if (decoded is Map) {
+              MessageHandlerSvc.handleEvent("incoming-facetime", Map<String, dynamic>.from(decoded), 'DartSocket');
+            }
+          } catch (e, s) {
+            Logger.warn("Failed to decode incoming-facetime payload", error: e, trace: s, tag: _tag);
+          }
+        }),
       ]);
     }
 
@@ -441,9 +450,13 @@ class SocketService {
       s.on("imessage-aliases-removed",
           (data) => MessageHandlerSvc.handleEvent("imessage-aliases-removed", data, 'DartSocket')),
       s.on("pinned-chats-updated", (data) {
-        final decoded = data is String ? jsonDecode(data) : data;
-        if (decoded is Map) {
-          MessageHandlerSvc.handleEvent("pinned-chats-updated", Map<String, dynamic>.from(decoded), 'DartSocket');
+        try {
+          final decoded = data is String ? jsonDecode(data) : data;
+          if (decoded is Map) {
+            MessageHandlerSvc.handleEvent("pinned-chats-updated", Map<String, dynamic>.from(decoded), 'DartSocket');
+          }
+        } catch (e, s) {
+          Logger.warn("Failed to decode pinned-chats-updated payload", error: e, trace: s, tag: _tag);
         }
       }),
       // Live Find My updates. Re-broadcast through the event dispatcher rather than
@@ -488,6 +501,7 @@ class SocketService {
     socket?.disconnect();
     _connectivitySubscription?.cancel();
     _connectivitySubscription = null;
+    ConversationViewController.clearAllTypingIndicators();
     state.value = SocketState.disconnected;
     _notifySyncStatus();
   }
@@ -508,6 +522,7 @@ class SocketService {
     _networkAvailable = true;
     _forceStartOnCheck = true;
     _checkConnectivity();
+    unawaited(ActiveCallController.instance.syncFromServer());
   }
 
   /// Tears the connection down completely, including its Manager.
@@ -531,6 +546,7 @@ class SocketService {
     // whether the socket will deliver a message, and a disposed-but-still-
     // referenced socket makes that answer a guess.
     socket = null;
+    ConversationViewController.clearAllTypingIndicators();
     // Set directly rather than through handleStatusUpdate — the disconnect event
     // that would normally report this was just unsubscribed above.
     state.value = SocketState.disconnected;
@@ -807,6 +823,7 @@ class SocketService {
         }
       case SocketState.disconnected:
         _stopHeartbeat();
+        ConversationViewController.clearAllTypingIndicators();
         if (stateChanged) {
           Logger.info("Disconnected from socket at $serverAddress");
           state.value = SocketState.disconnected;

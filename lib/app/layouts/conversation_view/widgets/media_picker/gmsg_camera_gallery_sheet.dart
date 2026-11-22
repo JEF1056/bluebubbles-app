@@ -150,34 +150,57 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
     super.dispose();
   }
 
+  bool _disposedForLifecycle = false;
+  int _cameraInitGen = 0;
+  bool _initCameraInFlight = false;
+
+  bool _isBackgroundLifecycle(AppLifecycleState? state) =>
+      state == AppLifecycleState.inactive ||
+      state == AppLifecycleState.paused ||
+      state == AppLifecycleState.hidden;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_useAndroidNativeCamera) {
       if (!_androidPermissionGranted) return;
-      if (state == AppLifecycleState.inactive) {
+      if (_isBackgroundLifecycle(state)) {
+        if (_disposedForLifecycle) return;
+        _disposedForLifecycle = true;
+        _cameraInitGen++;
+        _initCameraInFlight = false;
         _recordingTimer?.cancel();
         _isRecording = false;
         if (mounted) setState(() => _cameraStatus = _CameraStatus.loading);
         unawaited(_disposeCamera());
-      } else if (state == AppLifecycleState.resumed) {
-        unawaited(_initCamera(preferredIndex: _cameraIndex));
+      } else if (state == AppLifecycleState.resumed && _disposedForLifecycle) {
+        _disposedForLifecycle = false;
+        if (!_initCameraInFlight) {
+          unawaited(_initCamera(preferredIndex: _cameraIndex));
+        }
       }
       return;
     }
 
     if (state == AppLifecycleState.resumed) {
-      if (_cameraController == null && _cameraStatus == _CameraStatus.ready) {
+      final shouldReinit = _cameraController == null &&
+          !_initCameraInFlight &&
+          (_cameraStatus == _CameraStatus.ready || _disposedForLifecycle);
+      _disposedForLifecycle = false;
+      if (shouldReinit) {
         unawaited(_initCamera(preferredIndex: _cameraIndex));
       }
       return;
     }
 
-    final cam = _cameraController;
-    if (cam == null || !cam.value.isInitialized) return;
-    if (state == AppLifecycleState.inactive) {
+    if (_isBackgroundLifecycle(state)) {
+      _disposedForLifecycle = true;
       _recordingTimer?.cancel();
       _isRecording = false;
-      unawaited(_disposeCamera());
+      if (_cameraController != null) {
+        _cameraInitGen++;
+        _initCameraInFlight = false;
+        unawaited(_disposeCamera());
+      }
     }
   }
 
@@ -215,6 +238,11 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
         'flashMode': _flashModeKey(_flashMode),
       });
       if (!mounted || info == null) return;
+      if (_isBackgroundLifecycle(WidgetsBinding.instance.lifecycleState)) {
+        _disposedForLifecycle = true;
+        unawaited(_disposeCamera());
+        return;
+      }
       final minZoom = (info['minZoom'] as num?)?.toDouble() ?? 1.0;
       final maxZoom = (info['maxZoom'] as num?)?.toDouble() ?? 1.0;
       setState(() {
@@ -243,101 +271,132 @@ class _GmsgCameraGallerySheetState extends State<GmsgCameraGallerySheet> with Wi
   }
 
   Future<void> _initCamera({int? preferredIndex}) async {
-    if (mounted) setState(() => _cameraStatus = _CameraStatus.loading);
+    final gen = ++_cameraInitGen;
+    _initCameraInFlight = true;
+    try {
+      if (mounted) setState(() => _cameraStatus = _CameraStatus.loading);
 
-    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-      final camPerm = await Permission.camera.request();
-      if (!camPerm.isGranted) {
-        if (mounted) {
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        final camPerm = await Permission.camera.request();
+        if (!mounted || gen != _cameraInitGen) return;
+        if (!camPerm.isGranted) {
           setState(() {
             _androidPermissionGranted = false;
             _cameraStatus = camPerm.isPermanentlyDenied
                 ? _CameraStatus.permanentlyDenied
                 : _CameraStatus.permissionDenied;
           });
+          return;
+        }
+        if (_isVideoMode) {
+          _micGranted = (await Permission.microphone.request()).isGranted;
+        } else {
+          _micGranted = await Permission.microphone.isGranted;
+        }
+        if (!mounted || gen != _cameraInitGen) return;
+      }
+
+      if (_isBackgroundLifecycle(WidgetsBinding.instance.lifecycleState)) {
+        _disposedForLifecycle = true;
+        return;
+      }
+
+      if (_useAndroidNativeCamera) {
+        if (mounted && !_androidPermissionGranted) {
+          setState(() => _androidPermissionGranted = true);
+        } else {
+          _androidPermissionGranted = true;
+        }
+        if (_androidViewId != null) {
+          await _bindAndroidCamera(_androidViewId!);
         }
         return;
       }
-      if (_isVideoMode) {
-        _micGranted = (await Permission.microphone.request()).isGranted;
-      } else {
-        _micGranted = await Permission.microphone.isGranted;
-      }
-    }
-
-    if (_useAndroidNativeCamera) {
-      if (mounted && !_androidPermissionGranted) {
-        setState(() => _androidPermissionGranted = true);
-      } else {
-        _androidPermissionGranted = true;
-      }
-      if (_androidViewId != null) {
-        await _bindAndroidCamera(_androidViewId!);
-      }
-      return;
-    }
-
-    try {
-      if (_cameras.isEmpty) {
-        _cameras = await availableCameras();
-      }
-      if (_cameras.isEmpty) {
-        if (mounted) setState(() => _cameraStatus = _CameraStatus.unavailable);
-        return;
-      }
-
-      if (preferredIndex != null) {
-        _cameraIndex = preferredIndex % _cameras.length;
-      } else {
-        final backIdx = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
-        _cameraIndex = backIdx >= 0 ? backIdx : 0;
-      }
-
-      await _disposeCamera();
-      if (!mounted) return;
-
-      final nextController = CameraController(
-        _cameras[_cameraIndex],
-        ResolutionPreset.high,
-        enableAudio: _isVideoMode && _micGranted,
-      );
-      _cameraController = nextController;
-      await nextController.initialize();
-      if (!mounted || _cameraController != nextController) {
-        await nextController.dispose();
-        return;
-      }
 
       try {
-        await nextController.setFlashMode(_flashMode);
-      } catch (_) {
-        _flashMode = FlashMode.off;
-      }
+        if (_cameras.isEmpty) {
+          _cameras = await availableCameras();
+        }
+        if (!mounted || gen != _cameraInitGen) return;
+        if (_isBackgroundLifecycle(WidgetsBinding.instance.lifecycleState)) {
+          _disposedForLifecycle = true;
+          return;
+        }
+        if (_cameras.isEmpty) {
+          setState(() => _cameraStatus = _CameraStatus.unavailable);
+          return;
+        }
 
-      try {
-        _minZoom = await nextController.getMinZoomLevel();
-        _maxZoom = await nextController.getMaxZoomLevel();
-        _currentZoom = 1.0.clamp(_minZoom, _maxZoom);
-        await nextController.setZoomLevel(_currentZoom);
-      } catch (_) {
-        _minZoom = 1.0;
-        _maxZoom = 1.0;
-        _currentZoom = 1.0;
-      }
+        if (preferredIndex != null) {
+          _cameraIndex = preferredIndex % _cameras.length;
+        } else {
+          final backIdx = _cameras.indexWhere((c) => c.lensDirection == CameraLensDirection.back);
+          _cameraIndex = backIdx >= 0 ? backIdx : 0;
+        }
 
-      if (mounted) setState(() => _cameraStatus = _CameraStatus.ready);
-    } on CameraException catch (e) {
-      Logger.warn("Camera init failed: ${e.code} ${e.description}");
-      if (!mounted) return;
-      final denied = e.code == 'CameraAccessDenied' ||
-          e.code == 'CameraAccessDeniedWithoutPrompt' ||
-          e.code == 'CameraAccessRestricted';
-      setState(() {
-        _cameraStatus = denied ? _CameraStatus.permissionDenied : _CameraStatus.unavailable;
-      });
-    } catch (e, s) {
-      Logger.error("Camera init error", error: e, trace: s);
-      if (mounted) setState(() => _cameraStatus = _CameraStatus.unavailable);
+        await _disposeCamera();
+        if (!mounted || gen != _cameraInitGen) return;
+        if (_isBackgroundLifecycle(WidgetsBinding.instance.lifecycleState)) {
+          _disposedForLifecycle = true;
+          return;
+        }
+
+        final nextController = CameraController(
+          _cameras[_cameraIndex],
+          ResolutionPreset.high,
+          enableAudio: _isVideoMode && _micGranted,
+        );
+        _cameraController = nextController;
+        await nextController.initialize();
+        if (!mounted ||
+            gen != _cameraInitGen ||
+            _cameraController != nextController ||
+            _isBackgroundLifecycle(WidgetsBinding.instance.lifecycleState)) {
+          if (_cameraController == nextController) {
+            _cameraController = null;
+          }
+          if (_isBackgroundLifecycle(WidgetsBinding.instance.lifecycleState)) {
+            _disposedForLifecycle = true;
+          }
+          await nextController.dispose();
+          return;
+        }
+
+        try {
+          await nextController.setFlashMode(_flashMode);
+        } catch (_) {
+          _flashMode = FlashMode.off;
+        }
+
+        try {
+          _minZoom = await nextController.getMinZoomLevel();
+          _maxZoom = await nextController.getMaxZoomLevel();
+          _currentZoom = 1.0.clamp(_minZoom, _maxZoom);
+          await nextController.setZoomLevel(_currentZoom);
+        } catch (_) {
+          _minZoom = 1.0;
+          _maxZoom = 1.0;
+          _currentZoom = 1.0;
+        }
+
+        if (mounted && gen == _cameraInitGen) setState(() => _cameraStatus = _CameraStatus.ready);
+      } on CameraException catch (e) {
+        Logger.warn("Camera init failed: ${e.code} ${e.description}");
+        if (!mounted || gen != _cameraInitGen) return;
+        final denied = e.code == 'CameraAccessDenied' ||
+            e.code == 'CameraAccessDeniedWithoutPrompt' ||
+            e.code == 'CameraAccessRestricted';
+        setState(() {
+          _cameraStatus = denied ? _CameraStatus.permissionDenied : _CameraStatus.unavailable;
+        });
+      } catch (e, s) {
+        Logger.error("Camera init error", error: e, trace: s);
+        if (mounted && gen == _cameraInitGen) {
+          setState(() => _cameraStatus = _CameraStatus.unavailable);
+        }
+      }
+    } finally {
+      if (gen == _cameraInitGen) _initCameraInFlight = false;
     }
   }
 

@@ -1,8 +1,7 @@
 import 'dart:io';
 import 'package:integration_test/integration_test_driver_extended.dart';
 
-const String _outDir =
-    '/Users/jfan/.gemini/antigravity/brain/13820410-8533-40f5-908f-5a94bd0eae1b/scratch/screenshots/phone';
+const String _outDir = '/tmp/vqa/android';
 
 Future<void> main() async {
   Directory(_outDir).createSync(recursive: true);

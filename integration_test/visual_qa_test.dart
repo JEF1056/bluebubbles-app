@@ -1,43 +1,227 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/in_app_call_screen.dart';
 import 'package:bluebubbles/app/components/facetime/incoming_facetime_screen.dart';
 import 'package:bluebubbles/app/components/facetime/ongoing_call_pill.dart';
 import 'package:bluebubbles/app/components/facetime/outgoing_facetime_sheet.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/timeframe_picker.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_dialog.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/sticker_library_dialog.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/text_field_attachment_picker.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/conversation_text_field.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_icon_bar.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
+import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart';
 import 'package:bluebubbles/app/layouts/setup/dialogs/failed_to_connect_dialog.dart';
 import 'package:bluebubbles/app/layouts/setup/dialogs/manual_entry_dialog.dart';
+import 'package:bluebubbles/app/state/chat_state.dart';
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/facetime.dart';
-import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/models/genmoji.dart';
+import 'package:bluebubbles/models/library_sticker.dart';
+import 'package:bluebubbles/models/models.dart' show ServerDetails;
+import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_admin_actions.dart';
+import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_desktop_actions.dart';
+import 'package:bluebubbles/services/backend/settings/actions/shared_preferences_theme_actions.dart';
+import 'package:bluebubbles/services/backend_ui_interop/event_dispatcher.dart' as bb_events;
+import 'package:bluebubbles/services/network/api/facetime_api.dart';
+import 'package:bluebubbles/services/network/api/genmoji_api.dart';
+import 'package:bluebubbles/services/network/api/sticker_api.dart';
+import 'package:bluebubbles/services/services.dart' hide EventDispatcher;
+import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:dio/dio.dart' as dio;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:integration_test/integration_test.dart';
 
-class _FakeSettingsService extends SettingsService {}
+class _SilentLogger extends BaseLogger {
+  @override
+  void debug(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+  @override
+  void info(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+  @override
+  void warn(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+  @override
+  void error(dynamic log, {String? tag, Object? error, StackTrace? trace}) {}
+}
+
+class _FakeSettingsService extends SettingsService {
+  ServerDetails fakeDetails = const ServerDetails(
+    macOSVersion: 15,
+    macOSMinorVersion: 4,
+    serverVersion: '2.0.0',
+    serverVersionCode: 200,
+    privateApiEnabled: true,
+    apiVersions: [1, 2],
+    supportsStickersFlag: true,
+  );
+
+  @override
+  ServerDetails getServerDetails() => fakeDetails;
+
+  @override
+  ServerDetails get serverDetails => fakeDetails;
+}
 
 class _FakeSocketService extends SocketService {}
+
+class _FakeDesktopPrefs extends SharedPreferencesDesktopActions {
+  _FakeDesktopPrefs(super.service);
+  @override
+  double? getSplitRatio() => null;
+  @override
+  Future<void> setSplitRatio(double ratio) async {}
+}
+
+class _FakeThemePrefs extends SharedPreferencesThemeActions {
+  _FakeThemePrefs(super.service);
+  @override
+  String? getSelectedLightTheme() => null;
+  @override
+  String? getSelectedDarkTheme() => null;
+}
+
+class _FakeAdminPrefs extends SharedPreferencesAdminActions {
+  _FakeAdminPrefs(super.service);
+  final Map<String, Object?> _store = {};
+  @override
+  Object? get(String key) => _store[key];
+  @override
+  Future<void> setString(String key, String value) async => _store[key] = value;
+  @override
+  Future<void> setBool(String key, bool value) async => _store[key] = value;
+}
+
+class _FakePrefsService extends SharedPreferencesService {
+  _FakePrefsService() {
+    admin = _FakeAdminPrefs(this);
+    desktop = _FakeDesktopPrefs(this);
+    theme = _FakeThemePrefs(this);
+  }
+}
+
+class _FakeOutgoingMessageHandler extends OutgoingMessageHandler {
+  @override
+  Future<void> queue(OutgoingQueueItem item) async {}
+}
+
+class _FakeChatsService extends ChatsService {
+  @override
+  Future<void> setChatTextFieldText(Chat chat, String? value, {List<Run> runs = const []}) async {
+    chat.textFieldText = value;
+  }
+
+  @override
+  Future<void> setChatTextFieldAttachments(Chat chat, List<String> attachments) async {
+    chat.textFieldAttachments = attachments;
+  }
+}
+
+class _FakeFilesystemService extends FilesystemService {
+  _FakeFilesystemService(this._dir);
+  final Directory _dir;
+
+  @override
+  Directory get appDocDir => _dir;
+}
+
+class _FakeStickerApi extends StickerApi {
+  _FakeStickerApi() : super(HttpService());
+
+  final List<LibrarySticker> serverStickers = const [
+    LibrarySticker(identifier: 'stk-1', shelf: 'recent', name: 'Rocket', mimeType: 'image/png', longestSide: 128),
+    LibrarySticker(identifier: 'stk-2', shelf: 'recent', name: 'Sparkle', mimeType: 'image/png', longestSide: 128),
+    LibrarySticker(identifier: 'stk-3', shelf: 'saved', name: 'Wave', mimeType: 'image/png', longestSide: 128),
+    LibrarySticker(identifier: 'stk-4', shelf: 'saved', name: 'Coffee', mimeType: 'image/png', longestSide: 128),
+    LibrarySticker(identifier: 'stk-5', shelf: 'saved', name: 'Heart', mimeType: 'image/png', longestSide: 128),
+  ];
+
+  @override
+  Future<({List<LibrarySticker> stickers, String? reason})> library({dio.CancelToken? cancelToken}) async =>
+      (stickers: List<LibrarySticker>.from(serverStickers), reason: null);
+
+  @override
+  Future<Uint8List> image(String identifier, {bool thumbnail = false, dio.CancelToken? cancelToken}) async =>
+      _samplePng;
+}
+
+class _FakeGenmojiApi extends GenmojiApi {
+  _FakeGenmojiApi() : super(HttpService());
+
+  @override
+  Future<GenmojiSupport> status({dio.CancelToken? cancelToken}) async =>
+      const GenmojiSupport(available: true, reason: 'available', maximumDescriptionLength: 100);
+}
+
+class _FakeFaceTimeApi extends FaceTimeApi {
+  _FakeFaceTimeApi() : super(HttpService());
+
+  @override
+  Future<dio.Response> dtmf(String callUuid, String digit, {dio.CancelToken? cancelToken}) async =>
+      dio.Response(requestOptions: dio.RequestOptions(path: '/facetime/dtmf'), statusCode: 200);
+}
+
+class _FakeHttpService extends HttpService {
+  _FakeHttpService(this.fakeSticker, this.fakeGenmoji, this.fakeFaceTime);
+  final _FakeStickerApi fakeSticker;
+  final _FakeGenmojiApi fakeGenmoji;
+  final _FakeFaceTimeApi fakeFaceTime;
+
+  @override
+  StickerApi get sticker => fakeSticker;
+
+  @override
+  GenmojiApi get genmoji => fakeGenmoji;
+
+  @override
+  FaceTimeApi get faceTime => fakeFaceTime;
+}
+
+void _resetSingleton<T extends Object>(T instance) {
+  if (GetIt.I.isRegistered<T>()) {
+    GetIt.I.unregister<T>();
+  }
+  GetIt.I.registerSingleton<T>(instance);
+}
 
 final Uint8List _samplePng = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
 );
 
+Directory? _vqaTempDir;
+
 void _registerServices(Skins skin) {
   Get.testMode = true;
-  if (GetIt.I.isRegistered<SettingsService>()) {
-    GetIt.I.unregister<SettingsService>();
-  }
+  _vqaTempDir ??= Directory.systemTemp.createTempSync('bb_vqa_');
+  _resetSingleton<BaseLogger>(_SilentLogger());
+
   final svc = _FakeSettingsService()..settings = Settings();
   svc.settings.skin.value = skin;
-  GetIt.I.registerSingleton<SettingsService>(svc);
+  svc.settings.enablePrivateAPI.value = true;
+  svc.settings.privateSendTypingIndicators.value = false;
+  _resetSingleton<SettingsService>(svc);
 
-  if (!GetIt.I.isRegistered<SocketService>()) {
-    GetIt.I.registerSingleton<SocketService>(_FakeSocketService());
-  }
+  _resetSingleton<SocketService>(_FakeSocketService());
+  _resetSingleton<SharedPreferencesService>(_FakePrefsService());
+  _resetSingleton<NavigatorService>(NavigatorService());
+  _resetSingleton<ChatsService>(_FakeChatsService());
+  _resetSingleton<HandleService>(HandleService());
+  _resetSingleton<ThemesService>(ThemesService());
+  _resetSingleton<FilesystemService>(_FakeFilesystemService(_vqaTempDir!));
+  _resetSingleton<bb_events.EventDispatcher>(bb_events.EventDispatcher());
+  _resetSingleton<SyncService>(SyncService());
+  _resetSingleton<LifecycleService>(LifecycleService());
+  _resetSingleton<OutgoingMessageHandler>(_FakeOutgoingMessageHandler());
+  _resetSingleton<HttpService>(_FakeHttpService(_FakeStickerApi(), _FakeGenmojiApi(), _FakeFaceTimeApi()));
+  _resetSingleton<StickerLibraryService>(StickerLibraryService()..useMemoryCache = true);
 }
 
 Widget _appShell({
@@ -52,6 +236,7 @@ Widget _appShell({
       seedColor: const Color(0xFF0A84FF),
       brightness: brightness,
     ),
+    extensions: const [BubbleText(bubbleText: TextStyle(fontSize: 15))],
   );
   return MaterialApp(
     debugShowCheckedModeBanner: false,
@@ -517,5 +702,281 @@ void main() {
       await tester.tap(collapseBtn.first);
       await snap(tester, 'ft_ongoing_pill_collapsed');
     }
+
+    // 7. Outgoing FaceTime Sheet - Ringing state
+    await tester.pumpWidget(_appShell(
+      brightness: Brightness.dark,
+      bodyBuilder: (c) {
+        ctx = c;
+        return const SizedBox.shrink();
+      },
+    ));
+    await tester.pumpAndSettle();
+
+    final ringingCtrl = ActiveCallController(
+      onReturnToCall: (_, _) async {},
+      onEndCall: (_, _) async {},
+    );
+    unawaited(showModalBottomSheet<void>(
+      context: ctx,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => OutgoingFaceTimeSheet(
+        callerName: 'Alex Lin',
+        callerAddress: '+1 (415) 555-0192',
+        isAndroid: false,
+        initialVideo: true,
+        callController: ringingCtrl,
+        checkTelecomEnabled: () async => true,
+        onOpenCallingAccounts: () async {},
+        requestCallPermissions: () async => true,
+        onPlaceNativeAudioCall: () async => true,
+        onStartServerCall: (bool isAudio) async => const PlacedFaceTimeCall(
+          call: FaceTimeCall(callUuid: 'out-ring-1', isVideo: true),
+          link: 'https://facetime.apple.com/join#mock',
+        ),
+        onTryOpenJoinLink: (_) async => false,
+        onOpenJoinLink: (_) async {},
+        onHangUpRingingCall: (_) async {},
+      ),
+    ));
+    await snap(tester, 'ft_outgoing_sheet_ringing');
+    await closeModal(tester);
+
+    // 8. InAppCallScreen - Audio
+    final inAppAudioCtrl = ActiveCallController(
+      onReturnToCall: (_, _) async {},
+      onEndCall: (_, _) async {},
+    )..startOngoing(
+        callUuid: 'inapp-aud-1',
+        callerName: 'Maya Jordan',
+        isVideo: false,
+      );
+    await tester.pumpWidget(MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: InAppCallScreen(
+        controller: inAppAudioCtrl,
+        onMinimize: () {},
+        onToggleSpeaker: (v) async => v,
+      ),
+    ));
+    await snap(tester, 'ft_inapp_audio', settle: false);
+
+    // 9. InAppCallScreen - Video
+    final inAppVideoCtrl = ActiveCallController(
+      onReturnToCall: (_, _) async {},
+      onEndCall: (_, _) async {},
+      onSendDtmf: (_, _) async {},
+    )..startOngoing(
+        callUuid: 'inapp-vid-1',
+        callerName: 'Alex Lin',
+        avatarBytes: _samplePng,
+        isVideo: true,
+      );
+    await tester.pumpWidget(MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: InAppCallScreen(
+        controller: inAppVideoCtrl,
+        videoView: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF0E2A38), Color(0xFF131314)],
+            ),
+          ),
+          child: const Center(
+            child: Icon(Icons.videocam_rounded, size: 72, color: Colors.white24),
+          ),
+        ),
+        onMinimize: () {},
+        onToggleSpeaker: (v) async => v,
+      ),
+    ));
+    await snap(tester, 'ft_inapp_video', settle: false);
+
+    // 10. InAppCallScreen - DTMF Keypad
+    await tester.tap(find.bySemanticsLabel('Keypad'));
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.tap(find.text('5'));
+    await snap(tester, 'ft_inapp_dtmf', settle: false);
+  });
+
+  testWidgets('Visual QA: Stickers, Add-Media & Voice Recording (Dark & Light)', (tester) async {
+    _registerServices(Skins.Material);
+    final chat = Chat(guid: 'iMessage;-;+15550004444', chatIdentifier: '+15550004444')
+      ..autoSendTypingIndicators = false;
+
+    for (final brightness in [Brightness.dark, Brightness.light]) {
+      final tag = brightness == Brightness.dark ? 'dark' : 'light';
+      final ctrlTag = 'vqa-chat-$tag';
+      final chatCtrl = ConversationViewController(chat, tag_: ctrlTag);
+      late BuildContext ctx;
+
+      await tester.pumpWidget(_appShell(
+        brightness: brightness,
+        bodyBuilder: (c) {
+          ctx = c;
+          return const SizedBox.shrink();
+        },
+      ));
+      await tester.pumpAndSettle();
+
+      // 1. Stickers Picker
+      await GetIt.I<StickerLibraryService>().sync();
+      unawaited(showDialog<void>(
+        context: ctx,
+        builder: (dialogCtx) => Dialog(
+          backgroundColor: Theme.of(dialogCtx).colorScheme.surfaceContainerLow,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          insetPadding: const EdgeInsets.all(16),
+          child: SizedBox(
+            width: 360,
+            height: 440,
+            child: StickerLibraryView(
+              controller: chatCtrl,
+              draggable: false,
+            ),
+          ),
+        ),
+      ));
+      await snap(tester, 'stickers_picker_$tag');
+      await closeModal(tester);
+
+      // 2. Add-media: Web attachment menu
+      unawaited(showWebAttachmentMenu(ctx, chatCtrl));
+      await snap(tester, 'media_web_attach_$tag');
+      await closeModal(tester);
+
+      // 3. Add-media: Timeframe picker
+      unawaited(showTimeframePicker('Schedule', ctx, presetsAhead: true));
+      await snap(tester, 'media_timeframe_$tag');
+      await closeModal(tester);
+
+      // 4. Add-media: Genmoji dialog
+      unawaited(showGenmojiDialog(ctx, isIMessage: true));
+      await snap(tester, 'media_genmoji_$tag');
+      await closeModal(tester);
+
+      // 5. Add-media: Material AttachmentPicker bottom sheet (collapsed + expanded)
+      unawaited(showModalBottomSheet<void>(
+        context: ctx,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => AttachmentPicker(controller: chatCtrl),
+      ));
+      await snap(tester, 'media_attachment_picker_$tag');
+      final expandDrawerBtn = find.byIcon(Icons.keyboard_arrow_up_rounded);
+      if (expandDrawerBtn.evaluate().isNotEmpty) {
+        await tester.tap(expandDrawerBtn.first);
+        await snap(tester, 'media_attachment_picker_expanded_$tag');
+      }
+      await closeModal(tester);
+
+      // 6. Voice Recording Overlay
+      chatCtrl.showRecording.value = true;
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF0A84FF),
+              brightness: brightness,
+            ),
+            extensions: const [BubbleText(bubbleText: TextStyle(fontSize: 15))],
+          ),
+          home: ChatStateScope(
+            chatState: ChatState(chat),
+            child: Scaffold(
+              appBar: AppBar(title: const Text('Alex Lin')),
+              body: Column(
+                children: [
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        _MockBubble('Alex Lin', 'Voice note incoming!', false, brightness == Brightness.dark),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: ConversationTextField(parentController: chatCtrl),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await snap(tester, 'voice_recording_$tag', settle: false);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+      if (Get.isRegistered<ConversationViewController>(tag: ctrlTag)) {
+        Get.delete<ConversationViewController>(tag: ctrlTag, force: true);
+      }
+    }
+  });
+
+  testWidgets('Visual QA: Find My (Dark & Light)', (tester) async {
+    _registerServices(Skins.Material);
+    final findMyCtrl = Get.put(FindMyController(autoFetch: false));
+    final friends = [
+      FindMyFriend(
+        latitude: 37.3349,
+        longitude: -122.009,
+        longAddress: null,
+        shortAddress: 'Cupertino, CA',
+        title: 'Alice Chen',
+        subtitle: null,
+        handle: null,
+        handleAddress: 'alice@example.com',
+        status: LocationStatus.live,
+        locatingInProgress: false,
+        lastUpdated: DateTime.now(),
+        horizontalAccuracy: 15,
+      ),
+      FindMyFriend(
+        latitude: 37.7749,
+        longitude: -122.4194,
+        longAddress: null,
+        shortAddress: 'San Francisco, CA',
+        title: 'Bob Martinez',
+        subtitle: null,
+        handle: null,
+        handleAddress: 'bob@example.com',
+        status: LocationStatus.shallow,
+        locatingInProgress: false,
+        lastUpdated: DateTime.now().subtract(const Duration(minutes: 4)),
+        horizontalAccuracy: 40,
+      ),
+    ];
+    findMyCtrl.friends.addAll(friends);
+    findMyCtrl.friendsWithLocation.addAll(friends);
+    findMyCtrl.fetching2.value = false;
+
+    for (final brightness in [Brightness.dark, Brightness.light]) {
+      final tag = brightness == Brightness.dark ? 'dark' : 'light';
+      await tester.pumpWidget(
+        GetMaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: const Color(0xFF0A84FF),
+              brightness: brightness,
+            ),
+          ),
+          home: const FindMyPage(),
+        ),
+      );
+      await snap(tester, 'findmy_$tag', settle: false);
+    }
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 200));
+    Get.delete<FindMyController>(force: true);
   });
 }

@@ -126,8 +126,8 @@ class OtherFile extends StatelessWidget {
             showSnackbar('Error', 'That attachment has no data to save!', type: SnackbarType.error);
           }
         } else if (kIsDesktop) {
-          File _file = File(
-              join(FilesystemSvc.sysTempPath, "BlueBubbles", "attachments", attachment.guid, basename(file.path!)));
+          File _file = File(join(
+              FilesystemSvc.sysTempPath, "BlueBubbles", "attachments", FilesystemService.sanitizeGuid(attachment.guid), basename(file.path!)));
           if (!await _file.exists()) {
             await _file.create(recursive: true);
             await File(file.path!).copy(_file.path);
@@ -135,8 +135,8 @@ class OtherFile extends StatelessWidget {
           launchUrl(Uri.file(_file.path));
         } else {
           try {
-            final res =
-                await OpenFilex.open(join(FilesystemSvc.attachmentsPath, attachment.guid!, basename(file.path!)));
+            final res = await OpenFilex.open(
+                join(FilesystemSvc.attachmentsPath, FilesystemService.sanitizeGuid(attachment.guid), basename(file.path!)));
             if (res.type == ResultType.noAppToOpen) {
               showSnackbar('Error', "No handler for this file type! Using share menu instead.",
                   type: SnackbarType.error);

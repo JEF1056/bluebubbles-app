@@ -216,8 +216,8 @@ class LifecycleService with WidgetsBindingObserver {
 
     if (state == AppLifecycleState.resumed) {
       // If we resumed before the pause-initiated isolate drain finished, cancel
-      // it so foreground sends/receives aren't rejected (Android-only drain).
-      if (!kIsWeb && Platform.isAndroid && GetIt.I.isRegistered<GlobalIsolate>()) {
+      // it so foreground sends/receives aren't rejected.
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS) && GetIt.I.isRegistered<GlobalIsolate>()) {
         GetIt.I<GlobalIsolate>().cancelDrain();
       }
 
@@ -379,7 +379,7 @@ class LifecycleService with WidgetsBindingObserver {
     // (paused, or detached when the activity is destroyed). If it's inactive or
     // hidden, the app may still technically be in the foreground, just obscured.
     if (!kIsWeb &&
-        Platform.isAndroid &&
+        (Platform.isAndroid || Platform.isIOS) &&
         (triggerState == AppLifecycleState.paused || triggerState == AppLifecycleState.detached)) {
       // The awaits above can span an entire background → foreground bounce (a slow
       // or hanging stopAllTyping() request is enough). Tearing the socket and the

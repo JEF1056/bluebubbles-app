@@ -236,12 +236,17 @@ class MessageListenerService : Service() {
                             callerName = resolvedName,
                             callerAddress = event.callerAddress,
                             isVideo = event.isVideo,
-                            fromPhoneRelay = false
+                            fromPhoneRelay = false,
+                            isTelephony = event.isTelephony
                         )
                     }
 
                     is SocketEvent.FaceTimeCallEnded -> {
-                        CallNotificationHelper.endCall(this@MessageListenerService, event.callUuid)
+                        CallNotificationHelper.endCall(
+                            this@MessageListenerService,
+                            event.callUuid,
+                            onlyIfRinging = event.onlyIfRinging
+                        )
                     }
 
                     is SocketEvent.Connected -> {
@@ -317,6 +322,7 @@ class MessageListenerService : Service() {
         hapticJob?.cancel()
         relayJob?.cancel()
         scope.cancel()
+        (applicationContext as? WearBubblesApp)?.socketManager?.disconnect()
         super.onDestroy()
     }
 }

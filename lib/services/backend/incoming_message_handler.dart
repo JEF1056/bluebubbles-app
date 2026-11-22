@@ -867,6 +867,13 @@ class IncomingMessageHandler {
       await svc.addNewMessage(message);
     }
 
+    if (!(message.isFromMe ?? false) &&
+        message.associatedMessageGuid == null &&
+        Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+      final controller = cvc(chat);
+      controller.messageListGate.run(() => controller.setTypingIndicator(false));
+    }
+
     EventDispatcherSvc.emit('new-message', {
       'chatGuid': chat.guid,
       'message': message,

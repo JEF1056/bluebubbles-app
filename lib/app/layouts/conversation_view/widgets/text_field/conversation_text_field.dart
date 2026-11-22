@@ -465,8 +465,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       onPointerDown: (_) => controller.onUserChatInteraction(),
       child: Obx(() => Padding(
           padding: EdgeInsets.only(
-            bottom: showAttachmentPicker ? 0 : 10.0,
-            top: 10.0,
+            bottom: showAttachmentPicker ? 0 : (material ? 8.0 : 10.0),
+            top: material ? 8.0 : 10.0,
           ),
           child: LayoutBuilder(builder: (context, constraints) {
             // Capture width outside the Obx lambda so the reactive builder does not
@@ -483,7 +483,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                   fit: FlexFit.loose,
                   child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   if (!material) TextFieldIconBar(controller: controller, localController: localController),
-                  if (material) const SizedBox(width: 12),
+                  if (material) const SizedBox(width: 8),
                   Expanded(
                     child: Stack(
                       alignment: Alignment.centerLeft,
@@ -498,9 +498,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                           audioRecorder: audioRecorder,
                           sendMessage: sendMessage,
                         ),
-                        Positioned(
-                          top: 0,
-                          bottom: 0,
+                        Positioned.fill(
                           child: TextFieldRecordingOverlay(
                             controller: controller,
                             recorderController: recorderController,
@@ -515,7 +513,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                   if (material) const SizedBox(width: 8),
                   if (samsung || material)
                     Padding(
-                      padding: EdgeInsets.only(right: material ? 12.0 : 5.0),
+                      // Center 48dp Send/Mic vertically beside the 56dp Material pill.
+                      padding: EdgeInsets.only(right: material ? 8.0 : 5.0, bottom: material ? 4.0 : 0.0),
                       child: TextFieldSuffix(
                         subjectTextController: controller.subjectTextController,
                         textController: controller.textController,

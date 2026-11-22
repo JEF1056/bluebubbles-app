@@ -8,6 +8,7 @@ import android.telecom.CallAudioState
 import android.telecom.Connection
 import android.telecom.DisconnectCause
 import com.bluebubbles.messaging.services.network.HttpService
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
 import com.bluebubbles.messaging.utils.PersistentLog
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -15,12 +16,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 class FaceTimeConnection(
     private val context: Context,
     @Volatile var callUuid: String?,
-    val isTelephony: Boolean = false
+    val isTelephony: Boolean = false,
+    val isVideo: Boolean = false
 ) : Connection() {
 
     companion object {
         private const val TAG = "FaceTimeConnection"
-        private const val RINGING_TIMEOUT_MS = 60_000L
+        private const val RINGING_TIMEOUT_MS = CreateIncomingFaceTimeNotification.INCOMING_CALL_TIMEOUT_MS
         private val DTMF_DIGIT_REGEX = Regex("^[0-9*#ABCD]$")
         private val audioExecutor = Executors.newSingleThreadExecutor()
 
@@ -48,6 +50,16 @@ class FaceTimeConnection(
     @Volatile
     private var lastMuted: Boolean? = null
 
+    @Volatile
+    private var remoteVideoTextureId: Long? = null
+
+    @Volatile
+    private var localVideoTextureId: Long? = null
+
+    fun getRemoteVideoTextureId(): Long? = webRtcClient?.getRemoteVideoTextureId() ?: remoteVideoTextureId
+
+    fun getLocalVideoTextureId(): Long? = webRtcClient?.getLocalVideoTextureId() ?: localVideoTextureId
+
     fun bindCallUuid(uuid: String) {
         callUuid = uuid
         FaceTimeConnectionService.registerActiveConnection(uuid, this)
@@ -70,6 +82,50 @@ class FaceTimeConnection(
         webRtcClient?.setMuted(muted)
     }
 
+    fun setCameraEnabled(enabled: Boolean): Boolean {
+        if (ended.get()) return false
+        return webRtcClient?.setCameraEnabled(enabled) ?: false
+    }
+
+    fun flipCamera(): Boolean {
+        if (ended.get()) return false
+        return webRtcClient?.flipCamera() ?: false
+    }
+
+    fun setSpeakerphone(enabled: Boolean): Boolean {
+        if (ended.get()) return false
+        @Suppress("DEPRECATION")
+        val route = if (enabled) {
+            CallAudioState.ROUTE_SPEAKER
+        } else if (((callAudioState?.supportedRouteMask ?: 0) and CallAudioState.ROUTE_BLUETOOTH) != 0) {
+            CallAudioState.ROUTE_BLUETOOTH
+        } else {
+            CallAudioState.ROUTE_WIRED_OR_EARPIECE
+        }
+        @Suppress("DEPRECATION")
+        try {
+            setAudioRoute(route)
+        } catch (_: Exception) {}
+        @Suppress("DEPRECATION")
+        return try {
+            val audioManager = context.getSystemService(AudioManager::class.java)
+            audioManager?.isSpeakerphoneOn = enabled
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun isSpeakerphoneOn(): Boolean {
+        if (callAudioState?.route == CallAudioState.ROUTE_SPEAKER) return true
+        @Suppress("DEPRECATION")
+        return try {
+            context.getSystemService(AudioManager::class.java)?.isSpeakerphoneOn == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     private fun emitCallState(phase: String, uuid: String, muted: Boolean? = null) {
         val payload = HashMap<String, Any>(4).apply {
             put("phase", phase)
@@ -88,7 +144,7 @@ class FaceTimeConnection(
         mainHandler.postDelayed(ringingTimeoutRunnable, RINGING_TIMEOUT_MS)
     }
 
-    fun startAudioBridge(answerCall: Boolean) {
+    fun startAudioBridge(answerCall: Boolean, wantVideo: Boolean = isVideo) {
         val uuid = callUuid ?: return
         if (ended.get() || webRtcClient != null) return
 
@@ -96,9 +152,16 @@ class FaceTimeConnection(
             context = context,
             callUuid = uuid,
             answerCall = answerCall,
+            wantVideo = wantVideo,
             onRemoteHangup = { onRemoteDisconnect() },
             onError = { err ->
                 PersistentLog.e(context, TAG, "Audio bridge error for $uuid: $err")
+            },
+            onRemoteVideoTexture = { textureId ->
+                remoteVideoTextureId = textureId
+            },
+            onLocalVideoTexture = { textureId ->
+                localVideoTextureId = textureId
             }
         )
         webRtcClient = client
@@ -221,6 +284,7 @@ class FaceTimeConnection(
         cleanupAudio(sendHangup = sendHangup)
         if (!uuid.isNullOrBlank()) {
             FaceTimeConnectionService.unregisterActiveConnection(uuid, this)
+            CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(context, uuid)
             emitCallState("ended", uuid)
             com.bluebubbles.messaging.services.wear.WearSyncManager.notifyCallEnded(context, uuid)
         }
@@ -252,5 +316,7 @@ class FaceTimeConnection(
         mainHandler.removeCallbacks(ringingTimeoutRunnable)
         webRtcClient?.stop(sendHangup = sendHangup)
         webRtcClient = null
+        remoteVideoTextureId = null
+        localVideoTextureId = null
     }
 }

@@ -110,6 +110,7 @@ class Database {
         }
       } catch (e, s) {
         Logger.error("Failed to setup ObjectBox boxes!", error: e, trace: s);
+        rethrow;
       }
 
       try {
@@ -117,6 +118,7 @@ class Database {
         await PrefsSvc.database.setDbVersion(version);
       } catch (e, s) {
         Logger.error("Failed to perform database migrations!", error: e, trace: s);
+        rethrow;
       }
 
       await seedThemes();
@@ -127,6 +129,12 @@ class Database {
           Logger.error("Initial web persistence flush failed!", error: e, trace: s);
         }
       }
+    } catch (e, s) {
+      if (!initComplete.isCompleted) {
+        initComplete.future.ignore();
+        initComplete.completeError(e, s);
+      }
+      rethrow;
     } finally {
       if (!initComplete.isCompleted) {
         initComplete.complete();
@@ -161,7 +169,7 @@ class Database {
       Logger.error("Failed to prepare ObjectBox directory!", error: e, trace: s, tag: "Database");
       // Opening here could create an empty store in place of a custom-path copy that failed part way. The custom
       // path config is only cleared after a successful copy, so the next launch retries it.
-      return;
+      rethrow;
     }
 
     await _openOrAttachStore(objectBoxDirectory);
@@ -185,7 +193,9 @@ class Database {
       if (!isStoreOpen && e.toString().contains("another store is still open using the same path")) {
         Logger.info("Retrying to attach to an existing ObjectBox store", tag: "Database");
         await _openOrAttachStore(objectBoxDirectory, storeOpenStatus: true);
+        return;
       }
+      rethrow;
     }
   }
 

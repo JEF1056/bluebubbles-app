@@ -1,6 +1,8 @@
 package com.bluebubbles.messaging
 
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.bluebubbles.messaging.utils.Utils
 import com.google.gson.Gson
@@ -99,6 +101,10 @@ class UnifiedPushReceiver : MessagingReceiver() {
         }
 
         PersistentLog.i(applicationContext, tag, "Received new message of type $type from UnifiedPush...")
+        if (type == "ft-call-status-changed") {
+            CreateIncomingFaceTimeNotification.handlePushCallStatusChanged(applicationContext, payloadMap["data"])
+        }
+        WearSyncManager.forwardPushEventIfWatchActive(applicationContext, type, payloadMap)
         DartWorkManager.createWorker(applicationContext, type, payloadMap) {}
 
         // check if the user configured "Send Events to Tasker"

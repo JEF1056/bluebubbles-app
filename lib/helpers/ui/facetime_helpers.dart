@@ -2,13 +2,15 @@ import 'dart:async';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
+import 'package:bluebubbles/app/components/facetime/in_app_call_screen.dart';
 import 'package:bluebubbles/app/components/facetime/incoming_facetime_screen.dart';
+import 'package:bluebubbles/app/components/facetime/web_ringtone.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/intents_service.dart';
 import 'package:bluebubbles/services/backend/notifications/notifications_service.dart';
 import 'package:bluebubbles/services/backend/settings/settings_service.dart';
 import 'package:faker/faker.dart' hide Image;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 
@@ -40,9 +42,89 @@ class FaceTimeIncomingActions {
 Map<String, Route?> faceTimeOverlays = {};
 final Map<String, FaceTimeIncomingActions> faceTimeIncomingActions = {};
 
+/// Active full-screen [InAppCallScreen] route when expanded from [OngoingCallPillOverlay].
+Route<void>? activeInAppCallRoute;
+
+/// Dismisses the expanded [InAppCallScreen] route if currently active.
+void hideInAppCallScreen() {
+  final route = activeInAppCallRoute;
+  activeInAppCallRoute = null;
+  if (route != null && route.isActive) {
+    route.navigator?.removeRoute(route);
+  }
+}
+
+/// Opens the full-screen [InAppCallScreen] without duplicating route stacks.
+void openInAppCallScreen({
+  BuildContext? context,
+  ActiveCallController? controller,
+  Widget? videoView,
+  Future<bool> Function(bool enabled)? onToggleSpeaker,
+  bool initialSpeakerOn = false,
+}) {
+  final existingRoute = activeInAppCallRoute;
+  if (existingRoute != null &&
+      existingRoute.isActive &&
+      (existingRoute.navigator?.mounted ?? false)) {
+    return;
+  }
+
+  final targetContext = context ?? Get.context;
+  if (targetContext == null) return;
+
+  final callController = controller ?? ActiveCallController.instance;
+  if (callController.state.phase == ActiveCallPhase.idle) return;
+
+  final reducedMotion = facetimeReducedMotionOf(targetContext);
+  final navigator = Navigator.of(targetContext, rootNavigator: true);
+  final themes = InheritedTheme.capture(
+    from: targetContext,
+    to: navigator.context,
+  );
+  final route = RawDialogRoute<void>(
+    barrierDismissible: false,
+    barrierLabel: 'In-app call screen',
+    barrierColor: Colors.black.withValues(alpha: 0.45),
+    transitionDuration: reducedMotion ? Duration.zero : const Duration(milliseconds: 180),
+    pageBuilder: (dialogContext, animation, secondaryAnimation) => themes.wrap(
+      Builder(
+        builder: (themedContext) => InAppCallScreen(
+          controller: callController,
+          videoView: videoView,
+          onToggleSpeaker: onToggleSpeaker,
+          initialSpeakerOn: initialSpeakerOn,
+          onMinimize: () => Navigator.of(themedContext).maybePop(),
+        ),
+      ),
+    ),
+    transitionBuilder: (context, animation, secondaryAnimation, child) {
+      if (reducedMotion) return child;
+      final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+      return FadeTransition(
+        opacity: curved,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.96, end: 1.0).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+  activeInAppCallRoute = route;
+  unawaited(
+    navigator.push(route).then((_) {
+      if (identical(activeInAppCallRoute, route)) {
+        activeInAppCallRoute = null;
+      }
+    }),
+  );
+}
+
 /// Hides the FaceTime overlay with the given [callUuid].
 /// Also calls [NotificationsService.clearFaceTimeNotification] to clear the notification.
 void hideFaceTimeOverlay(String callUuid, {bool keepCallState = false}) {
+  if (kIsWeb) {
+    stopWebFaceTimeRingtone(callUuid: callUuid);
+  }
   if (GetIt.I.isRegistered<NotificationsService>()) {
     NotificationsSvc.clearFaceTimeNotification(callUuid, onlyIfRinging: keepCallState);
   }
@@ -65,12 +147,20 @@ void _pushFaceTimeRoute({
   required RouteTransitionsBuilder transitionBuilder,
 }) {
   final navigator = Navigator.of(targetContext, rootNavigator: true);
+  final themes = InheritedTheme.capture(
+    from: targetContext,
+    to: navigator.context,
+  );
   final route = RawDialogRoute<void>(
     barrierDismissible: false,
     barrierLabel: barrierLabel,
     barrierColor: Colors.black.withValues(alpha: 0.45),
     transitionDuration: transitionDuration,
-    pageBuilder: pageBuilder,
+    pageBuilder: (dialogContext, animation, secondaryAnimation) => themes.wrap(
+      Builder(
+        builder: (themedContext) => pageBuilder(themedContext, animation, secondaryAnimation),
+      ),
+    ),
     transitionBuilder: transitionBuilder,
   );
   faceTimeOverlays[callUuid] = route;
@@ -127,7 +217,11 @@ void openIncomingFaceTimeScreen(
             unawaited(callController.declineCall());
             hideFaceTimeOverlay(callUuid);
           },
-      onCancelConnecting: actions?.onCancelConnecting ?? () => hideFaceTimeOverlay(callUuid),
+      onCancelConnecting: actions?.onCancelConnecting ??
+          () {
+            unawaited(callController.endCall());
+            hideFaceTimeOverlay(callUuid);
+          },
     ),
     transitionBuilder: (context, animation, secondaryAnimation, child) {
       if (reducedMotion) return child;
@@ -165,7 +259,9 @@ Future<void> showFaceTimeOverlay(
   }
 
   // If we are somehow already showing an overlay for this call, close it first.
-  hideFaceTimeOverlay(callUuid);
+  if (faceTimeOverlays.containsKey(callUuid)) {
+    hideFaceTimeOverlay(callUuid);
+  }
 
   final callController = controller ?? ActiveCallController.instance;
   callController.startIncoming(
@@ -202,7 +298,10 @@ Future<void> showFaceTimeOverlay(
       unawaited(callController.declineCall());
       hideFaceTimeOverlay(callUuid);
     },
-    onCancelConnecting: () => hideFaceTimeOverlay(callUuid),
+    onCancelConnecting: () {
+      unawaited(callController.endCall());
+      hideFaceTimeOverlay(callUuid);
+    },
   );
   // Register synchronously without blocking the UI with a modal dialog.
   faceTimeOverlays[callUuid] = null;

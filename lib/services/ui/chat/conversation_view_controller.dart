@@ -51,8 +51,30 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   final Map<String, Player> audioPlayersDesktop = {};
   final Map<String, List<EntityAnnotation>> mlKitParsedText = {};
 
+  static final Set<ConversationViewController> _activeControllers = <ConversationViewController>{};
+  static void clearAllTypingIndicators() {
+    for (final controller in List<ConversationViewController>.of(_activeControllers)) {
+      controller.setTypingIndicator(false);
+    }
+  }
+
   // message view items
   final RxBool showTypingIndicator = false.obs;
+  Timer? _typingIndicatorTimer;
+
+  void setTypingIndicator(bool visible) {
+    _typingIndicatorTimer?.cancel();
+    _typingIndicatorTimer = null;
+    showTypingIndicator.value = visible;
+    if (visible) {
+      _typingIndicatorTimer = Timer(const Duration(seconds: 60), () {
+        _typingIndicatorTimer = null;
+        if (!isClosed) {
+          showTypingIndicator.value = false;
+        }
+      });
+    }
+  }
   final RxBool showScrollDown = false.obs;
   final RxDouble timestampOffset = 0.0.obs;
   final RxBool inSelectMode = false.obs;
@@ -189,6 +211,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   bool keyboardOpen = false;
   double _keyboardOffset = 0;
   Timer? _scrollDownDebounce;
+  StreamSubscription<bool>? _keyboardVisibilitySub;
   Future<void> Function(SendData)? sendFunc;
 
   /// When set, [_SendAnimationState] will auto-fire this send as soon as it
@@ -233,10 +256,11 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   @override
   void onInit() {
     super.onInit();
+    _activeControllers.add(this);
 
     textController.mentionables = mentionables;
     textController.formattingAllowed = () => canFormatText;
-    KeyboardVisibilityController().onChange.listen((bool visible) async {
+    _keyboardVisibilitySub = KeyboardVisibilityController().onChange.listen((bool visible) async {
       keyboardOpen = visible;
       if (scrollController.hasClients && scrollController.positions.length == 1) {
         _keyboardOffset = scrollController.offset;
@@ -281,6 +305,13 @@ class ConversationViewController extends StatefulController with GetSingleTicker
 
   @override
   void onClose() {
+    _activeControllers.remove(this);
+    _typingIndicatorTimer?.cancel();
+    _typingIndicatorTimer = null;
+    _keyboardVisibilitySub?.cancel();
+    _keyboardVisibilitySub = null;
+    _scrollDownDebounce?.cancel();
+    _scrollDownDebounce = null;
     _interactionDebounce?.cancel();
     _interactionDebounce = null;
     messageListGate.dispose();

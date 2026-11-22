@@ -1,18 +1,22 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/sticker_library_tile.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_drop_target.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/message_holder/message_holder_reactions.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/models/library_sticker.dart';
 import 'package:bluebubbles/models/models.dart' show StickerPlacement;
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
@@ -33,6 +37,56 @@ class _TestSettings extends Settings {
   Future<Settings> saveManyAsync(List<String> keys) async => this;
 }
 
+class _FakeStickerLibraryService extends StickerLibraryService {
+  _FakeStickerLibraryService(this.bytes);
+
+  final Uint8List bytes;
+
+  @override
+  Future<Uint8List> imageForSending(LibrarySticker sticker) async => bytes;
+}
+
+class _QueuedStickerCall {
+  _QueuedStickerCall({
+    required this.chat,
+    required this.selected,
+    required this.part,
+    required this.bytes,
+    required this.fileName,
+    required this.placement,
+  });
+
+  final Chat chat;
+  final Message selected;
+  final int part;
+  final Uint8List bytes;
+  final String fileName;
+  final StickerPlacement placement;
+}
+
+class _FakeOutgoingMessageHandler extends OutgoingMessageHandler {
+  final List<_QueuedStickerCall> placed = [];
+
+  @override
+  Future<void> queuePlacedSticker({
+    required Chat chat,
+    required Message selected,
+    required int part,
+    required Uint8List bytes,
+    required String fileName,
+    required StickerPlacement placement,
+  }) async {
+    placed.add(_QueuedStickerCall(
+      chat: chat,
+      selected: selected,
+      part: part,
+      bytes: bytes,
+      fileName: fileName,
+      placement: placement,
+    ));
+  }
+}
+
 void _registerTestServices() {
   Get.testMode = true;
   if (!GetIt.I.isRegistered<BaseLogger>()) {
@@ -43,6 +97,12 @@ void _registerTestServices() {
   }
   if (!GetIt.I.isRegistered<FilesystemService>()) {
     GetIt.I.registerSingleton<FilesystemService>(FilesystemService()..appDocDir = Directory.systemTemp);
+  }
+  if (!GetIt.I.isRegistered<StickerLibraryService>()) {
+    GetIt.I.registerSingleton<StickerLibraryService>(_FakeStickerLibraryService(_kPng1x1));
+  }
+  if (!GetIt.I.isRegistered<OutgoingMessageHandler>()) {
+    GetIt.I.registerSingleton<OutgoingMessageHandler>(_FakeOutgoingMessageHandler());
   }
 }
 
@@ -533,6 +593,252 @@ void main() {
       await tester.pump();
       final colSize = tester.getSize(find.byKey(const ValueKey('sticker_space_col')));
       expect(colSize, equals(const Size(240, 180)));
+    });
+
+    testWidgets('renders optimistically sent temp* placed sticker immediately from in-memory bytes', (tester) async {
+      const placement = StickerPlacement(
+        xScalar: 0.35,
+        yScalar: 0.65,
+        scale: 1.2,
+        rotation: -0.35,
+        parentPreviewWidth: 240,
+      );
+      final tempSticker = _makeStickerMessage(
+        guid: 'temp-STICKER-OPT',
+        attachmentId: 0,
+        partId: 0,
+        placement: placement.toMap(),
+      );
+      final parentMsg = Message(guid: 'PARENT-GUID', text: 'optimistic', isFromMe: true);
+      parentMsg.associatedMessages.add(tempSticker);
+      final state = MessageState(parentMsg);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 240,
+                height: 90,
+                child: MessageStateScope(
+                  messageState: state,
+                  child: StickerHolder(
+                    stickerMessages: [tempSticker],
+                    controller: null,
+                    placed: true,
+                    isFromMe: true,
+                    tailGutter: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final positioned = tester.widget<Positioned>(find.byKey(const ValueKey<Object>('at_0_temp-STICKER-OPT')));
+      // tailGutter=true, isFromMe=true => 4 + 0.35 * (240 - 16) = 82.4
+      expect(positioned.left, closeTo(82.4, 1e-6));
+      expect(positioned.top, closeTo(58.5, 1e-6));
+
+      final rotate = tester.widget<Transform>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey<Object>('at_0_temp-STICKER-OPT')),
+              matching: find.byType(Transform),
+            )
+            .first,
+      );
+      expect(rotate.transform.entry(0, 0), closeTo(math.cos(-0.35), 1e-6));
+      expect(rotate.transform.entry(1, 0), closeTo(math.sin(-0.35), 1e-6));
+
+      await tester.pump(const Duration(milliseconds: 750));
+    });
+  });
+
+  group('StickerDropTarget peel-and-place drag-drop & live ghost/transform affordance', () {
+    setUpAll(_registerTestServices);
+    tearDownAll(() async {
+      await GetIt.I.reset();
+    });
+
+    testWidgets('shows live ghost preview + transform readout on hover, adjusts scale/rotation, and queues placed sticker on drop',
+        (tester) async {
+      final outgoing = GetIt.I<OutgoingMessageHandler>() as _FakeOutgoingMessageHandler;
+      outgoing.placed.clear();
+
+      const sticker = LibrarySticker(
+        identifier: 'st-heart',
+        shelf: 'saved',
+        mimeType: 'image/png',
+        longestSide: 300,
+      );
+      final dragData = StickerDrag(sticker);
+      final targetMsg = Message(guid: 'MSG-TARGET-1', text: 'drop here', isFromMe: true);
+      final chat = Chat(guid: 'iMessage;-;+15550001111');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                Positioned(
+                  left: 20,
+                  top: 20,
+                  child: Draggable<StickerDrag>(
+                    data: dragData,
+                    dragAnchorStrategy: pointerDragAnchorStrategy,
+                    feedback: const SizedBox(width: 40, height: 40),
+                    child: const ColoredBox(
+                      key: ValueKey('drag_source'),
+                      color: Colors.blue,
+                      child: SizedBox(width: 48, height: 48),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 100,
+                  top: 120,
+                  width: 240,
+                  height: 80,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      const SizedBox.expand(),
+                      Positioned.fill(
+                        child: StickerDropTarget(
+                          message: targetMsg,
+                          part: 1,
+                          chat: chat,
+                          tailGutter: false,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final sourceCenter = tester.getCenter(find.byKey(const ValueKey('drag_source')));
+      final targetOrigin = tester.getTopLeft(find.byType(StickerDropTarget));
+      final dropPoint = targetOrigin + const Offset(160, 40);
+
+      final gesture = await tester.startGesture(sourceCenter);
+      await tester.pump();
+      // Break drag touch slop so _DragAvatar starts, then move over the bubble
+      await gesture.moveBy(const Offset(24, 0));
+      await tester.pump();
+      await gesture.moveTo(dropPoint);
+      await tester.pump();
+
+      // Live ghost preview & restrained transform pill appear while hovering
+      expect(find.text('100% · 0°'), findsOneWidget);
+
+      // Scroll-wheel / keyboard scale & rotation adjust the live transform while hovering
+      await tester.sendKeyEvent(LogicalKeyboardKey.equal);
+      await tester.sendKeyEvent(LogicalKeyboardKey.bracketRight);
+      await tester.pump();
+      expect(dragData.transform.value.scale, closeTo(1.12, 1e-6));
+      expect(dragData.transform.value.rotation, closeTo(math.pi / 12, 1e-6));
+      expect(find.text('112% · 15°'), findsOneWidget);
+
+      // Pointer scroll further adjusts scale
+      tester.binding.handlePointerEvent(PointerScrollEvent(
+        position: dropPoint,
+        scrollDelta: const Offset(0, -100),
+      ));
+      await tester.pump();
+      expect(dragData.transform.value.scale, closeTo(1.27, 1e-6));
+
+      // Drop onto the bubble
+      await gesture.up();
+      await tester.pumpAndSettle();
+
+      // Hover overlay clears after drop and OutgoingMsgHandler queues the exact normalized placement
+      expect(find.textContaining('% · '), findsNothing);
+      expect(outgoing.placed, hasLength(1));
+      final call = outgoing.placed.single;
+      expect(call.selected.guid, equals('MSG-TARGET-1'));
+      expect(call.part, equals(1));
+      expect(call.fileName, equals('sticker.png'));
+      expect(call.bytes, equals(_kPng1x1));
+      expect(call.placement.xScalar, closeTo(160 / 240, 1e-6));
+      expect(call.placement.yScalar, closeTo(40 / 80, 1e-6));
+      expect(call.placement.parentPreviewWidth, closeTo(240, 1e-6));
+      expect(
+        call.placement.scale,
+        closeTo(StickerHolder.scaleForPoints(StickerLibraryTile.dragSize * 1.27, 300), 1e-6),
+      );
+      expect(call.placement.rotation, closeTo(math.pi / 12, 1e-6));
+    });
+
+    testWidgets('rejects drops on unsent temp* messages without highlighting or queueing', (tester) async {
+      final outgoing = GetIt.I<OutgoingMessageHandler>() as _FakeOutgoingMessageHandler;
+      outgoing.placed.clear();
+
+      const sticker = LibrarySticker(
+        identifier: 'st-temp-reject',
+        shelf: 'saved',
+        mimeType: 'image/png',
+        longestSide: 300,
+      );
+      final dragData = StickerDrag(sticker);
+      final tempTarget = Message(guid: 'temp-MSG-UNSENT', text: 'pending', isFromMe: true);
+      final chat = Chat(guid: 'iMessage;-;+15550001111');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                Positioned(
+                  left: 20,
+                  top: 20,
+                  child: Draggable<StickerDrag>(
+                    data: dragData,
+                    dragAnchorStrategy: pointerDragAnchorStrategy,
+                    feedback: const SizedBox(width: 40, height: 40),
+                    child: const ColoredBox(
+                      key: ValueKey('drag_source_reject'),
+                      color: Colors.blue,
+                      child: SizedBox(width: 48, height: 48),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 100,
+                  top: 120,
+                  width: 200,
+                  height: 60,
+                  child: StickerDropTarget(
+                    message: tempTarget,
+                    part: 0,
+                    chat: chat,
+                    tailGutter: false,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final gesture = await tester.startGesture(tester.getCenter(find.byKey(const ValueKey('drag_source_reject'))));
+      await tester.pump();
+      await gesture.moveBy(const Offset(24, 0));
+      await tester.pump();
+      await gesture.moveTo(tester.getCenter(find.byType(StickerDropTarget)));
+      await tester.pump();
+
+      expect(find.textContaining('% · '), findsNothing);
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(outgoing.placed, isEmpty);
     });
   });
 }

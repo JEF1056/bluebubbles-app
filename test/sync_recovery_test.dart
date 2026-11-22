@@ -279,6 +279,18 @@ void main() {
         expect(sync.status.value.kind, SyncStatusKind.idle);
       });
     });
+
+    test('manual isIncrementalSyncing toggle clears syncing status instead of sticking', () {
+      fakeAsync((async) {
+        sync.isIncrementalSyncing.value = true;
+        async.elapse(const Duration(milliseconds: 350));
+        expect(sync.status.value.kind, SyncStatusKind.syncing);
+
+        sync.isIncrementalSyncing.value = false;
+        async.flushMicrotasks();
+        expect(sync.status.value.kind, SyncStatusKind.idle);
+      });
+    });
   });
 
   group('HttpService.runApiGuarded Cloudflare tunnel retries', () {

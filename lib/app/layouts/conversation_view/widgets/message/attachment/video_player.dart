@@ -252,7 +252,11 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
 
   bool hasListener = false;
   VideoController? videoController;
+  Future<void>? _initFuture;
   WebVideoController? _webVideoController;
+  VideoController? _listenedController;
+  VoidCallback? _rectListener;
+  StreamSubscription<bool>? _completedSub;
 
   final RxBool showPlayPauseOverlay = true.obs;
   final RxBool muted = SettingsSvc.settings.startVideosMuted.value.obs;
@@ -325,23 +329,37 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
 
   @override
   void dispose() {
+    _detachListeners();
     _evictionSubscription?.cancel();
     _webVideoController?.dispose();
+    if (cvController == null) {
+      videoController?.player.dispose();
+      videoController = null;
+    }
     super.dispose();
   }
 
+  void _detachListeners() {
+    if (_rectListener != null && _listenedController != null) {
+      _listenedController!.rect.removeListener(_rectListener!);
+    }
+    _rectListener = null;
+    _listenedController = null;
+    _completedSub?.cancel();
+    _completedSub = null;
+    hasListener = false;
+  }
+
   /// Our cached controller was disposed by the cache service. Forget it and return to
-  /// the lazy thumbnail state; the next tap builds a fresh player from disk. Desktop has
-  /// no thumbnail path, so it rebuilds eagerly, as it does on first mount.
+  /// the lazy thumbnail state; the next tap builds a fresh player from disk.
   void _onControllerEvicted() {
     if (kIsWeb || videoController == null) return;
+    _detachListeners();
     videoController = null;
-    hasListener = false;
     firstFrameReady.value = false;
     showPlayPauseOverlay.value = true;
     if (!mounted) return;
     setState(() {});
-    if (kIsDesktop || kIsWeb) initializeController();
   }
 
   Future<void> _playInline() async {
@@ -369,7 +387,14 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
     } catch (_) {}
   }
 
-  Future<void> initializeController() async {
+  Future<void> initializeController() {
+    if (videoController != null) return Future.value();
+    return _initFuture ??= _initializeControllerInternal().whenComplete(() {
+      _initFuture = null;
+    });
+  }
+
+  Future<void> _initializeControllerInternal() async {
     // Don't initialize if we already have a controller
     if (videoController != null) return;
 
@@ -382,32 +407,43 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
     }
 
     final player = Player();
-    videoController = VideoController(player);
-    await videoController!.player.setPlaylistMode(PlaylistMode.none);
-    await videoController!.player.open(media, play: false);
-    await configureAndroidVideoColorPipeline(videoController!.player);
-    await videoController!.player.setVolume(muted.value ? 0 : 100);
-    createListener(videoController!);
+    final created = VideoController(player);
+    try {
+      await created.player.setPlaylistMode(PlaylistMode.none);
+      await created.player.open(media, play: false);
+      await configureAndroidVideoColorPipeline(created.player);
+      await created.player.setVolume(muted.value ? 0 : 100);
+      if (!mounted || videoController != null) {
+        await created.player.dispose();
+        return;
+      }
+      videoController = created;
+      createListener(created);
 
-    // Cache the controller for reuse
-    if (cvController != null) {
-      cvController!.videoPlayers[attachment.guid!] = videoController!;
-    }
+      // Cache the controller for reuse
+      if (cvController != null) {
+        cvController!.videoPlayers[attachment.guid!] = created;
+      }
 
-    if (mounted) {
       setState(() {});
+    } catch (_) {
+      await created.player.dispose();
+      rethrow;
     }
   }
 
   void createListener(VideoController controller) {
-    if (hasListener) return;
+    if (hasListener && _listenedController == controller) return;
+    _detachListeners();
 
-    controller.rect.addListener(() {
+    _listenedController = controller;
+    _rectListener = () {
       // A null rect reports a 1.0 aspect ratio; don't clobber the DB-seeded value with it
       if (controller.rect.value == null) return;
       final ratio = controller.aspectRatio;
       if (aspectRatio.value != ratio) aspectRatio.value = ratio;
-    });
+    };
+    controller.rect.addListener(_rectListener!);
 
     // `waitUntilFirstFrameRendered` sounds like the right signal, but on Android (and
     // desktop) media_kit_video actually completes it from the same native video-geometry
@@ -421,7 +457,7 @@ class _VideoPlayerState extends State<VideoPlayer> with AutomaticKeepAliveClient
       if (mounted && !firstFrameReady.value) firstFrameReady.value = true;
     });
 
-    controller.player.stream.completed.listen((completed) async {
+    _completedSub = controller.player.stream.completed.listen((completed) async {
       // If the status is ended, restart
       if (completed) {
         await controller.player.pause();

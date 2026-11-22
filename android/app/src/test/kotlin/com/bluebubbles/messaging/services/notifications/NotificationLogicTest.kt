@@ -307,4 +307,78 @@ class NotificationLogicTest {
         assertTrue(DeleteNotificationHandler.matchesNotification("NEW_FACETIME", 42, 42, null))
         assertFalse(DeleteNotificationHandler.matchesNotification("NEW_MESSAGE", 41, 42, "NEW_MESSAGE"))
     }
+
+    @Test
+    fun `shouldUseCallStyle stays enabled on Android 14+ regardless of FSI and disables for ongoing or enable-account`() {
+        assertTrue(
+            CreateIncomingFaceTimeNotification.shouldUseCallStyle(
+                sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+                isOngoing = false,
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION
+            )
+        )
+        assertFalse(
+            CreateIncomingFaceTimeNotification.shouldUseCallStyle(
+                sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+                isOngoing = true,
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION
+            )
+        )
+        assertFalse(
+            CreateIncomingFaceTimeNotification.shouldUseCallStyle(
+                sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+                isOngoing = false,
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT
+            )
+        )
+        assertFalse(
+            CreateIncomingFaceTimeNotification.shouldUseCallStyle(
+                sdkInt = android.os.Build.VERSION_CODES.R,
+                isOngoing = false,
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION
+            )
+        )
+    }
+
+    @Test
+    fun `resolveIsVideo and computeFaceTimeNotificationId match Dart logic`() {
+        assertFalse(CreateIncomingFaceTimeNotification.resolveIsVideo(isVideoFlag = true, isAudioFlag = null, isTelephony = true))
+        assertFalse(CreateIncomingFaceTimeNotification.resolveIsVideo(isVideoFlag = null, isAudioFlag = true, isTelephony = false))
+        assertTrue(CreateIncomingFaceTimeNotification.resolveIsVideo(isVideoFlag = null, isAudioFlag = null, isTelephony = false))
+        assertEquals(12345678, CreateIncomingFaceTimeNotification.computeFaceTimeNotificationId("1234-5678-90ab"))
+    }
+
+    @Test
+    fun `resolveIncomingDartDedupeAction updates notification silently when deduped without active Telecom or pending end`() {
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingDartDedupeAction.UPDATE_NOTIFICATION_SILENTLY,
+            CreateIncomingFaceTimeNotification.resolveIncomingDartDedupeAction(
+                isOngoing = false,
+                callUuid = "uuid-1",
+                isPendingEnded = false,
+                hasActiveConnection = false,
+                isNewlySeen = false
+            )
+        )
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingDartDedupeAction.DROP_TELECOM_ACTIVE,
+            CreateIncomingFaceTimeNotification.resolveIncomingDartDedupeAction(
+                isOngoing = false,
+                callUuid = "uuid-1",
+                isPendingEnded = false,
+                hasActiveConnection = true,
+                isNewlySeen = false
+            )
+        )
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingDartDedupeAction.DROP_ENDED,
+            CreateIncomingFaceTimeNotification.resolveIncomingDartDedupeAction(
+                isOngoing = false,
+                callUuid = "uuid-1",
+                isPendingEnded = true,
+                hasActiveConnection = false,
+                isNewlySeen = false
+            )
+        )
+    }
 }

@@ -35,12 +35,21 @@ class iCloudApi {
     });
   }
 
+  static const Duration _minActiveRefreshTimeout = Duration(seconds: 30);
+
+  Duration _refreshReceiveTimeout({int multiplier = 1}) {
+    final base = _svc.dio.options.receiveTimeout;
+    if (base == null || base <= Duration.zero) return _minActiveRefreshTimeout;
+    final scaled = base * multiplier;
+    return scaled > _minActiveRefreshTimeout ? scaled : _minActiveRefreshTimeout;
+  }
+
   /// Refresh FindMy devices on server
   Future<Response> refreshDevices({String? deviceId, bool force = false, CancelToken? cancelToken}) async {
     return _svc.runApiGuarded(() async {
       final data = <String, dynamic>{
         if (force) 'force': true,
-        if (deviceId != null) 'deviceId': deviceId,
+        if (deviceId != null && deviceId.isNotEmpty) 'deviceId': deviceId,
       };
       final response = await _svc.dio.post(
         "${_svc.apiRoot}/icloud/findmy/devices/refresh",
@@ -48,7 +57,7 @@ class iCloudApi {
         queryParameters: _svc.buildQueryParams(),
         cancelToken: cancelToken,
         options: Options(
-          receiveTimeout: _svc.dio.options.receiveTimeout! * 12,
+          receiveTimeout: _refreshReceiveTimeout(multiplier: 12),
           headers: _svc.headers,
         ),
       );
@@ -121,6 +130,10 @@ class iCloudApi {
         data: data.isEmpty ? null : data,
         queryParameters: _svc.buildQueryParams(),
         cancelToken: cancelToken,
+        options: Options(
+          receiveTimeout: _refreshReceiveTimeout(multiplier: 2),
+          headers: _svc.headers,
+        ),
       );
       return _svc.returnSuccessOrError(response);
     });

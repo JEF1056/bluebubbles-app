@@ -67,7 +67,7 @@ class DartWorker(context: Context, workerParams: WorkerParameters): ListenableWo
         private var closeJob: Job? = null
 
         internal fun engineIdleKeepAliveMs(hasActiveSocket: Boolean): Long =
-            if (hasActiveSocket) 60_000L else 5_000L
+            if (hasActiveSocket) 60_000L else 30_000L
 
         // Number of times a worker is re-enqueued after a transient failure before giving up.
         // The FCM payload lives in the work's input data, so each retry re-delivers the event.

@@ -10,7 +10,10 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/but
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/genmoji.dart';
+import 'package:bluebubbles/models/library_sticker.dart';
+import 'package:bluebubbles/services/network/api/sticker_api.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/share.dart';
 import 'package:dio/dio.dart';
@@ -90,52 +93,40 @@ class AttachmentActions {
       // Copied and slightly modified from source, just so I can autofocus
       searchFieldWidget: Padding(
         padding: const EdgeInsets.all(8),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            TextField(
-              focusNode: focus,
-              controller: klipyController,
-              decoration: InputDecoration(
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(
-                    width: 0,
-                    style: BorderStyle.none,
-                  ),
-                ),
-                contentPadding: const EdgeInsets.fromLTRB(28, 5, 32, 7),
-                filled: true,
-                hintStyle: const KlipySearchFieldStyle().hintStyle,
-                hintText: "Search KLIPY",
-                isCollapsed: true,
-                isDense: true,
-              ),
-              style: context.theme.textTheme.bodyMedium!,
+        child: TextField(
+          focusNode: focus,
+          controller: klipyController,
+          decoration: InputDecoration(
+            prefixIcon: Icon(Icons.search_rounded, color: context.theme.colorScheme.onSurfaceVariant, size: 24),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide.none,
             ),
-            const Positioned(
-              left: 4,
-              child: Icon(
-                Icons.search,
-                color: Color(0xFF8A8A86),
-                size: 22,
-              ),
-            ),
-          ],
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            filled: true,
+            fillColor: context.theme.colorScheme.surfaceContainerHighest,
+            hintStyle: context.theme.textTheme.bodyMedium?.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+            hintText: "Search GIFs",
+            isDense: true,
+          ),
+          style: context.theme.textTheme.bodyMedium!,
         ),
       ),
       style: KlipyStyle(
-        color: context.theme.colorScheme.surfaceContainerHighest,
+        color: context.theme.colorScheme.surfaceContainerHigh,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
         attributionStyle: KlipyAttributionStyle(brightnes: context.theme.brightness),
         tabBarStyle: KlipyTabBarStyle(
           decoration: BoxDecoration(
-              color: context.theme.colorScheme.surfaceContainerHighest, borderRadius: BorderRadius.circular(8)),
+            color: context.theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
           indicator: BoxDecoration(
             color: context.theme.colorScheme.primary,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
           ),
-          labelColor: context.theme.colorScheme.onSurface,
-          unselectedLabelColor: context.theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          labelColor: context.theme.colorScheme.onPrimary,
+          unselectedLabelColor: context.theme.colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -214,27 +205,55 @@ class AttachmentActions {
         ).showPickerDialog(
           context,
           barrierDismissible: false,
+          backgroundColor: context.theme.colorScheme.surfaceContainerHigh,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
           constraints: BoxConstraints(minHeight: 480, minWidth: dialogWidth, maxWidth: dialogWidth),
         );
 
     if (!result || !context.mounted) return;
     final control = HandSignatureControl();
+    final scheme = context.theme.colorScheme;
+    final canvasDimension = (dialogWidth - 40).clamp(200.0, 380.0);
     Widget canvas = Container(
-      constraints: const BoxConstraints.expand(),
-      child: HandSignature(
-        control: control,
-        color: selectedColor,
-        width: 1.0,
-        maxWidth: 10.0,
-        type: SignatureDrawType.shape,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.55)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          HandSignature(
+            control: control,
+            color: selectedColor,
+            width: 1.0,
+            maxWidth: 10.0,
+            type: SignatureDrawType.shape,
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton.filledTonal(
+              tooltip: "Clear",
+              icon: const Icon(Icons.refresh_rounded, size: 24),
+              style: IconButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                padding: EdgeInsets.zero,
+              ),
+              onPressed: control.clear,
+            ),
+          ),
+        ],
       ),
     );
-    final canvasDimension = (dialogWidth - 40).clamp(200.0, 380.0);
     canvas = (kIsDesktop || kIsWeb) ? SizedBox.square(dimension: canvasDimension, child: canvas) : AspectRatio(aspectRatio: 1, child: canvas);
 
     await showBBDialog(
       context: context,
-      title: "Draw Handwriten Message",
+      title: "Draw Handwritten Message",
+      icon: Icons.draw_rounded,
       content: canvas,
       actions: [
         BBDialogAction(
@@ -242,7 +261,7 @@ class AttachmentActions {
           onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
         ),
         BBDialogAction(
-          text: "OK",
+          text: "Attach",
           isDefault: true,
           onPressed: () async {
             Navigator.of(context, rootNavigator: true).pop();
@@ -263,6 +282,42 @@ class AttachmentActions {
             ),
           ],
         );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stickers
+  // ---------------------------------------------------------------------------
+
+  /// Library stickers whose full-size image is downloading/sending, so their tiles show progress.
+  static final RxSet<String> sendingStickers = <String>{}.obs;
+
+  /// Sends [sticker] as a standalone message attachment (or stages it in [controller.pickedAttachments] when no
+  /// `sendFunc` is attached).
+  static Future<void> sendStandaloneSticker(
+    ConversationViewController controller,
+    LibrarySticker sticker,
+  ) async {
+    if (sendingStickers.contains(sticker.identifier)) return;
+    sendingStickers.add(sticker.identifier);
+    try {
+      final bytes = await StickerLibrarySvc.imageForSending(sticker);
+      final file = PlatformFile(
+        path: null,
+        name: "sticker-${sticker.identifier}.${sticker.fileExtension}",
+        bytes: bytes,
+        size: bytes.lengthInBytes,
+      );
+      if (controller.sendFunc != null) {
+        await controller.send(SendData(attachments: [file], text: '', subject: ''));
+      } else {
+        controller.pickedAttachments.add(file);
+      }
+    } catch (e, s) {
+      Logger.error("Failed to send standalone sticker", error: e, trace: s, tag: 'StickerLibrary');
+      showSnackbar("Error", stickerRefusal(e).message ?? "Couldn't send that sticker.", type: SnackbarType.error);
+    } finally {
+      sendingStickers.remove(sticker.identifier);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -352,7 +407,7 @@ class AttachmentActions {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (GenmojiLibrarySvc.cachedThumbnails.contains(entry.identifier)) ...[
+          if (!kIsWeb && GenmojiLibrarySvc.cachedThumbnails.contains(entry.identifier)) ...[
             Image.file(GenmojiLibrarySvc.thumbnailFile(entry.identifier), width: 88, height: 88),
             const SizedBox(height: 12),
           ],

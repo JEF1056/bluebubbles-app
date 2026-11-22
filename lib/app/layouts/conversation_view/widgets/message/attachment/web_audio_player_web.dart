@@ -177,8 +177,23 @@ class WebAudioController extends ChangeNotifier {
 
 web.AudioContext? _sharedAudioCtx;
 bool _unlockListenersInstalled = false;
+int _activeWebSoundCount = 0;
+Timer? _suspendSharedCtxTimer;
 final Map<String, Future<web.AudioBuffer?>> _decodedBuffers = <String, Future<web.AudioBuffer?>>{};
 final Map<String, Future<String?>> _assetBlobUrls = <String, Future<String?>>{};
+
+void _scheduleSharedCtxSuspend() {
+  _suspendSharedCtxTimer?.cancel();
+  _suspendSharedCtxTimer = Timer(const Duration(milliseconds: 300), () {
+    if (_activeWebSoundCount > 0) return;
+    final ctx = _sharedAudioCtx;
+    if (ctx != null && ctx.state == 'running') {
+      try {
+        unawaited(ctx.suspend().toDart.then((_) {}, onError: (_) {}));
+      } catch (_) {}
+    }
+  });
+}
 
 void _ensureAudioUnlock() {
   if (_unlockListenersInstalled) return;
@@ -191,7 +206,11 @@ void _ensureAudioUnlock() {
     try {
       final ctx = _sharedAudioCtx ??= web.AudioContext();
       if (ctx.state == 'suspended') {
-        ctx.resume();
+        unawaited(ctx.resume().toDart.then((_) {
+          if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
+        }, onError: (_) {}));
+      } else if (_activeWebSoundCount == 0) {
+        _scheduleSharedCtxSuspend();
       }
     } catch (_) {}
   }).toJS;
@@ -255,6 +274,7 @@ Future<void> playWebSoundAsset(
   }
 
   try {
+    _suspendSharedCtxTimer?.cancel();
     final ctx = _sharedAudioCtx ??= web.AudioContext();
     if (ctx.state == 'suspended') {
       await ctx.resume().toDart;
@@ -269,11 +289,46 @@ Future<void> playWebSoundAsset(
         final source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(gain);
-        source.start();
+
+        _activeWebSoundCount++;
+        var finished = false;
+        Timer? fallbackTimer;
+        late final web.EventListener onEnded;
+        void finishSound() {
+          if (finished) return;
+          finished = true;
+          fallbackTimer?.cancel();
+          try {
+            source.removeEventListener('ended', onEnded);
+          } catch (_) {}
+          try {
+            source.disconnect();
+          } catch (_) {}
+          try {
+            gain.disconnect();
+          } catch (_) {}
+          if (_activeWebSoundCount > 0) _activeWebSoundCount--;
+          if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
+        }
+
+        onEnded = ((web.Event _) => finishSound()).toJS;
+        source.addEventListener('ended', onEnded);
+        final durationMs = (buffer.duration * 1000).ceil().clamp(250, 10000);
+        fallbackTimer = Timer(Duration(milliseconds: durationMs + 500), finishSound);
+
+        try {
+          source.start();
+        } catch (_) {
+          finishSound();
+          rethrow;
+        }
         return;
       }
     }
-  } catch (_) {}
+    if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
+  } catch (_) {
+    if (_activeWebSoundCount == 0) _scheduleSharedCtxSuspend();
+  }
 
   try {
     final blobUrl = await _loadAssetBlobUrl(assetPath);

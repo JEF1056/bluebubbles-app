@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
 
@@ -41,11 +42,6 @@ void sendEffectAction(
   List<Run> textRuns,
 ) {
   if (!SettingsSvc.settings.enablePrivateAPI.value) return;
-  String typeSelected = "bubble";
-  final bubbleEffects = ["slam", "loud", "gentle", "invisible ink"];
-  final screenEffects = ["echo", "spotlight", "balloons", "confetti", "love", "lasers", "fireworks", "celebration"];
-  String bubbleSelected = "slam";
-  String screenSelected = "echo";
   final lead = text.length - text.trimLeft().length;
   text = text.trim();
   // Runs over the trimmed whitespace are cut back to the text, or they'd fall outside it and not be drawn
@@ -70,22 +66,6 @@ void sendEffectAction(
     attributedBody: [if (runs.isNotEmpty) AttributedBody(string: text, runs: runs)],
   );
   message.generateTempGuid();
-  final previewState = MessageState(message);
-  final GlobalKey key = GlobalKey();
-  Control animController = Control.stop;
-  final FireworkController fireworkController =
-      FireworkController(vsync: provider, windowSize: Size(NavigationSvc.width(context), context.height));
-  final CelebrationController celebrationController =
-      CelebrationController(vsync: provider, windowSize: Size(NavigationSvc.width(context), context.height));
-  final ConfettiController confettiController = ConfettiController(duration: const Duration(seconds: 1));
-  final BalloonController balloonController =
-      BalloonController(vsync: provider, windowSize: Size(NavigationSvc.width(context), context.height));
-  final LoveController loveController =
-      LoveController(vsync: provider, windowSize: Size(NavigationSvc.width(context), context.height));
-  final SpotlightController spotlightController =
-      SpotlightController(vsync: provider, windowSize: Size(NavigationSvc.width(context), context.height));
-  final LaserController laserController =
-      LaserController(vsync: provider, windowSize: Size(NavigationSvc.width(context), context.height));
   // Capture the conversation's theme before pushing the route — if adaptive
   // theming is active, context.theme is already the per-chat theme.
   final capturedTheme = context.theme;
@@ -98,347 +78,14 @@ void sendEffectAction(
       pageBuilder: (context, animation, secondaryAnimation) {
         return FadeTransition(
           opacity: animation,
-          child: GestureDetector(
-            onTap: () {
-              Navigator.of(context).pop();
-            },
-            child: BBScaffold(
-              backgroundColor: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-                  ? capturedTheme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9)
-                  : Colors.transparent,
-              safeAreaLeft: false,
-              safeAreaRight: false,
-              body: Stack(
-                fit: StackFit.expand,
-                children: [
-                  BackdropFilter(
-                    filter: ImageFilter.blur(
-                        sigmaX: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled ? 0 : 30,
-                        sigmaY:
-                            kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled ? 0 : 30),
-                    child: Container(
-                      color: capturedTheme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-                    ),
-                  ),
-                  StatefulBuilder(builder: (BuildContext context, void Function(void Function()) setState) {
-                    return Stack(
-                      children: [
-                        if (screenSelected == "fireworks") Fireworks(controller: fireworkController),
-                        if (screenSelected == "celebration") Celebration(controller: celebrationController),
-                        if (screenSelected == "balloons") Balloons(controller: balloonController),
-                        if (screenSelected == "love") Love(controller: loveController),
-                        if (screenSelected == "spotlight") Spotlight(controller: spotlightController),
-                        if (screenSelected == "lasers") Laser(controller: laserController),
-                        if (screenSelected == "confetti")
-                          Align(
-                            alignment: Alignment.topCenter,
-                            child: ConfettiWidget(
-                              confettiController: confettiController,
-                              blastDirection: pi / 2,
-                              blastDirectionality: BlastDirectionality.explosive,
-                              emissionFrequency: 0.35,
-                            ),
-                          ),
-                        SafeArea(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 20.0),
-                            child: Center(
-                                child: Column(children: [
-                              Text(
-                                "Send with effect",
-                                style: context.theme.textTheme.headlineSmall!,
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 20.0),
-                                child: SizedBox(
-                                  height: 50,
-                                  width: NavigationSvc.width(context) / 2,
-                                  child: CupertinoSlidingSegmentedControl<String>(
-                                    children: {
-                                      "bubble": const Text("Bubble"),
-                                      "screen": const Text("Screen"),
-                                    },
-                                    groupValue: typeSelected,
-                                    thumbColor: CupertinoColors.tertiarySystemFill.oppositeLightenOrDarken(20),
-                                    backgroundColor: CupertinoColors.tertiarySystemFill,
-                                    onValueChanged: (str) {
-                                      setState(() {
-                                        typeSelected = str ?? "bubble";
-                                      });
-                                    },
-                                  ),
-                                ),
-                              ),
-                              const Spacer(),
-                              if (typeSelected == "bubble")
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 20.0),
-                                  child: ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        maxHeight: 250,
-                                        maxWidth: NavigationSvc.width(context),
-                                      ),
-                                      child: SingleChildScrollView(
-                                        child: Wrap(
-                                          alignment: WrapAlignment.center,
-                                          children: List.generate(bubbleEffects.length, (index) {
-                                            return Padding(
-                                              padding: const EdgeInsets.all(8.0),
-                                              child: GestureDetector(
-                                                onTap: () {
-                                                  setState(() {
-                                                    bubbleSelected = bubbleEffects[index];
-                                                    message.expressiveSendStyleId = effectMap[bubbleSelected];
-                                                    previewState.triggerBubbleEffect(0);
-                                                    if (bubbleSelected == "gentle") {
-                                                      animController = Control.playFromStart;
-                                                    }
-                                                  });
-                                                },
-                                                child: Container(
-                                                  width: NavigationSvc.width(context) / 3,
-                                                  height: 50,
-                                                  decoration: BoxDecoration(
-                                                    color: CupertinoColors.tertiarySystemFill,
-                                                    border: Border.fromBorderSide(bubbleSelected == bubbleEffects[index]
-                                                        ? BorderSide(
-                                                            color: context.theme.colorScheme.primary,
-                                                            width: 1.5,
-                                                            style: BorderStyle.solid,
-                                                          )
-                                                        : BorderSide.none),
-                                                    borderRadius: BorderRadius.circular(5),
-                                                  ),
-                                                  child: Center(
-                                                    child: Text(
-                                                      bubbleEffects[index].toUpperCase(),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            );
-                                          }),
-                                        ),
-                                      )),
-                                ),
-                              if (typeSelected == "screen")
-                                Padding(
-                                  padding: const EdgeInsets.symmetric(vertical: 20.0),
-                                  child: ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        maxHeight: 350,
-                                        maxWidth: NavigationSvc.width(context),
-                                      ),
-                                      child: SingleChildScrollView(
-                                        child: Wrap(
-                                          alignment: WrapAlignment.center,
-                                          children: List.generate(screenEffects.length, (index) {
-                                            return Padding(
-                                              padding: const EdgeInsets.all(8.0),
-                                              child: GestureDetector(
-                                                onTap: () async {
-                                                  setState(() {
-                                                    screenSelected = screenEffects[index];
-                                                  });
-                                                  if (screenSelected == "fireworks" && !fireworkController.isPlaying) {
-                                                    fireworkController.windowSize =
-                                                        Size(NavigationSvc.width(context), context.height);
-                                                    fireworkController.start();
-                                                    await Future.delayed(const Duration(seconds: 1));
-                                                    fireworkController.stop();
-                                                  } else if (screenSelected == "celebration" &&
-                                                      !celebrationController.isPlaying) {
-                                                    celebrationController.windowSize =
-                                                        Size(NavigationSvc.width(context), context.height);
-                                                    celebrationController.start();
-                                                    await Future.delayed(const Duration(seconds: 1));
-                                                    celebrationController.stop();
-                                                  } else if (screenSelected == "balloons" &&
-                                                      !balloonController.isPlaying) {
-                                                    balloonController.windowSize =
-                                                        Size(NavigationSvc.width(context), context.height);
-                                                    balloonController.start();
-                                                    await Future.delayed(const Duration(seconds: 1));
-                                                    balloonController.stop();
-                                                  } else if (screenSelected == "love" && !loveController.isPlaying) {
-                                                    if (key.globalPaintBounds(context) != null) {
-                                                      loveController.windowSize =
-                                                          Size(NavigationSvc.width(context), context.height);
-                                                      loveController.start(Point(
-                                                          (key.globalPaintBounds(context)!.left +
-                                                                  key.globalPaintBounds(context)!.right) /
-                                                              2,
-                                                          (key.globalPaintBounds(context)!.top +
-                                                                  key.globalPaintBounds(context)!.bottom) /
-                                                              2));
-                                                      await Future.delayed(const Duration(seconds: 1));
-                                                      loveController.stop();
-                                                    }
-                                                  } else if (screenSelected == "spotlight" &&
-                                                      !spotlightController.isPlaying) {
-                                                    if (key.globalPaintBounds(context) != null) {
-                                                      spotlightController.windowSize =
-                                                          Size(NavigationSvc.width(context), context.height);
-                                                      spotlightController.start(key.globalPaintBounds(context)!);
-                                                      await Future.delayed(const Duration(seconds: 1));
-                                                      spotlightController.stop();
-                                                    }
-                                                  } else if (screenSelected == "lasers" && !laserController.isPlaying) {
-                                                    if (key.globalPaintBounds(context) != null) {
-                                                      laserController.windowSize =
-                                                          Size(NavigationSvc.width(context), context.height);
-                                                      laserController.start(key.globalPaintBounds(context)!);
-                                                      await Future.delayed(const Duration(seconds: 1));
-                                                      laserController.stop();
-                                                    }
-                                                  } else if (screenSelected == "confetti") {
-                                                    confettiController.play();
-                                                  }
-                                                },
-                                                child: Container(
-                                                  width: NavigationSvc.width(context) / 3,
-                                                  height: 50,
-                                                  decoration: BoxDecoration(
-                                                    color: CupertinoColors.tertiarySystemFill,
-                                                    border: Border.fromBorderSide(screenSelected == screenEffects[index]
-                                                        ? BorderSide(
-                                                            color: context.theme.colorScheme.primary,
-                                                            width: 1.5,
-                                                            style: BorderStyle.solid,
-                                                          )
-                                                        : BorderSide.none),
-                                                    borderRadius: BorderRadius.circular(5),
-                                                  ),
-                                                  child: Center(
-                                                    child: Text(
-                                                      screenEffects[index].toUpperCase(),
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            );
-                                          }),
-                                        ),
-                                      )),
-                                ),
-                              const Spacer(),
-                              if (text.isNotEmpty || subjectText.isNotEmpty)
-                                Theme(
-                                  data: capturedTheme.copyWith(
-                                    // in case some components still use legacy theming
-                                    primaryColor:
-                                        capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
-                                    colorScheme: capturedTheme.colorScheme.copyWith(
-                                      primary:
-                                          capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
-                                      onPrimary: capturedBubbleExt?.oniMessageBubbleColor ??
-                                          capturedTheme.colorScheme.onPrimary,
-                                      surface: capturedIsM3 ? null : capturedBubbleExt?.receivedBubbleColor,
-                                      onSurface: capturedIsM3 ? null : capturedBubbleExt?.onReceivedBubbleColor,
-                                    ),
-                                  ),
-                                  child: Builder(builder: (context) {
-                                    return Align(
-                                        alignment: Alignment.centerRight,
-                                        child: Padding(
-                                          key: key,
-                                          padding: const EdgeInsets.only(right: 5.0),
-                                          child: BubbleEffects(
-                                            messageState: previewState,
-                                            globalKey: key,
-                                            part: 0,
-                                              showTail: true,
-                                              child: ClipPath(
-                                                clipper: TailClipper(
-                                                  isFromMe: true,
-                                                  showTail: true,
-                                                  connectLower: false,
-                                                  connectUpper: false,
-                                                ),
-                                                child: Container(
-                                                  constraints: BoxConstraints(
-                                                    maxWidth: NavigationSvc.width(context) *
-                                                            MessageState.maxBubbleSizeFactor -
-                                                        40,
-                                                    minHeight: 40,
-                                                  ),
-                                                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15)
-                                                      .add(EdgeInsets.only(right: CurrentSkin.iOS ? 10 : 0)),
-                                                  color: context.theme.colorScheme.primary,
-                                                  child: CustomAnimationBuilder<Movie>(
-                                                    control: animController,
-                                                    tween: MovieTween()
-                                                      ..scene(
-                                                              begin: Duration.zero,
-                                                              duration: const Duration(milliseconds: 1),
-                                                              curve: Curves.easeInOut)
-                                                          .tween("size", 1.0.tweenTo(1.0))
-                                                      ..scene(
-                                                              begin: const Duration(milliseconds: 1),
-                                                              duration: const Duration(milliseconds: 500),
-                                                              curve: Curves.easeInOut)
-                                                          .tween("size", 0.0.tweenTo(0.5))
-                                                      ..scene(
-                                                              begin: const Duration(milliseconds: 1000),
-                                                              duration: const Duration(milliseconds: 800),
-                                                              curve: Curves.easeInOut)
-                                                          .tween("size", 0.5.tweenTo(1.0)),
-                                                    duration: const Duration(milliseconds: 1800),
-                                                    animationStatusListener: (status) {
-                                                      if (status == AnimationStatus.completed) {
-                                                        setState(() {
-                                                          animController = Control.stop;
-                                                        });
-                                                      }
-                                                    },
-                                                    builder: (context, anim, child) {
-                                                      final value1 = anim.get("size");
-                                                      return Transform.scale(
-                                                        scale: value1,
-                                                        alignment: Alignment.center,
-                                                        child: RichText(
-                                                          text: TextSpan(
-                                                            children: buildMessageSpans(
-                                                              context,
-                                                              MessagePart(
-                                                                  part: 0,
-                                                                  text: message.text,
-                                                                  runs: message.attributedBody.firstOrNull?.runs ?? []),
-                                                              message,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                        ));
-                                  }),
-                                ),
-                              const Spacer(),
-                              TextButton(
-                                child: Text(
-                                  typeSelected == "bubble" ? "Send with $bubbleSelected" : "Send with $screenSelected",
-                                  style: context.theme.textTheme.titleLarge!
-                                      .apply(color: context.theme.colorScheme.primary),
-                                ),
-                                onPressed: () async {
-                                  Navigator.of(context).pop();
-                                  await sendMessage(
-                                      effect: effectMap[typeSelected == "bubble" ? bubbleSelected : screenSelected]);
-                                },
-                              ),
-                            ])),
-                          ),
-                        ),
-                      ],
-                    );
-                  }),
-                ],
-              ),
-            ),
+          child: _SendEffectPickerOverlay(
+            message: message,
+            text: text,
+            subjectText: subjectText,
+            sendMessage: sendMessage,
+            capturedTheme: capturedTheme,
+            capturedIsM3: capturedIsM3,
+            capturedBubbleExt: capturedBubbleExt,
           ),
         );
       },
@@ -446,4 +93,429 @@ void sendEffectAction(
       opaque: false,
     ),
   );
+}
+
+class _SendEffectPickerOverlay extends StatefulWidget {
+  const _SendEffectPickerOverlay({
+    required this.message,
+    required this.text,
+    required this.subjectText,
+    required this.sendMessage,
+    required this.capturedTheme,
+    required this.capturedIsM3,
+    required this.capturedBubbleExt,
+  });
+
+  final Message message;
+  final String text;
+  final String subjectText;
+  final Future<void> Function({String? effect}) sendMessage;
+  final ThemeData capturedTheme;
+  final bool capturedIsM3;
+  final BubbleColors? capturedBubbleExt;
+
+  @override
+  State<_SendEffectPickerOverlay> createState() => _SendEffectPickerOverlayState();
+}
+
+class _SendEffectPickerOverlayState extends State<_SendEffectPickerOverlay> with TickerProviderStateMixin {
+  static const List<String> _bubbleEffects = ["slam", "loud", "gentle", "invisible ink"];
+  static const List<String> _screenEffects = [
+    "echo",
+    "spotlight",
+    "balloons",
+    "confetti",
+    "love",
+    "lasers",
+    "fireworks",
+    "celebration",
+  ];
+
+  String _typeSelected = "bubble";
+  String _bubbleSelected = "slam";
+  String _screenSelected = "echo";
+  late final MessageState _previewState = MessageState(widget.message);
+  final GlobalKey _bubbleKey = GlobalKey();
+  Control _animController = Control.stop;
+
+  late final FireworkController _fireworkController;
+  late final CelebrationController _celebrationController;
+  late final ConfettiController _confettiController;
+  late final BalloonController _balloonController;
+  late final LoveController _loveController;
+  late final SpotlightController _spotlightController;
+  late final LaserController _laserController;
+  bool _controllersInitialized = false;
+  Timer? _effectStopTimer;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_controllersInitialized) return;
+    final windowSize = Size(NavigationSvc.width(context), context.height);
+    _fireworkController = FireworkController(vsync: this, windowSize: windowSize);
+    _celebrationController = CelebrationController(vsync: this, windowSize: windowSize);
+    _confettiController = ConfettiController(duration: const Duration(seconds: 1));
+    _balloonController = BalloonController(vsync: this, windowSize: windowSize);
+    _loveController = LoveController(vsync: this, windowSize: windowSize);
+    _spotlightController = SpotlightController(vsync: this, windowSize: windowSize);
+    _laserController = LaserController(vsync: this, windowSize: windowSize);
+    _controllersInitialized = true;
+  }
+
+  @override
+  void dispose() {
+    _effectStopTimer?.cancel();
+    _effectStopTimer = null;
+    if (_controllersInitialized) {
+      _fireworkController.dispose();
+      _celebrationController.dispose();
+      _confettiController.dispose();
+      _balloonController.dispose();
+      _loveController.dispose();
+      _spotlightController.dispose();
+      _laserController.dispose();
+    }
+    super.dispose();
+  }
+
+  void _scheduleEffectStop(VoidCallback stopFn) {
+    _effectStopTimer?.cancel();
+    _effectStopTimer = Timer(const Duration(seconds: 1), () {
+      if (mounted) stopFn();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final capturedTheme = widget.capturedTheme;
+    final capturedIsM3 = widget.capturedIsM3;
+    final capturedBubbleExt = widget.capturedBubbleExt;
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).pop();
+      },
+      child: BBScaffold(
+        backgroundColor: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+            ? capturedTheme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.9)
+            : Colors.transparent,
+        safeAreaLeft: false,
+        safeAreaRight: false,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            BackdropFilter(
+              filter: ImageFilter.blur(
+                  sigmaX: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled ? 0 : 30,
+                  sigmaY: kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled ? 0 : 30),
+              child: Container(
+                color: capturedTheme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+              ),
+            ),
+            Stack(
+              children: [
+                if (_screenSelected == "fireworks") Fireworks(controller: _fireworkController),
+                if (_screenSelected == "celebration") Celebration(controller: _celebrationController),
+                if (_screenSelected == "balloons") Balloons(controller: _balloonController),
+                if (_screenSelected == "love") Love(controller: _loveController),
+                if (_screenSelected == "spotlight") Spotlight(controller: _spotlightController),
+                if (_screenSelected == "lasers") Laser(controller: _laserController),
+                if (_screenSelected == "confetti")
+                  Align(
+                    alignment: Alignment.topCenter,
+                    child: ConfettiWidget(
+                      confettiController: _confettiController,
+                      blastDirection: pi / 2,
+                      blastDirectionality: BlastDirectionality.explosive,
+                      emissionFrequency: 0.35,
+                    ),
+                  ),
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 20.0),
+                    child: Center(
+                        child: Column(children: [
+                      Text(
+                        "Send with effect",
+                        style: context.theme.textTheme.headlineSmall!,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 20.0),
+                        child: SizedBox(
+                          height: 50,
+                          width: NavigationSvc.width(context) / 2,
+                          child: CupertinoSlidingSegmentedControl<String>(
+                            children: {
+                              "bubble": const Text("Bubble"),
+                              "screen": const Text("Screen"),
+                            },
+                            groupValue: _typeSelected,
+                            thumbColor: CupertinoColors.tertiarySystemFill.oppositeLightenOrDarken(20),
+                            backgroundColor: CupertinoColors.tertiarySystemFill,
+                            onValueChanged: (str) {
+                              setState(() {
+                                _typeSelected = str ?? "bubble";
+                              });
+                            },
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      if (_typeSelected == "bubble")
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20.0),
+                          child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight: 250,
+                                maxWidth: NavigationSvc.width(context),
+                              ),
+                              child: SingleChildScrollView(
+                                child: Wrap(
+                                  alignment: WrapAlignment.center,
+                                  children: List.generate(_bubbleEffects.length, (index) {
+                                    return Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            _bubbleSelected = _bubbleEffects[index];
+                                            widget.message.expressiveSendStyleId = effectMap[_bubbleSelected];
+                                            _previewState.triggerBubbleEffect(0);
+                                            if (_bubbleSelected == "gentle") {
+                                              _animController = Control.playFromStart;
+                                            }
+                                          });
+                                        },
+                                        child: Container(
+                                          width: NavigationSvc.width(context) / 3,
+                                          height: 50,
+                                          decoration: BoxDecoration(
+                                            color: CupertinoColors.tertiarySystemFill,
+                                            border: Border.fromBorderSide(_bubbleSelected == _bubbleEffects[index]
+                                                ? BorderSide(
+                                                    color: context.theme.colorScheme.primary,
+                                                    width: 1.5,
+                                                    style: BorderStyle.solid,
+                                                  )
+                                                : BorderSide.none),
+                                            borderRadius: BorderRadius.circular(5),
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              _bubbleEffects[index].toUpperCase(),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ),
+                              )),
+                        ),
+                      if (_typeSelected == "screen")
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 20.0),
+                          child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight: 350,
+                                maxWidth: NavigationSvc.width(context),
+                              ),
+                              child: SingleChildScrollView(
+                                child: Wrap(
+                                  alignment: WrapAlignment.center,
+                                  children: List.generate(_screenEffects.length, (index) {
+                                    return Padding(
+                                      padding: const EdgeInsets.all(8.0),
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            _screenSelected = _screenEffects[index];
+                                          });
+                                          if (_screenSelected == "fireworks" && !_fireworkController.isPlaying) {
+                                            _fireworkController.windowSize =
+                                                Size(NavigationSvc.width(context), context.height);
+                                            _fireworkController.start();
+                                            _scheduleEffectStop(_fireworkController.stop);
+                                          } else if (_screenSelected == "celebration" &&
+                                              !_celebrationController.isPlaying) {
+                                            _celebrationController.windowSize =
+                                                Size(NavigationSvc.width(context), context.height);
+                                            _celebrationController.start();
+                                            _scheduleEffectStop(_celebrationController.stop);
+                                          } else if (_screenSelected == "balloons" && !_balloonController.isPlaying) {
+                                            _balloonController.windowSize =
+                                                Size(NavigationSvc.width(context), context.height);
+                                            _balloonController.start();
+                                            _scheduleEffectStop(_balloonController.stop);
+                                          } else if (_screenSelected == "love" && !_loveController.isPlaying) {
+                                            final bounds = _bubbleKey.globalPaintBounds(context);
+                                            if (bounds != null) {
+                                              _loveController.windowSize =
+                                                  Size(NavigationSvc.width(context), context.height);
+                                              _loveController.start(Point(
+                                                  (bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2));
+                                              _scheduleEffectStop(_loveController.stop);
+                                            }
+                                          } else if (_screenSelected == "spotlight" &&
+                                              !_spotlightController.isPlaying) {
+                                            final bounds = _bubbleKey.globalPaintBounds(context);
+                                            if (bounds != null) {
+                                              _spotlightController.windowSize =
+                                                  Size(NavigationSvc.width(context), context.height);
+                                              _spotlightController.start(bounds);
+                                              _scheduleEffectStop(_spotlightController.stop);
+                                            }
+                                          } else if (_screenSelected == "lasers" && !_laserController.isPlaying) {
+                                            final bounds = _bubbleKey.globalPaintBounds(context);
+                                            if (bounds != null) {
+                                              _laserController.windowSize =
+                                                  Size(NavigationSvc.width(context), context.height);
+                                              _laserController.start(bounds);
+                                              _scheduleEffectStop(_laserController.stop);
+                                            }
+                                          } else if (_screenSelected == "confetti") {
+                                            _confettiController.play();
+                                          }
+                                        },
+                                        child: Container(
+                                          width: NavigationSvc.width(context) / 3,
+                                          height: 50,
+                                          decoration: BoxDecoration(
+                                            color: CupertinoColors.tertiarySystemFill,
+                                            border: Border.fromBorderSide(_screenSelected == _screenEffects[index]
+                                                ? BorderSide(
+                                                    color: context.theme.colorScheme.primary,
+                                                    width: 1.5,
+                                                    style: BorderStyle.solid,
+                                                  )
+                                                : BorderSide.none),
+                                            borderRadius: BorderRadius.circular(5),
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              _screenEffects[index].toUpperCase(),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ),
+                              )),
+                        ),
+                      const Spacer(),
+                      if (widget.text.isNotEmpty || widget.subjectText.isNotEmpty)
+                        Theme(
+                          data: capturedTheme.copyWith(
+                            // in case some components still use legacy theming
+                            primaryColor: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
+                            colorScheme: capturedTheme.colorScheme.copyWith(
+                              primary: capturedBubbleExt?.iMessageBubbleColor ?? capturedTheme.colorScheme.primary,
+                              onPrimary:
+                                  capturedBubbleExt?.oniMessageBubbleColor ?? capturedTheme.colorScheme.onPrimary,
+                              surface: capturedIsM3 ? null : capturedBubbleExt?.receivedBubbleColor,
+                              onSurface: capturedIsM3 ? null : capturedBubbleExt?.onReceivedBubbleColor,
+                            ),
+                          ),
+                          child: Builder(builder: (context) {
+                            return Align(
+                                alignment: Alignment.centerRight,
+                                child: Padding(
+                                  key: _bubbleKey,
+                                  padding: const EdgeInsets.only(right: 5.0),
+                                  child: BubbleEffects(
+                                    messageState: _previewState,
+                                    globalKey: _bubbleKey,
+                                    part: 0,
+                                    showTail: true,
+                                    child: ClipPath(
+                                      clipper: TailClipper(
+                                        isFromMe: true,
+                                        showTail: true,
+                                        connectLower: false,
+                                        connectUpper: false,
+                                      ),
+                                      child: Container(
+                                        constraints: BoxConstraints(
+                                          maxWidth:
+                                              NavigationSvc.width(context) * MessageState.maxBubbleSizeFactor - 40,
+                                          minHeight: 40,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15)
+                                            .add(EdgeInsets.only(right: CurrentSkin.iOS ? 10 : 0)),
+                                        color: context.theme.colorScheme.primary,
+                                        child: CustomAnimationBuilder<Movie>(
+                                          control: _animController,
+                                          tween: MovieTween()
+                                            ..scene(
+                                                    begin: Duration.zero,
+                                                    duration: const Duration(milliseconds: 1),
+                                                    curve: Curves.easeInOut)
+                                                .tween("size", 1.0.tweenTo(1.0))
+                                            ..scene(
+                                                    begin: const Duration(milliseconds: 1),
+                                                    duration: const Duration(milliseconds: 500),
+                                                    curve: Curves.easeInOut)
+                                                .tween("size", 0.0.tweenTo(0.5))
+                                            ..scene(
+                                                    begin: const Duration(milliseconds: 1000),
+                                                    duration: const Duration(milliseconds: 800),
+                                                    curve: Curves.easeInOut)
+                                                .tween("size", 0.5.tweenTo(1.0)),
+                                          duration: const Duration(milliseconds: 1800),
+                                          animationStatusListener: (status) {
+                                            if (status == AnimationStatus.completed && mounted) {
+                                              setState(() {
+                                                _animController = Control.stop;
+                                              });
+                                            }
+                                          },
+                                          builder: (context, anim, child) {
+                                            final value1 = anim.get("size");
+                                            return Transform.scale(
+                                              scale: value1,
+                                              alignment: Alignment.center,
+                                              child: RichText(
+                                                text: TextSpan(
+                                                  children: buildMessageSpans(
+                                                    context,
+                                                    MessagePart(
+                                                        part: 0,
+                                                        text: widget.message.text,
+                                                        runs: widget.message.attributedBody.firstOrNull?.runs ?? []),
+                                                    widget.message,
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ));
+                          }),
+                        ),
+                      const Spacer(),
+                      TextButton(
+                        child: Text(
+                          _typeSelected == "bubble" ? "Send with $_bubbleSelected" : "Send with $_screenSelected",
+                          style: context.theme.textTheme.titleLarge!.apply(color: context.theme.colorScheme.primary),
+                        ),
+                        onPressed: () async {
+                          Navigator.of(context).pop();
+                          await widget.sendMessage(
+                              effect: effectMap[_typeSelected == "bubble" ? _bubbleSelected : _screenSelected]);
+                        },
+                      ),
+                    ])),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

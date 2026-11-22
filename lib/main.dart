@@ -35,6 +35,8 @@ import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
 import 'package:bluebubbles/app/wrappers/web_shortcuts_and_routing.dart';
 import 'package:bluebubbles/database/html/web_tab_lock.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/backend/lifecycle/web_lifecycle_interop_stub.dart'
+    if (dart.library.js_interop) 'package:bluebubbles/services/backend/lifecycle/web_lifecycle_interop_web.dart';
 import 'package:bluebubbles/services/backend/notifications/web_notifications_interop_stub.dart'
     if (dart.library.js_interop) 'package:bluebubbles/services/backend/notifications/web_notifications_interop_web.dart';
 import 'package:bluebubbles/services/services.dart';
@@ -165,8 +167,6 @@ Future<void> _bootApp(bool bubble, List<String> arguments) async {
       };
     }
 
-    await StartupTasks.initStartupServices(isBubble: bubble);
-
     /* ----- RANDOM STUFF INITIALIZATION ----- */
     if (!kIsWeb) {
       HttpOverrides.global = CustomHttpContext();
@@ -174,11 +174,13 @@ Future<void> _bootApp(bool bubble, List<String> arguments) async {
     dynamic exception;
     StackTrace? stacktrace;
 
-    FlutterError.onError = (details) {
-      Logger.error("Rendering Error: ${details.exceptionAsString()}", error: details.exception, trace: details.stack);
-    };
-
     try {
+      await StartupTasks.initStartupServices(isBubble: bubble);
+
+      FlutterError.onError = (details) {
+        Logger.error("Rendering Error: ${details.exceptionAsString()}", error: details.exception, trace: details.stack);
+      };
+
       // Once all the services are initialized, we need to perform some
       // startup tasks to ensure that the app has the information it needs.
       StartupTasks.onStartup().then((_) {
@@ -300,7 +302,9 @@ Future<void> _bootApp(bool bubble, List<String> arguments) async {
       Future.microtask(() => FilesystemSvc.checkFont());
     } catch (e, s) {
       print(s.toString());
-      Logger.error("Failure during app initialization!", error: e, trace: s);
+      if (GetIt.I.isRegistered<BaseLogger>()) {
+        Logger.error("Failure during app initialization!", error: e, trace: s);
+      }
       exception = e;
       stacktrace = s;
     }
@@ -338,6 +342,11 @@ class DesktopWindowListener extends WindowListener {
 
   @override
   void onWindowFocus() {
+    if (_desktopWindowHidden) {
+      updateSystemTrayToggle(windowHidden: false);
+    }
+    _desktopWindowMinimized = false;
+    _updateDesktopTickerInactive();
     LifecycleSvc.windowFocused = true;
     LifecycleSvc.open();
   }
@@ -372,6 +381,14 @@ class DesktopWindowListener extends WindowListener {
         break;
       case "show":
         updateSystemTrayToggle(windowHidden: false);
+        break;
+      case "minimize":
+        _desktopWindowMinimized = true;
+        _updateDesktopTickerInactive();
+        break;
+      case "restore":
+        _desktopWindowMinimized = false;
+        _updateDesktopTickerInactive();
         break;
     }
   }
@@ -499,12 +516,41 @@ class _WebTabBlockedViewState extends State<_WebTabBlockedView> {
   }
 }
 
-class Main extends StatelessWidget {
+class Main extends StatefulWidget {
   final ThemeData darkTheme;
   final ThemeData lightTheme;
   final AdaptiveThemeMode? savedThemeMode;
 
   const Main({super.key, required this.lightTheme, required this.darkTheme, this.savedThemeMode});
+
+  @override
+  State<Main> createState() => _MainState();
+}
+
+class _MainState extends State<Main> {
+  bool _webHidden = kIsWeb && isWebDocumentHidden;
+  VoidCallback? _disposeWebLifecycle;
+
+  @override
+  void initState() {
+    super.initState();
+    if (kIsWeb) {
+      _disposeWebLifecycle = listenWebLifecycle(
+        onVisibilityChange: (hidden) {
+          if (mounted && _webHidden != hidden) {
+            setState(() => _webHidden = hidden);
+          }
+        },
+        onOnlineChange: (_) {},
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposeWebLifecycle?.call();
+    super.dispose();
+  }
 
   Widget _withBackAction(BuildContext context, Widget? navigator) =>
       Actions(actions: {GoBackIntent: GoBackAction(context)}, child: navigator ?? Container());
@@ -516,13 +562,19 @@ class Main extends StatelessWidget {
         TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
       },
     );
-    return AdaptiveTheme(
-      light: lightTheme.copyWith(
-          textSelectionTheme: TextSelectionThemeData(selectionColor: lightTheme.colorScheme.primary)),
-      dark:
-          darkTheme.copyWith(textSelectionTheme: TextSelectionThemeData(selectionColor: darkTheme.colorScheme.primary)),
-      initial: savedThemeMode ?? AdaptiveThemeMode.system,
-      builder: (theme, darkTheme) => GetMaterialApp(
+    return ValueListenableBuilder<bool>(
+      valueListenable: _desktopWindowHiddenNotifier,
+      builder: (context, desktopHidden, child) => TickerMode(
+        enabled: !(desktopHidden || _webHidden),
+        child: child!,
+      ),
+      child: AdaptiveTheme(
+        light: widget.lightTheme.copyWith(
+            textSelectionTheme: TextSelectionThemeData(selectionColor: widget.lightTheme.colorScheme.primary)),
+        dark: widget.darkTheme
+            .copyWith(textSelectionTheme: TextSelectionThemeData(selectionColor: widget.darkTheme.colorScheme.primary)),
+        initial: widget.savedThemeMode ?? AdaptiveThemeMode.system,
+        builder: (theme, darkTheme) => GetMaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'BlueBubbles',
         theme: theme.withEmojiFallback.copyWith(
@@ -648,24 +700,32 @@ class Main extends StatelessWidget {
                             final localAuth = LocalAuthentication();
                             if (!isAuthing) {
                               isAuthing = true;
-                              localAuth
-                                  .authenticate(
-                                localizedReason: 'Please authenticate to unlock BlueBubbles',
-                                persistAcrossBackgrounding: true,
-                              )
-                                  .then((result) {
-                                isAuthing = false;
-                                if (result) {
-                                  if (!context.mounted) return;
-                                  SecureApplicationProvider.of(context, listen: false)!.authSuccess(unlock: true);
-                                  if (kIsDesktop) {
-                                    Future.delayed(Duration.zero, () {
-                                      ChatsSvc.init();
-                                      SocketSvc.init();
-                                    });
+                              try {
+                                localAuth
+                                    .authenticate(
+                                  localizedReason: 'Please authenticate to unlock BlueBubbles',
+                                  persistAcrossBackgrounding: true,
+                                )
+                                    .then((result) {
+                                  if (result) {
+                                    if (!context.mounted) return;
+                                    SecureApplicationProvider.of(context, listen: false)?.authSuccess(unlock: true);
+                                    if (kIsDesktop) {
+                                      Future.delayed(Duration.zero, () {
+                                        ChatsSvc.init();
+                                        SocketSvc.init();
+                                      });
+                                    }
                                   }
-                                }
-                              });
+                                }).catchError((e, s) {
+                                  Logger.warn("Biometric authentication failed", error: e, trace: s);
+                                }).whenComplete(() {
+                                  isAuthing = false;
+                                });
+                              } catch (e, s) {
+                                isAuthing = false;
+                                Logger.warn("Biometric authentication threw", error: e, trace: s);
+                              }
                             }
                             return Container(
                               color: context.theme.colorScheme.surface,
@@ -691,19 +751,27 @@ class Main extends StatelessWidget {
                                               height: 60,
                                               child: Icon(Icons.lock_open, color: context.theme.colorScheme.onPrimary)),
                                           onTap: () async {
-                                            final localAuth = LocalAuthentication();
-                                            bool didAuthenticate = await localAuth.authenticate(
-                                              localizedReason: 'Please authenticate to unlock BlueBubbles',
-                                              persistAcrossBackgrounding: true,
-                                            );
-                                            if (didAuthenticate) {
-                                              controller!.authSuccess(unlock: true);
-                                              if (kIsDesktop) {
-                                                Future.delayed(Duration.zero, () {
-                                                  ChatsSvc.init();
-                                                  SocketSvc.init();
-                                                });
+                                            if (isAuthing) return;
+                                            isAuthing = true;
+                                            try {
+                                              final localAuth = LocalAuthentication();
+                                              bool didAuthenticate = await localAuth.authenticate(
+                                                localizedReason: 'Please authenticate to unlock BlueBubbles',
+                                                persistAcrossBackgrounding: true,
+                                              );
+                                              if (didAuthenticate) {
+                                                controller?.authSuccess(unlock: true);
+                                                if (kIsDesktop) {
+                                                  Future.delayed(Duration.zero, () {
+                                                    ChatsSvc.init();
+                                                    SocketSvc.init();
+                                                  });
+                                                }
                                               }
+                                            } catch (e, s) {
+                                              Logger.warn("Biometric authentication failed", error: e, trace: s);
+                                            } finally {
+                                              isAuthing = false;
                                             }
                                           },
                                         ),
@@ -725,6 +793,7 @@ class Main extends StatelessWidget {
           ),
         defaultTransition: Transition.cupertino,
       ),
+      ),
     );
   }
 }
@@ -743,6 +812,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   Worker? _settingsUrlWorker;
   Worker? _webBadgeWorker;
   Worker? _setupFinishedWorker;
+  Worker? _windowsUnreadWorker;
+  StreamSubscription? _refreshAllSub;
+  StreamSubscription? _themeUpdateSub;
+  StreamSubscription<int>? _linuxUnreadSub;
   bool _webPostSetupInitialized = false;
   bool _syncingFromUrl = false;
   bool _handledShareTarget = false;
@@ -811,14 +884,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
 
     /* ----- APP REFRESH LISTENER INITIALIZATION ----- */
-    EventDispatcherSvc.stream.listen((event) {
-      if (event.type == 'refresh-all') {
+    _refreshAllSub = EventDispatcherSvc.stream.listen((event) {
+      if (event.type == 'refresh-all' && mounted) {
         setState(() {});
       }
     });
 
     SchedulerBinding.instance.addPostFrameCallback((_) async {
-      StartupTasks.uiReady.complete();
+      if (!StartupTasks.uiReady.isCompleted) {
+        StartupTasks.uiReady.complete();
+      }
 
       if (!LifecycleSvc.isBubble && !kIsWeb && !kIsDesktop) {
         LifecycleSvc.createFakePort();
@@ -852,7 +927,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
               LinuxLauncherBadge.update(SettingsSvc.settings.windowsTaskbarBadge.value ? count : 0);
 
           unawaited(updateBadge(ChatsSvc.unreadCount.value));
-          ChatsSvc.unreadCount.listen(updateBadge);
+          _linuxUnreadSub = ChatsSvc.unreadCount.listen(updateBadge);
         }
 
         if (Platform.isWindows) {
@@ -875,10 +950,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
           unawaited(updateBadge(ChatsSvc.unreadCount.value));
           // Each update is a shell COM call on the platform thread; syncs and mark-all-read change the count in bursts.
-          debounce<int>(ChatsSvc.unreadCount, updateBadge, time: const Duration(milliseconds: 250));
+          _windowsUnreadWorker = debounce<int>(ChatsSvc.unreadCount, updateBadge, time: const Duration(milliseconds: 250));
 
           /* ----- WINDOW EFFECT INITIALIZATION ----- */
-          EventDispatcherSvc.stream.listen((event) async {
+          _themeUpdateSub = EventDispatcherSvc.stream.listen((event) async {
             if (event.type == 'theme-update') {
               EasyDebounce.debounce('window-effect', const Duration(milliseconds: 500), () async {
                 if (mounted) {
@@ -895,6 +970,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         initSystemTray();
       }
 
+      if (!mounted) return;
       if (!SettingsSvc.settings.finishedSetup.value) {
         setState(() {
           fullyLoaded = true;
@@ -960,6 +1036,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _refreshAllSub?.cancel();
+    _themeUpdateSub?.cancel();
+    _linuxUnreadSub?.cancel();
+    _windowsUnreadWorker?.dispose();
     _chatUrlWorker?.dispose();
     _settingsUrlWorker?.dispose();
     _webBadgeWorker?.dispose();
@@ -1066,6 +1146,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
 final List<Object> _trayHandles = [];
 MenuItem? _trayToggleItem;
 bool _trayWindowHidden = false;
+bool _desktopWindowHidden = false;
+bool _desktopWindowMinimized = false;
+final ValueNotifier<bool> _desktopWindowHiddenNotifier = ValueNotifier<bool>(false);
+
+void _updateDesktopTickerInactive() {
+  final inactive = _desktopWindowHidden || _desktopWindowMinimized;
+  if (_desktopWindowHiddenNotifier.value != inactive) {
+    _desktopWindowHiddenNotifier.value = inactive;
+  }
+}
 
 void initSystemTray() {
   // Each call creates another icon, so a second one (Home's state rebuilt) would show two. Set only on success, so a
@@ -1118,6 +1208,11 @@ void initSystemTray() {
 
 void updateSystemTrayToggle({required bool windowHidden}) {
   _trayWindowHidden = windowHidden;
+  _desktopWindowHidden = windowHidden;
+  if (!windowHidden) {
+    _desktopWindowMinimized = false;
+  }
+  _updateDesktopTickerInactive();
   _trayToggleItem?.label = windowHidden ? 'Show App' : 'Hide App';
 }
 

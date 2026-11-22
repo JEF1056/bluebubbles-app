@@ -9,7 +9,6 @@ import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:get_it/get_it.dart';
-import 'package:universal_io/io.dart';
 
 // ignore: non_constant_identifier_names
 ActionHandler MessageHandlerSvc =
@@ -21,6 +20,7 @@ class ActionHandler extends GetxService {
   /// comes in with the same real GUID, it is removed here so the delayed
   /// `new-message` processing is skipped (the updated-message will handle it).
   final List<String> outOfOrderTempGuids = [];
+  final Set<String> _notifiedMissedCallUuids = <String>{};
 
   /// Extracts `readAt` (epoch ms) or legacy `lastReadMessageTimestamp` from a
   /// `chat-read-status-changed` payload, treating non-positive values as unset.
@@ -81,21 +81,64 @@ class ActionHandler extends GetxService {
     }
 
     ActiveCallController.instance.applyServerSession(enriched);
+
+    final bool isOutgoing = enriched["is_outgoing"] == true;
+    final String? endedReason = _nonEmptyString(enriched["ended_reason"])?.toLowerCase();
+    if (statusId == 6 && !isOutgoing && endedReason == "missed") {
+      final String? callUuid = _nonEmptyString(enriched["uuid"]) ??
+          _nonEmptyString(enriched["call_uuid"]) ??
+          _nonEmptyString(enriched["session_uuid"]);
+      final bool alreadyNotified = callUuid != null && _notifiedMissedCallUuids.contains(callUuid);
+      if (!alreadyNotified && GetIt.I.isRegistered<NotificationsService>()) {
+        if (callUuid != null) {
+          if (_notifiedMissedCallUuids.length >= 100) _notifiedMissedCallUuids.clear();
+          _notifiedMissedCallUuids.add(callUuid);
+        }
+        final bool isTelephony = enriched["is_telephony"] == true;
+        final bool isAudio = isTelephony ||
+            (enriched["is_video"] is bool
+                ? !(enriched["is_video"] as bool)
+                : (enriched["is_audio"] is bool ? enriched["is_audio"] as bool : false));
+        String caller = _nonEmptyString(enriched["display_name"]) ??
+            _nonEmptyString(address) ??
+            (isTelephony ? "iPhone Call" : "Unknown Number");
+        if (_nonEmptyString(enriched["display_name"]) == null &&
+            address != null &&
+            address.isNotEmpty &&
+            GetIt.I.isRegistered<ContactServiceV2>()) {
+          final contact = await ContactsSvcV2.getContact(address);
+          caller = contact?.displayName ?? caller;
+        }
+        await NotificationsSvc.createMissedFaceTimeNotification(
+          callUuid,
+          caller,
+          isAudio: isAudio,
+          isTelephony: isTelephony,
+          callerAddress: address,
+        );
+      }
+    }
+  }
+
+  static String? _nonEmptyString(dynamic raw) {
+    final trimmed = raw?.toString().trim();
+    return (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
   }
 
   Future<void> handleIncomingFaceTimeCall(Map<String, dynamic> data) async {
     Logger.info("Handling incoming FaceTime call");
-    final callUuid = data["uuid"];
+    final String? callUuid = _nonEmptyString(data["uuid"]);
     final bool isTelephony = data["is_telephony"] == true;
-    String? address = data["handle"]?["address"];
-    String caller = data["address"] ?? (isTelephony ? "iPhone call" : "Unknown Number");
+    final String? address = (data["handle"] is Map ? _nonEmptyString(data["handle"]["address"]) : null) ??
+        _nonEmptyString(data["address"]);
+    String caller = _nonEmptyString(data["address"]) ?? (isTelephony ? "iPhone call" : "Unknown Number");
     final bool isAudio = isTelephony ||
-        (data["is_video"] != null
+        (data["is_video"] is bool
             ? !(data["is_video"] as bool)
-            : (data["is_audio"] as bool? ?? false));
+            : (data["is_audio"] is bool ? data["is_audio"] as bool : false));
     Uint8List? chatIcon;
 
-    if (address != null) {
+    if (address != null && GetIt.I.isRegistered<ContactServiceV2>()) {
       ContactV2? contact = await ContactsSvcV2.getContact(address);
       if (contact?.avatarPath != null) {
         chatIcon = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
@@ -103,23 +146,84 @@ class ActionHandler extends GetxService {
       caller = contact?.displayName ?? caller;
     }
 
-    if (!kIsWeb && Platform.isAndroid && isAudio) {
+    await _dispatchIncomingFaceTimeUI(
+      callUuid: callUuid,
+      caller: caller,
+      chatIcon: chatIcon,
+      isAudio: isAudio,
+      callerAddress: address,
+      isTelephony: isTelephony,
+    );
+  }
+
+  Future<void> handleIncomingFaceTimeCallLegacy(Map<String, dynamic> data) async {
+    Logger.info("Handling incoming FaceTime call (legacy)");
+    final String? callUuid = _nonEmptyString(data["uuid"]);
+    final bool isTelephony = data["is_telephony"] == true;
+    final String? rawAddress = _nonEmptyString(data["address"]) ??
+        (data["handle"] is Map ? _nonEmptyString(data["handle"]["address"]) : null);
+    final String? rawCaller = _nonEmptyString(data["caller"]);
+    final String? address = rawAddress ?? rawCaller;
+    String? caller = rawCaller ?? address;
+    final bool isAudio = isTelephony ||
+        (data["is_video"] is bool
+            ? !(data["is_video"] as bool)
+            : (data["is_audio"] is bool ? data["is_audio"] as bool : false));
+    Uint8List? chatIcon;
+
+    if (address != null && GetIt.I.isRegistered<ContactServiceV2>()) {
+      ContactV2? contact = await ContactsSvcV2.getContact(address);
+      if (contact?.avatarPath != null) {
+        chatIcon = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
+      }
+      caller = contact?.displayName ?? caller;
+    }
+
+    if (caller == null) {
+      if (callUuid == null) return;
+      caller = isTelephony ? "iPhone call" : "Unknown Number";
+    }
+
+    await _dispatchIncomingFaceTimeUI(
+      callUuid: callUuid,
+      caller: caller,
+      chatIcon: chatIcon,
+      isAudio: isAudio,
+      callerAddress: address,
+      isTelephony: isTelephony,
+      allowFallbackOverlayUuid: true,
+    );
+  }
+
+  Future<void> _dispatchIncomingFaceTimeUI({
+    required String? callUuid,
+    required String caller,
+    required Uint8List? chatIcon,
+    required bool isAudio,
+    required String? callerAddress,
+    required bool isTelephony,
+    bool allowFallbackOverlayUuid = false,
+  }) async {
+    final String? overlayUuid =
+        callUuid ?? (allowFallbackOverlayUuid ? 'ft_${caller.hashCode}' : null);
+
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       final handledByTelecom = await NotificationsSvc.createIncomingFaceTimeNotification(
         callUuid,
         caller,
         chatIcon,
         isAudio,
-        callerAddress: address,
+        callerAddress: callerAddress,
         isTelephony: isTelephony,
       );
       if (handledByTelecom) return;
-      if (LifecycleSvc.isForeground) {
+      if (LifecycleSvc.isForeground && overlayUuid != null) {
         await showFaceTimeOverlay(
-          callUuid,
+          overlayUuid,
           caller,
           chatIcon,
           isAudio,
-          callerAddress: address,
+          callerAddress: callerAddress,
           isTelephony: isTelephony,
         );
       }
@@ -127,13 +231,13 @@ class ActionHandler extends GetxService {
     }
 
     if (!LifecycleSvc.isForeground) {
-      if (kIsDesktop) {
+      if (kIsDesktop && overlayUuid != null) {
         await showFaceTimeOverlay(
-          callUuid,
+          overlayUuid,
           caller,
           chatIcon,
           isAudio,
-          callerAddress: address,
+          callerAddress: callerAddress,
           isTelephony: isTelephony,
         );
       }
@@ -142,34 +246,18 @@ class ActionHandler extends GetxService {
         caller,
         chatIcon,
         isAudio,
-        callerAddress: address,
+        callerAddress: callerAddress,
         isTelephony: isTelephony,
       );
-    } else {
+    } else if (overlayUuid != null) {
       await showFaceTimeOverlay(
-        callUuid,
+        overlayUuid,
         caller,
         chatIcon,
         isAudio,
-        callerAddress: address,
+        callerAddress: callerAddress,
         isTelephony: isTelephony,
       );
-    }
-  }
-
-  Future<void> handleIncomingFaceTimeCallLegacy(Map<String, dynamic> data) async {
-    Logger.info("Handling incoming FaceTime call (legacy)");
-    String? address = data["caller"];
-    String? caller = address;
-    Uint8List? chatIcon;
-
-    if (address != null) {
-      ContactV2? contact = await ContactsSvcV2.getContact(address);
-      if (contact?.avatarPath != null) {
-        chatIcon = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
-      }
-      caller = contact?.displayName ?? caller;
-      await NotificationsSvc.createIncomingFaceTimeNotification(null, caller!, chatIcon, false);
     }
   }
 
@@ -187,25 +275,36 @@ class ActionHandler extends GetxService {
           final payload = ServerPayload.fromJson(data);
           final message = Message.fromMap(payload.data);
           if (message.error > 0) message.errorMessage = serverErrorMessage(message.error);
-          if (message.isFromMe!) {
+          final msgGuid = message.guid;
+          if (message.isFromMe == true && msgGuid != null) {
             if (payload.data['tempGuid'] == null) {
               // No tempGuid — we don't know which local temp message this echo
               // belongs to.  Wait briefly for the paired updated-message event
               // to arrive (which will carry the tempGuid and remove this entry).
               // If nothing arrives, process the new-message normally.
-              MessageHandlerSvc.outOfOrderTempGuids.add(message.guid!);
+              MessageHandlerSvc.outOfOrderTempGuids.add(msgGuid);
               await Future.delayed(const Duration(milliseconds: 500));
-              if (!MessageHandlerSvc.outOfOrderTempGuids.remove(message.guid!)) return;
+              if (!MessageHandlerSvc.outOfOrderTempGuids.remove(msgGuid)) return;
             } else {
-              MessageHandlerSvc.outOfOrderTempGuids.remove(message.guid!);
+              MessageHandlerSvc.outOfOrderTempGuids.remove(msgGuid);
             }
+          }
+
+          final rawChats = payload.data['chats'] as List?;
+          final firstChat = rawChats?.whereType<Map>().firstOrNull;
+          final chat = firstChat != null
+              ? Chat.fromMap(firstChat.cast<String, dynamic>())
+              : Message.findOne(guid: payload.data['tempGuid'] ?? msgGuid)?.chat.target;
+          if (chat == null) {
+            Logger.warn("Dropping new-message without chat metadata (guid=$msgGuid)");
+            return;
           }
 
           await IncomingMsgHandler.handle(
               IncomingPayload(
                 type: MessageEventType.newMessage,
                 source: MessageSource.socket,
-                chat: Chat.fromMap(payload.data['chats'].first.cast<String, dynamic>()),
+                chat: chat,
                 message: message,
                 attachments: ((payload.data['attachments'] as List?) ?? const [])
                     .whereType<Map>()
@@ -277,7 +376,8 @@ class ActionHandler extends GetxService {
           // the text field, so toggling it mid-send moves the target
           // SendAnimation is flying toward. Runs inline when no send is in
           // flight, which is the overwhelmingly common case.
-          controller.messageListGate.run(() => controller.showTypingIndicator.value = data["display"]);
+          final display = data["display"] == true;
+          controller.messageListGate.run(() => controller.setTypingIndicator(display));
         }
         return;
       case "incoming-facetime":
@@ -290,7 +390,10 @@ class ActionHandler extends GetxService {
         return;
       case "imessage-aliases-removed":
         Logger.info("Alias(es) removed ${data["aliases"]}");
-        await NotificationsSvc.createAliasesRemovedNotification((data["aliases"] as List).cast<String>());
+        final aliases = (data["aliases"] as List?)?.whereType<String>().toList() ?? const <String>[];
+        if (aliases.isNotEmpty) {
+          await NotificationsSvc.createAliasesRemovedNotification(aliases);
+        }
         return;
       case "new-findmy-location":
       case "new-findmy-device":

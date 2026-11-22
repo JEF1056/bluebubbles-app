@@ -62,6 +62,10 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val tag: String? = intent.getStringExtra("tag")
                 val callUuid: String? = intent.getStringExtra("callUuid")
                 DeleteNotificationHandler().deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
+                if (!callUuid.isNullOrBlank()) {
+                    FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
+                    WearSyncManager.notifyCallEnded(context, callUuid)
+                }
                 if (FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid) && callUuid != null) {
                     val pendingResult = goAsync()
                     HttpService(context).declineFaceTimeCall(
