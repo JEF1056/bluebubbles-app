@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -55,6 +56,7 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.ui.components.WearConfirmModal
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
@@ -195,27 +197,45 @@ fun ConversationListScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        if (isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(24.dp),
-                                strokeWidth = 2.dp,
-                                indicatorColor = palette.primary
-                            )
-                        } else {
-                            Icon(
-                                imageVector = if (error != null) Icons.Rounded.ErrorOutline else Icons.Rounded.ChatBubbleOutline,
-                                contentDescription = null,
-                                tint = if (error != null) OnErrorContainer else palette.subtleText,
-                                modifier = Modifier.size(22.dp)
-                            )
+                        val emptyIconState = when {
+                            isRefreshing -> 0
+                            error != null -> 1
+                            else -> 2
+                        }
+                        BlurFadeContent(
+                            targetState = emptyIconState,
+                            modifier = Modifier.size(24.dp)
+                        ) { iconState ->
+                            when (iconState) {
+                                0 -> CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp,
+                                    indicatorColor = palette.primary
+                                )
+                                1 -> Icon(
+                                    imageVector = Icons.Rounded.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = OnErrorContainer,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                else -> Icon(
+                                    imageVector = Icons.Rounded.ChatBubbleOutline,
+                                    contentDescription = null,
+                                    tint = palette.subtleText,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = error ?: if (isRefreshing) "Loading chats..." else "No conversations yet",
-                            style = centeredTextStyle(12.sp, 16.sp),
-                            color = palette.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
+                        val emptyText = error ?: if (isRefreshing) "Loading chats..." else "No conversations yet"
+                        BlurFadeContent(targetState = emptyText) { text ->
+                            Text(
+                                text = text,
+                                style = centeredTextStyle(12.sp, 16.sp),
+                                color = palette.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
             } else {
@@ -234,19 +254,24 @@ fun ConversationListScreen(
                     onClick = { viewModel.refresh() },
                     enabled = !isRefreshing,
                     leadingIcon = {
-                        if (isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                indicatorColor = palette.primary
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = null,
-                                tint = palette.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        BlurFadeContent(
+                            targetState = isRefreshing,
+                            modifier = Modifier.size(18.dp)
+                        ) { refreshing ->
+                            if (refreshing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    indicatorColor = palette.primary
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = null,
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     },
                     backgroundColor = palette.surfaceContainer,
@@ -280,11 +305,18 @@ fun ConversationListScreen(
     }
 
     val target = chatToDelete
+    var lastTarget by remember { mutableStateOf<ChatItemUi?>(null) }
+    LaunchedEffect(target) {
+        if (target != null) {
+            lastTarget = target
+        }
+    }
+    val modalTarget = target ?: lastTarget
     WearConfirmModal(
         show = target != null,
         onDismiss = { chatToDelete = null },
         title = "Hide chat?",
-        message = target?.let { "Removes \"${it.title}\" from your watch." } ?: "",
+        message = modalTarget?.let { "Removes \"${it.title}\" from your watch." } ?: "",
         confirmLabel = "Hide chat",
         onConfirm = {
             if (target != null) {
@@ -295,13 +327,13 @@ fun ConversationListScreen(
         dismissLabel = "Keep chat",
         icon = Icons.Outlined.VisibilityOff,
         destructive = true,
-        headerBadge = if (target != null) {
+        headerBadge = if (modalTarget != null) {
             {
                 ContactAvatar(
-                    title = target.title,
-                    seed = target.guid,
-                    avatarPath = target.avatarPath,
-                    isGroup = target.isGroup,
+                    title = modalTarget.title,
+                    seed = modalTarget.guid,
+                    avatarPath = modalTarget.avatarPath,
+                    isGroup = modalTarget.isGroup,
                     size = 40.dp
                 )
             }
@@ -336,30 +368,40 @@ private fun ChatRow(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = chat.title,
-                style = centeredTextStyle(
-                    fontSize = 15.sp,
-                    lineHeight = 18.sp,
-                    fontWeight = FontWeight.Bold
-                ),
-                color = palette.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (chat.subtitle.isNotBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
+            BlurFadeContent(
+                targetState = chat.title,
+                contentAlignment = Alignment.CenterStart
+            ) { title ->
                 Text(
-                    text = chat.subtitle,
+                    text = title,
                     style = centeredTextStyle(
-                        fontSize = 13.5.sp,
-                        lineHeight = 17.sp,
-                        fontWeight = if (chat.hasUnread) FontWeight.Medium else FontWeight.Normal
+                        fontSize = 15.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = FontWeight.Bold
                     ),
-                    color = if (chat.hasUnread) palette.onSurface else palette.onSurfaceVariant,
+                    color = palette.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (chat.subtitle.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                BlurFadeContent(
+                    targetState = chat.subtitle,
+                    contentAlignment = Alignment.CenterStart
+                ) { subtitle ->
+                    Text(
+                        text = subtitle,
+                        style = centeredTextStyle(
+                            fontSize = 13.5.sp,
+                            lineHeight = 17.sp,
+                            fontWeight = if (chat.hasUnread) FontWeight.Medium else FontWeight.Normal
+                        ),
+                        color = if (chat.hasUnread) palette.onSurface else palette.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
         if (chat.isPinned) {

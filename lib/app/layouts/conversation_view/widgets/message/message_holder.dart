@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
@@ -646,10 +647,12 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                                                   message.guid! &&
                                                                                               e2.part.part == e.part);
                                                                                       return AnimatedSize(
-                                                                                          duration: const Duration(
-                                                                                              milliseconds: 250),
+                                                                                          duration: motionDuration(
+                                                                                              context,
+                                                                                              const Duration(
+                                                                                                  milliseconds: 200)),
                                                                                           alignment: Alignment.centerRight,
-                                                                                          curve: Curves.easeOutBack,
+                                                                                          curve: Curves.easeOutCubic,
                                                                                           child: editStuff == null
                                                                                               ? const SizedBox.shrink()
                                                                                               : MessageEditField(
@@ -690,7 +693,6 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                     StickerObserver(
                                                                       part: e,
                                                                       cvController: widget.cvController,
-                                                                      placed: true,
                                                                     ),
                                                                     if (SettingsSvc.getServerDetails().supportsStickers)
                                                                       Positioned.fill(
@@ -715,12 +717,6 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                   ],
                                                                 ),
                                                               ),
-                                                              ),
-                                                              // Stickers are in the outer Stack so they contribute to
-                                                              // the message holder's size but don't affect bubble alignment
-                                                              StickerObserver(
-                                                                part: e,
-                                                                cvController: widget.cvController,
                                                               ),
                                                             ],
                                                           ),

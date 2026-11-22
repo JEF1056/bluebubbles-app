@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
@@ -97,8 +98,14 @@ class SubscriptionRequiredCard extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(5),
                   decoration: BoxDecoration(color: scheme.surfaceContainerHighest, shape: BoxShape.circle),
-                  child: Icon(offline ? Icons.cloud_off_rounded : Icons.lock_rounded,
-                      size: 16, color: scheme.onSurfaceVariant),
+                  child: BlurFadeSwitcher(
+                    child: Icon(
+                      offline ? Icons.cloud_off_rounded : Icons.lock_rounded,
+                      key: ValueKey(offline),
+                      size: 16,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
                 ),
               ),
             ],

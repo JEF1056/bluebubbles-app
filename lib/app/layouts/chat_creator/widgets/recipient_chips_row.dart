@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_controller.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/selected_contact_chip.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
@@ -53,8 +54,8 @@ class _RecipientChipsRowState extends State<RecipientChipsRow> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     AnimatedSize(
-                      duration: const Duration(milliseconds: 250),
-                      curve: Curves.easeIn,
+                      duration: motionDuration(context, const Duration(milliseconds: 200)),
+                      curve: Curves.easeOutCubic,
                       alignment: Alignment.centerLeft,
                       child: ConstrainedBox(
                         constraints: BoxConstraints(

@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_detail_sheet.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_device_avatar.dart';
@@ -106,8 +107,20 @@ class FindMyDeviceListTile extends StatelessWidget {
                   shape: const StadiumBorder(),
                 ),
                 onPressed: busy ? null : () => controller.toggleRingDevice(item),
-                icon: Icon(isRinging ? Icons.stop_rounded : Icons.volume_up_rounded, size: 16),
-                label: Text(isRinging ? 'Stop Sound' : 'Play Sound'),
+                icon: BlurFadeSwitcher(
+                  child: Icon(
+                    isRinging ? Icons.stop_rounded : Icons.volume_up_rounded,
+                    key: ValueKey(isRinging),
+                    size: 16,
+                  ),
+                ),
+                label: BlurFadeSwitcher(
+                  animateSize: true,
+                  child: Text(
+                    isRinging ? 'Stop Sound' : 'Play Sound',
+                    key: ValueKey(isRinging),
+                  ),
+                ),
               );
             }),
         ],

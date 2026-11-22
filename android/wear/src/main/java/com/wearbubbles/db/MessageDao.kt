@@ -33,6 +33,17 @@ interface MessageDao {
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE guid = :guid)")
     suspend fun existsByGuid(guid: String): Boolean
 
+    @Query("SELECT * FROM messages WHERE guid = :guid LIMIT 1")
+    suspend fun getByGuid(guid: String): MessageEntity?
+
+    @Query("UPDATE messages SET translatedText = :translatedText, translationSourceLang = :sourceLang, translationTargetLang = :targetLang WHERE guid = :guid")
+    suspend fun updateTranslation(
+        guid: String,
+        translatedText: String?,
+        sourceLang: String?,
+        targetLang: String?
+    )
+
     @Query("SELECT COUNT(*) FROM messages WHERE chatGuid = :chatGuid")
     suspend fun countForChat(chatGuid: String): Int
 
@@ -143,6 +154,21 @@ interface MessageDao {
     companion object {
         // Slightly above PhoneRelayClient.SEND_TIMEOUT_MS (130s) so active sends aren't flagged early.
         internal const val STALE_PENDING_TIMEOUT_MS = 145_000L
+
+        internal fun mergeTranslationIfUnchanged(incoming: MessageEntity, existing: MessageEntity?): MessageEntity {
+            if (existing == null || !incoming.translatedText.isNullOrBlank()) return incoming
+            if (incoming.text == existing.text &&
+                incoming.dateEdited == existing.dateEdited &&
+                !existing.translatedText.isNullOrBlank()
+            ) {
+                return incoming.copy(
+                    translatedText = existing.translatedText,
+                    translationSourceLang = existing.translationSourceLang,
+                    translationTargetLang = existing.translationTargetLang
+                )
+            }
+            return incoming
+        }
         private const val RECONCILE_CLOCK_SKEW_MS = 15_000L
         private const val RECONCILE_FORWARD_WINDOW_MS = 5 * 60_000L
 

@@ -49,6 +49,7 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.ErrorContainer
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.OnErrorContainer
@@ -144,28 +145,30 @@ fun SetupScreen(
                         color = palette.onSurface,
                         textAlign = TextAlign.Center
                     )
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (state.isPhoneConnected) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(SuccessColor)
+                    BlurFadeContent(targetState = state.isPhoneConnected) { isConnected ->
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isConnected) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(SuccessColor)
+                                )
+                            }
+                            Text(
+                                text = if (isConnected) {
+                                    "Phone paired"
+                                } else {
+                                    "Sync or connect direct"
+                                },
+                                style = centeredTextStyle(11.sp, 14.sp),
+                                color = if (isConnected) SuccessColor else palette.subtleText,
+                                textAlign = TextAlign.Center
                             )
                         }
-                        Text(
-                            text = if (state.isPhoneConnected) {
-                                "Phone paired"
-                            } else {
-                                "Sync or connect direct"
-                            },
-                            style = centeredTextStyle(11.sp, 14.sp),
-                            color = if (state.isPhoneConnected) SuccessColor else palette.subtleText,
-                            textAlign = TextAlign.Center
-                        )
                     }
                 }
             }
@@ -176,27 +179,32 @@ fun SetupScreen(
                     onClick = { viewModel.syncFromPhone() },
                     enabled = !state.isSyncingFromPhone && !state.isTesting,
                     leadingIcon = {
-                        if (state.isSyncingFromPhone) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                indicatorColor = if (state.isPhoneConnected) {
-                                    palette.onPrimaryAction
-                                } else {
-                                    palette.primary
-                                }
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Rounded.Smartphone,
-                                contentDescription = null,
-                                tint = if (state.isPhoneConnected) {
-                                    palette.onPrimaryAction
-                                } else {
-                                    palette.onSurface
-                                },
-                                modifier = Modifier.size(18.dp)
-                            )
+                        BlurFadeContent(
+                            targetState = state.isSyncingFromPhone,
+                            modifier = Modifier.size(18.dp)
+                        ) { syncing ->
+                            if (syncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    indicatorColor = if (state.isPhoneConnected) {
+                                        palette.onPrimaryAction
+                                    } else {
+                                        palette.primary
+                                    }
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Smartphone,
+                                    contentDescription = null,
+                                    tint = if (state.isPhoneConnected) {
+                                        palette.onPrimaryAction
+                                    } else {
+                                        palette.onSurface
+                                    },
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     },
                     backgroundColor = if (state.isPhoneConnected) {
@@ -275,7 +283,8 @@ fun SetupScreen(
                 )
             }
 
-            if (state.error != null) {
+            val errorText = state.error
+            if (errorText != null) {
                 item(key = "error") {
                     Row(
                         modifier = Modifier
@@ -292,12 +301,14 @@ fun SetupScreen(
                             tint = OnErrorContainer,
                             modifier = Modifier.size(15.dp)
                         )
-                        Text(
-                            text = state.error!!,
-                            style = centeredTextStyle(11.5.sp, 15.sp, FontWeight.Medium),
-                            color = OnErrorContainer,
-                            textAlign = TextAlign.Center
-                        )
+                        BlurFadeContent(targetState = errorText) { text ->
+                            Text(
+                                text = text,
+                                style = centeredTextStyle(11.5.sp, 15.sp, FontWeight.Medium),
+                                color = OnErrorContainer,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
             }
@@ -308,19 +319,24 @@ fun SetupScreen(
                     onClick = { viewModel.testAndConnect() },
                     enabled = !state.isTesting && !state.isSyncingFromPhone,
                     leadingIcon = {
-                        if (state.isTesting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                indicatorColor = if (hasManualCreds) palette.onPrimaryAction else palette.onPrimaryContainer
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Rounded.Link,
-                                contentDescription = null,
-                                tint = if (hasManualCreds) palette.onPrimaryAction else palette.onPrimaryContainer,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        BlurFadeContent(
+                            targetState = state.isTesting,
+                            modifier = Modifier.size(18.dp)
+                        ) { testing ->
+                            if (testing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    indicatorColor = if (hasManualCreds) palette.onPrimaryAction else palette.onPrimaryContainer
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Link,
+                                    contentDescription = null,
+                                    tint = if (hasManualCreds) palette.onPrimaryAction else palette.onPrimaryContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     },
                     backgroundColor = if (hasManualCreds) palette.primaryAction else palette.primaryContainer,

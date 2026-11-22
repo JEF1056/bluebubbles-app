@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
@@ -215,6 +216,17 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
       // Use MessageState observables for proper reactivity
       final isTempMessage = controller.isSending.value;
       final isFromMe = controller.isFromMe.value;
+      final activeTranslation = (!isFromMe &&
+              !part.shouldRedact &&
+              !widget.subjectOnly &&
+              !isNullOrEmpty(part.text) &&
+              controller.parts.firstWhereOrNull((p) => !isNullOrEmpty(p.text)) == part)
+          ? controller.translation.value
+          : null;
+      final showTranslated = activeTranslation != null && !controller.showOriginalTranslation.value;
+      final displayPart = showTranslated
+          ? MessagePart(part: part.part, text: activeTranslation.text, subject: part.subject)
+          : part;
 
       final material = !iOS && !samsung;
       final tailGutter = iOS && !message.isBigEmoji ? 10.0 : 0.0;
@@ -281,70 +293,79 @@ class _TextBubbleState extends State<TextBubble> with SingleTickerProviderStateM
         color: resolvedColor,
         decoration: resolvedDecoration,
         // alignment: Alignment.center,
-        child: FutureBuilder<List<InlineSpan>>(
-            future: buildEnrichedMessageSpans(
-              context,
-              part,
-              message,
-              colorOverride: selected
-                  ? context.theme.colorScheme.onTertiaryContainer
-                  : SettingsSvc.settings.colorfulBubbles.value && !isFromMe
-                      ? getBubbleColors(selected).first.oppositeLightenOrDarken(90)
-                      : null,
-              hideBodyText: widget.subjectOnly,
+        child: BlurFadeSwitcher(
+          alignment: AlignmentDirectional.centerStart,
+          animateSize: true,
+          child: KeyedSubtree(
+            key: ValueKey(
+              showTranslated ? 'tr_${activeTranslation.text}_${part.subject}' : 'orig_${part.text}_${part.subject}',
             ),
-            initialData: buildMessageSpans(
-              context,
-              part,
-              message,
-              colorOverride: selected
-                  ? context.theme.colorScheme.onTertiaryContainer
-                  : SettingsSvc.settings.colorfulBubbles.value && !isFromMe
-                      ? getBubbleColors(selected).first.oppositeLightenOrDarken(90)
-                      : null,
-              hideBodyText: widget.subjectOnly,
-            ),
-            builder: (context, snapshot) {
-              if (snapshot.data != null) {
-                if (effect == MessageEffect.gentle) {
-                  return Obx(() => CustomAnimationBuilder<Movie>(
-                        control: rxAnim.value,
-                        tween: tween,
-                        duration: const Duration(milliseconds: 1800),
-                        animationStatusListener: (status) {
-                          if (status == AnimationStatus.completed) {
-                            rxAnim.value = Control.stop;
-                          }
-                        },
-                        builder: (context, anim, child) {
-                          final value1 = anim.get("size");
-                          return Transform.scale(scale: value1, alignment: Alignment.center, child: child);
-                        },
-                        child: Center(
-                            widthFactor: 1,
-                            child: _richText(
-                              snapshot.data!,
-                              isFromMe: isFromMe,
-                              selected: selected,
-                              isDarkOutgoing: isDarkOutgoing,
-                            )),
-                      ));
-                }
-                return Center(
-                  widthFactor: 1,
-                  child: Padding(
-                      padding:
-                          message.fullText.length == 1 ? const EdgeInsets.only(left: 3, right: 3) : EdgeInsets.zero,
-                      child: _richText(
-                        snapshot.data!,
-                        isFromMe: isFromMe,
-                        selected: selected,
-                        isDarkOutgoing: isDarkOutgoing,
-                      )),
-                );
-              }
-              return const SizedBox.shrink();
-            }),
+            child: FutureBuilder<List<InlineSpan>>(
+                future: buildEnrichedMessageSpans(
+                  context,
+                  displayPart,
+                  message,
+                  colorOverride: selected
+                      ? context.theme.colorScheme.onTertiaryContainer
+                      : SettingsSvc.settings.colorfulBubbles.value && !isFromMe
+                          ? getBubbleColors(selected).first.oppositeLightenOrDarken(90)
+                          : null,
+                  hideBodyText: widget.subjectOnly,
+                ),
+                initialData: buildMessageSpans(
+                  context,
+                  displayPart,
+                  message,
+                  colorOverride: selected
+                      ? context.theme.colorScheme.onTertiaryContainer
+                      : SettingsSvc.settings.colorfulBubbles.value && !isFromMe
+                          ? getBubbleColors(selected).first.oppositeLightenOrDarken(90)
+                          : null,
+                  hideBodyText: widget.subjectOnly,
+                ),
+                builder: (context, snapshot) {
+                  if (snapshot.data != null) {
+                    if (effect == MessageEffect.gentle) {
+                      return Obx(() => CustomAnimationBuilder<Movie>(
+                            control: rxAnim.value,
+                            tween: tween,
+                            duration: const Duration(milliseconds: 1800),
+                            animationStatusListener: (status) {
+                              if (status == AnimationStatus.completed) {
+                                rxAnim.value = Control.stop;
+                              }
+                            },
+                            builder: (context, anim, child) {
+                              final value1 = anim.get("size");
+                              return Transform.scale(scale: value1, alignment: Alignment.center, child: child);
+                            },
+                            child: Center(
+                                widthFactor: 1,
+                                child: _richText(
+                                  snapshot.data!,
+                                  isFromMe: isFromMe,
+                                  selected: selected,
+                                  isDarkOutgoing: isDarkOutgoing,
+                                )),
+                          ));
+                    }
+                    return Center(
+                      widthFactor: 1,
+                      child: Padding(
+                          padding:
+                              (displayPart.text?.length ?? 0) == 1 ? const EdgeInsets.only(left: 3, right: 3) : EdgeInsets.zero,
+                          child: _richText(
+                            snapshot.data!,
+                            isFromMe: isFromMe,
+                            selected: selected,
+                            isDarkOutgoing: isDarkOutgoing,
+                          )),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                }),
+          ),
+        ),
       );
     });
   }

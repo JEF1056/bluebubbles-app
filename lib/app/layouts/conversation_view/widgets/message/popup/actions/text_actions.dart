@@ -35,3 +35,33 @@ void copySelection(MessagePopupActionContext ctx) {
     content: SelectableText(ctx.part.fullText, style: Theme.of(ctx.context).extension<BubbleText>()!.bubbleText),
   );
 }
+
+Future<void> translateMessage(MessagePopupActionContext ctx) async {
+  final ms = ctx.messageState;
+  final guid = ms.message.guid;
+  ctx.popDetails();
+  if (ms.translation.value != null) {
+    ms.showOriginalTranslation.value = !ms.showOriginalTranslation.value;
+    return;
+  }
+  if (guid == null || ms.isTranslating.value) return;
+  ms.isTranslating.value = true;
+  try {
+    final resp = await HttpSvc.translateMessage(guid);
+    final payload = resp.data?['data'];
+    final rawTr = payload is Map ? payload['translation'] : null;
+    if (rawTr is Map) {
+      final tr = MessageTranslation.fromJson(Map<String, dynamic>.from(rawTr));
+      ms.message.metadata = Map<String, dynamic>.from(ms.message.metadata ?? {})..['translation'] = tr.toJson();
+      ms.translation.value = tr;
+      ms.showOriginalTranslation.value = false;
+      await Message.replaceMessage(guid, ms.message);
+    } else {
+      showSnackbar("Notice", "No translation needed");
+    }
+  } catch (e) {
+    showSnackbar("Error", "Failed to translate message", type: SnackbarType.error);
+  } finally {
+    ms.isTranslating.value = false;
+  }
+}

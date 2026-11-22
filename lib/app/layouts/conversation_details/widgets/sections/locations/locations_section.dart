@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/attachment_section_type.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/conversation_attachments.dart';
@@ -138,7 +139,7 @@ class _LocationsSectionState extends State<LocationsSection> {
         else if (hideWhenEmpty)
           SliverToBoxAdapter(
             child: AnimatedSize(
-              duration: M3EMotion.spatialFast.duration,
+              duration: motionDuration(context, M3EMotion.spatialFast.duration),
               curve: M3EMotion.spatialFast.curve,
               child: const SizedBox.shrink(),
             ),

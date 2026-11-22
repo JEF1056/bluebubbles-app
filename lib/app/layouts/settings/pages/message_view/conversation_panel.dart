@@ -30,9 +30,18 @@ class _ConversationPanelState extends State<ConversationPanel> with ThemeHelpers
   bool sendPrepared = false;
   bool receivePrepared = false;
 
+  final RxBool _autoTranslateEnabled = false.obs;
+  final RxString _targetLanguage = 'en'.obs;
+  final RxBool _clearingTranslationCache = false.obs;
+
+  static const _languageOptions = <String>[
+    'en', 'es', 'fr', 'de', 'it', 'pt', 'zh-CN', 'zh-TW', 'ja', 'ko', 'ar', 'hi', 'ru', 'nl', 'pl', 'tr', 'vi', 'th', 'id',
+  ];
+
   @override
   void initState() {
     super.initState();
+    _loadTranslationConfig();
 
     if (kIsDesktop) {
       sendPlayer = Player();
@@ -534,11 +543,110 @@ class _ConversationPanelState extends State<ConversationPanel> with ThemeHelpers
                       )),
                 ],
               ),
+              SettingsHeader(
+                iosSubtitle: iosSubtitle,
+                materialSubtitle: materialSubtitle,
+                text: "Translation",
+              ),
+              SettingsSection(
+                backgroundColor: tileColor,
+                children: [
+                  Obx(() => SettingsSwitch(
+                        onChanged: (bool val) async {
+                          final prev = _autoTranslateEnabled.value;
+                          _autoTranslateEnabled.value = val;
+                          try {
+                            await HttpSvc.updateTranslationConfig(autoTranslateEnabled: val);
+                          } catch (_) {
+                            _autoTranslateEnabled.value = prev;
+                            showSnackbar("Error", "Failed to update translation settings", type: SnackbarType.error);
+                          }
+                        },
+                        initialVal: _autoTranslateEnabled.value,
+                        title: "Auto-Translate Incoming Messages",
+                        subtitle: "Automatically translate incoming messages on the server",
+                        backgroundColor: tileColor,
+                      )),
+                  const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                  Obx(() => SettingsTile(
+                        title: "Preferred Language",
+                        subtitle: MessageTranslation.languageName(_targetLanguage.value),
+                        onTap: _pickTargetLanguage,
+                        trailing: const NextButton(),
+                      )),
+                  const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
+                  Obx(() => SettingsTile(
+                        title: "Clear Translation Cache",
+                        subtitle: "Remove cached translations on the server",
+                        trailing: _clearingTranslationCache.value
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2.5),
+                              )
+                            : null,
+                        onTap: () async {
+                          if (_clearingTranslationCache.value) return;
+                          _clearingTranslationCache.value = true;
+                          try {
+                            await HttpSvc.clearTranslationCache();
+                            showSnackbar("Notice", "Translation cache cleared");
+                          } catch (_) {
+                            showSnackbar("Error", "Failed to clear translation cache", type: SnackbarType.error);
+                          } finally {
+                            _clearingTranslationCache.value = false;
+                          }
+                        },
+                      )),
+                ],
+              ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  Future<void> _loadTranslationConfig() async {
+    try {
+      final resp = await HttpSvc.getTranslationConfig();
+      final data = resp.data?['data'];
+      if (data is Map) {
+        _autoTranslateEnabled.value = data['auto_translate_enabled'] == true;
+        final lang = data['translation_target_language']?.toString();
+        if (lang != null && lang.isNotEmpty) _targetLanguage.value = lang;
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _pickTargetLanguage() async {
+    final chosen = await showDialog<String>(
+      context: this.context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text("Preferred Language"),
+        children: [
+          for (final code in _languageOptions)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(code),
+              child: Row(
+                children: [
+                  Expanded(child: Text(MessageTranslation.languageName(code))),
+                  if (_targetLanguage.value == code) const Icon(Icons.check, size: 18),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen == _targetLanguage.value) return;
+    final prev = _targetLanguage.value;
+    _targetLanguage.value = chosen;
+    try {
+      await HttpSvc.updateTranslationConfig(targetLanguage: chosen);
+    } catch (_) {
+      _targetLanguage.value = prev;
+      showSnackbar("Error", "Failed to update preferred language", type: SnackbarType.error);
+    }
   }
 
   @override

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/scheduler.dart';
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/video_player.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/web_video_player.dart';
@@ -371,34 +372,28 @@ class _FullscreenVideoState extends State<FullscreenVideo> with AutomaticKeepAli
                                   borderRadius: BorderRadius.circular(40),
                                 ),
                                 clipBehavior: Clip.antiAlias,
-                                child: Padding(
-                                  padding: EdgeInsets.only(
-                                    left: SettingsSvc.settings.skin.value == Skins.iOS &&
-                                            !(videoController?.player.state.playing ?? false)
-                                        ? 17
-                                        : 10,
-                                    top: SettingsSvc.settings.skin.value == Skins.iOS ? 13 : 10,
-                                    right: 10,
-                                    bottom: 10,
-                                  ),
-                                  child: Obx(
-                                    () => (videoController?.player.state.playing ?? false)
-                                        ? Icon(
-                                            SettingsSvc.settings.skin.value == Skins.iOS
-                                                ? CupertinoIcons.pause
-                                                : Icons.pause,
-                                            color: context.iconColor,
-                                            size: 45,
-                                          )
-                                        : Icon(
-                                            SettingsSvc.settings.skin.value == Skins.iOS
-                                                ? CupertinoIcons.play
-                                                : Icons.play_arrow,
-                                            color: context.iconColor,
-                                            size: 45,
-                                          ),
-                                  ),
-                                ),
+                                child: Obx(() {
+                                  final playing = videoController?.player.state.playing ?? false;
+                                  final isIOS = SettingsSvc.settings.skin.value == Skins.iOS;
+                                  return BlurFadeSwitcher(
+                                    child: Padding(
+                                      key: ValueKey(playing),
+                                      padding: EdgeInsets.only(
+                                        left: isIOS && !playing ? 17 : 10,
+                                        top: isIOS ? 13 : 10,
+                                        right: 10,
+                                        bottom: 10,
+                                      ),
+                                      child: Icon(
+                                        playing
+                                            ? (isIOS ? CupertinoIcons.pause : Icons.pause)
+                                            : (isIOS ? CupertinoIcons.play : Icons.play_arrow),
+                                        color: context.iconColor,
+                                        size: 45,
+                                      ),
+                                    ),
+                                  );
+                                }),
                               ),
                             ),
                           ),

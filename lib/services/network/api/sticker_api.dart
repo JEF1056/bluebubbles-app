@@ -109,6 +109,11 @@ class StickerApi {
     StickerPlacement? placement,
     CancelToken? cancelToken,
   }) async {
+    final cleanGuid = messageGuid.replaceAll("bp:", "").split("/").last;
+    if (cleanGuid.isEmpty) {
+      throw ArgumentError.value(messageGuid, 'messageGuid', 'Invalid target message GUID');
+    }
+    final validPlacement = placement != null && placement.isValid ? placement : null;
     return _svc.runApiGuarded(() async {
       final response = await _svc.dio.post(
         "${_svc.apiRootV2}/message/sticker",
@@ -117,12 +122,12 @@ class StickerApi {
           'attachment': MultipartFile.fromBytes(bytes, filename: fileName),
           'chatGuid': chatGuid,
           'tempGuid': tempGuid,
-          'selectedMessageGuid': messageGuid,
+          'selectedMessageGuid': cleanGuid,
           'partIndex': partIndex.toString(),
           if (tapback) 'tapback': 'true',
           if (remove) 'remove': 'true',
           // Without it the server centers the sticker
-          if (placement != null) ...placement.toMap().map((k, v) => MapEntry(k, v.toString())),
+          if (validPlacement != null) ...validPlacement.toMap().map((k, v) => MapEntry(k, v.toString())),
         }),
         cancelToken: cancelToken,
       );

@@ -399,7 +399,6 @@ void main() {
                   child: StickerHolder(
                     stickerMessages: [stickerMsg],
                     controller: null,
-                    placed: true,
                     isFromMe: true,
                     tailGutter: false,
                   ),
@@ -625,7 +624,6 @@ void main() {
                   child: StickerHolder(
                     stickerMessages: [tempSticker],
                     controller: null,
-                    placed: true,
                     isFromMe: true,
                     tailGutter: true,
                   ),
@@ -839,6 +837,131 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
       expect(outgoing.placed, isEmpty);
+    });
+  });
+
+  group('Sticker crash guards & unified fallback', () {
+    test('StickerHolder geometry guards zero, negative, NaN, and Infinity sizes without throwing', () {
+      const invalidPlacement = StickerPlacement(
+        xScalar: double.nan,
+        yScalar: double.infinity,
+        scale: 1.0,
+        rotation: 0.0,
+        parentPreviewWidth: 200,
+      );
+      expect(invalidPlacement.isValid, isFalse);
+      expect(StickerPlacement.centeredDefault.isValid, isTrue);
+
+      expect(StickerHolder.placedCenter(invalidPlacement, const Size(200, 80), false, false), Offset.zero);
+      expect(StickerHolder.placedCenter(StickerPlacement.centeredDefault, Size.zero, false, true), Offset.zero);
+      expect(StickerHolder.placedCenter(StickerPlacement.centeredDefault, Size.infinite, true, true), Offset.zero);
+
+      expect(
+        StickerHolder.placementAt(const Offset(double.nan, 10), const Size(200, 80), false, false),
+        StickerPlacement.centeredDefault,
+      );
+      expect(
+        StickerHolder.placementAt(const Offset(10, 10), Size.zero, false, false),
+        StickerPlacement.centeredDefault,
+      );
+
+      expect(StickerHolder.drawScale(invalidPlacement, const Size(200, 80)), 0);
+      expect(StickerHolder.drawScale(StickerPlacement.centeredDefault, Size.zero), 0);
+      expect(StickerHolder.drawScale(StickerPlacement.centeredDefault, Size.infinite), 0);
+
+      expect(
+        StickerHolder.placedRect(const PlacedSticker(StickerPlacement.centeredDefault, Size.zero), const Size(200, 80), false, false),
+        Rect.zero,
+      );
+      expect(
+        StickerHolder.space(
+          const [PlacedSticker(StickerPlacement.centeredDefault, Size(300, 300))],
+          Size.zero,
+          false,
+          true,
+          double.infinity,
+        ),
+        EdgeInsets.zero,
+      );
+    });
+
+    test('Message.fromMap parses bp:p:0/GUID and string associatedMessagePart safely', () {
+      final msg = Message.fromMap({
+        'guid': 'STICKER-1',
+        'associatedMessageGuid': 'bp:p:2/TARGET-GUID',
+        'associatedMessageType': 'sticker',
+        'isFromMe': false,
+        'dateCreated': 1700000000000,
+      });
+      expect(msg.associatedMessageGuid, 'TARGET-GUID');
+      expect(msg.associatedMessagePart, 2);
+
+      final msgNoPart = Message.fromMap({
+        'guid': 'STICKER-2',
+        'associatedMessageGuid': 'TARGET-GUID',
+        'associatedMessageType': 'sticker',
+        'isFromMe': true,
+        'dateCreated': 1700000000000,
+      });
+      expect(msgNoPart.associatedMessageGuid, 'TARGET-GUID');
+      expect(msgNoPart.associatedMessagePart, isNull);
+    });
+
+    testWidgets('StickerHolder renders ancient sticker without placement via centeredDefault and survives zero-size constraints', (tester) async {
+      final attachment = Attachment(
+        guid: 'ancient-sticker-1',
+        mimeType: 'image/png',
+        bytes: _kPng1x1,
+        stickerPlacement: null,
+      );
+      final stickerMsg = Message(
+        guid: 'STICKER-ANCIENT-1',
+        associatedMessageType: 'sticker',
+        associatedMessagePart: 0,
+        dateCreated: DateTime.now(),
+      )..dbAttachments.add(attachment);
+
+      // Zero-size constraints must not crash layout
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox.fromSize(
+              size: Size.zero,
+              child: StickerHolder(
+                stickerMessages: [stickerMsg],
+                isFromMe: false,
+                tailGutter: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      // Normal bubble renders centeredDefault at (100, 40) inside 200x80 bubble
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 200,
+                height: 80,
+                child: StickerHolder(
+                  stickerMessages: [stickerMsg],
+                  isFromMe: false,
+                  tailGutter: false,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final pos = tester.widget<Positioned>(find.byType(Positioned));
+      expect(pos.left, closeTo(100, 1e-6));
+      expect(pos.top, closeTo(40, 1e-6));
     });
   });
 }

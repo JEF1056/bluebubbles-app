@@ -103,6 +103,15 @@ data class HandleDto(
     val originalROWID: Long? = null
 )
 
+data class MessageTranslationDto(
+    val text: String? = null,
+    val sourceLanguage: String? = null,
+    val targetLanguage: String? = null,
+    val provider: String? = null,
+    val autoTranslated: Boolean? = null,
+    val dateTranslated: Long? = null
+)
+
 data class MessageDto(
     val guid: String,
     val tempGuid: String? = null,
@@ -111,13 +120,17 @@ data class MessageDto(
     val dateCreated: Long = 0,
     val dateDelivered: Long? = null,
     val dateRead: Long? = null,
+    val dateEdited: Long? = null,
     val handle: HandleDto? = null,
     val chats: List<ChatRefDto>? = null,
     val attachments: List<AttachmentDto>? = null,
     val associatedMessageGuid: String? = null,
     val associatedMessageType: String? = null,
     val associatedMessageEmoji: String? = null,
-    val attributedBody: JsonElement? = null
+    val attributedBody: JsonElement? = null,
+    val translation: MessageTranslationDto? = null,
+    val balloonBundleId: String? = null,
+    val payloadData: JsonElement? = null
 )
 
 data class ChatRefDto(
@@ -160,6 +173,16 @@ data class ChatRelayDto(
     val pinIndex: Int? = null
 )
 
+data class LinkPreviewDto(
+    val title: String? = null,
+    val subtitle: String? = null,
+    val url: String? = null,
+    val site: String? = null,
+    val imageAttachmentGuid: String? = null,
+    val imageUrl: String? = null,
+    val iconUrl: String? = null
+)
+
 data class MessageRelayDto(
     val guid: String,
     val chatGuid: String,
@@ -169,12 +192,19 @@ data class MessageRelayDto(
     val dateCreated: Long = 0L,
     val dateDelivered: Long? = null,
     val dateRead: Long? = null,
+    val dateEdited: Long? = null,
     val handleAddress: String? = null,
     val attachmentGuid: String? = null,
     val attachmentMimeType: String? = null,
+    val attachments: List<AttachmentDto>? = null,
+    val balloonBundleId: String? = null,
+    val linkPreview: LinkPreviewDto? = null,
     val associatedMessageGuid: String? = null,
     val associatedMessageType: String? = null,
-    val associatedMessageEmoji: String? = null
+    val associatedMessageEmoji: String? = null,
+    val translatedText: String? = null,
+    val translationSourceLang: String? = null,
+    val translationTargetLang: String? = null
 )
 
 data class ContactRelayDto(

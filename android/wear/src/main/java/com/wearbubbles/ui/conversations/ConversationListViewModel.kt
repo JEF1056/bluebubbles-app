@@ -1,6 +1,7 @@
 package com.wearbubbles.ui.conversations
 
 import android.app.Application
+import android.net.ConnectivityManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wearbubbles.WearBubblesApp
@@ -12,14 +13,11 @@ import com.wearbubbles.data.UpdateChecker
 import com.wearbubbles.data.shouldRefreshOnResume
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.db.entities.ChatEntity
-import com.wearbubbles.service.MessageListenerService
-import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -87,20 +85,8 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
         viewModelScope.launch {
             val phoneConnected = relay.refreshPhoneConnected()
             _isPhoneRelay.value = phoneConnected
-            if (!phoneConnected) {
-                val configured = settings.isConfigured.first()
-                if (configured) {
-                    MessageSyncWorker.schedule(application)
-                    MessageListenerService.start(application)
-                } else {
-                    MessageSyncWorker.cancel(application)
-                }
-            } else {
-                MessageSyncWorker.cancel(application)
-                MessageListenerService.stop(application)
-            }
-            refresh()
-            if (!phoneConnected) {
+            refreshInternal()
+            if (shouldPrefetchOnLaunch(metered = isNetworkMetered(), phoneConnected = phoneConnected)) {
                 checkUpdates()
                 prefetchRecentImages()
             }
@@ -124,24 +110,35 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
     fun refresh() {
         if (_isRefreshing.value) return
         viewModelScope.launch {
-            lastRefreshStartedAtMs = System.currentTimeMillis()
-            _isRefreshing.value = true
-            _error.value = null
-            try {
-                // Refresh contacts in parallel without holding the chat-list sync indicator open.
-                viewModelScope.launch { runCatching { contactRepo.refreshContacts() } }
-                val chatResult = chatRepo.refreshChats()
-                chatResult.exceptionOrNull()?.let { err ->
-                    if (_chats.value.isEmpty()) {
-                        _error.value = err.localizedMessage?.take(50) ?: "Refresh failed"
-                    }
-                }
-            } catch (e: Exception) {
-                _error.value = e.localizedMessage?.take(50) ?: "Refresh failed"
-            } finally {
-                _isRefreshing.value = false
-            }
+            refreshInternal()
         }
+    }
+
+    private suspend fun refreshInternal() {
+        if (_isRefreshing.value) return
+        lastRefreshStartedAtMs = System.currentTimeMillis()
+        _isRefreshing.value = true
+        _error.value = null
+        try {
+            // Refresh contacts in parallel without holding the chat-list sync indicator open.
+            viewModelScope.launch { runCatching { contactRepo.refreshContacts() } }
+            val chatResult = chatRepo.refreshChats()
+            chatResult.exceptionOrNull()?.let { err ->
+                if (_chats.value.isEmpty()) {
+                    _error.value = err.localizedMessage?.take(50) ?: "Refresh failed"
+                }
+            }
+        } catch (e: Exception) {
+            _error.value = e.localizedMessage?.take(50) ?: "Refresh failed"
+        } finally {
+            _isRefreshing.value = false
+        }
+    }
+
+    private fun isNetworkMetered(): Boolean {
+        val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java)
+            ?: return false
+        return cm.isActiveNetworkMetered
     }
 
     fun deleteChat(guid: String) {
@@ -218,5 +215,10 @@ class ConversationListViewModel(application: Application) : AndroidViewModel(app
             diff < 604_800_000 -> "${diff / 86_400_000}d"
             else -> "${diff / 604_800_000}w"
         }
+    }
+
+    companion object {
+        internal fun shouldPrefetchOnLaunch(metered: Boolean, phoneConnected: Boolean): Boolean =
+            !phoneConnected && !metered
     }
 }

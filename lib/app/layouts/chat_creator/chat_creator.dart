@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_dialogs.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_utils.dart';
@@ -306,8 +307,8 @@ class ChatCreatorState extends State<ChatCreator> with ThemeHelpers {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           AnimatedSize(
-                            duration: const Duration(milliseconds: 250),
-                            curve: Curves.easeIn,
+                            duration: motionDuration(context, const Duration(milliseconds: 200)),
+                            curve: Curves.easeOutCubic,
                             alignment: Alignment.centerLeft,
                             child: ConstrainedBox(
                               constraints:

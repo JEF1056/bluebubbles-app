@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/typing/typing_indicator.dart';
 import 'package:bluebubbles/app/state/chat_state.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -293,9 +294,13 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
       final hasTyping = material &&
           Get.isRegistered<ConversationViewController>(tag: controller.chat.guid) &&
           Get.find<ConversationViewController>(tag: controller.chat.guid).showTypingIndicator.value;
+      final maxLines = SettingsSvc.settings.denseChatTiles.value ? 1 : 2;
+      final lineHeight = (widget.style.fontSize ?? 14) * (widget.style.height ?? 1.5);
+      final Widget content;
       if (hasTyping) {
-        return Text(
+        content = Text(
           "Typing…",
+          key: const ValueKey(true),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: widget.style.copyWith(
@@ -303,88 +308,83 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
             fontWeight: FontWeight.w400,
           ),
         );
-      }
-      final latestMessage = chatState.latestMessage.value;
-      final isFromMe = latestMessage?.isFromMe ?? false;
-      final isRead = latestMessage?.dateRead != null;
-      final isDelivered =
-          controller.chat.isGroup || !isFromMe || latestMessage?.isDelivered == true || isRead;
-
-      // subtitle.value is already contact-info-free when redacted mode is on
-      // (ChatState.redactContactInfo / updateChatLatestMessage ensure this).
-      final String _subtitle = chatState.subtitle.value ?? '';
-
-      // Draft detection — show "Draft: ..." when there is staged text or attachments.
-      final draftText = chatState.textFieldText.value ?? '';
-      final hasDraftText = draftText.isNotEmpty;
-      final hasDraftAttachments = chatState.textFieldAttachments.isNotEmpty;
-      final hasDraft = hasDraftText || hasDraftAttachments;
-
-      final maxLines = SettingsSvc.settings.denseChatTiles.value ? 1 : 2;
-      final lineHeight = (widget.style.fontSize ?? 14) * (widget.style.height ?? 1.5);
-
-      // For material DMs with a message from me, show a delivery check icon
-      // instead of italic styling — mirrors the Google Messages visual pattern.
-      // Suppress when showing a draft so the layout stays clean.
-      final showDeliveryIcon = material && isFromMe && !controller.chat.isGroup && !hasDraft;
-      final iconColor = isRead ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant;
-
-      final TextSpan subtitleSpan;
-      if (hasDraft) {
-        final draftBody = hasDraftText ? draftText : 'Attachment';
-        final draftRunsJson = chatState.textFieldRuns.value;
-        final draftRuns = hasDraftText ? _draftRuns(draftRunsJson) : const <Run>[];
-        subtitleSpan = TextSpan(children: [
-          TextSpan(
-            text: 'Draft: ',
-            style: widget.style.copyWith(
-              color: context.theme.colorScheme.error,
-              fontStyle: FontStyle.normal,
-            ),
-          ),
-          ...buildMessageRunSpans(
-            text: draftBody,
-            runs: draftRuns,
-            style: widget.style,
-            buildText: (text, style, _) => MessageHelper.buildEmojiText(text, style),
-          ),
-        ]);
       } else {
-        final style = widget.style.copyWith(fontStyle: !iOS && !material && !isDelivered ? FontStyle.italic : null);
-        // Runs only line up when the preview is the message text itself (not redacted, a subject, an attachment...)
-        final body = latestMessage?.attributedBody.firstOrNull;
-        final spans = [
-          if (!iOS && isFromMe) ...MessageHelper.buildEmojiText("You: ", style),
-          ...buildMessageRunSpans(
-            text: _subtitle,
-            runs: body != null && body.string == _subtitle ? body.runs : const [],
-            style: style,
-            buildText: (text, style, _) => MessageHelper.buildEmojiText(text, style),
-          ),
-        ];
-        final inline = _subtitle.contains(objectReplacementChar)
-            ? _inlineAttachments(latestMessage, _subtitle)
-            : const <Attachment?>[];
-        final stickerPlaceholder = inline.isNotEmpty && _cachedLeadingSticker
-            ? (latestMessage?.associatedMessageType == ReactionTypes.STICKER ? "with a sticker" : "a sticker")
-            : null;
-        subtitleSpan = TextSpan(
-          children: inline.isEmpty
-              ? spans
-              : withInlineAttachments(spans, inline, style, leadingPlaceholder: stickerPlaceholder),
+        final latestMessage = chatState.latestMessage.value;
+        final isFromMe = latestMessage?.isFromMe ?? false;
+        final isRead = latestMessage?.dateRead != null;
+        final isDelivered =
+            controller.chat.isGroup || !isFromMe || latestMessage?.isDelivered == true || isRead;
+
+        // subtitle.value is already contact-info-free when redacted mode is on
+        // (ChatState.redactContactInfo / updateChatLatestMessage ensure this).
+        final String _subtitle = chatState.subtitle.value ?? '';
+
+        // Draft detection — show "Draft: ..." when there is staged text or attachments.
+        final draftText = chatState.textFieldText.value ?? '';
+        final hasDraftText = draftText.isNotEmpty;
+        final hasDraftAttachments = chatState.textFieldAttachments.isNotEmpty;
+        final hasDraft = hasDraftText || hasDraftAttachments;
+
+        // For material DMs with a message from me, show a delivery check icon
+        // instead of italic styling — mirrors the Google Messages visual pattern.
+        // Suppress when showing a draft so the layout stays clean.
+        final showDeliveryIcon = material && isFromMe && !controller.chat.isGroup && !hasDraft;
+        final iconColor = isRead ? context.theme.colorScheme.primary : context.theme.colorScheme.onSurfaceVariant;
+
+        final TextSpan subtitleSpan;
+        if (hasDraft) {
+          final draftBody = hasDraftText ? draftText : 'Attachment';
+          final draftRunsJson = chatState.textFieldRuns.value;
+          final draftRuns = hasDraftText ? _draftRuns(draftRunsJson) : const <Run>[];
+          subtitleSpan = TextSpan(children: [
+            TextSpan(
+              text: 'Draft: ',
+              style: widget.style.copyWith(
+                color: context.theme.colorScheme.error,
+                fontStyle: FontStyle.normal,
+              ),
+            ),
+            ...buildMessageRunSpans(
+              text: draftBody,
+              runs: draftRuns,
+              style: widget.style,
+              buildText: (text, style, _) => MessageHelper.buildEmojiText(text, style),
+            ),
+          ]);
+        } else {
+          final style = widget.style.copyWith(fontStyle: !iOS && !material && !isDelivered ? FontStyle.italic : null);
+          // Runs only line up when the preview is the message text itself (not redacted, a subject, an attachment...)
+          final body = latestMessage?.attributedBody.firstOrNull;
+          final spans = [
+            if (!iOS && isFromMe) ...MessageHelper.buildEmojiText("You: ", style),
+            ...buildMessageRunSpans(
+              text: _subtitle,
+              runs: body != null && body.string == _subtitle ? body.runs : const [],
+              style: style,
+              buildText: (text, style, _) => MessageHelper.buildEmojiText(text, style),
+            ),
+          ];
+          final inline = _subtitle.contains(objectReplacementChar)
+              ? _inlineAttachments(latestMessage, _subtitle)
+              : const <Attachment?>[];
+          final stickerPlaceholder = inline.isNotEmpty && _cachedLeadingSticker
+              ? (latestMessage?.associatedMessageType == ReactionTypes.STICKER ? "with a sticker" : "a sticker")
+              : null;
+          subtitleSpan = TextSpan(
+            children: inline.isEmpty
+                ? spans
+                : withInlineAttachments(spans, inline, style, leadingPlaceholder: stickerPlaceholder),
+          );
+        }
+
+        final richText = RichText(
+          text: subtitleSpan,
+          overflow: TextOverflow.ellipsis,
+          maxLines: maxLines,
         );
-      }
 
-      final richText = RichText(
-        text: subtitleSpan,
-        overflow: TextOverflow.ellipsis,
-        maxLines: maxLines,
-      );
-
-      return Padding(
-        padding: const EdgeInsets.only(right: 10),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: lineHeight * (material ? 1 : maxLines)),
+        content = KeyedSubtree(
+          key: const ValueKey(false),
           child: showDeliveryIcon
               ? Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -405,6 +405,17 @@ class _ChatSubtitleState extends CustomState<ChatSubtitle, void, ConversationTil
                   ],
                 )
               : richText,
+        );
+      }
+
+      return Padding(
+        padding: const EdgeInsets.only(right: 10),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: lineHeight * (material ? 1 : maxLines)),
+          child: BlurFadeSwitcher(
+            alignment: AlignmentDirectional.centerStart,
+            child: content,
+          ),
         ),
       );
     });
@@ -436,27 +447,31 @@ class ChatLeadingState extends State<ChatLeading> with ThemeHelpers {
             children: <Widget>[
               Padding(
                 padding: const EdgeInsets.only(top: 2, right: 2),
-                child: widget.controller.isSelected
-                    ? Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(30),
-                          color: context.theme.colorScheme.primary,
-                        ),
-                        width: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
-                        height: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
-                        child: Center(
-                          child: Icon(
-                            Icons.check,
-                            color: context.theme.colorScheme.onPrimary,
-                            size: 26,
+                child: BlurFadeSwitcher(
+                  child: widget.controller.isSelected
+                      ? Container(
+                          key: const ValueKey(true),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(30),
+                            color: context.theme.colorScheme.primary,
                           ),
+                          width: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
+                          height: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
+                          child: Center(
+                            child: Icon(
+                              Icons.check,
+                              color: context.theme.colorScheme.onPrimary,
+                              size: 26,
+                            ),
+                          ),
+                        )
+                      : ContactAvatarGroupWidget(
+                          key: const ValueKey(false),
+                          chat: widget.controller.chat,
+                          size: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
+                          editable: false,
                         ),
-                      )
-                    : ContactAvatarGroupWidget(
-                        chat: widget.controller.chat,
-                        size: SettingsSvc.settings.denseChatTiles.value ? 36 : (material ? 50 : 45),
-                        editable: false,
-                      ),
+                ),
               ),
               if (showTypingIndicator && !material)
                 Positioned(

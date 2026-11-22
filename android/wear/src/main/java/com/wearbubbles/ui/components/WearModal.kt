@@ -20,11 +20,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +51,7 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.wearbubbles.ui.theme.WearRotaryFocusScope
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.WearPillButton
 import com.wearbubbles.ui.theme.centeredTextStyle
 
@@ -68,7 +73,18 @@ enum class WearModalActionStyle {
 
 @Composable
 fun rememberReducedMotion(): Boolean {
-    return remember { !ValueAnimator.areAnimatorsEnabled() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var reduced by remember { mutableStateOf(!ValueAnimator.areAnimatorsEnabled()) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                reduced = !ValueAnimator.areAnimatorsEnabled()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    return reduced
 }
 
 @OptIn(ExperimentalHorologistApi::class)
@@ -90,12 +106,12 @@ fun WearModalScaffold(
         LaunchedEffect(showDialog, reducedMotion) {
             if (!reducedMotion) visible = showDialog
         }
-        val alpha by animateFloatAsState(
+        val alpha = animateFloatAsState(
             targetValue = if (visible) 1f else 0f,
             animationSpec = if (reducedMotion) snap() else tween(160, easing = FastOutSlowInEasing),
             label = "wear_modal_alpha"
         )
-        val scale by animateFloatAsState(
+        val scale = animateFloatAsState(
             targetValue = if (visible) 1f else 0.95f,
             animationSpec = if (reducedMotion) snap() else tween(180, easing = FastOutSlowInEasing),
             label = "wear_modal_scale"
@@ -119,9 +135,9 @@ fun WearModalScaffold(
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer {
-                            this.alpha = alpha
-                            scaleX = scale
-                            scaleY = scale
+                            this.alpha = alpha.value
+                            scaleX = scale.value
+                            scaleY = scale.value
                         }
                 ) {
                     ScalingLazyColumn(
@@ -174,24 +190,34 @@ fun WearModalHeader(
     ) {
         badge()
         Spacer(modifier = Modifier.height(5.dp))
-        Text(
-            text = title,
-            style = centeredTextStyle(15.sp, 18.sp, FontWeight.SemiBold),
-            color = WearModalTextPrimary,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        if (!subtitle.isNullOrBlank()) {
-            Spacer(modifier = Modifier.height(2.dp))
+        BlurFadeContent(
+            targetState = title,
+            contentAlignment = Alignment.Center
+        ) { currentTitle ->
             Text(
-                text = subtitle,
-                style = centeredTextStyle(12.sp, 15.sp),
-                color = WearModalTextSecondary,
+                text = currentTitle,
+                style = centeredTextStyle(15.sp, 18.sp, FontWeight.SemiBold),
+                color = WearModalTextPrimary,
                 textAlign = TextAlign.Center,
-                maxLines = subtitleMaxLines,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+        }
+        if (!subtitle.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(2.dp))
+            BlurFadeContent(
+                targetState = subtitle,
+                contentAlignment = Alignment.Center
+            ) { currentSubtitle ->
+                Text(
+                    text = currentSubtitle,
+                    style = centeredTextStyle(12.sp, 15.sp),
+                    color = WearModalTextSecondary,
+                    textAlign = TextAlign.Center,
+                    maxLines = subtitleMaxLines,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

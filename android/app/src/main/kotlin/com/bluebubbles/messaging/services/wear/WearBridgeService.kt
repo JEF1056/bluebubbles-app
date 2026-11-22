@@ -108,6 +108,16 @@ class WearBridgeService : WearableListenerService() {
                 val chatGuid = parseJson(dataStr)?.str("chatGuid") ?: return
                 WearSyncManager.handleOpenChatFromWatch(applicationContext, chatGuid)
             }
+            WearSyncManager.PATH_TRANSLATE_MESSAGE -> {
+                val obj = parseJson(dataStr) ?: return
+                val messageGuid = obj.str("messageGuid") ?: return
+                WearSyncManager.translateMessage(
+                    context = applicationContext,
+                    nodeId = nodeId,
+                    messageGuid = messageGuid,
+                    requestId = obj.str("requestId")
+                )
+            }
         }
     }
 

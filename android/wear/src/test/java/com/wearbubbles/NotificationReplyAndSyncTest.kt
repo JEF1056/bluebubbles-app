@@ -253,6 +253,23 @@ class NotificationReplyAndSyncTest {
 
         override suspend fun existsByGuid(guid: String): Boolean = rows.containsKey(guid)
 
+        override suspend fun getByGuid(guid: String): MessageEntity? = rows[guid]
+
+        override suspend fun updateTranslation(
+            guid: String,
+            translatedText: String?,
+            sourceLang: String?,
+            targetLang: String?
+        ) {
+            val existing = rows[guid] ?: return
+            rows[guid] = existing.copy(
+                translatedText = translatedText,
+                translationSourceLang = sourceLang,
+                translationTargetLang = targetLang
+            )
+            publish()
+        }
+
         override suspend fun countForChat(chatGuid: String): Int =
             rows.values.count { it.chatGuid == chatGuid }
 

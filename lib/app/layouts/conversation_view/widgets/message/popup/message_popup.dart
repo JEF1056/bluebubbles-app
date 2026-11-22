@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:ui';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
 import 'package:bluebubbles/app/components/subscription_required.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/popup/actions/media_actions.dart'
@@ -738,8 +739,8 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                       left: 15,
                       right: 15,
                       child: AnimatedSize(
-                        duration: M3EMotion.spatialDefault.duration,
-                        curve: M3EMotion.spatialOvershoot,
+                        duration: motionDuration(context, const Duration(milliseconds: 200)),
+                        curve: Curves.easeOutCubic,
                         alignment: Alignment.center,
                         child: reactions.isNotEmpty
                             ? KeyedSubtree(key: _detailsKey, child: ReactionDetails(reactions: reactions))
@@ -752,9 +753,9 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                       right: isFromMe ? 15 : null,
                       left: !isFromMe ? clampedOverlayLeft : null,
                       child: AnimatedSize(
-                        curve: M3EMotion.spatialFast.curve,
+                        curve: Curves.easeOutCubic,
                         alignment: isFromMe ? Alignment.centerRight : Alignment.centerLeft,
-                        duration: M3EMotion.spatialFast.duration,
+                        duration: motionDuration(context, const Duration(milliseconds: 200)),
                         child: currentlySelectedReaction == "init"
                             ? const SizedBox(height: 80)
                             : _withAddEmojiCircle(
@@ -1016,6 +1017,14 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
         DetailsMenuActionWidget(
           onTap: () => popup_text_actions.copyText(_buildActionContext(DetailsMenuAction.CopyText)),
           action: DetailsMenuAction.CopyText,
+        ),
+      if (!(message.isFromMe ?? false) && !isNullOrEmptyString(part.text))
+        DetailsMenuActionWidget(
+          onTap: () => popup_text_actions.translateMessage(_buildActionContext(DetailsMenuAction.Translate)),
+          action: DetailsMenuAction.Translate,
+          customTitle: widget.controller.translation.value != null
+              ? (widget.controller.showOriginalTranslation.value ? "Show Translation" : "Show Original")
+              : null,
         ),
       if (showDownload)
         DetailsMenuActionWidget(

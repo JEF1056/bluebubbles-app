@@ -116,6 +116,15 @@ class MessageState extends StatefulController {
   /// Whether to show previous edits for this message
   final RxBool showEdits = false.obs;
 
+  /// Reactive message translation (from [message.metadata['translation']])
+  final Rxn<MessageTranslation> translation = Rxn<MessageTranslation>(null);
+
+  /// Whether the user has toggled to view the original text instead of the translation
+  final RxBool showOriginalTranslation = false.obs;
+
+  /// Whether a translation request is currently in-flight for this message
+  final RxBool isTranslating = false.obs;
+
   /// Set by [MessagesService] when this outgoing message is the newest one
   /// whose [dateRead] is non-null.  Drives the "Read" indicator.
   final RxBool showReadIndicator = false.obs;
@@ -310,6 +319,7 @@ class MessageState extends StatefulController {
         isSent = (!(message.guid?.startsWith('temp') ?? false)).obs,
         isReaction = message.isReaction.obs,
         hasEffectPlayed = message.hasEffectPlayed.obs {
+    translation.value = message.translation;
     // Create AttachmentState for every attachment already on the message.
     for (final attachment in message.dbAttachments) {
       if (attachment.guid != null) {
@@ -775,6 +785,7 @@ class MessageState extends StatefulController {
     // A local delete isn't the server's to undo.
     message.dateDeleted = updatedMessage.dateDeleted ?? message.dateDeleted;
     message.metadata = updatedMessage.metadata;
+    translation.value = updatedMessage.translation;
     message.bigEmoji = updatedMessage.bigEmoji;
     message.hasApplePayloadData = updatedMessage.hasApplePayloadData;
     message.isBookmarked = updatedMessage.isBookmarked;

@@ -6,8 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.SettingsDataStore
-import com.wearbubbles.service.MessageListenerService
-import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -127,12 +125,8 @@ class SetupViewModel(application: Application) : AndroidViewModel(application) {
                 val response = api.ping(pass)
                 if (response.status == 200) {
                     settings.saveDirectCredentials(url, pass)
-                    if (!relay.refreshPhoneConnected(force = true)) {
-                        MessageSyncWorker.schedule(getApplication())
-                        MessageListenerService.start(getApplication())
-                    } else {
-                        MessageSyncWorker.cancel(getApplication())
-                    }
+                    relay.refreshPhoneConnected(force = true)
+                    app.foregroundSocketSession.start(app)
                     _uiState.value = _uiState.value.copy(isTesting = false, isSuccess = true)
                 } else {
                     _uiState.value = _uiState.value.copy(

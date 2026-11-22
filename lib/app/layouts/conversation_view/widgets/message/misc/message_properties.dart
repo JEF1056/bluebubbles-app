@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
@@ -97,9 +98,9 @@ class _MessagePropertiesState extends State<MessageProperties> with ThemeHelpers
         fallbackColor: context.theme.colorScheme.primary,
       );
       return AnimatedSize(
-        curve: Curves.easeInOut,
+        curve: Curves.easeOutCubic,
         alignment: Alignment.bottomCenter,
-        duration: const Duration(milliseconds: 250),
+        duration: motionDuration(context, const Duration(milliseconds: 200)),
         child: props.isNotEmpty
             ? Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 15).add(const EdgeInsets.only(top: 3)),

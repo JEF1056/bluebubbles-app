@@ -44,3 +44,4 @@ export 'package:bluebubbles/database/global/scheduled_message.dart';
 export 'package:bluebubbles/database/global/findmy_device.dart';
 export 'package:bluebubbles/database/global/findmy_friend.dart';
 export 'package:bluebubbles/database/global/server_payload.dart';
+export 'package:bluebubbles/database/global/models/message_translation.dart';

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/send_effect_picker.dart';
@@ -127,40 +128,41 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
 
           return Padding(
             padding: EdgeInsets.all(isMaterial ? 0.0 : 3.0),
-            child: AnimatedCrossFade(
-              alignment: Alignment.center,
-              crossFadeState: canSend && !showRecording ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-              duration: const Duration(milliseconds: 150),
-              firstChild: _RecordingButton(
-                isWeb: _isWeb,
-                isDesktop: _isDesktop,
-                isChatCreator: isChatCreator,
-                alwaysShowSend: alwaysShowSend,
-                showRecording: showRecording,
-                controller: widget.controller,
-                recorderController: widget.recorderController,
-                audioRecorder: audioRecorder,
-                onDeleteRecording: deleteAudioRecording,
-              ),
-              secondChild: SendButton(
-                sendMessage: widget.sendMessage,
-                onLongPress: () {
-                  if (widget.controller!.scheduledDate.value != null) return;
-                  sendEffectAction(
-                    context,
-                    widget.controller!,
-                    widget.textController.text,
-                    widget.subjectTextController?.text.trim() ?? "",
-                    widget.controller!.replyToMessage?.message.guid,
-                    widget.controller!.replyToMessage?.partIndex,
-                    widget.controller!.chat.guid,
-                    widget.sendMessage,
-                    widget.textController is MentionTextEditingController
-                        ? (widget.textController as MentionTextEditingController).sendableRuns
-                        : const [],
-                  );
-                },
-              ),
+            child: BlurFadeSwitcher(
+              animateSize: true,
+              child: canSend && !showRecording
+                  ? SendButton(
+                      key: const ValueKey('send'),
+                      sendMessage: widget.sendMessage,
+                      onLongPress: () {
+                        if (widget.controller!.scheduledDate.value != null) return;
+                        sendEffectAction(
+                          context,
+                          widget.controller!,
+                          widget.textController.text,
+                          widget.subjectTextController?.text.trim() ?? "",
+                          widget.controller!.replyToMessage?.message.guid,
+                          widget.controller!.replyToMessage?.partIndex,
+                          widget.controller!.chat.guid,
+                          widget.sendMessage,
+                          widget.textController is MentionTextEditingController
+                              ? (widget.textController as MentionTextEditingController).sendableRuns
+                              : const [],
+                        );
+                      },
+                    )
+                  : _RecordingButton(
+                      key: const ValueKey('rec'),
+                      isWeb: _isWeb,
+                      isDesktop: _isDesktop,
+                      isChatCreator: isChatCreator,
+                      alwaysShowSend: alwaysShowSend,
+                      showRecording: showRecording,
+                      controller: widget.controller,
+                      recorderController: widget.recorderController,
+                      audioRecorder: audioRecorder,
+                      onDeleteRecording: deleteAudioRecording,
+                    ),
             ),
           );
         });
@@ -182,6 +184,7 @@ class _TextFieldSuffixState extends State<TextFieldSuffix> with ThemeHelpers {
 /// unnecessary rebuilds of the complex recording UI
 class _RecordingButton extends StatefulWidget {
   const _RecordingButton({
+    super.key,
     required this.isWeb,
     required this.isDesktop,
     required this.isChatCreator,

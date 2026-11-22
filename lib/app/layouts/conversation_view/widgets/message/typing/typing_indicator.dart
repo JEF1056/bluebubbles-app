@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e_shapes.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/typing/typing_clipper.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
@@ -158,8 +158,8 @@ class _TypingIndicatorState extends State<TypingIndicator> with SingleTickerProv
   @override
   Widget build(BuildContext context) {
     return AnimatedSize(
-      duration: iOS ? const Duration(milliseconds: 200) : M3EMotion.spatialFast.duration,
-      curve: iOS ? Curves.easeOut : M3EMotion.spatialFast.curve,
+      duration: motionDuration(context, const Duration(milliseconds: 200)),
+      curve: Curves.easeOutCubic,
       child: _isShowing
           ? ScaleTransition(
               scale: _scaleAnimation,

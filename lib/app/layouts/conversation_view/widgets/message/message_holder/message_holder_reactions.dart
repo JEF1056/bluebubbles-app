@@ -5,7 +5,6 @@ import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reaction/reaction_holder.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
-import 'package:bluebubbles/models/models.dart' show StickerPlacement;
 import 'package:bluebubbles/services/ui/chat/conversation_view_controller.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -258,38 +257,31 @@ class StickerObserver extends StatelessWidget {
     super.key,
     required this.part,
     required this.cvController,
-    this.placed = false,
   });
 
   final MessagePart part;
   final ConversationViewController cvController;
 
-  /// Only stickers with a sender placement (filling the bubble's Stack), or only those without
-  final bool placed;
-
   @override
   Widget build(BuildContext context) {
     // Media collection items render their own per-card placed stickers (CollectionAttachmentStickers),
     // matching how CollectionAttachmentReactions owns per-card tapbacks.
-    if (placed && part.isMediaCollection) return const SizedBox.shrink();
+    if (part.isMediaCollection) return const SizedBox.shrink();
     final state = MessageStateScope.of(context);
     return Obx(() {
-      final stickersForPart = state
-          .stickersForBubble(part)
-          .where((e) => e.dbAttachments.any((a) => StickerPlacement.tryParse(a.stickerPlacement) != null) == placed)
-          .toList();
+      final stickersForPart = state.stickersForBubble(part);
 
       if (stickersForPart.isEmpty) return const SizedBox.shrink();
 
-      final holder = StickerHolder(
-        stickerMessages: stickersForPart,
-        controller: cvController,
-        placed: placed,
-        hidden: state.showingPopup.value,
-        isFromMe: state.message.isFromMe ?? false,
-        tailGutter: CurrentSkin.iOS && !part.isMediaCollection,
+      return Positioned.fill(
+        child: StickerHolder(
+          stickerMessages: stickersForPart,
+          controller: cvController,
+          hidden: state.showingPopup.value,
+          isFromMe: state.message.isFromMe ?? false,
+          tailGutter: CurrentSkin.iOS && !part.isMediaCollection,
+        ),
       );
-      return placed ? Positioned.fill(child: holder) : holder;
     });
   }
 }

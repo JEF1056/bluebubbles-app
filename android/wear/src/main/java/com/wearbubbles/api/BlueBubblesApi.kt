@@ -1,6 +1,7 @@
 package com.wearbubbles.api
 
 import com.google.gson.JsonElement
+import com.google.gson.JsonObject
 import com.wearbubbles.api.dto.ApiResponse
 import com.wearbubbles.api.dto.ChatDto
 import com.wearbubbles.api.dto.ChatQueryRequest
@@ -69,6 +70,12 @@ interface BlueBubblesApi {
         @Query("password") password: String,
         @Body body: ReactRequest
     ): ApiResponse<MessageDto>
+
+    @POST("/api/v1/message/{guid}/translate")
+    suspend fun translateMessage(
+        @Path("guid") guid: String,
+        @Query("password") password: String
+    ): ApiResponse<JsonObject>
 
     @Multipart
     @POST("/api/v1/message/attachment")

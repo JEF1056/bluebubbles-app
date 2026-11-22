@@ -12,7 +12,7 @@ import com.wearbubbles.db.entities.MessageEntity
 
 @Database(
     entities = [ChatEntity::class, MessageEntity::class, ContactEntity::class],
-    version = 10,
+    version = 12,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,6 +37,23 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN translatedText TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN translationSourceLang TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN translationTargetLang TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN dateEdited INTEGER")
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentsJson TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN balloonBundleId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN linkPreviewJson TEXT")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -44,7 +61,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "wearbubbles.db"
                 )
-                    .addMigrations(MIGRATION_8_9, MIGRATION_9_10)
+                    .addMigrations(MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }

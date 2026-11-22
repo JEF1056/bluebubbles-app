@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator.dart' show SelectedContact;
 import 'package:bluebubbles/app/layouts/chat_creator/chat_creator_controller.dart';
 import 'package:bluebubbles/app/layouts/chat_creator/widgets/recipient_chips_row.dart';
@@ -122,11 +123,11 @@ class _AnimatedHeader extends StatelessWidget {
     return Obx(() {
       final visible = controller.isHeaderVisible.value;
       return AnimatedSize(
-        duration: const Duration(milliseconds: 300),
+        duration: motionDuration(context, const Duration(milliseconds: 300)),
         curve: Curves.easeInOut,
         child: AnimatedOpacity(
           opacity: visible ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 200),
+          duration: motionDuration(context, const Duration(milliseconds: 200)),
           child: visible
               ? Column(
                   mainAxisSize: MainAxisSize.min,

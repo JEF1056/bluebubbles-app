@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/database/global/attributed_body.dart';
 import 'package:bluebubbles/database/global/message_summary_info.dart';
+import 'package:bluebubbles/database/global/models/message_translation.dart';
 import 'package:bluebubbles/database/global/payload_data.dart';
 import 'package:bluebubbles/database/html/attachment.dart';
 import 'package:bluebubbles/database/html/chat.dart';
@@ -106,6 +107,13 @@ class Message {
 
   String? get dbMetadata => metadata == null ? null : jsonEncode(metadata);
   set dbMetadata(String? json) => metadata = json == null ? null : jsonDecode(json) as Map<String, dynamic>;
+
+  MessageTranslation? get translation {
+    final raw = metadata?['translation'];
+    if (raw is Map<String, dynamic>) return MessageTranslation.fromJson(raw);
+    if (raw is Map) return MessageTranslation.fromJson(Map<String, dynamic>.from(raw));
+    return null;
+  }
 
   bool get isKeptAudio => itemType == 5 && subject != null;
 
@@ -222,6 +230,9 @@ class Message {
         metadata = json["metadata"]?.cast<String, dynamic>();
       }
     }
+    if (json['translation'] is Map) {
+      metadata['translation'] = Map<String, dynamic>.from(json['translation'] as Map);
+    }
 
     List<MessageSummaryInfo> msi = [];
     try {
@@ -280,8 +291,10 @@ class Message {
       groupActionType: json["groupActionType"] ?? 0,
       balloonBundleId: json["balloonBundleId"],
       associatedMessageGuid: json["associatedMessageGuid"]?.toString().replaceAll("bp:", "").split("/").last,
-      associatedMessagePart: json["associatedMessagePart"] ??
-          int.tryParse(json["associatedMessageGuid"].toString().replaceAll("p:", "").split("/").first),
+      associatedMessagePart: (json["associatedMessagePart"] is int
+              ? json["associatedMessagePart"] as int
+              : int.tryParse(json["associatedMessagePart"]?.toString() ?? "")) ??
+          int.tryParse(json["associatedMessageGuid"]?.toString().replaceAll("bp:", "").replaceAll("p:", "").split("/").first ?? ""),
       associatedMessageType: json["associatedMessageType"],
       associatedMessageEmoji: json["associatedMessageEmoji"],
       expressiveSendStyleId: json["expressiveSendStyleId"],
@@ -827,6 +840,10 @@ class Message {
     }
 
     existing.metadata = mergeTopLevelDicts(existing.metadata, newMessage.metadata);
+    if (newMessage.metadata?['translation'] != null) {
+      existing.metadata ??= {};
+      existing.metadata!['translation'] = newMessage.metadata!['translation'];
+    }
 
     if (existing.originalROWID == null && newMessage.originalROWID != null) {
       existing.originalROWID = newMessage.originalROWID;
@@ -949,7 +966,12 @@ class Message {
       (associatedMessageEmoji != null && stored.associatedMessageEmoji == null) ||
       (service != null && stored.service == null) ||
       (datePlayed != null && stored.datePlayed == null) ||
-      (country != null && stored.country == null);
+      (country != null && stored.country == null) ||
+      (translation != null &&
+          (stored.translation == null ||
+              (translation!.dateTranslated != null &&
+                  (stored.translation!.dateTranslated == null ||
+                      translation!.dateTranslated!.isAfter(stored.translation!.dateTranslated!)))));
 
   Map<String, dynamic> toMap() {
     return {

@@ -2,6 +2,7 @@ import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/ui/reaction_helpers.dart';
 import 'package:bluebubbles/helpers/types/helpers/message_helper.dart';
+import 'package:bluebubbles/helpers/types/helpers/misc_helpers.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 
 class MessageActions {
@@ -91,6 +92,11 @@ class MessageActions {
         existing.associatedMessageGuid = inputNewMessage.associatedMessageGuid ?? existing.associatedMessageGuid;
       }
       existing.associatedMessageType = type;
+      existing.metadata = mergeTopLevelDicts(existing.metadata, inputNewMessage.metadata);
+      if (inputNewMessage.metadata?['translation'] != null) {
+        existing.metadata ??= {};
+        existing.metadata!['translation'] = inputNewMessage.metadata!['translation'];
+      }
 
       try {
         messageBox.put(existing, mode: PutMode.update);

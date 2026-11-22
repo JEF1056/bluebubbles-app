@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/imessage_stats/imessage_stats_helpers.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/server_management_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/widgets/settings_widgets.dart';
@@ -210,16 +211,7 @@ class _MaterialIMessageStatsPageState
         Obx(() {
           final isLoading = controller.isActiveStatsLoading();
           return IconButton(
-            icon: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 280),
-              switchInCurve: Curves.easeOutCubic,
-              switchOutCurve: Curves.easeInCubic,
-              transitionBuilder: (child, animation) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: ScaleTransition(scale: Tween<double>(begin: 0.92, end: 1.0).animate(animation), child: child),
-                );
-              },
+            icon: BlurFadeSwitcher(
               child: isLoading
                   ? SizedBox(
                       key: const ValueKey('loading'),

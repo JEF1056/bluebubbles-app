@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
@@ -245,7 +246,12 @@ class _SendButtonIcon extends StatelessWidget {
               : null,
         ),
         alignment: Alignment.center,
-        child: iconContent,
+        child: BlurFadeSwitcher(
+          child: KeyedSubtree(
+            key: ValueKey((isAnimating, scheduled, materialStyle?.badge, skin)),
+            child: iconContent,
+          ),
+        ),
       );
     });
   }

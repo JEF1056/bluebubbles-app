@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:collection/collection.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/buttons/text_field_button.dart';
@@ -290,9 +291,9 @@ class TextFieldComponentState extends State<TextFieldComponent> {
                           reverse: true,
                           physics: const ClampingScrollPhysics(),
                           child: AnimatedSize(
-                            duration: const Duration(milliseconds: 250),
+                            duration: motionDuration(context, const Duration(milliseconds: 200)),
                             alignment: Alignment.bottomCenter,
-                            curve: Curves.easeOut,
+                            curve: Curves.easeOutCubic,
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -855,8 +856,8 @@ class TextFieldComponentState extends State<TextFieldComponent> {
             ]),
           ),
           AnimatedSize(
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeIn,
+            duration: motionDuration(context, const Duration(milliseconds: 200)),
+            curve: Curves.easeOutCubic,
             alignment: Alignment.bottomCenter,
             child: pickerChild,
           ),

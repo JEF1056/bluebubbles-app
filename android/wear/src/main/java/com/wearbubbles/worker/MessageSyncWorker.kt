@@ -4,11 +4,9 @@ import android.content.Context
 import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -19,7 +17,6 @@ import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.NotificationHelper
 import kotlinx.coroutines.flow.first
-import java.util.concurrent.TimeUnit
 
 class MessageSyncWorker(
     context: Context,
@@ -34,24 +31,6 @@ class MessageSyncWorker(
 
         internal fun shouldSkipSync(isSocketConnected: Boolean, force: Boolean): Boolean =
             isSocketConnected && !force
-
-        fun schedule(context: Context) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .build()
-
-            val request = PeriodicWorkRequestBuilder<MessageSyncWorker>(
-                30, TimeUnit.MINUTES
-            )
-                .setConstraints(constraints)
-                .build()
-
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                WORK_NAME,
-                ExistingPeriodicWorkPolicy.UPDATE,
-                request
-            )
-        }
 
         fun runOnce(context: Context) {
             val constraints = Constraints.Builder()

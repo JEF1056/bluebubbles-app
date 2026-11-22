@@ -165,7 +165,7 @@ object NotificationHelper {
             "Background Connection",
             NotificationManager.IMPORTANCE_MIN
         ).apply {
-            description = "Keeps WearBubbles connected in standalone mode"
+            description = "Background tasks"
             setShowBadge(false)
         }
 

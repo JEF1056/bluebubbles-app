@@ -4,6 +4,8 @@ import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.ChatRepository
 import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.relay.PhoneRelayClient
+import com.wearbubbles.socket.SocketManager
+import com.wearbubbles.ui.conversations.ConversationListViewModel
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
 import okhttp3.Request
@@ -76,6 +78,7 @@ class OptWearDataTest {
 
     @Test
     fun `apiClient custom headers interceptor scopes headers to configured server origin`() {
+        assertTrue(ApiClient.okHttpClient.dns === SocketManager.ipv4FirstDns)
         val observedSecrets = mutableListOf<String?>()
         val observedNgrok = mutableListOf<String?>()
         val testClient = ApiClient.okHttpClient.newBuilder()
@@ -112,5 +115,13 @@ class OptWearDataTest {
         } finally {
             ApiClient.reset()
         }
+    }
+
+    @Test
+    fun `shouldPrefetchOnLaunch runs only when standalone and unmetered`() {
+        assertTrue(ConversationListViewModel.shouldPrefetchOnLaunch(metered = false, phoneConnected = false))
+        assertFalse(ConversationListViewModel.shouldPrefetchOnLaunch(metered = true, phoneConnected = false))
+        assertFalse(ConversationListViewModel.shouldPrefetchOnLaunch(metered = false, phoneConnected = true))
+        assertFalse(ConversationListViewModel.shouldPrefetchOnLaunch(metered = true, phoneConnected = true))
     }
 }

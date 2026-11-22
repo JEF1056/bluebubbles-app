@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/custom/custom_bouncing_scroll_physics.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/attachment_holder.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/sticker_holder.dart';
@@ -129,13 +130,11 @@ class MessagePartWrapper extends StatelessWidget {
         ),
         // show stickers on top
         if (stickers.isNotEmpty)
-          Positioned(
-            top: 0,
-            left: message.isFromMe! ? null : 0,
-            right: message.isFromMe! ? 0 : null,
+          Positioned.fill(
             child: StickerHolder(
               stickerMessages: stickers,
               controller: cvController,
+              isFromMe: message.isFromMe ?? false,
             ),
           ),
         // show reactions on top
@@ -212,9 +211,9 @@ class _MessageContentBubble extends StatelessWidget {
               final editStuff = cvController.editing
                   .firstWhereOrNull((e2) => e2.message.guid == message.guid! && e2.part.part == part.part);
               return AnimatedSize(
-                duration: const Duration(milliseconds: 250),
+                duration: motionDuration(context, const Duration(milliseconds: 200)),
                 alignment: Alignment.centerRight,
-                curve: Curves.easeOutBack,
+                curve: Curves.easeOutCubic,
                 child: editStuff == null
                     ? const SizedBox.shrink()
                     : _EditModeTextField(

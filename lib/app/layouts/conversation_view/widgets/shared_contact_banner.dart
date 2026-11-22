@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart';
@@ -184,7 +185,7 @@ class _SharedContactBannerState extends State<SharedContactBanner> {
             ),
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             child: AnimatedSize(
-              duration: const Duration(milliseconds: 250),
+              duration: motionDuration(context, const Duration(milliseconds: 250)),
               curve: Curves.easeOutCubic,
               alignment: Alignment.topCenter,
               child: Column(mainAxisSize: MainAxisSize.min, children: cards),

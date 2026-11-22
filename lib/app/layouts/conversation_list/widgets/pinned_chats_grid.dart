@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/drop_flight.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/pin_drag_controller.dart';
@@ -126,7 +127,7 @@ class _PinnedChatsGridState extends State<PinnedChatsGrid> {
   Widget build(BuildContext context) {
     return SliverToBoxAdapter(
       child: AnimatedSize(
-        duration: const Duration(milliseconds: 250),
+        duration: motionDuration(context, const Duration(milliseconds: 200)),
         curve: Curves.easeOutCubic,
         alignment: Alignment.topCenter,
         // The pins themselves: only chat and settings changes refilter them.

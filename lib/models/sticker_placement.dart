@@ -21,6 +21,24 @@ class StickerPlacement {
     required this.parentPreviewWidth,
   });
 
+  /// Safe centered fallback when an ancient sticker lacks placement metadata
+  static const StickerPlacement centeredDefault = StickerPlacement(
+    xScalar: 0.5,
+    yScalar: 0.5,
+    scale: 1.0,
+    rotation: 0.0,
+    parentPreviewWidth: 0,
+  );
+
+  bool get isValid =>
+      xScalar.isFinite &&
+      yScalar.isFinite &&
+      scale.isFinite &&
+      scale > 0 &&
+      rotation.isFinite &&
+      parentPreviewWidth.isFinite &&
+      parentPreviewWidth >= 0;
+
   /// The placement in [json], or null when any of its values is missing or not a finite number,
   /// since a sticker can't be laid out from part of one
   static StickerPlacement? tryParse(Object? json) {

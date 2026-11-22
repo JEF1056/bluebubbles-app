@@ -22,5 +22,12 @@ data class MessageEntity(
     val associatedMessageEmoji: String? = null,
     val sendFailed: Boolean = false,
     val dateDelivered: Long? = null,
-    val dateRead: Long? = null
+    val dateRead: Long? = null,
+    val translatedText: String? = null,
+    val translationSourceLang: String? = null,
+    val translationTargetLang: String? = null,
+    val dateEdited: Long? = null,
+    val attachmentsJson: String? = null,
+    val balloonBundleId: String? = null,
+    val linkPreviewJson: String? = null
 )

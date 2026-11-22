@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
@@ -166,10 +167,15 @@ class _MaterialHeaderState extends CustomState<MaterialHeader, void, Conversatio
                               ),
                             ),
                             const SizedBox(width: 10),
-                            Text(
-                              controller.selectedChats.length.toString(),
-                              style: context.theme.textTheme.titleLarge!.copyWith(
-                                color: context.theme.colorScheme.primary,
+                            BlurFadeSwitcher(
+                              alignment: AlignmentDirectional.centerStart,
+                              animateSize: true,
+                              child: Text(
+                                controller.selectedChats.length.toString(),
+                                key: ValueKey(controller.selectedChats.length),
+                                style: context.theme.textTheme.titleLarge!.copyWith(
+                                  color: context.theme.colorScheme.primary,
+                                ),
                               ),
                             ),
                           ],

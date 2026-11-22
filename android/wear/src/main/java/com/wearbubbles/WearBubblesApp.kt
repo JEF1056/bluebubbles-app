@@ -14,8 +14,10 @@ import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
+import com.wearbubbles.service.ForegroundSocketSession
 import com.wearbubbles.socket.SocketEvent
 import com.wearbubbles.socket.SocketManager
+import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,6 +32,7 @@ class WearBubblesApp : Application(), ImageLoaderFactory {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val socketManager = SocketManager()
+    val foregroundSocketSession = ForegroundSocketSession()
     lateinit var phoneRelayClient: PhoneRelayClient
         private set
 
@@ -37,6 +40,8 @@ class WearBubblesApp : Application(), ImageLoaderFactory {
         super.onCreate()
         phoneRelayClient = PhoneRelayClient(this)
         NotificationHelper.createChannels(this)
+        // Purge legacy periodic sync work from upgraded installs.
+        MessageSyncWorker.cancel(this)
         observeSocketPersistence()
     }
 

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'package:bluebubbles/helpers/ui/recent_emojis.dart';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/platform/shims/native_media.dart';
 import 'package:bluebubbles/app/components/custom_text_editing_controllers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/open_pigeon_view.dart';
@@ -558,8 +559,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                   );
                 }
                 return AnimatedSize(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOut,
+                  duration: motionDuration(context, const Duration(milliseconds: 200)),
+                  curve: Curves.easeOutCubic,
                   alignment: Alignment.bottomCenter,
                   child: pickerChild,
                 );

@@ -14,6 +14,7 @@ import com.wearbubbles.api.dto.TapbackType
 import com.wearbubbles.api.dto.TapbackUtils
 import com.wearbubbles.data.ChatRepository
 import com.wearbubbles.data.ContactRepository
+import com.wearbubbles.data.LinkPreviewHelper
 import com.wearbubbles.data.MessageRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.data.shouldRefreshOnResume
@@ -22,6 +23,8 @@ import com.wearbubbles.db.MessageDao
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.RelayEvent
 import com.wearbubbles.socket.SocketEvent
+import com.wearbubbles.worker.ReplySendWorker
+import com.wearbubbles.worker.shouldRetrySend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -43,6 +46,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Collections
+import java.util.UUID
 
 internal fun shouldExposeDirectAttachmentUrl(
     isPhoneConnected: Boolean,
@@ -55,6 +59,31 @@ internal fun shouldExposeDirectAttachmentUrl(
     if (attachmentGuid.isNullOrBlank() || serverUrl.isBlank() || password.isBlank()) return false
     return true
 }
+
+data class AttachmentUi(
+    val guid: String,
+    val mimeType: String?,
+    val url: String?,
+    val localPath: String?,
+    val transferName: String? = null,
+    val isLoading: Boolean = false,
+    val isFetchFailed: Boolean = false
+) {
+    val isImage: Boolean get() = mimeType?.startsWith("image/") == true
+    val isAudio: Boolean get() = mimeType?.startsWith("audio/") == true
+}
+
+data class LinkPreviewUi(
+    val title: String?,
+    val subtitle: String?,
+    val url: String?,
+    val site: String?,
+    val imageAttachmentGuid: String? = null,
+    val imageUrl: String? = null,
+    val localImagePath: String? = null,
+    val isImageLoading: Boolean = false,
+    val iconUrl: String? = null
+)
 
 data class MessageUi(
     val guid: String,
@@ -73,11 +102,21 @@ data class MessageUi(
     val customHeaders: Map<String, String>,
     val isLatestOutgoing: Boolean,
     val isLastReadOutgoing: Boolean = false,
+    val isLastDeliveredOutgoing: Boolean = false,
+    val isLastSentOutgoing: Boolean = false,
     val isLatestIncoming: Boolean = false,
     val handleAddress: String? = null,
     val isAttachmentLoading: Boolean = false,
     val isAttachmentFetchFailed: Boolean = false,
-    val isPhoneConnected: Boolean = false
+    val isPhoneConnected: Boolean = false,
+    val dateEdited: Long = 0L,
+    val translatedText: String? = null,
+    val translationSourceLang: String? = null,
+    val translationTargetLang: String? = null,
+    val showOriginalTranslation: Boolean = false,
+    val isTranslating: Boolean = false,
+    val attachments: List<AttachmentUi> = emptyList(),
+    val linkPreview: LinkPreviewUi? = null
 )
 
 class MessageDetailViewModel(application: Application) : AndroidViewModel(application) {
@@ -116,6 +155,9 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     private val _messages = MutableStateFlow<List<MessageUi>>(emptyList())
     val messages: StateFlow<List<MessageUi>> = _messages.asStateFlow()
 
+    private val _showOriginalGuids = MutableStateFlow<Set<String>>(emptySet())
+    private val _translatingGuids = MutableStateFlow<Set<String>>(emptySet())
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -146,6 +188,9 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
 
     fun deleteFailedMessage(guid: String) {
         viewModelScope.launch {
+            if (guid.startsWith("temp-")) {
+                ReplySendWorker.cancel(app, guid)
+            }
             messageRepo.deleteMessage(guid)
         }
     }
@@ -153,6 +198,9 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     fun deleteAllFailedMessages() {
         if (chatGuid.isBlank()) return
         viewModelScope.launch {
+            _messages.value
+                .filter { it.sendFailed && it.guid.startsWith("temp-") }
+                .forEach { ReplySendWorker.cancel(app, it.guid) }
             messageRepo.deleteFailedMessages(chatGuid)
         }
     }
@@ -160,18 +208,14 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     fun retryFailedMessage(msg: MessageUi) {
         val text = msg.text?.trim()?.takeIf { it.isNotBlank() } ?: return
         viewModelScope.launch {
-            messageRepo.deleteMessage(msg.guid)
-            _isSending.value = true
-            _error.value = null
-            val res = messageRepo.sendMessage(chatGuid, text)
-            if (res.isFailure) {
-                _error.value = res.exceptionOrNull()?.localizedMessage?.take(50) ?: "Failed to send"
+            val tempGuid = if (msg.guid.startsWith("temp-")) {
+                ReplySendWorker.cancel(app, msg.guid)
+                msg.guid
             } else {
-                val resolvedGuid = res.getOrNull()?.chatGuid ?: chatGuid
-                switchChatGuidIfResolved(resolvedGuid)
-                markChatReadIfResumed(resolvedGuid)
+                messageRepo.deleteMessage(msg.guid)
+                "temp-${UUID.randomUUID()}"
             }
-            _isSending.value = false
+            sendWithRetryFallback(text, tempGuid)
         }
     }
 
@@ -281,17 +325,25 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                     .filter { it.isNotBlank() }
                     .distinctUntilChanged()
                     .flatMapLatest { guid ->
+                        val uiRevisionFlow = combine(
+                            _attachmentRevision,
+                            _showOriginalGuids,
+                            _translatingGuids
+                        ) { rev, showOrig, translating ->
+                            Triple(rev, showOrig, translating)
+                        }
                         combine(
                             messageRepo.getMessages(guid),
-                            _attachmentRevision,
+                            uiRevisionFlow,
                             contactRepo.getContactsFlow(),
                             relay.isPhoneConnected,
                             _isGroup
-                        ) { allEntities, _, _, phoneConnected, isGroupChat ->
-                            Triple(allEntities, phoneConnected, isGroupChat)
+                        ) { allEntities, (_, showOrigGuids, translatingGuids), _, phoneConnected, isGroupChat ->
+                            Triple(Triple(allEntities, phoneConnected, isGroupChat), showOrigGuids, translatingGuids)
                         }
                     }
-                    .map { (allEntities, phoneConnected, isGroupChat) ->
+                    .map { (core, showOrigGuids, translatingGuids) ->
+                        val (allEntities, phoneConnected, isGroupChat) = core
                         val reactionsByTarget = TapbackUtils.computeReactions(allEntities)
                         val visible = allEntities.filter { !TapbackUtils.isTapbackCode(it.associatedMessageType) }
                         val receiptFlags = computeMessageReceiptFlags(
@@ -301,17 +353,37 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                                     isFromMe = it.isFromMe,
                                     sendFailed = it.sendFailed,
                                     isPending = MessageDao.isTempPlaceholderGuid(it.guid),
-                                    dateRead = it.dateRead ?: 0L
+                                    dateRead = it.dateRead ?: 0L,
+                                    dateDelivered = it.dateDelivered ?: 0L,
+                                    dateCreated = it.dateCreated
                                 )
                             }
                         )
 
+                        val parsedAttachmentsByMsg = HashMap<String, List<com.wearbubbles.api.dto.AttachmentDto>>(visible.size)
+                        val parsedPreviewByMsg = HashMap<String, com.wearbubbles.api.dto.LinkPreviewDto?>(visible.size)
                         val cachedFiles = HashMap<String, String>()
                         for (entity in visible) {
-                            val attGuid = entity.attachmentGuid
-                            if (!attGuid.isNullOrBlank() && attGuid !in cachedFiles) {
-                                relay.getCachedAttachmentFile(attGuid)?.absolutePath?.let { path ->
-                                    cachedFiles[attGuid] = path
+                            val atts = LinkPreviewHelper.parseAttachments(
+                                entity.attachmentsJson,
+                                entity.attachmentGuid,
+                                entity.attachmentMimeType
+                            )
+                            parsedAttachmentsByMsg[entity.guid] = atts
+                            val preview = LinkPreviewHelper.parseLinkPreview(entity.linkPreviewJson)
+                            parsedPreviewByMsg[entity.guid] = preview
+
+                            for (att in atts) {
+                                if (att.guid.isNotBlank() && att.guid !in cachedFiles) {
+                                    relay.getCachedAttachmentFile(att.guid)?.absolutePath?.let { path ->
+                                        cachedFiles[att.guid] = path
+                                    }
+                                }
+                            }
+                            val previewAttGuid = preview?.imageAttachmentGuid
+                            if (!previewAttGuid.isNullOrBlank() && previewAttGuid !in cachedFiles) {
+                                relay.getCachedAttachmentFile(previewAttGuid)?.absolutePath?.let { path ->
+                                    cachedFiles[previewAttGuid] = path
                                 }
                             }
                         }
@@ -335,9 +407,49 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                                 contactRepo.resolveDisplayName(entity.handleAddress)
                             } else null
 
-                            val attUrl = if (shouldExposeDirectAttachmentUrl(
+                            val parsedPreview = parsedPreviewByMsg[entity.guid]
+                            val rawAtts = parsedAttachmentsByMsg[entity.guid].orEmpty()
+                            val displayAtts = if (parsedPreview != null) {
+                                rawAtts.filterNot { att ->
+                                    LinkPreviewHelper.isPluginPayloadAttachment(att.transferName) ||
+                                        att.guid == parsedPreview.imageAttachmentGuid
+                                }
+                            } else {
+                                rawAtts
+                            }
+                            val uiAttachments = displayAtts.map { att ->
+                                val directUrl = if (shouldExposeDirectAttachmentUrl(
+                                        isPhoneConnected = phoneConnected,
+                                        attachmentGuid = att.guid,
+                                        failedRelayGuids = failedSnapshot,
+                                        serverUrl = serverUrl,
+                                        password = password
+                                    )
+                                ) {
+                                    com.wearbubbles.api.ApiClient.getAttachmentUrl(
+                                        serverUrl,
+                                        password,
+                                        att.guid,
+                                        att.mimeType
+                                    )
+                                } else null
+                                val local = cachedFiles[att.guid]
+                                AttachmentUi(
+                                    guid = att.guid,
+                                    mimeType = att.mimeType,
+                                    url = directUrl,
+                                    localPath = local,
+                                    transferName = att.transferName,
+                                    isLoading = local == null && att.guid in inFlightSnapshot,
+                                    isFetchFailed = local == null && att.guid in failedSnapshot
+                                )
+                            }
+                            val primaryAtt = uiAttachments.firstOrNull()
+                            val attGuid = primaryAtt?.guid ?: entity.attachmentGuid
+                            val localPath = primaryAtt?.localPath ?: attGuid?.let { cachedFiles[it] }
+                            val attUrl = primaryAtt?.url ?: if (shouldExposeDirectAttachmentUrl(
                                     isPhoneConnected = phoneConnected,
-                                    attachmentGuid = entity.attachmentGuid,
+                                    attachmentGuid = attGuid,
                                     failedRelayGuids = failedSnapshot,
                                     serverUrl = serverUrl,
                                     password = password
@@ -346,13 +458,46 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                                 com.wearbubbles.api.ApiClient.getAttachmentUrl(
                                     serverUrl,
                                     password,
-                                    entity.attachmentGuid!!,
+                                    attGuid!!,
                                     entity.attachmentMimeType
                                 )
                             } else null
 
-                            val attGuid = entity.attachmentGuid
-                            val localPath = attGuid?.let { cachedFiles[it] }
+                            val previewUi = parsedPreview?.let { base ->
+                                val previewAttGuid = base.imageAttachmentGuid
+                                val localPreviewImg = previewAttGuid?.let { cachedFiles[it] }
+                                val directPreviewImgUrl = if (!previewAttGuid.isNullOrBlank() &&
+                                    shouldExposeDirectAttachmentUrl(
+                                        isPhoneConnected = phoneConnected,
+                                        attachmentGuid = previewAttGuid,
+                                        failedRelayGuids = failedSnapshot,
+                                        serverUrl = serverUrl,
+                                        password = password
+                                    )
+                                ) {
+                                    com.wearbubbles.api.ApiClient.getAttachmentUrl(
+                                        serverUrl,
+                                        password,
+                                        previewAttGuid,
+                                        "image/jpeg"
+                                    )
+                                } else null
+                                val targetUrl = base.url
+                                LinkPreviewUi(
+                                    title = base.title,
+                                    subtitle = base.subtitle,
+                                    url = targetUrl,
+                                    site = base.site ?: LinkPreviewHelper.deriveSiteHost(targetUrl),
+                                    imageAttachmentGuid = previewAttGuid,
+                                    imageUrl = directPreviewImgUrl ?: base.imageUrl,
+                                    localImagePath = localPreviewImg,
+                                    isImageLoading = previewAttGuid != null &&
+                                        localPreviewImg == null &&
+                                        previewAttGuid in inFlightSnapshot,
+                                    iconUrl = base.iconUrl
+                                )
+                            }
+
                             MessageUi(
                                 guid = entity.guid,
                                 text = entity.text,
@@ -364,17 +509,27 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                                 sendFailed = entity.sendFailed,
                                 reactions = reactions,
                                 attachmentGuid = attGuid,
-                                attachmentMimeType = entity.attachmentMimeType,
+                                attachmentMimeType = primaryAtt?.mimeType ?: entity.attachmentMimeType,
                                 attachmentUrl = attUrl,
                                 localAttachmentPath = localPath,
                                 customHeaders = customHeaders,
                                 isLatestOutgoing = entity.guid == receiptFlags.latestOutgoingGuid,
                                 isLastReadOutgoing = entity.guid == receiptFlags.lastReadOutgoingGuid,
+                                isLastDeliveredOutgoing = entity.guid == receiptFlags.lastDeliveredOutgoingGuid,
+                                isLastSentOutgoing = entity.guid == receiptFlags.lastSentOutgoingGuid,
                                 isLatestIncoming = entity.guid == receiptFlags.latestIncomingGuid,
                                 handleAddress = entity.handleAddress,
-                                isAttachmentLoading = attGuid != null && localPath == null && attGuid in inFlightSnapshot,
-                                isAttachmentFetchFailed = attGuid != null && localPath == null && attGuid in failedSnapshot,
-                                isPhoneConnected = phoneConnected
+                                isAttachmentLoading = primaryAtt?.isLoading ?: (attGuid != null && localPath == null && attGuid in inFlightSnapshot),
+                                isAttachmentFetchFailed = primaryAtt?.isFetchFailed ?: (attGuid != null && localPath == null && attGuid in failedSnapshot),
+                                isPhoneConnected = phoneConnected,
+                                dateEdited = entity.dateEdited ?: 0L,
+                                translatedText = entity.translatedText,
+                                translationSourceLang = entity.translationSourceLang,
+                                translationTargetLang = entity.translationTargetLang,
+                                showOriginalTranslation = entity.guid in showOrigGuids,
+                                isTranslating = entity.guid in translatingGuids,
+                                attachments = uiAttachments,
+                                linkPreview = previewUi
                             )
                         }
                         uiList to eagerGuids
@@ -590,20 +745,44 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun sendMessage(text: String) {
-        if (text.isBlank()) return
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
         viewModelScope.launch {
-            _isSending.value = true
-            _error.value = null
-            val res = messageRepo.sendMessage(chatGuid, text.trim())
-            if (res.isFailure) {
-                _error.value = res.exceptionOrNull()?.localizedMessage?.take(50) ?: "Failed to send"
-            } else {
-                val resolvedGuid = res.getOrNull()?.chatGuid ?: chatGuid
-                switchChatGuidIfResolved(resolvedGuid)
-                markChatReadIfResumed(resolvedGuid)
-            }
-            _isSending.value = false
+            val tempGuid = "temp-${UUID.randomUUID()}"
+            sendWithRetryFallback(trimmed, tempGuid)
         }
+    }
+
+    private suspend fun sendWithRetryFallback(text: String, tempGuid: String) {
+        _isSending.value = true
+        _error.value = null
+        val res = messageRepo.sendMessage(
+            chatGuid = chatGuid,
+            text = text,
+            existingTempGuid = tempGuid,
+            shouldMarkFailed = { err -> relay.isPhoneConnected.value || !shouldRetrySend(err, 0) }
+        )
+        if (res.isFailure) {
+            val err = res.exceptionOrNull()
+            if (!relay.isPhoneConnected.value && shouldRetrySend(err, 0)) {
+                ReplySendWorker.enqueue(
+                    context = app,
+                    chatGuid = chatGuid,
+                    senderName = _chatTitle.value,
+                    replyText = text,
+                    tempGuid = tempGuid,
+                    fromNotification = false
+                )
+                _error.value = "Queued"
+            } else {
+                _error.value = err?.localizedMessage?.take(50) ?: "Failed to send"
+            }
+        } else {
+            val resolvedGuid = res.getOrNull()?.chatGuid ?: chatGuid
+            switchChatGuidIfResolved(resolvedGuid)
+            markChatReadIfResumed(resolvedGuid)
+        }
+        _isSending.value = false
     }
 
     fun toggleTapback(messageGuid: String, tapback: TapbackType, currentlyActiveByMe: Boolean) {
@@ -614,6 +793,26 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                 _error.value = "Reaction failed"
             } else {
                 markChatReadIfResumed(guid)
+            }
+        }
+    }
+
+    fun toggleOriginalTranslation(messageGuid: String) {
+        _showOriginalGuids.update { current ->
+            if (messageGuid in current) current - messageGuid else current + messageGuid
+        }
+    }
+
+    fun translateMessage(messageGuid: String) {
+        if (messageGuid.isBlank() || messageGuid in _translatingGuids.value) return
+        viewModelScope.launch {
+            _translatingGuids.update { it + messageGuid }
+            val res = messageRepo.translateMessage(messageGuid)
+            _translatingGuids.update { it - messageGuid }
+            if (res.isFailure) {
+                _error.value = res.exceptionOrNull()?.localizedMessage?.take(40) ?: "Translation failed"
+            } else {
+                _showOriginalGuids.update { it - messageGuid }
             }
         }
     }
@@ -845,16 +1044,32 @@ internal fun selectEagerAttachmentGuids(
     if (limit <= 0) return emptyList()
     val picked = ArrayList<String>(limit)
     for (entity in messages.asReversed()) {
-        val attGuid = entity.attachmentGuid
-        val mime = entity.attachmentMimeType ?: ""
-        if (!attGuid.isNullOrBlank() &&
-            attGuid !in failedGuids &&
-            attGuid !in cachedGuids &&
-            attGuid !in picked &&
-            mime.startsWith("image/")
+        val attachments = LinkPreviewHelper.parseAttachments(
+            entity.attachmentsJson,
+            entity.attachmentGuid,
+            entity.attachmentMimeType
+        )
+        for (att in attachments) {
+            val attGuid = att.guid
+            val mime = att.mimeType ?: ""
+            if (attGuid.isNotBlank() &&
+                attGuid !in failedGuids &&
+                attGuid !in cachedGuids &&
+                attGuid !in picked &&
+                mime.startsWith("image/")
+            ) {
+                picked.add(attGuid)
+                if (picked.size >= limit) return picked
+            }
+        }
+        val previewGuid = LinkPreviewHelper.parseLinkPreview(entity.linkPreviewJson)?.imageAttachmentGuid
+        if (!previewGuid.isNullOrBlank() &&
+            previewGuid !in failedGuids &&
+            previewGuid !in cachedGuids &&
+            previewGuid !in picked
         ) {
-            picked.add(attGuid)
-            if (picked.size >= limit) break
+            picked.add(previewGuid)
+            if (picked.size >= limit) return picked
         }
     }
     return picked

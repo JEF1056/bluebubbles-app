@@ -228,10 +228,12 @@ fun formatDetailTimestamp(
     val targetDate = target.toLocalDate()
     val today = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
     val timePart = target.format(DateTimeFormatter.ofPattern("h:mm a", locale))
-    return when (targetDate) {
-        today -> timePart
-        today.minusDays(1) -> "Yesterday $timePart"
-        else -> "${target.format(DateTimeFormatter.ofPattern("MMM d", locale))}, $timePart"
+    val elapsedDays = elapsedMs / 86_400_000L
+    return when {
+        targetDate == today -> timePart
+        elapsedDays <= 7L -> "${target.format(DateTimeFormatter.ofPattern("EEE", locale))} $timePart"
+        elapsedDays <= 365L -> "${target.format(DateTimeFormatter.ofPattern("MMM d", locale))}, $timePart"
+        else -> target.format(DateTimeFormatter.ofPattern("M/d/yy", locale))
     }
 }
 
@@ -252,8 +254,10 @@ internal fun nextDisplayedTimestampTickDelayMs(
     nowMs: Long = System.currentTimeMillis()
 ): Long? = messages.asSequence()
     .filter { msg ->
-        msg.isLatestOutgoing ||
-            msg.isLastReadOutgoing ||
+        msg.isLastReadOutgoing ||
+            msg.isLastDeliveredOutgoing ||
+            msg.isLastSentOutgoing ||
+            msg.isLatestOutgoing ||
             msg.isLatestIncoming ||
             msg.guid == expandedMessageGuid
     }
@@ -274,7 +278,8 @@ enum class MessageDetailKind {
     READ,
     DELIVERED,
     SENT,
-    RECEIVED
+    RECEIVED,
+    EDITED
 }
 
 data class MessageDetailStatus(
@@ -288,25 +293,105 @@ data class MessageReceiptCandidate(
     val isFromMe: Boolean,
     val sendFailed: Boolean,
     val isPending: Boolean,
-    val dateRead: Long
+    val dateRead: Long,
+    val dateDelivered: Long = 0L,
+    val dateCreated: Long = 0L
 )
 
 data class MessageReceiptFlags(
     val latestOutgoingGuid: String?,
     val lastReadOutgoingGuid: String?,
+    val lastDeliveredOutgoingGuid: String? = null,
+    val lastSentOutgoingGuid: String? = null,
     val latestIncomingGuid: String?
 )
 
-fun computeMessageReceiptFlags(items: List<MessageReceiptCandidate>): MessageReceiptFlags =
-    MessageReceiptFlags(
+private fun isReceiptWinnerNewer(
+    candidateDate: Long,
+    candidateCreated: Long,
+    candidateIndex: Int,
+    currentDate: Long,
+    currentCreated: Long,
+    currentIndex: Int
+): Boolean {
+    if (candidateDate != currentDate) return candidateDate > currentDate
+    if (candidateCreated != currentCreated) return candidateCreated > currentCreated
+    return candidateIndex > currentIndex
+}
+
+private fun isMessageNewerThan(
+    aCreated: Long,
+    aIndex: Int,
+    bCreated: Long,
+    bIndex: Int
+): Boolean = if (aCreated != bCreated) aCreated > bCreated else aIndex > bIndex
+
+fun computeMessageReceiptFlags(items: List<MessageReceiptCandidate>): MessageReceiptFlags {
+    var readIdx = -1
+    var deliveredIdx = -1
+    var sentIdx = -1
+    var incomingIdx = -1
+
+    items.forEachIndexed { index, item ->
+        if (item.sendFailed || item.isPending) return@forEachIndexed
+        if (!item.isFromMe) {
+            if (incomingIdx < 0 || isMessageNewerThan(item.dateCreated, index, items[incomingIdx].dateCreated, incomingIdx)) {
+                incomingIdx = index
+            }
+            return@forEachIndexed
+        }
+        when {
+            item.dateRead > 0L -> {
+                if (readIdx < 0 || isReceiptWinnerNewer(
+                        item.dateRead, item.dateCreated, index,
+                        items[readIdx].dateRead, items[readIdx].dateCreated, readIdx
+                    )
+                ) {
+                    readIdx = index
+                }
+            }
+            item.dateDelivered > 0L -> {
+                if (deliveredIdx < 0 || isReceiptWinnerNewer(
+                        item.dateDelivered, item.dateCreated, index,
+                        items[deliveredIdx].dateDelivered, items[deliveredIdx].dateCreated, deliveredIdx
+                    )
+                ) {
+                    deliveredIdx = index
+                }
+            }
+            else -> {
+                if (sentIdx < 0 || isMessageNewerThan(item.dateCreated, index, items[sentIdx].dateCreated, sentIdx)) {
+                    sentIdx = index
+                }
+            }
+        }
+    }
+
+    // Match Flutter MessagesService._recomputeDeliveredIndicators: a newer Read
+    // supersedes an older Delivered; a newer Read or Delivered supersedes Sent.
+    if (deliveredIdx >= 0 && readIdx >= 0 &&
+        isMessageNewerThan(items[readIdx].dateCreated, readIdx, items[deliveredIdx].dateCreated, deliveredIdx)
+    ) {
+        deliveredIdx = -1
+    }
+    if (sentIdx >= 0) {
+        val supersededByRead = readIdx >= 0 &&
+            isMessageNewerThan(items[readIdx].dateCreated, readIdx, items[sentIdx].dateCreated, sentIdx)
+        val supersededByDelivered = deliveredIdx >= 0 &&
+            isMessageNewerThan(items[deliveredIdx].dateCreated, deliveredIdx, items[sentIdx].dateCreated, sentIdx)
+        if (supersededByRead || supersededByDelivered) {
+            sentIdx = -1
+        }
+    }
+
+    return MessageReceiptFlags(
         latestOutgoingGuid = items.lastOrNull { it.isFromMe }?.guid,
-        lastReadOutgoingGuid = items.lastOrNull {
-            it.isFromMe && !it.sendFailed && !it.isPending && it.dateRead > 0L
-        }?.guid,
-        latestIncomingGuid = items.lastOrNull {
-            !it.isFromMe && !it.sendFailed && !it.isPending
-        }?.guid
+        lastReadOutgoingGuid = items.getOrNull(readIdx)?.guid,
+        lastDeliveredOutgoingGuid = items.getOrNull(deliveredIdx)?.guid,
+        lastSentOutgoingGuid = items.getOrNull(sentIdx)?.guid,
+        latestIncomingGuid = items.getOrNull(incomingIdx)?.guid
     )
+}
 
 fun resolveMessageDetailStatus(
     isFromMe: Boolean,
@@ -315,9 +400,13 @@ fun resolveMessageDetailStatus(
     dateCreated: Long,
     dateDelivered: Long,
     dateRead: Long,
-    isLatestOutgoing: Boolean,
-    isLastReadOutgoing: Boolean,
-    isLatestIncoming: Boolean,
+    isLatestOutgoing: Boolean = false,
+    isLastReadOutgoing: Boolean = false,
+    isLastDeliveredOutgoing: Boolean = false,
+    isLastSentOutgoing: Boolean = false,
+    isLatestIncoming: Boolean = false,
+    dateEdited: Long = 0L,
+    isExpanded: Boolean = false,
     nowMs: Long = System.currentTimeMillis(),
     zoneId: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault()
@@ -329,25 +418,23 @@ fun resolveMessageDetailStatus(
             showAlways = true
         )
     }
-    if (isFromMe) {
-        if (isPending) {
-            return if (isLatestOutgoing) {
-                MessageDetailStatus(
-                    kind = MessageDetailKind.SENDING,
-                    label = "Sending…",
-                    showAlways = true
-                )
-            } else {
-                null
-            }
-        }
-        return when {
+    if (isFromMe && isPending) {
+        return MessageDetailStatus(
+            kind = MessageDetailKind.SENDING,
+            label = "Sending…",
+            showAlways = true
+        )
+    }
+
+    val isEdited = dateEdited > 0L
+    val base = if (isFromMe) {
+        when {
             dateRead > 0L -> {
                 val time = formatDetailTimestamp(dateRead, nowMs, zoneId, locale)
                 MessageDetailStatus(
                     kind = MessageDetailKind.READ,
                     label = if (time.isNotBlank()) "Read · $time" else "Read",
-                    showAlways = isLatestOutgoing || isLastReadOutgoing
+                    showAlways = isLastReadOutgoing
                 )
             }
             dateDelivered > 0L -> {
@@ -355,7 +442,7 @@ fun resolveMessageDetailStatus(
                 MessageDetailStatus(
                     kind = MessageDetailKind.DELIVERED,
                     label = if (time.isNotBlank()) "Delivered · $time" else "Delivered",
-                    showAlways = isLatestOutgoing
+                    showAlways = isLastDeliveredOutgoing
                 )
             }
             else -> {
@@ -363,15 +450,27 @@ fun resolveMessageDetailStatus(
                 MessageDetailStatus(
                     kind = MessageDetailKind.SENT,
                     label = if (time.isNotBlank()) "Sent · $time" else "Sent",
-                    showAlways = isLatestOutgoing
+                    showAlways = isLastSentOutgoing
                 )
             }
         }
+    } else {
+        val time = formatDetailTimestamp(dateCreated, nowMs, zoneId, locale)
+        MessageDetailStatus(
+            kind = MessageDetailKind.RECEIVED,
+            label = if (time.isNotBlank()) "Received · $time" else "Received",
+            showAlways = isLatestIncoming
+        )
     }
-    val time = formatDetailTimestamp(dateCreated, nowMs, zoneId, locale)
-    return MessageDetailStatus(
-        kind = MessageDetailKind.RECEIVED,
-        label = if (time.isNotBlank()) "Received · $time" else "Received",
-        showAlways = isLatestIncoming
-    )
+
+    if (!isEdited) return base
+    return if (base.showAlways || isExpanded) {
+        base.copy(label = "Edited · ${base.label}", showAlways = true)
+    } else {
+        MessageDetailStatus(
+            kind = MessageDetailKind.EDITED,
+            label = "Edited",
+            showAlways = true
+        )
+    }
 }

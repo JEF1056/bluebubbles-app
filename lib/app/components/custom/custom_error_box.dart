@@ -1,5 +1,6 @@
 import 'dart:ui' as ui show Paragraph, ParagraphBuilder, ParagraphConstraints, ParagraphStyle, TextStyle;
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -430,8 +431,19 @@ class _ErrorPanelContentState extends State<_ErrorPanelContent> {
               OutlinedButton.icon(
                 style: neutralButtonStyle,
                 onPressed: () => setState(() => _showStackTrace = !_showStackTrace),
-                icon: Icon(_showStackTrace ? Icons.expand_less : Icons.expand_more),
-                label: Text(_showStackTrace ? 'Hide Stack Trace' : 'Show Stack Trace'),
+                icon: BlurFadeSwitcher(
+                  child: Icon(
+                    _showStackTrace ? Icons.expand_less : Icons.expand_more,
+                    key: ValueKey(_showStackTrace),
+                  ),
+                ),
+                label: BlurFadeSwitcher(
+                  animateSize: true,
+                  child: Text(
+                    _showStackTrace ? 'Hide Stack Trace' : 'Show Stack Trace',
+                    key: ValueKey(_showStackTrace),
+                  ),
+                ),
               ),
           ],
         ),

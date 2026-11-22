@@ -103,6 +103,7 @@ object WearSyncManager {
     const val PATH_ANSWER_CALL_AUDIO = "/bb/answer-call-audio"
     const val PATH_DECLINE_CALL = "/bb/decline-call"
     const val PATH_OPEN_CHAT = "/bb/open-chat"
+    const val PATH_TRANSLATE_MESSAGE = "/bb/translate-message"
 
     private data class IncomingCallMeta(
         val callerName: String,
@@ -1115,6 +1116,58 @@ object WearSyncManager {
         }
     }
 
+    internal fun buildTranslateUrl(apiRoot: String, messageGuid: String, authKey: String): String =
+        "$apiRoot/message/${encode(messageGuid).replace("+", "%20")}/translate?password=${encode(authKey)}"
+
+    internal fun parseTranslationData(bodyStr: String?): JsonObject? = try {
+        JsonParser.parseString(bodyStr ?: "{}").asObjOrNull()?.obj("data")?.obj("translation")
+    } catch (_: Exception) {
+        null
+    }
+
+    fun translateMessage(
+        context: Context,
+        nodeId: String,
+        messageGuid: String,
+        requestId: String? = null
+    ) {
+        scope.launch {
+            val settings = SettingsHelper(context)
+            if (!settings.hasServerUrl() || !settings.hasAuthKey()) {
+                if (!requestId.isNullOrBlank()) {
+                    sendResult(context, nodeId, requestId, null, false, "Phone server not configured")
+                }
+                return@launch
+            }
+            try {
+                val client = buildOkHttpClient(settings)
+                val url = buildTranslateUrl(settings.apiRoot, messageGuid, settings.guidAuthKey)
+                val req = Request.Builder().url(url).post("{}".toRequestBody(jsonMediaType)).build()
+                client.newCall(req).execute().use { resp ->
+                    val ok = resp.isSuccessful
+                    val bodyStr = resp.body?.string()
+                    val rawTranslation = if (ok) parseTranslationData(bodyStr) else null
+                    if (!requestId.isNullOrBlank()) {
+                        sendResult(
+                            context = context,
+                            nodeId = nodeId,
+                            requestId = requestId,
+                            tempGuid = null,
+                            success = ok,
+                            error = if (ok) null else "HTTP ${resp.code}",
+                            translation = rawTranslation
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                PersistentLog.w(context, TAG, "translateMessage error: ${e.message}")
+                if (!requestId.isNullOrBlank()) {
+                    sendResult(context, nodeId, requestId, null, false, e.message ?: "Translation failed")
+                }
+            }
+        }
+    }
+
     fun sendAudioAttachment(
         context: Context,
         nodeId: String,
@@ -1703,7 +1756,8 @@ object WearSyncManager {
         tempGuid: String?,
         success: Boolean,
         error: String?,
-        message: JsonObject? = null
+        message: JsonObject? = null,
+        translation: JsonObject? = null
     ) {
         sendNodeJson(context, nodeId, PATH_SEND_RESULT, JsonObject().apply {
             addProperty("requestId", requestId)
@@ -1711,6 +1765,7 @@ object WearSyncManager {
             addProperty("success", success)
             if (error != null) addProperty("error", error)
             if (message != null) add("message", message)
+            if (translation != null) add("translation", translation)
         })
     }
 
@@ -1813,9 +1868,30 @@ object WearSyncManager {
             .build()
     }
 
-    private fun mapMessageToRelayJson(msg: JsonObject, chatGuid: String): JsonObject {
+    internal fun mapMessageToRelayJson(msg: JsonObject, chatGuid: String): JsonObject {
         val atts = msg.arr("attachments")
-        val firstAtt = if (atts != null && atts.size() > 0) atts[0].asObjOrNull() else null
+        val attachmentsJson = JsonArray()
+        var firstNonPluginAtt: JsonObject? = null
+        var firstAtt: JsonObject? = null
+        if (atts != null) {
+            for (el in atts) {
+                val att = el.asObjOrNull() ?: continue
+                val attGuid = att.str("guid")?.takeIf { it.isNotBlank() } ?: continue
+                if (firstAtt == null) firstAtt = att
+                val transferName = att.str("transferName")?.takeIf { it.isNotBlank() }
+                if (firstNonPluginAtt == null && !WearLinkPreview.isPluginPayloadAttachment(transferName)) {
+                    firstNonPluginAtt = att
+                }
+                attachmentsJson.add(JsonObject().apply {
+                    addProperty("guid", attGuid)
+                    att.str("mimeType")?.takeIf { it.isNotBlank() }?.let { addProperty("mimeType", it) }
+                    transferName?.let { addProperty("transferName", it) }
+                })
+            }
+        }
+        val primaryAtt = firstNonPluginAtt ?: firstAtt
+        val balloonBundleId = msg.str("balloonBundleId")?.takeIf { it.isNotBlank() }
+        val linkPreview = WearLinkPreview.extractLinkPreviewJson(msg, atts)
         return JsonObject().apply {
             addProperty("guid", msg.str("guid") ?: UUID.randomUUID().toString())
             addProperty("chatGuid", chatGuid)
@@ -1825,12 +1901,24 @@ object WearSyncManager {
             addProperty("dateCreated", msg.long("dateCreated") ?: System.currentTimeMillis())
             msg.long("dateDelivered")?.let { addProperty("dateDelivered", it) }
             msg.long("dateRead")?.let { addProperty("dateRead", it) }
+            msg.long("dateEdited")?.let { addProperty("dateEdited", it) }
             addProperty("handleAddress", msg.obj("handle")?.str("address"))
-            addProperty("attachmentGuid", firstAtt?.str("guid"))
-            addProperty("attachmentMimeType", firstAtt?.str("mimeType"))
+            addProperty("attachmentGuid", primaryAtt?.str("guid"))
+            addProperty("attachmentMimeType", primaryAtt?.str("mimeType"))
+            if (attachmentsJson.size() > 0) add("attachments", attachmentsJson)
+            balloonBundleId?.let { addProperty("balloonBundleId", it) }
+            linkPreview?.let { add("linkPreview", it) }
             addProperty("associatedMessageGuid", msg.str("associatedMessageGuid"))
             addProperty("associatedMessageType", msg.str("associatedMessageType"))
             addProperty("associatedMessageEmoji", msg.str("associatedMessageEmoji"))
+            msg.obj("translation")?.let { tr ->
+                val trText = tr.str("text")?.takeIf { it.isNotBlank() }
+                if (trText != null) {
+                    addProperty("translatedText", trText)
+                    tr.str("sourceLanguage")?.let { addProperty("translationSourceLang", it) }
+                    tr.str("targetLanguage")?.let { addProperty("translationTargetLang", it) }
+                }
+            }
         }
     }
 

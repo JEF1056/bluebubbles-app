@@ -1,10 +1,13 @@
 package com.wearbubbles.data
 
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.api.dto.CreateChatRequest
 import com.wearbubbles.api.dto.MessageDto
 import com.wearbubbles.api.dto.MessageQueryRequest
 import com.wearbubbles.api.dto.MessageRelayDto
+import com.wearbubbles.api.dto.MessageTranslationDto
 import com.wearbubbles.api.dto.ReactRequest
 import com.wearbubbles.api.dto.SendMessageRequest
 import com.wearbubbles.api.dto.TapbackType
@@ -104,6 +107,18 @@ class MessageRepository(
             val isDoesNotExist = (httpCode == 400 || httpCode == 500) &&
                 responseBody?.contains("does not exist", ignoreCase = true) == true
             return if (isNotFound || isDoesNotExist) recipient else null
+        }
+
+        private val gson = Gson()
+
+        internal fun parseTranslationFromResponse(dataObj: JsonObject?): MessageTranslationDto? {
+            val trObj = dataObj?.get("translation")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: return null
+            return try {
+                gson.fromJson(trObj, MessageTranslationDto::class.java)
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 
@@ -228,7 +243,8 @@ class MessageRepository(
     suspend fun sendMessage(
         chatGuid: String,
         text: String,
-        existingTempGuid: String? = null
+        existingTempGuid: String? = null,
+        shouldMarkFailed: (Throwable) -> Boolean = { true }
     ): Result<MessageEntity> {
         val tempEntity = persistOptimisticOutgoing(
             messageDao = messageDao,
@@ -324,8 +340,10 @@ class MessageRepository(
             updateChatLastMessage(targetChatGuid, text, realEntity.dateCreated)
             realEntity
         }.onFailure { err ->
-            withContext(NonCancellable) {
-                messageDao.markSendFailed(tempGuid)
+            if (err is CancellationException || shouldMarkFailed(err)) {
+                withContext(NonCancellable) {
+                    messageDao.markSendFailed(tempGuid)
+                }
             }
             if (err is CancellationException) throw err
         }
@@ -474,6 +492,43 @@ class MessageRepository(
         }
     }
 
+    suspend fun translateMessage(messageGuid: String): Result<Unit> {
+        if (phoneRelay != null && phoneRelay.refreshPhoneConnected()) {
+            val res = phoneRelay.translateMessage(messageGuid)
+            if (res != null && res.success) {
+                val tr = res.translation
+                if (tr != null && !tr.text.isNullOrBlank()) {
+                    messageDao.updateTranslation(
+                        guid = messageGuid,
+                        translatedText = tr.text,
+                        sourceLang = tr.sourceLanguage,
+                        targetLang = tr.targetLanguage
+                    )
+                }
+                return Result.success(Unit)
+            }
+            if (res != null && !res.success) {
+                return Result.failure(IllegalStateException(res.error ?: "Translation failed"))
+            }
+        }
+
+        return runCatching {
+            val (api, password) = requireApi()
+            val response = api.translateMessage(messageGuid, password)
+            val dataObj = response.data
+                ?: throw IllegalStateException(response.message.ifBlank { "Translation failed" })
+            val tr = parseTranslationFromResponse(dataObj)
+            if (tr != null && !tr.text.isNullOrBlank()) {
+                messageDao.updateTranslation(
+                    guid = messageGuid,
+                    translatedText = tr.text,
+                    sourceLang = tr.sourceLanguage,
+                    targetLang = tr.targetLanguage
+                )
+            }
+        }
+    }
+
     suspend fun handleMessageSendError(dto: MessageDto) {
         val candidates = listOfNotNull(
             dto.tempGuid?.takeIf { it.isNotBlank() },
@@ -486,7 +541,10 @@ class MessageRepository(
 
     suspend fun handleIncomingSocketMessage(dto: MessageDto, isUpdate: Boolean = false) {
         val chatGuid = dto.chats?.firstOrNull()?.guid ?: return
-        val entity = dto.toEntity(chatGuid)
+        val parsed = dto.toEntity(chatGuid)
+        val entity = if (isUpdate) {
+            MessageDao.mergeTranslationIfUnchanged(parsed, messageDao.getByGuid(parsed.guid))
+        } else parsed
         messageDao.upsertAndReconcile(entity, tempGuid = dto.tempGuid)
         if (isUpdate) return
 
@@ -534,38 +592,9 @@ class MessageRepository(
         )
     }
 
-    private fun MessageRelayDto.toEntity(fallbackChatGuid: String) = MessageEntity(
-        guid = guid,
-        chatGuid = chatGuid.ifBlank { fallbackChatGuid },
-        text = text,
-        isFromMe = isFromMe,
-        dateCreated = dateCreated,
-        handleAddress = handleAddress,
-        attachmentGuid = attachmentGuid,
-        attachmentMimeType = attachmentMimeType,
-        associatedMessageGuid = associatedMessageGuid,
-        associatedMessageType = associatedMessageType,
-        associatedMessageEmoji = associatedMessageEmoji,
-        dateDelivered = dateDelivered,
-        dateRead = dateRead
-    )
+    private fun MessageRelayDto.toEntity(fallbackChatGuid: String) =
+        LinkPreviewHelper.relayDtoToEntity(this, fallbackChatGuid)
 
-    private fun MessageDto.toEntity(chatGuid: String): MessageEntity {
-        val firstAttachment = attachments?.firstOrNull()
-        return MessageEntity(
-            guid = guid,
-            chatGuid = chatGuid,
-            text = text,
-            isFromMe = isFromMe,
-            dateCreated = dateCreated,
-            handleAddress = handle?.address,
-            attachmentGuid = firstAttachment?.guid,
-            attachmentMimeType = firstAttachment?.mimeType,
-            associatedMessageGuid = associatedMessageGuid,
-            associatedMessageType = associatedMessageType,
-            associatedMessageEmoji = associatedMessageEmoji,
-            dateDelivered = dateDelivered,
-            dateRead = dateRead
-        )
-    }
+    private fun MessageDto.toEntity(chatGuid: String): MessageEntity =
+        LinkPreviewHelper.messageDtoToEntity(this, chatGuid)
 }

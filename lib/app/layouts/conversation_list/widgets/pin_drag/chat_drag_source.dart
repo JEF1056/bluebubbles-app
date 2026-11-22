@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/dialogs/conversation_peek_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/chat_drag_feedback.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/pin_drag/chat_draggables.dart';
@@ -154,7 +155,7 @@ class _ChatDragSourceState extends State<ChatDragSource> {
       child: widget.startsInPinArea
           ? draggable
           : AnimatedSize(
-              duration: const Duration(milliseconds: 200),
+              duration: motionDuration(context, const Duration(milliseconds: 200)),
               curve: Curves.easeOutCubic,
               alignment: Alignment.topCenter,
               child: draggable,

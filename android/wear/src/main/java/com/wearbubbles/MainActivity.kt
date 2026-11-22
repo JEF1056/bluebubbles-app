@@ -21,11 +21,16 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val SOCKET_PAUSE_GRACE_MS = 5_000L
+    }
+
     private val initialChatGuid = mutableStateOf<String?>(null)
     private val initialChatNonce = mutableStateOf(0L)
     private var pausedActiveChatGuid: String? = null
     private var activeHeartbeatJob: Job? = null
     private var bridgingObserverJob: Job? = null
+    private var pendingSocketStopJob: Job? = null
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -86,7 +91,12 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val relay = (applicationContext as WearBubblesApp).phoneRelayClient
+        pendingSocketStopJob?.cancel()
+        pendingSocketStopJob = null
+        val app = applicationContext as WearBubblesApp
+        app.foregroundSocketSession.start(app)
+
+        val relay = app.phoneRelayClient
         activeHeartbeatJob?.cancel()
         activeHeartbeatJob = lifecycleScope.launch {
             launch { relay.refreshPhoneConnected() }
@@ -114,7 +124,15 @@ class MainActivity : ComponentActivity() {
         }
         activeHeartbeatJob?.cancel()
         activeHeartbeatJob = null
-        val relay = (applicationContext as WearBubblesApp).phoneRelayClient
+        val app = applicationContext as WearBubblesApp
+        val session = app.foregroundSocketSession
+        val epoch = session.currentEpoch()
+        pendingSocketStopJob?.cancel()
+        pendingSocketStopJob = app.applicationScope.launch {
+            delay(SOCKET_PAUSE_GRACE_MS)
+            session.pauseAfterGrace(epoch)
+        }
+        val relay = app.phoneRelayClient
         if (relay.isPhoneConnected.value) {
             relay.notifyWatchActive(false)
         }

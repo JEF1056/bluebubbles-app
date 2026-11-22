@@ -1,5 +1,6 @@
 package com.wearbubbles.api
 
+import com.wearbubbles.socket.SocketManager
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
@@ -44,6 +45,7 @@ object ApiClient {
             }
         }
         OkHttpClient.Builder()
+            .dns(SocketManager.ipv4FirstDns)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)

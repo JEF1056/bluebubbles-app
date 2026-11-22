@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/sending_opacity_wrapper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/parts/upload_progress_content.dart';
@@ -417,7 +418,7 @@ class _AttachmentHolderState extends State<AttachmentHolder> with ThemeHelpers {
                     hasReservedBox: reservedBox != null,
                   ),
                   child: AnimatedSize(
-                    duration: const Duration(milliseconds: 150),
+                    duration: motionDuration(context, const Duration(milliseconds: 150)),
                     // AnimatedSize loosens constraints, so content would render at its
                     // natural size — smaller than the parent frame. SizedBox.expand()
                     // snaps back to the max loosened constraints and forces tight

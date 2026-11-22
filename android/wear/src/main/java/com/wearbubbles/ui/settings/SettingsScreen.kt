@@ -52,6 +52,7 @@ import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.BuildConfig
 import com.wearbubbles.ui.components.WearConfirmModal
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.ErrorColor
 import com.wearbubbles.ui.theme.LocalWearPalette
@@ -140,21 +141,31 @@ fun SettingsScreen(
                             modifier = Modifier.weight(1f),
                             verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
                         ) {
-                            Text(
-                                text = primaryText,
-                                style = centeredTextStyle(13.5.sp, 17.sp, FontWeight.SemiBold),
-                                color = palette.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (secondaryText != null) {
+                            BlurFadeContent(
+                                targetState = primaryText,
+                                contentAlignment = Alignment.CenterStart
+                            ) { text ->
                                 Text(
-                                    text = secondaryText,
-                                    style = centeredTextStyle(11.sp, 14.sp),
-                                    color = palette.subtleText,
+                                    text = text,
+                                    style = centeredTextStyle(13.5.sp, 17.sp, FontWeight.SemiBold),
+                                    color = palette.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                            }
+                            if (secondaryText != null) {
+                                BlurFadeContent(
+                                    targetState = secondaryText,
+                                    contentAlignment = Alignment.CenterStart
+                                ) { text ->
+                                    Text(
+                                        text = text,
+                                        style = centeredTextStyle(11.sp, 14.sp),
+                                        color = palette.subtleText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
@@ -178,12 +189,14 @@ fun SettingsScreen(
                             .background(modeColor.copy(alpha = 0.16f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = modeIcon,
-                            contentDescription = null,
-                            tint = modeColor,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        BlurFadeContent(targetState = modeIcon to modeColor) { (icon, color) ->
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = color,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(
@@ -207,13 +220,18 @@ fun SettingsScreen(
                                     .clip(CircleShape)
                                     .background(modeColor)
                             )
-                            Text(
-                                text = modeLabel,
-                                style = centeredTextStyle(11.sp, 14.sp, FontWeight.Medium),
-                                color = modeColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            BlurFadeContent(
+                                targetState = modeLabel to modeColor,
+                                contentAlignment = Alignment.CenterStart
+                            ) { (label, color) ->
+                                Text(
+                                    text = label,
+                                    style = centeredTextStyle(11.sp, 14.sp, FontWeight.Medium),
+                                    color = color,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -230,19 +248,24 @@ fun SettingsScreen(
                     onClick = { viewModel.syncFromPhone() },
                     enabled = !state.isSyncing,
                     leadingIcon = {
-                        if (state.isSyncing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                indicatorColor = palette.primary
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Rounded.Sync,
-                                contentDescription = null,
-                                tint = palette.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        BlurFadeContent(
+                            targetState = state.isSyncing,
+                            modifier = Modifier.size(18.dp)
+                        ) { syncing ->
+                            if (syncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    indicatorColor = palette.primary
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.Sync,
+                                    contentDescription = null,
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     },
                     backgroundColor = palette.surfaceContainer,
@@ -284,12 +307,17 @@ fun SettingsScreen(
                             color = palette.onSurface,
                             maxLines = 1
                         )
-                        Text(
-                            text = if (state.hapticEnabled) "On" else "Off",
-                            style = centeredTextStyle(11.sp, 14.sp),
-                            color = palette.subtleText,
-                            maxLines = 1
-                        )
+                        BlurFadeContent(
+                            targetState = state.hapticEnabled,
+                            contentAlignment = Alignment.CenterStart
+                        ) { enabled ->
+                            Text(
+                                text = if (enabled) "On" else "Off",
+                                style = centeredTextStyle(11.sp, 14.sp),
+                                color = palette.subtleText,
+                                maxLines = 1
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Switch(checked = state.hapticEnabled)

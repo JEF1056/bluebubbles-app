@@ -262,6 +262,61 @@ class HttpService implements BaseApi {
     fontDownloadProgress.value = null;
     fontDownloadTotalSize.value = null;
   }
+
+  Future<Response> translateMessage(String guid, {String? targetLanguage, CancelToken? cancelToken}) {
+    return runApiGuarded(() async {
+      final response = await dio.post(
+        "$apiRoot/message/${Uri.encodeComponent(guid)}/translate",
+        queryParameters: buildQueryParams(),
+        data: {
+          if (targetLanguage != null) 'targetLanguage': targetLanguage,
+        },
+        cancelToken: cancelToken,
+      );
+      return returnSuccessOrError(response);
+    });
+  }
+
+  Future<Response> getTranslationConfig({CancelToken? cancelToken}) {
+    return runApiGuarded(() async {
+      final response = await dio.get(
+        "$apiRoot/translation/config",
+        queryParameters: buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return returnSuccessOrError(response);
+    });
+  }
+
+  Future<Response> updateTranslationConfig({
+    bool? autoTranslateEnabled,
+    String? targetLanguage,
+    CancelToken? cancelToken,
+  }) {
+    return runApiGuarded(() async {
+      final response = await dio.post(
+        "$apiRoot/translation/config",
+        queryParameters: buildQueryParams(),
+        data: {
+          if (autoTranslateEnabled != null) 'auto_translate_enabled': autoTranslateEnabled,
+          if (targetLanguage != null) 'translation_target_language': targetLanguage,
+        },
+        cancelToken: cancelToken,
+      );
+      return returnSuccessOrError(response);
+    });
+  }
+
+  Future<Response> clearTranslationCache({CancelToken? cancelToken}) {
+    return runApiGuarded(() async {
+      final response = await dio.delete(
+        "$apiRoot/translation/cache",
+        queryParameters: buildQueryParams(),
+        cancelToken: cancelToken,
+      );
+      return returnSuccessOrError(response);
+    });
+  }
 }
 
 /// Intercepts API requests, responses, and errors and logs them to console

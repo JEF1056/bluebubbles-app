@@ -19,6 +19,7 @@ import com.wearbubbles.api.ApiClient
 import com.wearbubbles.api.dto.ChatRelayDto
 import com.wearbubbles.api.dto.ContactRelayDto
 import com.wearbubbles.api.dto.MessageRelayDto
+import com.wearbubbles.api.dto.MessageTranslationDto
 import com.wearbubbles.api.dto.TapbackType
 import com.wearbubbles.api.dto.TapbackUtils
 import com.wearbubbles.data.SettingsDataStore
@@ -61,7 +62,8 @@ data class SendResultPayload(
     val success: Boolean = false,
     val error: String? = null,
     val message: MessageRelayDto? = null,
-    val timedOut: Boolean = false
+    val timedOut: Boolean = false,
+    val translation: MessageTranslationDto? = null
 )
 
 sealed class RelayEvent {
@@ -264,20 +266,8 @@ class PhoneRelayClient(private val context: Context) {
             }
         }
 
-        internal fun MessageRelayDto.toEntity() = MessageEntity(
-            guid = guid,
-            chatGuid = chatGuid,
-            text = text,
-            isFromMe = isFromMe,
-            dateCreated = dateCreated,
-            handleAddress = handleAddress,
-            attachmentGuid = attachmentGuid,
-            attachmentMimeType = attachmentMimeType,
-            associatedMessageGuid = associatedMessageGuid,
-            associatedMessageType = associatedMessageType,
-            dateDelivered = dateDelivered,
-            dateRead = dateRead
-        )
+        internal fun MessageRelayDto.toEntity() =
+            com.wearbubbles.data.LinkPreviewHelper.relayDtoToEntity(this)
 
         const val PATH_CREDENTIALS = "/bb/credentials"
         const val PATH_PROFILE = "/bb/profile"
@@ -362,6 +352,7 @@ class PhoneRelayClient(private val context: Context) {
         const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
         const val PATH_WATCH_ACTIVE = "/bb/watch-active"
         const val PATH_OPEN_CHAT = "/bb/open-chat"
+        const val PATH_TRANSLATE_MESSAGE = "/bb/translate-message"
         const val PATH_INCOMING_CALL = "/bb/incoming-call"
         const val PATH_CALL_ENDED = "/bb/call-ended"
         const val PATH_ANSWER_CALL_AUDIO = "/bb/answer-call-audio"
@@ -850,6 +841,32 @@ class PhoneRelayClient(private val context: Context) {
     suspend fun sendDeclineCallAwait(callUuid: String): Boolean =
         sendJsonField(PATH_DECLINE_CALL, "callUuid", callUuid)
 
+    suspend fun translateMessage(messageGuid: String): SendResultPayload? {
+        val requestId = UUID.randomUUID().toString()
+        val deferred = CompletableDeferred<SendResultPayload>()
+        pendingResults[requestId] = deferred
+
+        val payload = JsonObject().apply {
+            addProperty("messageGuid", messageGuid)
+            addProperty("requestId", requestId)
+        }.toString().toByteArray()
+
+        if (!sendToPhone(PATH_TRANSLATE_MESSAGE, payload)) {
+            pendingResults.remove(requestId)
+            return null
+        }
+
+        return try {
+            orTimedOutResult(
+                withTimeoutOrNull(30_000L) { deferred.await() },
+                requestId = requestId,
+                tempGuid = messageGuid
+            )
+        } finally {
+            pendingResults.remove(requestId)
+        }
+    }
+
     private val watchActiveLock = Any()
     @Volatile
     private var desiredWatchActive: Boolean = false
@@ -967,7 +984,10 @@ class PhoneRelayClient(private val context: Context) {
     suspend fun handleIncomingMessageJson(json: String, isUpdate: Boolean) {
         try {
             val dto = gson.fromJson(json, MessageRelayDto::class.java) ?: return
-            val entity = dto.toEntity()
+            val parsed = dto.toEntity()
+            val entity = if (isUpdate) {
+                MessageDao.mergeTranslationIfUnchanged(parsed, db.messageDao().getByGuid(parsed.guid))
+            } else parsed
             db.messageDao().upsertAndReconcile(entity, tempGuid = dto.tempGuid)
             if (!isUpdate) {
                 val displayText = if (TapbackUtils.isTapbackCode(entity.associatedMessageType)) {

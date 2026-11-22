@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Backspace
@@ -27,7 +26,6 @@ import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Dialpad
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,7 +39,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -54,7 +51,6 @@ import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.itemsIndexed
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.Text
-import coil.compose.AsyncImage
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.layout.ScalingLazyColumn
 import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
@@ -65,15 +61,13 @@ import com.google.android.horologist.compose.layout.rememberResponsiveColumnStat
 import com.wearbubbles.api.dto.AddressNormalizer
 import com.wearbubbles.db.entities.ChatEntity
 import com.wearbubbles.db.entities.ContactEntity
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.LocalWearPalette
 import com.wearbubbles.ui.theme.WearDirectKeyboardInput
 import com.wearbubbles.ui.theme.WearPillButton
-import com.wearbubbles.ui.theme.avatarMonogram
-import com.wearbubbles.ui.theme.avatarSwatchFor
 import com.wearbubbles.ui.theme.centeredTextStyle
 import com.wearbubbles.ui.theme.rememberSpeechInputLauncher
-import java.io.File
 import java.util.Locale
 
 private const val MAX_FAVORITE_CONTACTS = 4
@@ -548,29 +542,27 @@ fun NewMessageScreen(
                     }
                 }
 
-                if (isLoading && !hasContacts) {
-                    item(key = "loading_contacts") {
-                        Text(
-                            text = "Loading contacts...",
-                            style = centeredTextStyle(13.sp, 17.sp),
-                            color = palette.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
+                val statusText = when {
+                    isLoading && !hasContacts -> "Loading contacts..."
+                    filteredContacts.isEmpty() -> if (query.isBlank()) "No contacts synced" else "No matches for \"$query\""
+                    else -> null
+                }
+                if (statusText != null) {
+                    item(key = "contacts_status") {
+                        BlurFadeContent(
+                            targetState = statusText,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 12.dp)
-                        )
-                    }
-                } else if (filteredContacts.isEmpty()) {
-                    item(key = "empty_contacts") {
-                        Text(
-                            text = if (query.isBlank()) "No contacts synced" else "No matches for \"$query\"",
-                            style = centeredTextStyle(13.sp, 17.sp),
-                            color = palette.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp)
-                        )
+                        ) { text ->
+                            Text(
+                                text = text,
+                                style = centeredTextStyle(13.sp, 17.sp),
+                                color = palette.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 } else {
                     for (section in alphabeticalSections) {
@@ -659,13 +651,6 @@ private fun FavoriteContactCapsule(
 ) {
     val palette = LocalWearPalette.current
     val display = contact.displayName.ifBlank { contact.normalizedAddress }
-    val avatarFile = remember(contact.avatarPath) {
-        contact.avatarPath?.takeIf { it.isNotBlank() }?.let(::File)
-    }
-    val swatch = remember(contact.normalizedAddress) {
-        avatarSwatchFor(contact.normalizedAddress)
-    }
-    val monogram = remember(display) { avatarMonogram(display) }
 
     Column(
         modifier = modifier
@@ -674,36 +659,12 @@ private fun FavoriteContactCapsule(
             .padding(bottom = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(swatch.container),
-            contentAlignment = Alignment.Center
-        ) {
-            if (avatarFile != null) {
-                AsyncImage(
-                    model = avatarFile,
-                    contentDescription = display,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else if (monogram != null) {
-                Text(
-                    text = monogram,
-                    style = centeredTextStyle(19.sp, 22.sp, FontWeight.SemiBold),
-                    color = swatch.content,
-                    textAlign = TextAlign.Center
-                )
-            } else {
-                Icon(
-                    imageVector = Icons.Rounded.Person,
-                    contentDescription = display,
-                    tint = swatch.content,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
+        ContactAvatar(
+            title = display,
+            seed = contact.normalizedAddress,
+            avatarPath = contact.avatarPath,
+            size = 48.dp
+        )
 
         Spacer(modifier = Modifier.height(4.dp))
 

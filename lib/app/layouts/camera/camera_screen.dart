@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -334,8 +335,7 @@ class _VideoPreviewState extends State<_VideoPreview> with WidgetsBindingObserve
                     Center(
                       child: GestureDetector(
                         onTap: _togglePlay,
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 150),
+                        child: BlurFadeSwitcher(
                           child: Icon(
                             value.isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
                             key: ValueKey(value.isPlaying),

@@ -236,13 +236,17 @@ class OutgoingMessageHandler {
     required String fileName,
     required StickerPlacement placement,
   }) {
+    if (!placement.isValid) {
+      return Future.error(ArgumentError.value(placement, 'placement', 'Non-finite or invalid sticker placement'));
+    }
+    final targetGuid = selected.guid?.replaceAll("bp:", "").split("/").last;
     return queue(
       OutgoingReaction(
         chat: chat,
         message: Message(
-          associatedMessageGuid: selected.guid,
+          associatedMessageGuid: targetGuid,
           associatedMessageType: ReactionTypes.PLACED_STICKER,
-          associatedMessagePart: part,
+          associatedMessagePart: part < 0 ? 0 : part,
           dateCreated: DateTime.now(),
           hasAttachments: true,
           isFromMe: true,
@@ -762,7 +766,7 @@ class OutgoingMessageHandler {
       saved.add(hydrated);
 
       final msgSvcRegistered = Get.isRegistered<MessagesService>(tag: c.guid);
-      if (r != null && message.isReaction && msgSvcRegistered) {
+      if (r != null && message.isReaction && msgSvcRegistered && message.associatedMessageGuid != null) {
         // Add temp reaction to UI immediately during prep so it appears without
         // waiting for the chat's send queue (fixes back-to-back text+reaction send delay).
         final parentState = MessagesSvc(c.guid).getMessageStateIfExists(message.associatedMessageGuid!);
@@ -977,13 +981,14 @@ class OutgoingMessageHandler {
                     if (ReactionTypes.sendsSticker(r)) {
                       confirmed = Message.findOne(guid: confirmed.guid) ?? confirmed;
                     }
+                    final targetGuid = confirmed.associatedMessageGuid ?? m.associatedMessageGuid;
                     final parentState =
-                        maybeFindMessagesSvc(c.guid)?.getMessageStateIfExists(confirmed.associatedMessageGuid!);
+                        targetGuid == null ? null : maybeFindMessagesSvc(c.guid)?.getMessageStateIfExists(targetGuid);
                     if (parentState != null) {
                       parentState.updateAssociatedMessageInternal(confirmed, tempGuid: tempGuid);
                     } else {
                       Logger.warn(
-                        'Parent MessageState not found for ${confirmed.associatedMessageGuid} when updating reaction',
+                        'Parent MessageState not found for $targetGuid when updating reaction',
                         tag: _tag,
                       );
                     }
@@ -1001,7 +1006,7 @@ class OutgoingMessageHandler {
         // top-level MessagesService entries, so the standard updateMessage call
         // inside _finalizeOutgoingFailure is a no-op for them.  Explicitly
         // update the parent so the error badge propagates to the UI.
-        onExtra: r != null && m.isReaction
+        onExtra: r != null && m.isReaction && m.associatedMessageGuid != null
             ? (errorMsg) async {
                 maybeFindMessagesSvc(c.guid)
                     ?.getMessageStateIfExists(m.associatedMessageGuid!)
@@ -1733,6 +1738,13 @@ class OutgoingMessageHandler {
 
   /// Why tapback [type] on [m] can't be sent, or null if it can.
   static String? _unsendableTapbackReason(String type, Message m) {
+    final targetGuid = m.associatedMessageGuid;
+    if (targetGuid == null ||
+        targetGuid.isEmpty ||
+        targetGuid.startsWith("temp") ||
+        targetGuid.startsWith("error")) {
+      return "Target message isn't on the server yet";
+    }
     if (type == ReactionTypes.PLACED_STICKER) {
       return SettingsSvc.serverDetails.supportsStickers ? null : "Stickers need a v2 server";
     }

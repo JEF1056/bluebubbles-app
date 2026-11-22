@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.KeyEvent
@@ -13,9 +14,14 @@ import android.widget.EditText
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -23,6 +29,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -60,8 +67,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +98,98 @@ import coil.request.ImageRequest
 import com.wearbubbles.ui.components.rememberReducedMotion
 import kotlinx.coroutines.delay
 import java.io.File
+
+internal const val BLUR_FADE_ENTER_MS = 200
+internal const val BLUR_FADE_EXIT_MS = 180
+internal const val BLUR_FADE_MAX_DP = 2.5f
+internal const val BLUR_FADE_THRESHOLD_DP = 0.1f
+
+internal fun resolveBlurFadeDp(
+    fraction: Float,
+    sdkInt: Int = Build.VERSION.SDK_INT,
+    reducedMotion: Boolean = false,
+    maxBlurDp: Float = BLUR_FADE_MAX_DP
+): Float {
+    if (reducedMotion || sdkInt < Build.VERSION_CODES.S) return 0f
+    val blurDp = maxBlurDp * fraction.coerceIn(0f, 1f)
+    return if (blurDp > BLUR_FADE_THRESHOLD_DP) blurDp else 0f
+}
+
+/**
+ * Transitions changing content with a subtle 2.5dp Gaussian blur-fade on API 31+ (fade-only on
+ * API 30, instant swap when reduced motion is enabled). Reads blur fraction only in graphicsLayer
+ * so content never recomposes per frame and carries zero offscreen layer overhead at rest.
+ */
+@Composable
+fun <T> BlurFadeContent(
+    targetState: T,
+    modifier: Modifier = Modifier,
+    contentAlignment: Alignment = Alignment.Center,
+    animateSize: Boolean = false,
+    contentKey: (T) -> Any? = { it },
+    content: @Composable (T) -> Unit
+) {
+    if (rememberReducedMotion()) {
+        Box(modifier = modifier, contentAlignment = contentAlignment) {
+            content(targetState)
+        }
+        return
+    }
+    AnimatedContent(
+        targetState = targetState,
+        modifier = modifier,
+        contentAlignment = contentAlignment,
+        contentKey = contentKey,
+        transitionSpec = {
+            (fadeIn(tween(BLUR_FADE_ENTER_MS, easing = FastOutSlowInEasing)) togetherWith
+                fadeOut(tween(BLUR_FADE_EXIT_MS, easing = FastOutSlowInEasing)))
+                .using(
+                    if (animateSize) {
+                        SizeTransform(clip = false) { _, _ ->
+                            tween(BLUR_FADE_ENTER_MS, easing = FastOutSlowInEasing)
+                        }
+                    } else {
+                        null
+                    }
+                )
+        },
+        label = "blur_fade_content"
+    ) { state ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val blurFraction = transition.animateFloat(
+                transitionSpec = {
+                    tween(
+                        durationMillis = if (targetState == EnterExitState.Visible) {
+                            BLUR_FADE_ENTER_MS
+                        } else {
+                            BLUR_FADE_EXIT_MS
+                        },
+                        easing = FastOutSlowInEasing
+                    )
+                },
+                label = "blur_fade_fraction"
+            ) { enterExit ->
+                if (enterExit == EnterExitState.Visible) 0f else 1f
+            }
+            Box(
+                modifier = Modifier.graphicsLayer {
+                    val blurDp = resolveBlurFadeDp(blurFraction.value)
+                    renderEffect = if (blurDp > 0f) {
+                        val px = blurDp.dp.toPx()
+                        if (px > 0f) BlurEffect(px, px, TileMode.Decal) else null
+                    } else {
+                        null
+                    }
+                },
+                contentAlignment = contentAlignment
+            ) {
+                content(state)
+            }
+        } else {
+            content(state)
+        }
+    }
+}
 
 /**
  * Shared Google Messages-style circular contact/group avatar with deterministic pastel-on-tonal
@@ -138,30 +240,34 @@ fun ContactAvatar(
                     .background(containerColor),
                 contentAlignment = Alignment.Center
             ) {
-                when {
-                    isGroup -> Icon(
-                        imageVector = Icons.Rounded.Group,
-                        contentDescription = null,
-                        tint = contentColor,
-                        modifier = Modifier.size(iconSize)
-                    )
-                    monogram != null -> Text(
-                        text = monogram,
-                        style = centeredTextStyle(
-                            fontSize = monogramFontSize,
-                            lineHeight = monogramFontSize,
-                            fontWeight = FontWeight.Medium
-                        ),
-                        color = contentColor,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1
-                    )
-                    else -> Icon(
-                        imageVector = Icons.Rounded.Person,
-                        contentDescription = null,
-                        tint = contentColor,
-                        modifier = Modifier.size(iconSize)
-                    )
+                BlurFadeContent(
+                    targetState = if (isGroup) "group" else monogram ?: "person"
+                ) { state ->
+                    when (state) {
+                        "group" -> Icon(
+                            imageVector = Icons.Rounded.Group,
+                            contentDescription = null,
+                            tint = contentColor,
+                            modifier = Modifier.size(iconSize)
+                        )
+                        "person" -> Icon(
+                            imageVector = Icons.Rounded.Person,
+                            contentDescription = null,
+                            tint = contentColor,
+                            modifier = Modifier.size(iconSize)
+                        )
+                        else -> Text(
+                            text = state,
+                            style = centeredTextStyle(
+                                fontSize = monogramFontSize,
+                                lineHeight = monogramFontSize,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = contentColor,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
         }
@@ -223,32 +329,43 @@ fun WearPillButton(
             horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(
-                text = label,
-                style = centeredTextStyle(
-                    fontSize = 14.sp,
-                    lineHeight = 17.sp,
-                    fontWeight = labelFontWeight
-                ),
-                color = contentColor,
-                textAlign = if (centered) TextAlign.Center else TextAlign.Start,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (!secondaryLabel.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
+            val textAlignment = if (centered) Alignment.Center else Alignment.CenterStart
+            BlurFadeContent(
+                targetState = label,
+                contentAlignment = textAlignment
+            ) { currentLabel ->
                 Text(
-                    text = secondaryLabel,
+                    text = currentLabel,
                     style = centeredTextStyle(
-                        fontSize = 11.sp,
-                        lineHeight = 14.sp,
-                        fontWeight = FontWeight.Normal
+                        fontSize = 14.sp,
+                        lineHeight = 17.sp,
+                        fontWeight = labelFontWeight
                     ),
-                    color = secondaryContentColor,
+                    color = contentColor,
                     textAlign = if (centered) TextAlign.Center else TextAlign.Start,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (!secondaryLabel.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                BlurFadeContent(
+                    targetState = secondaryLabel,
+                    contentAlignment = textAlignment
+                ) { currentSecondary ->
+                    Text(
+                        text = currentSecondary,
+                        style = centeredTextStyle(
+                            fontSize = 11.sp,
+                            lineHeight = 14.sp,
+                            fontWeight = FontWeight.Normal
+                        ),
+                        color = secondaryContentColor,
+                        textAlign = if (centered) TextAlign.Center else TextAlign.Start,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }

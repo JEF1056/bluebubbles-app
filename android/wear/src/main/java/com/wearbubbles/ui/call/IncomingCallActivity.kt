@@ -6,6 +6,15 @@ import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -56,10 +65,11 @@ import androidx.wear.compose.material.Text
 import com.wearbubbles.notifications.ActiveCallState
 import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.CallPhase
+import com.wearbubbles.ui.components.rememberReducedMotion
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.WearBubblesTheme
 import com.wearbubbles.ui.theme.centeredTextStyle
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.io.File
 import java.util.Locale
 
@@ -104,6 +114,7 @@ private val DialerAnswerGreen = Color(0xFF34A853)
 private fun IncomingCallScreen(state: ActiveCallState) {
     val context = LocalContext.current
     val appScope = remember(context) { (context.applicationContext as WearBubblesApp).applicationScope }
+    val reducedMotion = rememberReducedMotion()
     var actionInFlight by remember(state.callUuid, state.phase) { mutableStateOf(false) }
 
     val avatarBitmap = remember(state.avatarPath) {
@@ -137,57 +148,69 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                         .background(DialerElevatedSurface),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (avatarBitmap != null) {
-                        Image(
-                            bitmap = avatarBitmap,
-                            contentDescription = state.callerName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Text(
-                            text = state.callerName.firstOrNull()?.uppercase() ?: "?",
-                            color = DialerPrimaryText,
-                            style = centeredTextStyle(
-                                fontSize = 20.sp,
-                                lineHeight = 24.sp,
-                                fontWeight = FontWeight.SemiBold
+                    BlurFadeContent(targetState = avatarBitmap) { bitmap ->
+                        if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap,
+                                contentDescription = state.callerName,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
                             )
-                        )
+                        } else {
+                            Text(
+                                text = state.callerName.firstOrNull()?.uppercase() ?: "?",
+                                color = DialerPrimaryText,
+                                style = centeredTextStyle(
+                                    fontSize = 20.sp,
+                                    lineHeight = 24.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    text = state.callerName,
-                    color = DialerPrimaryText,
-                    style = centeredTextStyle(
-                        fontSize = 18.sp,
-                        lineHeight = 22.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(2.dp))
-
-                when (state.phase) {
-                    CallPhase.RINGING -> Text(
-                        text = ringingCallSubtitle(isVideo = state.isVideo, isTelephony = state.isTelephony),
-                        color = DialerSecondaryText,
+                BlurFadeContent(targetState = state.callerName) { callerName ->
+                    Text(
+                        text = callerName,
+                        color = DialerPrimaryText,
                         style = centeredTextStyle(
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp,
-                            fontWeight = FontWeight.Medium
+                            fontSize = 18.sp,
+                            lineHeight = 22.sp,
+                            fontWeight = FontWeight.SemiBold
                         ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center
                     )
-                    CallPhase.ONGOING -> CallTimerText(startedAtElapsedMs = state.startedAtElapsedMs)
+                }
+
+                Spacer(modifier = Modifier.height(2.dp))
+
+                val subtitleState = if (state.phase == CallPhase.ONGOING) {
+                    "ongoing"
+                } else {
+                    ringingCallSubtitle(isVideo = state.isVideo, isTelephony = state.isTelephony)
+                }
+                BlurFadeContent(targetState = subtitleState) { phaseSubtitle ->
+                    if (phaseSubtitle == "ongoing") {
+                        CallTimerText(startedAtElapsedMs = state.startedAtElapsedMs)
+                    } else {
+                        Text(
+                            text = phaseSubtitle,
+                            color = DialerSecondaryText,
+                            style = centeredTextStyle(
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
 
@@ -195,7 +218,7 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 6.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -226,33 +249,49 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                     )
                 }
 
-                if (state.phase == CallPhase.RINGING) {
-                    Box(
-                        modifier = Modifier
-                            .size(52.dp)
-                            .clip(CircleShape)
-                            .background(DialerAnswerGreen)
-                            .semantics { contentDescription = "Answer Audio" }
-                            .clickable(enabled = !actionInFlight, role = Role.Button) {
-                                actionInFlight = true
-                                appScope.launch {
-                                    try {
-                                        CallNotificationHelper.answerCallAudio(context.applicationContext, state.callUuid)
-                                    } finally {
-                                        withContext(Dispatchers.Main) {
-                                            actionInFlight = false
+                AnimatedVisibility(
+                    visible = state.phase == CallPhase.RINGING,
+                    enter = if (reducedMotion) {
+                        EnterTransition.None
+                    } else {
+                        fadeIn(tween(200, easing = FastOutSlowInEasing)) +
+                            expandHorizontally(tween(200, easing = FastOutSlowInEasing))
+                    },
+                    exit = if (reducedMotion) {
+                        ExitTransition.None
+                    } else {
+                        fadeOut(tween(180, easing = FastOutSlowInEasing)) +
+                            shrinkHorizontally(tween(200, easing = FastOutSlowInEasing))
+                    }
+                ) {
+                    Box(modifier = Modifier.padding(start = 28.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(52.dp)
+                                .clip(CircleShape)
+                                .background(DialerAnswerGreen)
+                                .semantics { contentDescription = "Answer Audio" }
+                                .clickable(enabled = !actionInFlight, role = Role.Button) {
+                                    actionInFlight = true
+                                    appScope.launch {
+                                        try {
+                                            CallNotificationHelper.answerCallAudio(context.applicationContext, state.callUuid)
+                                        } finally {
+                                            withContext(Dispatchers.Main) {
+                                                actionInFlight = false
+                                            }
                                         }
                                     }
-                                }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Call,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Call,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
             }

@@ -168,7 +168,11 @@ class _StickerDropTargetState extends State<StickerDropTarget> {
               builder: (context, constraints) {
                 final local = _hoverLocal;
                 Offset? center;
-                if (drag != null && local != null) {
+                if (drag != null &&
+                    local != null &&
+                    constraints.biggest.isFinite &&
+                    constraints.biggest.width > 0 &&
+                    constraints.biggest.height > 0) {
                   final isFromMe = widget.message.isFromMe ?? false;
                   final at = StickerHolder.placementAt(
                     local,
@@ -281,7 +285,7 @@ class _StickerDropTargetState extends State<StickerDropTarget> {
 
   Future<void> _place(BuildContext context, DragTargetDetails<StickerDrag> details) async {
     final box = context.findRenderObject() as RenderBox?;
-    if (box == null || !box.attached) return;
+    if (box == null || !box.attached || !box.size.isFinite || box.size.width <= 0 || box.size.height <= 0) return;
     // The drag feedback is centered on the pointer, which is where the drop reports
     final at = StickerHolder.placementAt(
       box.globalToLocal(details.offset),

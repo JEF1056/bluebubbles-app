@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -53,8 +54,7 @@ class _CopyAddressButtonState extends State<CopyAddressButton> {
             child: SizedBox(
               width: iOS ? 30 : 32,
               height: iOS ? 30 : 32,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 150),
+              child: BlurFadeSwitcher(
                 child: Icon(
                   icon,
                   key: ValueKey(copied),

@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:bluebubbles/app/components/m3e/m3e_motion.dart';
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/misc/tail_clipper.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/relative_timestamp_ticker.dart';
@@ -80,12 +80,15 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
 
   bool get _isEdited => controller.parts.any((p) => p.isEdited);
 
+  bool get _hasTranslationIndicator =>
+      !(message.isFromMe ?? false) && (controller.isTranslating.value || controller.translation.value != null);
+
   bool get shouldShow {
     if (controller.audioWasKept.value != null) return true;
     if (message.isGroupEvent) return false;
     if (widget.forceShow || _isSendingDisplayed) return true;
     if (controller.isFullyUnsent || (controller.parts.lastOrNull?.isUnsent ?? false)) return false;
-    if (_isEdited) return true;
+    if (_isEdited || _hasTranslationIndicator) return true;
 
     // Visibility for "last read / delivered / sent / received" is computed by
     // MessagesService._recomputeDeliveredIndicators and stored reactively on
@@ -205,6 +208,49 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     DateTime? timestamp,
   }) _materialStatus(bool hasBackground) => _resolveStatus(material: true, hasBackground: hasBackground);
 
+  Widget? _buildTranslationControl({required bool material, required bool hasBackground}) {
+    if (!_hasTranslationIndicator) return null;
+    final fallbackColor = material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final baseStyle = WallpaperContrast.unbubbledStyle(
+      material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!,
+      hasWallpaper: hasBackground,
+      fallbackColor: fallbackColor,
+    );
+    if (controller.isTranslating.value) {
+      return BlurFadeSwitcher(
+        alignment: AlignmentDirectional.centerStart,
+        animateSize: true,
+        child: Text(
+          "Translating…",
+          key: const ValueKey('translating'),
+          style: baseStyle.copyWith(fontWeight: FontWeight.normal),
+        ),
+      );
+    }
+    final tr = controller.translation.value;
+    if (tr == null) return null;
+    final showOrig = controller.showOriginalTranslation.value;
+    final label = showOrig
+        ? "Showing original · Show translation"
+        : "Translated from ${tr.sourceLanguageName}";
+    return BlurFadeSwitcher(
+      alignment: AlignmentDirectional.centerStart,
+      animateSize: true,
+      child: MouseRegion(
+        key: ValueKey(showOrig ? 'tr_orig' : 'tr_${tr.sourceLanguageName}'),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => controller.showOriginalTranslation.toggle(),
+          child: Text(
+            label,
+            style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final material = !iOS && !samsung;
@@ -220,9 +266,9 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
               )
             : 0.0;
     return AnimatedSize(
-      curve: material ? M3EMotion.spatialFast.curve : Curves.easeInOut,
+      curve: Curves.easeOutCubic,
       alignment: Alignment.bottomCenter,
-      duration: material ? M3EMotion.spatialFast.duration : const Duration(milliseconds: 250),
+      duration: motionDuration(context, const Duration(milliseconds: 200)),
       child: Obx(() {
         // Observe the fields that affect both shouldShow and getText.
         // isSending is handled via the debounced _isSendingDisplayed + setState,
@@ -237,6 +283,9 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         controller.dateCreated.value;
         controller.dateEdited.value;
         controller.parts.length;
+        controller.translation.value;
+        controller.showOriginalTranslation.value;
+        controller.isTranslating.value;
         final isRelative = SettingsSvc.settings.skin.value != Skins.iOS;
         if (!shouldShow) {
           _ticker.sync(null, isRelative: false);
@@ -255,79 +304,115 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
           );
         }
 
+        final translationWidget = _buildTranslationControl(material: material, hasBackground: hasBackground);
+        final sepStyle = WallpaperContrast.unbubbledStyle(
+          material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!,
+          hasWallpaper: hasBackground,
+          fallbackColor: material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline,
+        );
+
+        Widget buildFooter(Widget? statusWidget) {
+          if (statusWidget == null) return translationWidget!;
+          if (translationWidget == null) return statusWidget;
+          if (Theme.of(context).platform == TargetPlatform.android) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                statusWidget,
+                const SizedBox(height: 1),
+                translationWidget,
+              ],
+            );
+          }
+          return Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              statusWidget,
+              Text(" · ", style: sepStyle),
+              translationWidget,
+            ],
+          );
+        }
+
         if (material) {
           final status = _materialStatus(hasBackground);
           _ticker.sync(status.timestamp, isRelative: isRelative);
           final hasIcon = status.icon != null || status.gmsgKind != null;
-          if (!hasIcon && status.spans.isEmpty) {
+          final hasStatus = hasIcon || status.spans.isNotEmpty;
+          if (!hasStatus && translationWidget == null) {
             return const SizedBox.shrink();
           }
-          return wrapEditedTap(Padding(
+          return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (status.gmsgKind != null)
-                  Semantics(
-                    label: status.semanticLabel,
-                    child: CustomPaint(
-                      size: Size(status.gmsgKind == _GMsgStatusKind.sent ? 12 : 18, 12),
-                      painter: _GMsgStatusPainter(
-                        kind: status.gmsgKind!,
-                        color: status.iconColor ?? mutedColor,
-                        checkColor: hasBackground ? Colors.black87 : context.theme.colorScheme.onPrimary,
+            child: buildFooter(
+              hasStatus
+                  ? wrapEditedTap(
+                      BlurFadeSwitcher(
+                        alignment: AlignmentDirectional.centerStart,
+                        animateSize: true,
+                        child: Row(
+                          key: ValueKey(status.semanticLabel),
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            if (status.gmsgKind != null)
+                              Semantics(
+                                label: status.semanticLabel,
+                                child: CustomPaint(
+                                  size: Size(status.gmsgKind == _GMsgStatusKind.sent ? 12 : 18, 12),
+                                  painter: _GMsgStatusPainter(
+                                    kind: status.gmsgKind!,
+                                    color: status.iconColor ?? mutedColor,
+                                    checkColor: hasBackground ? Colors.black87 : context.theme.colorScheme.onPrimary,
+                                  ),
+                                ),
+                              )
+                            else if (status.icon != null)
+                              Icon(
+                                status.icon,
+                                size: 14,
+                                color: status.iconColor ?? mutedColor,
+                                shadows: hasBackground ? WallpaperContrast.unbubbledTextShadows : null,
+                                semanticLabel: status.semanticLabel,
+                              ),
+                            if (status.spans.isNotEmpty)
+                              Padding(
+                                padding: EdgeInsets.only(left: hasIcon ? 4 : 0),
+                                child: Text.rich(TextSpan(children: status.spans)),
+                              ),
+                          ],
+                        ),
                       ),
-                    ),
-                  )
-                else if (status.icon != null)
-                  Icon(
-                    status.icon,
-                    size: 14,
-                    color: status.iconColor ?? mutedColor,
-                    shadows: hasBackground ? WallpaperContrast.unbubbledTextShadows : null,
-                    semanticLabel: status.semanticLabel,
-                  ),
-                AnimatedSize(
-                  duration: M3EMotion.spatialFast.duration,
-                  curve: M3EMotion.spatialFast.curve,
-                  alignment: AlignmentDirectional.centerStart,
-                  child: AnimatedSwitcher(
-                    duration: M3EMotion.effectsFast.duration,
-                    switchInCurve: M3EMotion.effectsFast.curve,
-                    switchOutCurve: M3EMotion.effectsFast.curve,
-                    layoutBuilder: (currentChild, previousChildren) => Stack(
-                      alignment: AlignmentDirectional.centerStart,
-                      children: [
-                        ...previousChildren,
-                        ?currentChild,
-                      ],
-                    ),
-                    child: status.spans.isEmpty
-                        ? const SizedBox.shrink()
-                        : Padding(
-                            key: ValueKey(status.semanticLabel),
-                            padding: EdgeInsets.only(left: hasIcon ? 4 : 0),
-                            child: Text.rich(TextSpan(children: status.spans)),
-                          ),
-                  ),
-                ),
-              ],
+                    )
+                  : null,
             ),
-          ));
+          );
         }
 
         final status = _resolveStatus(material: false, hasBackground: hasBackground);
         _ticker.sync(status.timestamp, isRelative: isRelative);
         final spans = status.spans;
-        return spans.isNotEmpty
-            ? wrapEditedTap(Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 15).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
-                child: Text.rich(TextSpan(
-                  children: spans,
-                )),
-              ))
-            : const SizedBox.shrink();
+        if (spans.isEmpty && translationWidget == null) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15).add(EdgeInsets.only(top: 2, bottom: 2, left: indentLeft)),
+          child: buildFooter(
+            spans.isNotEmpty
+                ? wrapEditedTap(
+                    BlurFadeSwitcher(
+                      alignment: AlignmentDirectional.centerStart,
+                      animateSize: true,
+                      child: Text.rich(
+                        key: ValueKey(status.semanticLabel),
+                        TextSpan(children: spans),
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+        );
       }),
     );
   }

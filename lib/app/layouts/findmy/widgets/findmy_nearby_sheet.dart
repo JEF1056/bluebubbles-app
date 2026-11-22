@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/layouts/findmy/widgets/findmy_device_avatar.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -498,14 +499,26 @@ class _FindMyNearbySheetState extends State<FindMyNearbySheet>
                                   widget.device,
                                   component: _selectedComponent,
                                 ),
-                        icon: busy
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : Icon(isRinging ? Icons.stop_rounded : Icons.volume_up_rounded),
-                        label: Text(isRinging ? 'Stop Sound' : 'Play Sound'),
+                        icon: BlurFadeSwitcher(
+                          child: busy
+                              ? const SizedBox(
+                                  key: ValueKey('busy'),
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Icon(
+                                  isRinging ? Icons.stop_rounded : Icons.volume_up_rounded,
+                                  key: ValueKey(isRinging),
+                                ),
+                        ),
+                        label: BlurFadeSwitcher(
+                          animateSize: true,
+                          child: Text(
+                            isRinging ? 'Stop Sound' : 'Play Sound',
+                            key: ValueKey(isRinging),
+                          ),
+                        ),
                       );
                     }),
                   ),

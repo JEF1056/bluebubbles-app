@@ -32,9 +32,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.SendToMobile
 import androidx.compose.material.icons.outlined.AddReaction
@@ -43,18 +46,21 @@ import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.SentimentSatisfied
+import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.rounded.BrokenImage
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Done
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -111,6 +117,7 @@ import com.google.android.horologist.compose.layout.ScalingLazyColumnDefaults
 import com.google.android.horologist.compose.layout.ScreenScaffold
 import com.google.android.horologist.compose.layout.rememberResponsiveColumnState
 import com.wearbubbles.api.dto.TapbackType
+import com.wearbubbles.data.LinkPreviewHelper
 import com.wearbubbles.db.MessageDao
 import com.wearbubbles.notifications.RemoteLauncher
 import com.wearbubbles.ui.components.WearConfirmModal
@@ -126,6 +133,7 @@ import com.wearbubbles.ui.components.WearModalSurface
 import com.wearbubbles.ui.components.WearModalTextPrimary
 import com.wearbubbles.ui.components.WearModalTextSecondary
 import com.wearbubbles.ui.components.rememberReducedMotion
+import com.wearbubbles.ui.theme.BlurFadeContent
 import com.wearbubbles.ui.theme.ContactAvatar
 import com.wearbubbles.ui.theme.ErrorColor
 import com.wearbubbles.ui.theme.ErrorContainer
@@ -176,9 +184,15 @@ private val QUICK_EMOJIS = listOf(
 private val AUDIO_WAVEFORM_HEIGHTS = listOf(6.dp, 12.dp, 9.dp, 14.dp, 7.dp, 11.dp)
 
 private data class ViewerImageSource(
+    val attachmentGuid: String?,
     val localPath: String?,
     val remoteUrl: String?,
     val headers: Map<String, String>
+)
+
+private data class ViewerGalleryState(
+    val sources: List<ViewerImageSource>,
+    val initialIndex: Int
 )
 
 @OptIn(ExperimentalHorologistApi::class)
@@ -236,7 +250,7 @@ fun MessageDetailScreen(
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showPeopleDialog by remember { mutableStateOf(false) }
     var showTrashConfirm by remember { mutableStateOf(false) }
-    var fullscreenImage by remember { mutableStateOf<ViewerImageSource?>(null) }
+    var fullscreenGallery by remember { mutableStateOf<ViewerGalleryState?>(null) }
     val activeFailedMsg = failedActionMsg?.let { target ->
         messages.firstOrNull { it.guid == target.guid && it.sendFailed }
     }
@@ -372,11 +386,13 @@ fun MessageDetailScreen(
         }
     }
 
-    if (fullscreenImage != null) {
+    if (fullscreenGallery != null) {
+        val activeGallery = fullscreenGallery!!
         FullscreenImageViewer(
-            source = fullscreenImage!!,
+            gallery = activeGallery,
             imageLoader = imageLoader,
-            onDismiss = { fullscreenImage = null }
+            onRequestAttachment = { attGuid -> viewModel.requestAttachmentIfNeeded(attGuid) },
+            onDismiss = { fullscreenGallery = null }
         )
         return
     }
@@ -418,15 +434,21 @@ fun MessageDetailScreen(
                         .fillMaxWidth()
                         .padding(bottom = 4.dp)
                 ) {
-                    Text(
-                        text = chatTitle,
-                        style = centeredTextStyle(15.sp, 19.sp, FontWeight.Medium),
-                        color = palette.onSurface,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    BlurFadeContent(
+                        targetState = chatTitle,
+                        contentAlignment = Alignment.Center,
                         modifier = Modifier.fillMaxWidth()
-                    )
+                    ) { title ->
+                        Text(
+                            text = title,
+                            style = centeredTextStyle(15.sp, 19.sp, FontWeight.Medium),
+                            color = palette.onSurface,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
 
@@ -468,18 +490,29 @@ fun MessageDetailScreen(
                         }
                     },
                     onFailedClick = { failedActionMsg = msg },
-                    onImageClick = {
-                        if (msg.localAttachmentPath == null && msg.attachmentUrl == null) {
-                            viewModel.retryAttachment(msg.attachmentGuid)
-                        } else {
-                            fullscreenImage = ViewerImageSource(
-                                localPath = msg.localAttachmentPath,
-                                remoteUrl = msg.attachmentUrl,
-                                headers = msg.customHeaders
+                    onImageClick = { index ->
+                        val imageAtts = msg.imageAttachmentsForUi()
+                        val target = imageAtts.getOrNull(index)
+                        if (target != null && target.localPath == null && target.url == null) {
+                            viewModel.retryAttachment(target.guid)
+                        } else if (imageAtts.isNotEmpty()) {
+                            fullscreenGallery = ViewerGalleryState(
+                                sources = imageAtts.map { att ->
+                                    ViewerImageSource(
+                                        attachmentGuid = att.guid,
+                                        localPath = att.localPath,
+                                        remoteUrl = att.url,
+                                        headers = msg.customHeaders
+                                    )
+                                },
+                                initialIndex = index.coerceIn(0, imageAtts.lastIndex)
                             )
                         }
                     },
-                    onPlayAudioClick = { viewModel.toggleAudioPlayback(msg) }
+                    onRetryAttachment = { attGuid -> viewModel.retryAttachment(attGuid) },
+                    onPlayAudioClick = { viewModel.toggleAudioPlayback(msg) },
+                    onTranslate = { viewModel.translateMessage(msg.guid) },
+                    onToggleOriginalTranslation = { viewModel.toggleOriginalTranslation(msg.guid) }
                 )
             }
 
@@ -522,20 +555,25 @@ fun MessageDetailScreen(
                         .padding(top = 14.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isRecordingVoiceMemo) {
-                        VoiceRecordingBar(
-                            seconds = recordingSeconds,
-                            onCancel = { viewModel.cancelRecording() },
-                            onSend = { viewModel.stopAndSendRecording() }
-                        )
-                    } else {
-                        ReplyActionCluster(
-                            isSending = isSending,
-                            onMicClick = launchSpeechReply,
-                            onMicLongClick = startVoiceMemo,
-                            onEmojiClick = { showEmojiPicker = true },
-                            onKeyboardClick = launchKeyboardReply
-                        )
+                    BlurFadeContent(
+                        targetState = isRecordingVoiceMemo,
+                        modifier = Modifier.defaultMinSize(minHeight = 62.dp)
+                    ) { recording ->
+                        if (recording) {
+                            VoiceRecordingBar(
+                                seconds = recordingSeconds,
+                                onCancel = { viewModel.cancelRecording() },
+                                onSend = { viewModel.stopAndSendRecording() }
+                            )
+                        } else {
+                            ReplyActionCluster(
+                                isSending = isSending,
+                                onMicClick = launchSpeechReply,
+                                onMicLongClick = startVoiceMemo,
+                                onEmojiClick = { showEmojiPicker = true },
+                                onKeyboardClick = launchKeyboardReply
+                            )
+                        }
                     }
                 }
             }
@@ -611,14 +649,38 @@ fun MessageDetailScreen(
         }
     }
 
+    val tapTarget = reactionTargetMsg
+    val canTranslateTarget = tapTarget != null &&
+        !tapTarget.isFromMe &&
+        !tapTarget.text.isNullOrBlank() &&
+        !MessageDao.isTempPlaceholderGuid(tapTarget.guid)
+    val tapTargetHasTranslation = canTranslateTarget && !tapTarget!!.translatedText.isNullOrBlank()
+
     TapbackPickerOverlay(
-        showDialog = reactionTargetMsg != null,
-        targetSnippet = reactionTargetMsg?.text?.trim()?.takeIf { it.isNotBlank() },
-        activeByMeTypes = reactionTargetMsg?.reactions
+        showDialog = tapTarget != null,
+        targetSnippet = tapTarget?.let { resolveBubbleDisplayText(it)?.trim()?.takeIf { s -> s.isNotBlank() } },
+        activeByMeTypes = tapTarget?.reactions
             ?.filter { it.isFromMe }
             ?.map { it.type }
             ?.toSet()
             ?: emptySet(),
+        translateActionLabel = if (canTranslateTarget) {
+            resolveTranslationActionLabel(
+                hasTranslation = tapTargetHasTranslation,
+                showOriginalTranslation = tapTarget!!.showOriginalTranslation,
+                isTranslating = tapTarget.isTranslating
+            )
+        } else null,
+        onTranslateAction = if (canTranslateTarget && !tapTarget!!.isTranslating) {
+            {
+                if (tapTargetHasTranslation) {
+                    viewModel.toggleOriginalTranslation(tapTarget.guid)
+                } else {
+                    viewModel.translateMessage(tapTarget.guid)
+                }
+                reactionTargetMsg = null
+            }
+        } else null,
         onSelect = { tapback ->
             val target = reactionTargetMsg
             if (target != null) {
@@ -859,30 +921,30 @@ private fun ReplyActionCluster(
             iconSize = 24.dp
         )
 
-        if (isSending) {
-            Box(
-                modifier = Modifier
-                    .size(50.dp)
-                    .clip(CircleShape)
-                    .background(palette.surfaceContainerHigh),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    strokeWidth = 2.dp,
-                    indicatorColor = palette.primary
-                )
+        Box(
+            modifier = Modifier
+                .size(50.dp)
+                .clip(CircleShape)
+                .background(palette.surfaceContainerHigh)
+                .clickable(enabled = !isSending, role = Role.Button, onClick = onKeyboardClick),
+            contentAlignment = Alignment.Center
+        ) {
+            BlurFadeContent(targetState = isSending) { sending ->
+                if (sending) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        strokeWidth = 2.dp,
+                        indicatorColor = palette.primary
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Outlined.Keyboard,
+                        contentDescription = "Keyboard reply",
+                        tint = palette.onSurface,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
-        } else {
-            WearCircleIconButton(
-                icon = Icons.Outlined.Keyboard,
-                contentDescription = "Keyboard reply",
-                onClick = onKeyboardClick,
-                backgroundColor = palette.surfaceContainerHigh,
-                contentColor = palette.onSurface,
-                size = 50.dp,
-                iconSize = 24.dp
-            )
         }
     }
 }
@@ -926,7 +988,8 @@ private fun VoiceRecordingBar(
             )
             Text(
                 text = durationText,
-                style = centeredTextStyle(12.sp, 14.sp, FontWeight.SemiBold),
+                style = centeredTextStyle(12.sp, 14.sp, FontWeight.SemiBold)
+                    .copy(fontFeatureSettings = "tnum"),
                 color = OnErrorContainer,
                 textAlign = TextAlign.Center
             )
@@ -948,8 +1011,8 @@ private fun TypingIndicatorBubble() {
     val lifecycleOwner = LocalLifecycleOwner.current
     val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
     val animateTyping = !reducedMotion && lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
-    val alphas = if (!animateTyping) {
-        listOf(0.7f, 0.7f, 0.7f)
+    val alphaStates: List<State<Float>>? = if (!animateTyping) {
+        null
     } else {
         val transition = rememberInfiniteTransition(label = "typing")
         listOf(0, 180, 360).map { delayMs ->
@@ -966,7 +1029,7 @@ private fun TypingIndicatorBubble() {
                     repeatMode = RepeatMode.Restart
                 ),
                 label = "dot_$delayMs"
-            ).value
+            )
         }
     }
 
@@ -985,11 +1048,12 @@ private fun TypingIndicatorBubble() {
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            alphas.forEach { dotAlpha ->
+            repeat(3) { idx ->
+                val alphaState = alphaStates?.get(idx)
                 Box(
                     modifier = Modifier
                         .size(6.dp)
-                        .alpha(dotAlpha)
+                        .graphicsLayer { alpha = alphaState?.value ?: 0.7f }
                         .clip(CircleShape)
                         .background(palette.onSurfaceVariant)
                 )
@@ -1159,7 +1223,9 @@ internal fun TapbackPickerOverlay(
     targetSnippet: String?,
     activeByMeTypes: Set<TapbackType>,
     onSelect: (TapbackType) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    translateActionLabel: String? = null,
+    onTranslateAction: (() -> Unit)? = null
 ) {
     val tapbacks = TapbackType.pickerEntries
 
@@ -1214,6 +1280,17 @@ internal fun TapbackPickerOverlay(
             }
         }
 
+        if (translateActionLabel != null) {
+            item(key = "tapback_translate") {
+                WearModalActionPill(
+                    label = translateActionLabel,
+                    icon = Icons.Outlined.Translate,
+                    style = WearModalActionStyle.Secondary,
+                    onClick = { onTranslateAction?.invoke() }
+                )
+            }
+        }
+
         item(key = "tapback_close") {
             WearModalActionPill(
                 label = "Close reactions",
@@ -1255,6 +1332,64 @@ private fun TapbackPill(
     }
 }
 
+internal fun resolveBubbleDisplayText(message: MessageUi): String? {
+    val showTranslated = !message.isFromMe &&
+        !message.translatedText.isNullOrBlank() &&
+        !message.showOriginalTranslation
+    val effective = if (showTranslated) message.translatedText else message.text
+    return effective?.takeIf { it.isNotBlank() }
+}
+
+internal fun resolveTranslationCaption(
+    isFromMe: Boolean,
+    translatedText: String?,
+    sourceLanguage: String?,
+    showOriginalTranslation: Boolean,
+    isTranslating: Boolean
+): String? {
+    if (isFromMe) return null
+    val hasTranslation = !translatedText.isNullOrBlank()
+    return when {
+        isTranslating -> "Translating…"
+        hasTranslation && showOriginalTranslation -> "Original · Translate"
+        hasTranslation -> {
+            val lang = sourceLanguage?.trim()?.takeIf { it.isNotBlank() }?.uppercase(java.util.Locale.US)
+            if (lang != null) "Translated · $lang" else "Translated"
+        }
+        else -> null
+    }
+}
+
+internal fun resolveTranslationActionLabel(
+    hasTranslation: Boolean,
+    showOriginalTranslation: Boolean,
+    isTranslating: Boolean
+): String = when {
+    isTranslating -> "Translating…"
+    hasTranslation && showOriginalTranslation -> "Show translation"
+    hasTranslation -> "Show original"
+    else -> "Translate"
+}
+
+private fun MessageUi.imageAttachmentsForUi(): List<AttachmentUi> {
+    val fromList = attachments.filter { it.isImage }
+    if (fromList.isNotEmpty()) return fromList
+    val guid = attachmentGuid
+    if (!guid.isNullOrBlank() && attachmentMimeType?.startsWith("image/") == true) {
+        return listOf(
+            AttachmentUi(
+                guid = guid,
+                mimeType = attachmentMimeType,
+                url = attachmentUrl,
+                localPath = localAttachmentPath,
+                isLoading = isAttachmentLoading,
+                isFetchFailed = isAttachmentFetchFailed
+            )
+        )
+    }
+    return emptyList()
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
@@ -1269,8 +1404,11 @@ private fun MessageBubble(
     onToggleDetailExpand: () -> Unit,
     onLongPress: () -> Unit,
     onFailedClick: () -> Unit,
-    onImageClick: () -> Unit,
-    onPlayAudioClick: () -> Unit
+    onImageClick: (Int) -> Unit,
+    onRetryAttachment: (String?) -> Unit,
+    onPlayAudioClick: () -> Unit,
+    onTranslate: () -> Unit,
+    onToggleOriginalTranslation: () -> Unit
 ) {
     val context = LocalContext.current
     val palette = LocalWearPalette.current
@@ -1283,9 +1421,12 @@ private fun MessageBubble(
         message.dateCreated,
         message.dateDelivered,
         message.dateRead,
-        message.isLatestOutgoing,
+        message.dateEdited,
         message.isLastReadOutgoing,
+        message.isLastDeliveredOutgoing,
+        message.isLastSentOutgoing,
         message.isLatestIncoming,
+        isDetailExpanded,
         nowMs
     ) {
         resolveMessageDetailStatus(
@@ -1295,9 +1436,12 @@ private fun MessageBubble(
             dateCreated = message.dateCreated,
             dateDelivered = message.dateDelivered,
             dateRead = message.dateRead,
-            isLatestOutgoing = message.isLatestOutgoing,
             isLastReadOutgoing = message.isLastReadOutgoing,
+            isLastDeliveredOutgoing = message.isLastDeliveredOutgoing,
+            isLastSentOutgoing = message.isLastSentOutgoing,
             isLatestIncoming = message.isLatestIncoming,
+            dateEdited = message.dateEdited,
+            isExpanded = isDetailExpanded,
             nowMs = nowMs
         )
     }
@@ -1312,11 +1456,18 @@ private fun MessageBubble(
         message.isFromMe -> palette.onSentBubble
         else -> palette.onReceivedBubble
     }
-    val isImageAttachment = message.attachmentMimeType?.startsWith("image/") == true
-    val isAudioAttachment = message.attachmentMimeType?.startsWith("audio/") == true
-    val imageModelData: Any? = remember(message.localAttachmentPath, message.attachmentUrl) {
-        message.localAttachmentPath?.let(::File) ?: message.attachmentUrl
-    }
+    val imageAttachments = remember(
+        message.attachments,
+        message.attachmentGuid,
+        message.attachmentMimeType,
+        message.localAttachmentPath,
+        message.attachmentUrl,
+        message.isAttachmentLoading,
+        message.isAttachmentFetchFailed
+    ) { message.imageAttachmentsForUi() }
+    val isImageAttachment = imageAttachments.isNotEmpty()
+    val isAudioAttachment = message.attachmentMimeType?.startsWith("audio/") == true ||
+        message.attachments.any { it.isAudio }
 
     val topGap = when {
         meta.showTimestampHeader -> 4.dp
@@ -1359,6 +1510,11 @@ private fun MessageBubble(
             )
         }
 
+        val isIncomingText = !message.isFromMe &&
+            !message.text.isNullOrBlank() &&
+            !MessageDao.isTempPlaceholderGuid(message.guid)
+        val hasTranslation = !message.isFromMe && !message.translatedText.isNullOrBlank()
+
         Box(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = alignment
@@ -1366,116 +1522,29 @@ private fun MessageBubble(
             Column(
                 horizontalAlignment = if (message.isFromMe) Alignment.End else Alignment.Start
             ) {
-                val hasImagePreview = isImageAttachment && (imageModelData != null || !message.attachmentGuid.isNullOrBlank())
-                if (isImageAttachment && imageModelData != null) {
-                    val reqBuilder = ImageRequest.Builder(context)
-                        .data(imageModelData)
-                        .size(250, 250)
-                        .crossfade(true)
-                    if (imageModelData is String) {
-                        message.customHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
-                    }
-                    SubcomposeAsyncImage(
-                        model = reqBuilder.build(),
+                val hasImagePreview = isImageAttachment
+                if (hasImagePreview) {
+                    AttachmentImageGrid(
+                        attachments = imageAttachments,
+                        customHeaders = message.customHeaders,
+                        isPhoneConnected = message.isPhoneConnected,
+                        sendFailed = message.sendFailed,
+                        bubbleShape = bubbleShape,
+                        bubbleColor = bubbleColor,
+                        textColor = textColor,
+                        maxBubbleWidth = maxBubbleWidth,
                         imageLoader = imageLoader,
-                        contentDescription = "Image attachment",
-                        contentScale = ContentScale.Crop,
-                        loading = {
-                            Box(
-                                modifier = Modifier
-                                    .size(116.dp)
-                                    .clip(bubbleShape)
-                                    .background(palette.surfaceContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp,
-                                    indicatorColor = palette.primary
-                                )
+                        onTileClick = { idx, att ->
+                            if (message.sendFailed) {
+                                onFailedClick()
+                            } else if (att.localPath == null && att.url == null) {
+                                onRetryAttachment(att.guid)
+                            } else {
+                                onImageClick(idx)
                             }
                         },
-                        error = {
-                            Row(
-                                modifier = Modifier
-                                    .clip(bubbleShape)
-                                    .background(bubbleColor)
-                                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.BrokenImage,
-                                    contentDescription = null,
-                                    tint = textColor,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "Photo",
-                                    style = centeredTextStyle(12.sp, 15.sp),
-                                    color = textColor
-                                )
-                            }
-                        },
-                        modifier = Modifier
-                            .size(124.dp)
-                            .clip(bubbleShape)
-                            .combinedClickable(
-                                onClick = if (message.sendFailed) onFailedClick else onImageClick,
-                                onLongClick = onLongPress
-                            )
+                        onLongPress = onLongPress
                     )
-                } else if (hasImagePreview) {
-                    if (message.isAttachmentLoading) {
-                        Box(
-                            modifier = Modifier
-                                .size(116.dp)
-                                .clip(bubbleShape)
-                                .background(palette.surfaceContainer)
-                                .combinedClickable(
-                                    onClick = { if (message.sendFailed) onFailedClick() },
-                                    onLongClick = onLongPress
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                indicatorColor = palette.primary
-                            )
-                        }
-                    } else {
-                        val chipLabel = when {
-                            message.isAttachmentFetchFailed -> "Retry photo"
-                            !message.isPhoneConnected -> "Offline"
-                            else -> "Tap to load"
-                        }
-                        Row(
-                            modifier = Modifier
-                                .clip(bubbleShape)
-                                .background(palette.surfaceContainer)
-                                .combinedClickable(
-                                    role = Role.Button,
-                                    onClick = if (message.sendFailed) onFailedClick else onImageClick,
-                                    onLongClick = onLongPress
-                                )
-                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = chipLabel,
-                                tint = palette.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Text(
-                                text = chipLabel,
-                                style = centeredTextStyle(12.sp, 15.sp),
-                                color = palette.onSurface
-                            )
-                        }
-                    }
                 }
 
                 if (isAudioAttachment) {
@@ -1502,12 +1571,14 @@ private fun MessageBubble(
                                 .background(textColor.copy(alpha = 0.16f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = if (isPlayingAudio) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
-                                contentDescription = if (isPlayingAudio) "Stop audio" else "Play audio",
-                                tint = textColor,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            BlurFadeContent(targetState = isPlayingAudio) { playing ->
+                                Icon(
+                                    imageVector = if (playing) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (playing) "Stop audio" else "Play audio",
+                                    tint = textColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Row(
@@ -1525,19 +1596,33 @@ private fun MessageBubble(
                             }
                         }
                         Spacer(modifier = Modifier.width(7.dp))
-                        Text(
-                            text = if (isPlayingAudio) "Playing" else "Voice",
-                            style = centeredTextStyle(11.5.sp, 14.sp, FontWeight.Medium),
-                            color = textColor,
-                            maxLines = 1
-                        )
+                        BlurFadeContent(
+                            targetState = isPlayingAudio,
+                            contentAlignment = Alignment.CenterStart
+                        ) { playing ->
+                            Text(
+                                text = if (playing) "Playing" else "Voice",
+                                style = centeredTextStyle(11.5.sp, 14.sp, FontWeight.Medium),
+                                color = textColor,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
 
-                val displayText = message.text?.takeIf { it.isNotBlank() }
-                    ?: if (!isImageAttachment && !isAudioAttachment && message.attachmentGuid != null) {
+                val rawDisplayText = resolveBubbleDisplayText(message)
+                    ?: if (!isImageAttachment && !isAudioAttachment && message.linkPreview == null && message.attachmentGuid != null) {
                         "Attachment"
                     } else null
+                val displayText = if (rawDisplayText != null &&
+                    message.linkPreview != null &&
+                    !hasTranslation &&
+                    LinkPreviewHelper.shouldHideBareUrlText(rawDisplayText, message.linkPreview.url)
+                ) {
+                    null
+                } else {
+                    rawDisplayText
+                }
 
                 if (displayText != null) {
                     if (hasImagePreview || isAudioAttachment) {
@@ -1552,7 +1637,8 @@ private fun MessageBubble(
                                 onClick = {
                                     when {
                                         message.sendFailed -> onFailedClick()
-                                        detailStatus != null && !detailStatus.showAlways -> onToggleDetailExpand()
+                                        (detailStatus != null && (!detailStatus.showAlways || detailStatus.kind == MessageDetailKind.EDITED)) ||
+                                            (isIncomingText && !hasTranslation) -> onToggleDetailExpand()
                                     }
                                 },
                                 onLongClick = onLongPress
@@ -1560,12 +1646,39 @@ private fun MessageBubble(
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                         contentAlignment = Alignment.CenterStart
                     ) {
-                        Text(
-                            text = displayText,
-                            style = centeredTextStyle(14.sp, 18.sp),
-                            color = textColor
-                        )
+                        BlurFadeContent(
+                            targetState = displayText,
+                            contentAlignment = Alignment.CenterStart,
+                            animateSize = true
+                        ) { currentText ->
+                            Text(
+                                text = currentText,
+                                style = centeredTextStyle(14.sp, 18.sp),
+                                color = textColor
+                            )
+                        }
                     }
+                }
+
+                if (message.linkPreview != null) {
+                    if (displayText != null || hasImagePreview || isAudioAttachment) {
+                        Spacer(modifier = Modifier.height(3.dp))
+                    }
+                    LinkPreviewCard(
+                        preview = message.linkPreview,
+                        bubbleShape = bubbleShape,
+                        maxBubbleWidth = maxBubbleWidth,
+                        customHeaders = message.customHeaders,
+                        imageLoader = imageLoader,
+                        onClick = {
+                            if (message.sendFailed) {
+                                onFailedClick()
+                            } else {
+                                message.linkPreview.url?.let { RemoteLauncher.openUrlOnPhoneAsync(context, it) }
+                            }
+                        },
+                        onLongClick = onLongPress
+                    )
                 }
 
                 if (message.reactions.isNotEmpty()) {
@@ -1604,78 +1717,579 @@ private fun MessageBubble(
             }
         }
 
-        if (detailStatus != null && detailStatus.kind == MessageDetailKind.FAILED) {
-            Row(
+        val showStatusRow = detailStatus != null &&
+            (detailStatus.kind == MessageDetailKind.FAILED || detailStatus.showAlways || isDetailExpanded)
+        if (showStatusRow) {
+            BlurFadeContent(
+                targetState = detailStatus!!,
+                contentAlignment = if (message.isFromMe) Alignment.CenterEnd else Alignment.CenterStart
+            ) { status ->
+                if (status.kind == MessageDetailKind.FAILED) {
+                    Row(
+                        modifier = Modifier
+                            .padding(end = 2.dp, top = 2.dp)
+                            .defaultMinSize(minHeight = 15.dp)
+                            .clip(RoundedCornerShape(50))
+                            .clickable(role = Role.Button, onClick = onFailedClick)
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ErrorOutline,
+                            contentDescription = null,
+                            tint = ErrorColor,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Text(
+                            text = status.label,
+                            style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
+                            color = ErrorColor
+                        )
+                    }
+                } else {
+                    val detailColor = if (status.kind == MessageDetailKind.READ && message.isLastReadOutgoing) {
+                        palette.onSurface.copy(alpha = 0.88f)
+                    } else {
+                        palette.subtleText
+                    }
+                    Row(
+                        modifier = Modifier
+                            .padding(
+                                start = if (message.isFromMe) 0.dp else 10.dp,
+                                end = if (message.isFromMe) 6.dp else 0.dp,
+                                top = 4.dp
+                            )
+                            .defaultMinSize(minHeight = 15.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = status.label,
+                            style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
+                            color = detailColor,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = if (message.isFromMe) TextAlign.End else TextAlign.Start
+                        )
+                        when (status.kind) {
+                            MessageDetailKind.READ -> {
+                                Box(
+                                    modifier = Modifier
+                                        .size(15.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.onSurface),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DoneAll,
+                                        contentDescription = "Read",
+                                        tint = palette.canvas,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
+                            MessageDetailKind.DELIVERED -> {
+                                Icon(
+                                    imageVector = Icons.Rounded.DoneAll,
+                                    contentDescription = "Delivered",
+                                    tint = palette.subtleText,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            MessageDetailKind.SENT -> {
+                                Icon(
+                                    imageVector = Icons.Rounded.Done,
+                                    contentDescription = "Sent",
+                                    tint = palette.subtleText,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+            }
+        }
+
+        val translationCaption = resolveTranslationCaption(
+            isFromMe = message.isFromMe,
+            translatedText = message.translatedText,
+            sourceLanguage = message.translationSourceLang,
+            showOriginalTranslation = message.showOriginalTranslation,
+            isTranslating = message.isTranslating
+        )
+        if (translationCaption != null) {
+            BlurFadeContent(
+                targetState = translationCaption,
+                contentAlignment = Alignment.CenterStart,
                 modifier = Modifier
-                    .padding(end = 2.dp, top = 2.dp)
-                    .clip(RoundedCornerShape(50))
-                    .clickable(role = Role.Button, onClick = onFailedClick)
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ErrorOutline,
-                    contentDescription = null,
-                    tint = ErrorColor,
-                    modifier = Modifier.size(12.dp)
-                )
+                    .padding(
+                        start = 10.dp,
+                        top = if (showStatusRow) 2.dp else 4.dp
+                    )
+                    .let { mod ->
+                        if (hasTranslation && !message.isTranslating) {
+                            mod
+                                .clip(RoundedCornerShape(50))
+                                .clickable(role = Role.Button, onClick = onToggleOriginalTranslation)
+                        } else mod
+                    }
+                    .padding(horizontal = 4.dp, vertical = 1.dp)
+            ) { caption ->
                 Text(
-                    text = detailStatus.label,
-                    style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                    color = ErrorColor
-                )
-            }
-        } else if (detailStatus != null && (detailStatus.showAlways || isDetailExpanded)) {
-            val detailColor = if (detailStatus.kind == MessageDetailKind.READ && message.isLatestOutgoing) {
-                palette.onSurface.copy(alpha = 0.88f)
-            } else {
-                palette.subtleText
-            }
-            Row(
-                modifier = Modifier.padding(
-                    start = if (message.isFromMe) 0.dp else 10.dp,
-                    end = if (message.isFromMe) 6.dp else 0.dp,
-                    top = 4.dp
-                ),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = detailStatus.label,
-                    style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
-                    color = detailColor,
-                    maxLines = 2,
+                    text = caption,
+                    style = centeredTextStyle(10.5.sp, 13.sp, FontWeight.Medium),
+                    color = palette.subtleText,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    textAlign = if (message.isFromMe) TextAlign.End else TextAlign.Start
+                    textAlign = TextAlign.Start
                 )
-                when (detailStatus.kind) {
-                    MessageDetailKind.READ -> {
-                        Box(
+            }
+        }
+
+        if (detailStatus?.kind != MessageDetailKind.FAILED && isDetailExpanded && isIncomingText && !hasTranslation && !message.isTranslating) {
+            val actionLabel = resolveTranslationActionLabel(
+                hasTranslation = false,
+                showOriginalTranslation = false,
+                isTranslating = false
+            )
+            Box(
+                modifier = Modifier
+                    .padding(start = 10.dp, top = 4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(palette.surfaceContainerHigh)
+                    .clickable(
+                        role = Role.Button,
+                        onClick = onTranslate
+                    )
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                BlurFadeContent(targetState = actionLabel) { label ->
+                    Text(
+                        text = label,
+                        style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
+                        color = palette.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AttachmentImageGrid(
+    attachments: List<AttachmentUi>,
+    customHeaders: Map<String, String>,
+    isPhoneConnected: Boolean,
+    sendFailed: Boolean,
+    bubbleShape: RoundedCornerShape,
+    bubbleColor: Color,
+    textColor: Color,
+    maxBubbleWidth: Dp,
+    imageLoader: ImageLoader,
+    onTileClick: (Int, AttachmentUi) -> Unit,
+    onLongPress: () -> Unit
+) {
+    if (attachments.size == 1) {
+        val att = attachments[0]
+        AttachmentImageTile(
+            attachment = att,
+            customHeaders = customHeaders,
+            isPhoneConnected = isPhoneConnected,
+            sendFailed = sendFailed,
+            bubbleShape = bubbleShape,
+            bubbleColor = bubbleColor,
+            textColor = textColor,
+            imageLoader = imageLoader,
+            overflowCount = 0,
+            compact = false,
+            modifier = Modifier.size(124.dp),
+            onClick = { onTileClick(0, att) },
+            onLongPress = onLongPress
+        )
+        return
+    }
+
+    val tileGap = 2.dp
+    val gridShape = RoundedCornerShape(16.dp)
+    Column(
+        modifier = Modifier
+            .width(maxBubbleWidth)
+            .clip(gridShape),
+        verticalArrangement = Arrangement.spacedBy(tileGap)
+    ) {
+        when (attachments.size) {
+            2 -> {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(tileGap)
+                ) {
+                    attachments.forEachIndexed { idx, att ->
+                        AttachmentImageTile(
+                            attachment = att,
+                            customHeaders = customHeaders,
+                            isPhoneConnected = isPhoneConnected,
+                            sendFailed = sendFailed,
+                            bubbleShape = RoundedCornerShape(4.dp),
+                            bubbleColor = bubbleColor,
+                            textColor = textColor,
+                            imageLoader = imageLoader,
+                            overflowCount = 0,
+                            compact = true,
                             modifier = Modifier
-                                .size(15.dp)
-                                .clip(CircleShape)
-                                .background(palette.onSurface),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.DoneAll,
-                                contentDescription = "Read",
-                                tint = palette.canvas,
-                                modifier = Modifier.size(11.dp)
+                                .weight(1f)
+                                .height(92.dp),
+                            onClick = { onTileClick(idx, att) },
+                            onLongPress = onLongPress
+                        )
+                    }
+                }
+            }
+            3 -> {
+                AttachmentImageTile(
+                    attachment = attachments[0],
+                    customHeaders = customHeaders,
+                    isPhoneConnected = isPhoneConnected,
+                    sendFailed = sendFailed,
+                    bubbleShape = RoundedCornerShape(4.dp),
+                    bubbleColor = bubbleColor,
+                    textColor = textColor,
+                    imageLoader = imageLoader,
+                    overflowCount = 0,
+                    compact = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(86.dp),
+                    onClick = { onTileClick(0, attachments[0]) },
+                    onLongPress = onLongPress
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(tileGap)
+                ) {
+                    for (idx in 1..2) {
+                        val att = attachments[idx]
+                        AttachmentImageTile(
+                            attachment = att,
+                            customHeaders = customHeaders,
+                            isPhoneConnected = isPhoneConnected,
+                            sendFailed = sendFailed,
+                            bubbleShape = RoundedCornerShape(4.dp),
+                            bubbleColor = bubbleColor,
+                            textColor = textColor,
+                            imageLoader = imageLoader,
+                            overflowCount = 0,
+                            compact = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(74.dp),
+                            onClick = { onTileClick(idx, att) },
+                            onLongPress = onLongPress
+                        )
+                    }
+                }
+            }
+            else -> {
+                val overflow = (attachments.size - 4).coerceAtLeast(0)
+                for (rowIdx in 0..1) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(tileGap)
+                    ) {
+                        for (colIdx in 0..1) {
+                            val idx = rowIdx * 2 + colIdx
+                            val att = attachments[idx]
+                            AttachmentImageTile(
+                                attachment = att,
+                                customHeaders = customHeaders,
+                                isPhoneConnected = isPhoneConnected,
+                                sendFailed = sendFailed,
+                                bubbleShape = RoundedCornerShape(4.dp),
+                                bubbleColor = bubbleColor,
+                                textColor = textColor,
+                                imageLoader = imageLoader,
+                                overflowCount = if (idx == 3) overflow else 0,
+                                compact = true,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(74.dp),
+                                onClick = { onTileClick(idx, att) },
+                                onLongPress = onLongPress
                             )
                         }
                     }
-                    MessageDetailKind.DELIVERED -> {
-                        Icon(
-                            imageVector = Icons.Rounded.Done,
-                            contentDescription = "Delivered",
-                            tint = palette.subtleText,
-                            modifier = Modifier.size(13.dp)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AttachmentImageTile(
+    attachment: AttachmentUi,
+    customHeaders: Map<String, String>,
+    isPhoneConnected: Boolean,
+    sendFailed: Boolean,
+    bubbleShape: RoundedCornerShape,
+    bubbleColor: Color,
+    textColor: Color,
+    imageLoader: ImageLoader,
+    overflowCount: Int,
+    compact: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit
+) {
+    val context = LocalContext.current
+    val palette = LocalWearPalette.current
+    val imageModelData: Any? = remember(attachment.localPath, attachment.url) {
+        attachment.localPath?.let(::File) ?: attachment.url
+    }
+
+    Box(
+        modifier = modifier
+            .clip(bubbleShape)
+            .background(palette.surfaceContainer)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongPress
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (imageModelData != null) {
+            val reqBuilder = ImageRequest.Builder(context)
+                .data(imageModelData)
+                .size(250, 250)
+                .crossfade(true)
+            if (imageModelData is String) {
+                customHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+            }
+            SubcomposeAsyncImage(
+                model = reqBuilder.build(),
+                imageLoader = imageLoader,
+                contentDescription = "Image attachment",
+                contentScale = ContentScale.Crop,
+                loading = {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            indicatorColor = palette.primary
                         )
                     }
-                    else -> {}
+                },
+                error = {
+                    Icon(
+                        imageVector = Icons.Rounded.BrokenImage,
+                        contentDescription = "Broken image",
+                        tint = textColor,
+                        modifier = Modifier.size(18.dp)
+                    )
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else if (overflowCount == 0) {
+            val chipLabel = when {
+                sendFailed -> "Failed"
+                attachment.isFetchFailed -> "Retry photo"
+                !isPhoneConnected -> "Offline"
+                else -> "Tap to load"
+            }
+            val fallbackState = when {
+                attachment.isLoading -> "loading"
+                compact -> "compact_${attachment.isFetchFailed}"
+                else -> chipLabel
+            }
+            BlurFadeContent(targetState = fallbackState) { state ->
+                when {
+                    state == "loading" -> CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        indicatorColor = palette.primary
+                    )
+                    state.startsWith("compact_") -> Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = if (state == "compact_true") "Retry photo" else "Load photo",
+                        tint = palette.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    else -> Row(
+                        modifier = Modifier
+                            .background(bubbleColor.takeIf { sendFailed } ?: palette.surfaceContainer)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = state,
+                            tint = palette.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = state,
+                            style = centeredTextStyle(11.5.sp, 14.sp),
+                            color = palette.onSurface
+                        )
+                    }
                 }
+            }
+        }
+
+        if (overflowCount > 0) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.56f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "+$overflowCount",
+                    style = centeredTextStyle(15.sp, 18.sp, FontWeight.SemiBold),
+                    color = Color.White
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LinkPreviewCard(
+    preview: LinkPreviewUi,
+    bubbleShape: RoundedCornerShape,
+    maxBubbleWidth: Dp,
+    customHeaders: Map<String, String>,
+    imageLoader: ImageLoader,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val palette = LocalWearPalette.current
+    val heroModel: Any? = remember(preview.localImagePath, preview.imageUrl) {
+        preview.localImagePath?.let(::File) ?: preview.imageUrl
+    }
+    val siteText = remember(preview.url, preview.site) {
+        preview.site ?: LinkPreviewHelper.deriveSiteHost(preview.url)
+    }
+    val titleText = preview.title?.takeIf { it.isNotBlank() }
+        ?: siteText
+        ?: preview.url
+        ?: "Link"
+    val showSite = LinkPreviewHelper.showsSiteLine(titleText, siteText)
+    val subtitleText = preview.subtitle?.takeIf {
+        it.isNotBlank() && !it.equals(titleText, ignoreCase = true)
+    }
+
+    Column(
+        modifier = Modifier
+            .width(maxBubbleWidth)
+            .clip(bubbleShape)
+            .background(palette.surfaceContainerHigh)
+            .border(1.dp, palette.surfaceContainer, bubbleShape)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+    ) {
+        if (heroModel != null) {
+            val reqBuilder = ImageRequest.Builder(context)
+                .data(heroModel)
+                .size(320, 180)
+                .crossfade(true)
+            if (heroModel is String) {
+                customHeaders.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+            }
+            SubcomposeAsyncImage(
+                model = reqBuilder.build(),
+                imageLoader = imageLoader,
+                contentDescription = titleText,
+                contentScale = ContentScale.Crop,
+                loading = {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(78.dp)
+                            .background(palette.surfaceContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            indicatorColor = palette.primary
+                        )
+                    }
+                },
+                error = {},
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(78.dp)
+            )
+        } else if (preview.isImageLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(78.dp)
+                    .background(palette.surfaceContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    indicatorColor = palette.primary
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 11.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = titleText,
+                style = centeredTextStyle(12.5.sp, 15.5.sp, FontWeight.SemiBold),
+                color = palette.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (subtitleText != null) {
+                Text(
+                    text = subtitleText,
+                    style = centeredTextStyle(11.sp, 13.5.sp),
+                    color = palette.subtleText,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(top = 1.dp)
+            ) {
+                Icon(
+                    imageVector = if (preview.url != null) Icons.AutoMirrored.Rounded.OpenInNew else Icons.Rounded.Link,
+                    contentDescription = null,
+                    tint = palette.primary,
+                    modifier = Modifier.size(11.dp)
+                )
+                Text(
+                    text = if (showSite && siteText != null) siteText else "Open on phone",
+                    style = centeredTextStyle(10.5.sp, 13.sp, FontWeight.Medium),
+                    color = palette.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
@@ -1683,24 +2297,29 @@ private fun MessageBubble(
 
 @Composable
 private fun FullscreenImageViewer(
-    source: ViewerImageSource,
+    gallery: ViewerGalleryState,
     imageLoader: ImageLoader,
+    onRequestAttachment: (String?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val focusRequester = remember { FocusRequester() }
+    val pagerState = rememberPagerState(
+        initialPage = gallery.initialIndex.coerceIn(0, (gallery.sources.size - 1).coerceAtLeast(0)),
+        pageCount = { gallery.sources.size }
+    )
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
 
-    val modelData: Any? = remember(source.localPath, source.remoteUrl) {
-        source.localPath?.let(::File) ?: source.remoteUrl
-    }
-    val reqBuilder = ImageRequest.Builder(context)
-        .data(modelData)
-        .crossfade(true)
-    if (modelData is String) {
-        source.headers.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+    LaunchedEffect(pagerState.currentPage, gallery.sources) {
+        scale = 1f
+        offsetX = 0f
+        offsetY = 0f
+        val current = gallery.sources.getOrNull(pagerState.currentPage)
+        if (current != null && current.localPath == null && current.remoteUrl == null) {
+            onRequestAttachment(current.attachmentGuid)
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -1747,22 +2366,65 @@ private fun FullscreenImageViewer(
             },
         contentAlignment = Alignment.Center
     ) {
-        SubcomposeAsyncImage(
-            model = reqBuilder.build(),
-            imageLoader = imageLoader,
-            contentDescription = "Fullscreen image",
-            contentScale = ContentScale.Fit,
-            loading = {
-                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = scale,
-                    scaleY = scale,
-                    translationX = offsetX,
-                    translationY = offsetY
+        HorizontalPager(
+            state = pagerState,
+            userScrollEnabled = scale <= 1.05f,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            val source = gallery.sources[page]
+            val modelData: Any? = remember(source.localPath, source.remoteUrl) {
+                source.localPath?.let(::File) ?: source.remoteUrl
+            }
+            if (modelData != null) {
+                val reqBuilder = ImageRequest.Builder(context)
+                    .data(modelData)
+                    .crossfade(true)
+                if (modelData is String) {
+                    source.headers.forEach { (k, v) -> reqBuilder.addHeader(k, v) }
+                }
+                SubcomposeAsyncImage(
+                    model = reqBuilder.build(),
+                    imageLoader = imageLoader,
+                    contentDescription = "Fullscreen image ${page + 1}",
+                    contentScale = ContentScale.Fit,
+                    loading = {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer(
+                            scaleX = if (pagerState.currentPage == page) scale else 1f,
+                            scaleY = if (pagerState.currentPage == page) scale else 1f,
+                            translationX = if (pagerState.currentPage == page) offsetX else 0f,
+                            translationY = if (pagerState.currentPage == page) offsetY else 0f
+                        )
                 )
-        )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                }
+            }
+        }
+
+        if (gallery.sources.size > 1) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 12.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.Black.copy(alpha = 0.65f))
+                    .padding(horizontal = 9.dp, vertical = 3.dp)
+            ) {
+                BlurFadeContent(targetState = pagerState.currentPage) { page ->
+                    Text(
+                        text = "${page + 1} / ${gallery.sources.size}",
+                        style = centeredTextStyle(11.sp, 13.sp, FontWeight.Medium),
+                        color = Color.White
+                    )
+                }
+            }
+        }
     }
 }

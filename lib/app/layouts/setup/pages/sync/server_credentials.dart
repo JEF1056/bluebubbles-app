@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/layouts/settings/dialogs/custom_headers_dialog.dart';
 import 'package:bluebubbles/app/layouts/setup/dialogs/failed_to_scan_dialog.dart';
 import 'package:bluebubbles/app/layouts/setup/pages/page_template.dart';
@@ -524,8 +525,12 @@ class _ServerCredentialsState extends State<ServerCredentials> with ThemeHelpers
                                                 canRequestFocus: false,
                                                 descendantsAreFocusable: false,
                                                 child: IconButton(
-                                                  icon:
-                                                      Icon(obscureText.value ? Icons.visibility_off : Icons.visibility),
+                                                  icon: BlurFadeSwitcher(
+                                                    child: Icon(
+                                                      obscureText.value ? Icons.visibility_off : Icons.visibility,
+                                                      key: ValueKey(obscureText.value),
+                                                    ),
+                                                  ),
                                                   color: context.theme.colorScheme.onSurfaceVariant,
                                                   onPressed: () {
                                                     obscureText.value = !obscureText.value;

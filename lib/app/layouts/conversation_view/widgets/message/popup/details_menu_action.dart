@@ -14,6 +14,7 @@ enum DetailsMenuAction {
   OpenInBrowser(PlatformSupport.android | PlatformSupport.web, CupertinoIcons.macwindow, Icons.open_in_browser, "Open In Browser"),
   OpenInNewTab(PlatformSupport.web, CupertinoIcons.macwindow, Icons.open_in_browser, "Open In New Tab"),
   CopyText(PlatformSupport.all, CupertinoIcons.doc_on_clipboard, Icons.content_copy, "Copy"),
+  Translate(PlatformSupport.all, CupertinoIcons.globe, Icons.translate, "Translate"),
   CopyAttachment(PlatformSupport.desktop, CupertinoIcons.doc_on_clipboard, Icons.content_copy, "Copy Attachment"),
   SaveOriginal(PlatformSupport.all, CupertinoIcons.cloud_download, Icons.file_download, "Save Original"),
   SaveLivePhoto(PlatformSupport.all, CupertinoIcons.photo, Icons.motion_photos_on_outlined, "Save Live Photo"),

@@ -10,7 +10,6 @@ import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
-import com.wearbubbles.service.MessageListenerService
 import com.wearbubbles.worker.MessageSyncWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -137,7 +136,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             app.socketManager.disconnect()
             MessageSyncWorker.cancel(getApplication())
-            MessageListenerService.stop(getApplication())
             NotificationHelper.cancelAll(getApplication())
             ApiClient.reset()
             settings.clearAll(markDisconnected = true)

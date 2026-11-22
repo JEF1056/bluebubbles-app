@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/conversation_tile.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/trailing_state_mixin.dart';
@@ -247,20 +248,8 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
               ],
             ),
             const SizedBox(height: 5),
-            AnimatedSwitcher(
-              duration: M3EMotion.spatialFast.duration,
-              transitionBuilder: (child, anim) => ScaleTransition(
-                scale: CurvedAnimation(
-                  parent: anim,
-                  curve: M3EMotion.spatialOvershoot,
-                  reverseCurve: M3EMotion.effectsFast.curve,
-                ),
-                // FadeTransition asserts opacity stays in [0, 1], so keep overshoot on scale only.
-                child: FadeTransition(
-                  opacity: CurvedAnimation(parent: anim, curve: M3EMotion.effectsFast.curve),
-                  child: child,
-                ),
-              ),
+            BlurFadeSwitcher(
+              alignment: AlignmentDirectional.centerEnd,
               child: controller.isSelected
                   ? Icon(
                       Icons.check_circle_rounded,
