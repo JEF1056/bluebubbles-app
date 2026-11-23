@@ -209,15 +209,16 @@ fun ContactAvatar(
     val context = LocalContext.current
     val palette = LocalWearPalette.current
     val avatarFile = remember(avatarPath) {
-        avatarPath?.substringBefore("?")?.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.exists() }
+        avatarPath?.substringBefore("?")?.takeIf { it.isNotBlank() }?.let { File(it) }
     }
+    var imageFailed by remember(avatarPath) { mutableStateOf(false) }
     val swatch = remember(seed) { avatarSwatchFor(seed) }
     val monogram = remember(title) { avatarMonogram(title) }
     val iconSize = (size.value * 0.52f).dp
     val monogramFontSize = (size.value * 0.43f).sp
 
     Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
-        if (avatarFile != null) {
+        if (avatarFile != null && !imageFailed) {
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(avatarFile)
@@ -226,6 +227,7 @@ fun ContactAvatar(
                     .build(),
                 contentDescription = title,
                 contentScale = ContentScale.Crop,
+                onError = { imageFailed = true },
                 modifier = Modifier
                     .size(size)
                     .clip(CircleShape)
@@ -240,34 +242,32 @@ fun ContactAvatar(
                     .background(containerColor),
                 contentAlignment = Alignment.Center
             ) {
-                BlurFadeContent(
-                    targetState = if (isGroup) "group" else monogram ?: "person"
-                ) { state ->
-                    when (state) {
-                        "group" -> Icon(
-                            imageVector = Icons.Rounded.Group,
-                            contentDescription = null,
-                            tint = contentColor,
-                            modifier = Modifier.size(iconSize)
-                        )
-                        "person" -> Icon(
-                            imageVector = Icons.Rounded.Person,
-                            contentDescription = null,
-                            tint = contentColor,
-                            modifier = Modifier.size(iconSize)
-                        )
-                        else -> Text(
-                            text = state,
-                            style = centeredTextStyle(
-                                fontSize = monogramFontSize,
-                                lineHeight = monogramFontSize,
-                                fontWeight = FontWeight.Medium
-                            ),
-                            color = contentColor,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1
-                        )
-                    }
+                if (isGroup) {
+                    Icon(
+                        imageVector = Icons.Rounded.Group,
+                        contentDescription = null,
+                        tint = contentColor,
+                        modifier = Modifier.size(iconSize)
+                    )
+                } else if (monogram == null) {
+                    Icon(
+                        imageVector = Icons.Rounded.Person,
+                        contentDescription = null,
+                        tint = contentColor,
+                        modifier = Modifier.size(iconSize)
+                    )
+                } else {
+                    Text(
+                        text = monogram,
+                        style = centeredTextStyle(
+                            fontSize = monogramFontSize,
+                            lineHeight = monogramFontSize,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        color = contentColor,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1
+                    )
                 }
             }
         }

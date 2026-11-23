@@ -1,5 +1,8 @@
 package com.bluebubbles.messaging.services.notifications
 
+import android.app.UiModeManager
+import android.content.Context
+import android.content.res.Configuration
 import androidx.core.app.Person
 import androidx.core.graphics.drawable.IconCompat
 import java.util.Locale
@@ -75,3 +78,10 @@ internal fun resolveNotificationId(chatId: Int?, chatGuid: String): Int {
     if (chatId != null && chatId != 0) return chatId
     return (chatGuid.hashCode() and 0x7fffffff).let { if (it == 0) 1 else it }
 }
+
+// shortcut: UiMode car mode only, upgrade to androidx.car.app CarConnection if projection is missed
+internal fun isCarMode(ctx: Context): Boolean =
+    ctx.getSystemService(UiModeManager::class.java)?.currentModeType == Configuration.UI_MODE_TYPE_CAR
+
+internal fun shouldHideBubbleOnRead(keepBubble: Boolean, inCar: Boolean): Boolean =
+    keepBubble && !inCar

@@ -11,6 +11,7 @@ import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:collection/collection.dart';
@@ -70,6 +71,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
   // Debounce setState calls to prevent rapid rebuilds
   Timer? _setStateDebouncer;
   StreamSubscription? _eventSubscription;
+  VoidCallback? _cancelPostLoadTransition;
 
   // Managers for different responsibilities
   late final SmartRepliesManager smartRepliesManager;
@@ -101,9 +103,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
       // Fires after this frame rather than racing against loadChunk.
       controller.markMessagesViewReady();
-
-      // Trigger a rebuild to display the messages.
-      setState(() {});
     });
 
     _eventSubscription = EventDispatcherSvc.stream.listen((e) async {
@@ -172,6 +171,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
         _messages = service.struct.messages;
         _messages.sort(Message.sort);
+        controller.initUnreadDivider(_messages);
 
         // Initialize the mixin's service reference and create controllers.
         // This MUST always run so _messageService is non-null when
@@ -203,22 +203,28 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         await _scrollToSearchResult(widget.initialScrollToGuid!);
       }
 
-      if (!(_messages.firstOrNull?.isFromMe ?? true)) {
-        updateReplies();
-      }
-      if (SettingsSvc.settings.scrollToLastUnread.value && chat.lastReadMessageGuid != null) {
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (!mounted) return;
-          if (messageService.getMessageStateIfExists(chat.lastReadMessageGuid!)?.built ?? false) return;
-          quickActions['scroll-last-read'] = _buildQuickAction("Jump to oldest unread", onTap: () async {
-            if (jumpingToOldestUnread.value) return;
-            jumpingToOldestUnread.value = true;
-            await jumpToMessage(chat.lastReadMessageGuid!);
-            quickActions.remove('scroll-last-read');
-            jumpingToOldestUnread.value = false;
+      if (!mounted) return;
+      _cancelPostLoadTransition?.call();
+      _cancelPostLoadTransition = runAfterRouteTransition(context, () {
+        if (!mounted) return;
+        if (!(_messages.firstOrNull?.isFromMe ?? true)) {
+          updateReplies();
+        }
+        final jumpTargetGuid = controller.unreadDividerGuid.value ?? chat.lastReadMessageGuid;
+        if (SettingsSvc.settings.scrollToLastUnread.value && jumpTargetGuid != null) {
+          Future.delayed(const Duration(milliseconds: 100), () {
+            if (!mounted) return;
+            if (messageService.getMessageStateIfExists(jumpTargetGuid)?.built ?? false) return;
+            quickActions['scroll-last-read'] = _buildQuickAction("Jump to oldest unread", onTap: () async {
+              if (jumpingToOldestUnread.value) return;
+              jumpingToOldestUnread.value = true;
+              await jumpToMessage(jumpTargetGuid);
+              quickActions.remove('scroll-last-read');
+              jumpingToOldestUnread.value = false;
+            });
           });
-        });
-      }
+        }
+      });
     }();
   }
 
@@ -247,6 +253,8 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     );
 
     // Controllers are now disposed by MessagesService.onClose()
+    _cancelPostLoadTransition?.call();
+    _cancelPostLoadTransition = null;
     _setStateDebouncer?.cancel();
     _eventSubscription?.cancel();
     _listVersion.dispose();
@@ -328,7 +336,12 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
           ..link(Message_.chat, Chat_.id.equals(chat.id!))
           ..order(Message_.dateCreated, flags: Order.descending))
         .build();
-    final ids = await query.findIdsAsync();
+    final List<int> ids;
+    try {
+      ids = await query.findIdsAsync();
+    } finally {
+      query.close();
+    }
     final pos = ids.indexOf(message!.id!);
     if (pos == -1) {
       showSnackbar("Error", "Failed to find message!", type: SnackbarType.error);
@@ -577,12 +590,21 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     if (index != -1) {
       _messages.removeAt(index);
       _messageKeys.remove(message.guid);
+      _listKey.currentState?.removeItem(
+        index,
+        (context, animation) => const SizedBox.shrink(),
+        duration: Duration.zero,
+      );
       Logger.debug("handleDeletedMessage: Removed message at index $index");
       _listVersion.value++;
       _setStateDebouncer?.cancel();
-      _setStateDebouncer = Timer(const Duration(milliseconds: 16), () {
-        if (mounted) setState(() {});
-      });
+      if (_messages.isEmpty) {
+        setState(() {});
+      } else {
+        _setStateDebouncer = Timer(const Duration(milliseconds: 16), () {
+          if (mounted) setState(() {});
+        });
+      }
     } else {
       Logger.warn("handleDeletedMessage: Message ${message.guid} not found in list");
     }
@@ -691,7 +713,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
               controller: controller,
             ),
           ),
-          if (_messages.isEmpty)
+          if (_messages.isEmpty && !handlersInitialized)
             const SliverToBoxAdapter(
               child: Loader(text: "Loading surrounding message context..."),
             ),
@@ -834,7 +856,7 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                   duration: const Duration(milliseconds: 150),
                   curve: Curves.easeIn,
                   builder: (context, dim, child) =>
-                      Opacity(opacity: _messages.isEmpty && widget.customService == null ? 0 : dim, child: child),
+                      Opacity(opacity: _messages.isEmpty && !handlersInitialized && widget.customService == null ? 0 : dim, child: child),
                   child: DeferredPointerHandler(
                     child: NotificationListener<UserScrollNotification>(
                       onNotification: (notification) {

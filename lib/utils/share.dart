@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/composer_popover.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -34,89 +36,53 @@ class Share {
   }
 
   static Future<void> location(Chat chat) async {
-    bool _serviceEnabled;
-    LocationPermission _permissionGranted;
-    Position _locationData;
+    final canOpenSettings = !kIsWeb && (!kIsDesktop || !Platform.isLinux);
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      showSnackbar(
+        "Location is off",
+        "Location Services must be enabled to send Locations",
+        type: SnackbarType.error,
+        actionLabel: canOpenSettings ? "Open settings" : null,
+        onAction: canOpenSettings ? () => unawaited(Geolocator.openLocationSettings()) : null,
+      );
+      return;
+    }
 
-    _serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!_serviceEnabled) {
-      await showBBDialog(
-          context: Get.context!,
-          title: "Location Services",
-          body: "Location Services must be enabled to send Locations",
-          actions: [
-            if (!kIsDesktop || !Platform.isLinux)
-              BBDialogAction(
-                text: "Cancel",
-                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-              ),
-            if (!kIsDesktop || !Platform.isLinux)
-              BBDialogAction(
-                text: "Open Settings",
-                isDefault: true,
-                onPressed: () async => await Geolocator.openLocationSettings(),
-              ),
-            if (kIsDesktop && Platform.isLinux)
-              BBDialogAction(
-                text: "OK",
-                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-              ),
-          ]);
-      if (!_serviceEnabled) {
+    if (!kIsDesktop || !Platform.isLinux) {
+      var permissionGranted = await Geolocator.checkPermission();
+      if (permissionGranted == LocationPermission.denied) {
+        permissionGranted = await Geolocator.requestPermission();
+      }
+      if (permissionGranted == LocationPermission.denied || permissionGranted == LocationPermission.deniedForever) {
+        showSnackbar(
+          "Location permission needed",
+          "BlueBubbles needs the Location permission to send Locations",
+          type: SnackbarType.error,
+          actionLabel: canOpenSettings ? "Open settings" : null,
+          onAction: canOpenSettings ? () => unawaited(Geolocator.openAppSettings()) : null,
+        );
         return;
       }
     }
 
-    if (!kIsDesktop || !Platform.isLinux) {
-      _permissionGranted = await Geolocator.checkPermission();
-      if (_permissionGranted == LocationPermission.denied) {
-        _permissionGranted = await Geolocator.requestPermission();
-      }
-      if (_permissionGranted == LocationPermission.denied || _permissionGranted == LocationPermission.deniedForever) {
-        await showBBDialog(
-            context: Get.context!,
-            title: "Location Permission",
-            body: "BlueBubbles needs the Location permission to send Locations",
-            actions: [
-              BBDialogAction(
-                text: "Cancel",
-                onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-              ),
-              BBDialogAction(
-                text: "Open Settings",
-                isDefault: true,
-                onPressed: () async => await Geolocator.openLocationSettings(),
-              ),
-            ]);
-        if (_permissionGranted == LocationPermission.denied || _permissionGranted == LocationPermission.deniedForever) {
-          return;
-        }
-      }
-    }
-
-    String? _attachmentGuid;
-    String? fileName;
-    Uint8List? bytes;
-    String? url;
-    String? title;
-
     Future<LocationAttachmentData> getLocationPreview() async {
-      _locationData = await Geolocator.getCurrentPosition();
-      String vcfString = AttachmentsSvc.createAppleLocation(_locationData.latitude, _locationData.longitude);
+      final locationData = await Geolocator.getCurrentPosition();
+      final vcfString = AttachmentsSvc.createAppleLocation(locationData.latitude, locationData.longitude);
 
       // Build out the file we are going to send
-      String _attachmentGuid = "temp-${randomString(8)}";
-      String fileName = "$_attachmentGuid-CL.loc.vcf";
-      Uint8List bytes = Uint8List.fromList(utf8.encode(vcfString));
+      final attachmentGuid = "temp-${randomString(8)}";
+      final fileName = "$attachmentGuid-CL.loc.vcf";
+      final bytes = Uint8List.fromList(utf8.encode(vcfString));
 
       // Apple Maps does not always serve a preview image; the location is
       // still perfectly sendable without one, so this is not treated as a
       // failure the way the old force-unwrap did (which left the dialog stuck
       // on "Loading Location..." forever).
-      final meta = await MetadataHelper.getLocationMetadata(_locationData);
+      final meta = await MetadataHelper.getLocationMetadata(locationData);
 
       return LocationAttachmentData(
-        guid: _attachmentGuid,
+        guid: attachmentGuid,
         fileName: fileName,
         bytes: bytes,
         mapImageUrl: meta?.imageUrl,
@@ -124,65 +90,241 @@ class Share {
       );
     }
 
-    bool send = false;
-    if (kIsDesktop || kIsWeb) {
-      cvc(chat).showingOverlays = true;
-    }
-    bool loadingOpen = true;
-    showDialog(
-      context: Get.context!,
-      barrierDismissible: true,
-      builder: (_) => const BBProgressDialog(title: "Loading Location..."),
-    ).whenComplete(() => loadingOpen = false);
+    final hostContext = Get.context;
+    if (hostContext == null || !hostContext.mounted) return;
+    final controller =
+        Get.isRegistered<ConversationViewController>(tag: chat.guid) ? Get.find<ConversationViewController>(tag: chat.guid) : null;
+    final isWide = MediaQuery.sizeOf(hostContext).width >= 600;
 
-    Object? locationError;
-    try {
-      final preview = await getLocationPreview();
-      _attachmentGuid = preview.guid;
-      fileName = preview.fileName;
-      bytes = preview.bytes;
-      url = preview.mapImageUrl;
-      title = preview.title;
-    } catch (e) {
-      locationError = e;
-    }
-
-    final wasCancelled = !loadingOpen;
-    if (loadingOpen) {
-      Navigator.of(Get.context!, rootNavigator: true).pop();
-    }
-
-    if (!wasCancelled) {
-      if (locationError != null || bytes == null) {
-        await showBBDialog<void>(
-          context: Get.context!,
-          title: "Couldn't Get Location",
-          icon: Icons.location_off_outlined,
-          iconColor: Get.theme.colorScheme.error,
-          body: "Check that location permissions are granted and try again.",
-          actions: [
-            BBDialogAction(
-              text: "Dismiss",
-              isDefault: true,
-              onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
+    LocationAttachmentData? confirmedPreview;
+    if (!isWide) {
+      confirmedPreview = await showModalBottomSheet<LocationAttachmentData>(
+        context: hostContext,
+        isScrollControlled: true,
+        useRootNavigator: true,
+        showDragHandle: true,
+        backgroundColor: hostContext.theme.colorScheme.surfaceContainerHigh,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+        builder: (sheetCtx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: _LocationShareSheet(loadPreview: getLocationPreview),
+          ),
+        ),
+      );
+    } else if (controller != null) {
+      final anchor = controller.textFieldKey.currentContext ?? hostContext;
+      await showComposerPopover(
+        anchor,
+        controller,
+        width: 360,
+        height: 360,
+        builder: (_) => ComposerPopoverCard(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: SingleChildScrollView(
+              child: _LocationShareSheet(
+                loadPreview: getLocationPreview,
+                onResult: (preview) => confirmedPreview = preview,
+              ),
             ),
-          ],
-        );
-      } else {
-        await showBBDialog<void>(
-          context: Get.context!,
-          title: "Send Location?",
-          icon: Icons.location_on_outlined,
-          content: Builder(
-            builder: (ctx) {
-              final scheme = ctx.theme.colorScheme;
-              return ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 340),
-                child: Column(
+          ),
+        ),
+      );
+    } else {
+      confirmedPreview = await showModalBottomSheet<LocationAttachmentData>(
+        context: hostContext,
+        isScrollControlled: true,
+        useRootNavigator: true,
+        showDragHandle: true,
+        constraints: const BoxConstraints(maxWidth: 420),
+        backgroundColor: hostContext.theme.colorScheme.surfaceContainerHigh,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+        builder: (sheetCtx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: _LocationShareSheet(loadPreview: getLocationPreview),
+          ),
+        ),
+      );
+    }
+
+    if (confirmedPreview == null) return;
+    final preview = confirmedPreview!;
+
+    final message = Message(
+      guid: preview.guid,
+      text: "",
+      dateCreated: DateTime.now(),
+      hasAttachments: true,
+      isFromMe: true,
+      handleId: 0,
+    );
+
+    final attachment = Attachment(
+      guid: preview.guid,
+      mimeType: "text/x-vlocation",
+      isOutgoing: true,
+      uti: "public.vlocation",
+      bytes: preview.bytes,
+      transferName: preview.fileName,
+      totalBytes: preview.bytes.length,
+    );
+
+    OutgoingMsgHandler.queue(
+      OutgoingAttachment(
+        chat: chat,
+        message: message,
+        attachment: attachment,
+      ),
+    );
+  }
+}
+
+class _LocationShareSheet extends StatefulWidget {
+  const _LocationShareSheet({required this.loadPreview, this.onResult});
+
+  final Future<LocationAttachmentData> Function() loadPreview;
+  final ValueChanged<LocationAttachmentData?>? onResult;
+
+  @override
+  State<_LocationShareSheet> createState() => _LocationShareSheetState();
+}
+
+class _LocationShareSheetState extends State<_LocationShareSheet> {
+  LocationAttachmentData? _preview;
+  bool _loading = true;
+  bool _hasError = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    setState(() {
+      _loading = true;
+      _hasError = false;
+    });
+    try {
+      final result = await widget.loadPreview();
+      if (!mounted) return;
+      setState(() {
+        _preview = result;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _hasError = true;
+      });
+    }
+  }
+
+  void _close([LocationAttachmentData? result]) {
+    if (widget.onResult != null) {
+      widget.onResult!(result);
+      Navigator.of(context).pop();
+    } else {
+      Navigator.of(context).pop(result);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.theme.colorScheme;
+    final textTheme = context.theme.textTheme;
+    const minSize = Size(64, 48);
+    const shape = StadiumBorder();
+
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      switchInCurve: Curves.easeOutCubic,
+      child: _loading
+          ? Column(
+              key: const ValueKey('loading'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.location_on_outlined, color: scheme.primary),
+                    const SizedBox(width: 10),
+                    Text("Share Location", style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const Center(child: CircularProgressIndicator()),
+                const SizedBox(height: 14),
+                Text(
+                  "Finding your location…",
+                  textAlign: TextAlign.center,
+                  style: textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 20),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => _close(),
+                    style: TextButton.styleFrom(minimumSize: minSize, shape: shape),
+                    child: const Text("Cancel"),
+                  ),
+                ),
+              ],
+            )
+          : _hasError || _preview == null
+              ? Column(
+                  key: const ValueKey('error'),
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (url != null) ...[
+                    Row(
+                      children: [
+                        Icon(Icons.location_off_outlined, color: scheme.error),
+                        const SizedBox(width: 10),
+                        Text("Couldn't Get Location", style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      "Check that location permissions are granted and try again.",
+                      style: textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => _close(),
+                          style: TextButton.styleFrom(minimumSize: minSize, shape: shape),
+                          child: const Text("Dismiss"),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: _fetch,
+                          style: FilledButton.styleFrom(minimumSize: minSize, shape: shape),
+                          child: const Text("Retry"),
+                        ),
+                      ],
+                    ),
+                  ],
+                )
+              : Column(
+                  key: const ValueKey('ready'),
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.location_on_outlined, color: scheme.primary),
+                        const SizedBox(width: 10),
+                        Text("Send Location?", style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    if (_preview!.mapImageUrl != null) ...[
                       Container(
                         decoration: BoxDecoration(
                           color: scheme.surfaceContainerHighest,
@@ -193,7 +335,7 @@ class Share {
                         child: AspectRatio(
                           aspectRatio: 16 / 10,
                           child: Image.network(
-                            url,
+                            _preview!.mapImageUrl!,
                             fit: BoxFit.cover,
                             gaplessPlayback: true,
                             errorBuilder: (_, _, _) => Center(
@@ -204,14 +346,14 @@ class Share {
                                   const SizedBox(height: 6),
                                   Text(
                                     "Map preview unavailable",
-                                    style: ctx.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+                                    style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                                   ),
                                 ],
                               ),
                             ),
                             frameBuilder: (_, child, frame, _) {
                               if (frame == null) {
-                                return Center(child: buildProgressIndicator(ctx));
+                                return Center(child: buildProgressIndicator(context));
                               }
                               return child;
                             },
@@ -221,69 +363,31 @@ class Share {
                       const SizedBox(height: 12),
                     ],
                     Text(
-                      title ?? "No location details found",
-                      style: ctx.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: scheme.onSurface,
-                      ),
+                      _preview!.title ?? "Current location",
+                      style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600, color: scheme.onSurface),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                     ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => _close(),
+                          style: TextButton.styleFrom(minimumSize: minSize, shape: shape),
+                          child: const Text("Cancel"),
+                        ),
+                        const SizedBox(width: 8),
+                        FilledButton(
+                          onPressed: () => _close(_preview),
+                          style: FilledButton.styleFrom(minimumSize: minSize, shape: shape),
+                          child: const Text("Send Location"),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
-              );
-            },
-          ),
-          actions: [
-            BBDialogAction(
-              text: "Cancel",
-              onPressed: () => Navigator.of(Get.context!, rootNavigator: true).pop(),
-            ),
-            BBDialogAction(
-              text: "Send Location",
-              isDefault: true,
-              onPressed: () {
-                send = true;
-                Navigator.of(Get.context!, rootNavigator: true).pop();
-              },
-            ),
-          ],
-        );
-      }
-    }
-    if (kIsDesktop || kIsWeb) {
-      cvc(chat).showingOverlays = false;
-    }
-
-    if (!send) return;
-    if (bytes == null) return;
-
-    final message = Message(
-      guid: _attachmentGuid,
-      text: "",
-      dateCreated: DateTime.now(),
-      hasAttachments: true,
-      isFromMe: true,
-      handleId: 0,
-    );
-
-    final attachment = Attachment(
-      guid: _attachmentGuid,
-      mimeType: "text/x-vlocation",
-      isOutgoing: true,
-      uti: "public.vlocation",
-      bytes: bytes,
-      transferName: fileName,
-      totalBytes: bytes.length,
-    );
-
-    OutgoingMsgHandler.queue(
-      OutgoingAttachment(
-        chat: chat,
-        message: message,
-        attachment: attachment,
-      ),
     );
   }
 }

@@ -9,6 +9,8 @@ import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:maplibre/maplibre.dart' as maplibre;
+// ignore: implementation_imports
+import 'package:maplibre/src/translucent_pointer.dart';
 
 FindMyFriend _testFriend({
   required String id,
@@ -343,6 +345,118 @@ void main() {
       final endPoint = controller.animatedPoints['alice@example.com']!;
       expect(endPoint.latitude, closeTo(37.7849, 1e-6));
       expect(endPoint.longitude, closeTo(-122.4094, 1e-6));
+    });
+  });
+
+  group('FindMy marker hit-testing & pinch-to-zoom pass-through', () {
+    test('hitTestFindMyMarkerKey resolves topmost marker and leaves side padding open', () {
+      const markers = [
+        maplibre.Marker(
+          point: maplibre.Geographic(lon: -122.42, lat: 37.77),
+          size: Size(96, 76),
+          alignment: Alignment.bottomCenter,
+          child: SizedBox.shrink(key: ValueKey('friend-alice')),
+        ),
+        maplibre.Marker(
+          point: maplibre.Geographic(lon: -122.42, lat: 37.77),
+          size: Size(96, 76),
+          alignment: Alignment.bottomCenter,
+          child: SizedBox.shrink(key: ValueKey('device-mac')),
+        ),
+        maplibre.Marker(
+          point: maplibre.Geographic(lon: -122.40, lat: 37.78),
+          size: Size(72, 72),
+          alignment: Alignment.center,
+          child: SizedBox.shrink(key: ValueKey('current')),
+        ),
+      ];
+      const offsets = [
+        Offset(180, 300),
+        Offset(190, 305),
+        Offset(320, 420),
+      ];
+
+      // Overlap between friend-alice and device-mac selects topmost (device-mac)
+      expect(
+        hitTestFindMyMarkerKey(markers, offsets, const Offset(185, 280)),
+        'device-mac',
+      );
+      // Only friend-alice covers x=156
+      expect(
+        hitTestFindMyMarkerKey(markers, offsets, const Offset(156, 270)),
+        'friend-alice',
+      );
+      // Self location puck hit
+      expect(
+        hitTestFindMyMarkerKey(markers, offsets, const Offset(320, 420)),
+        'current',
+      );
+      // Empty map background miss
+      expect(
+        hitTestFindMyMarkerKey(markers, offsets, const Offset(60, 60)),
+        isNull,
+      );
+    });
+
+    testWidgets('TranslucentPointer lets two-finger pinch reach map gesture detector even when started on a marker',
+        (tester) async {
+      int maxPointerCount = 0;
+      double lastScale = 1.0;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 390,
+              height: 600,
+              child: Stack(
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onScaleUpdate: (details) {
+                      if (details.pointerCount > maxPointerCount) {
+                        maxPointerCount = details.pointerCount;
+                      }
+                      lastScale = details.scale;
+                    },
+                    child: const SizedBox.expand(),
+                  ),
+                  TranslucentPointer(
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          left: 100,
+                          top: 200,
+                          width: 96,
+                          height: 76,
+                          child: Container(
+                            key: const ValueKey('pin-box'),
+                            color: Colors.blue,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Finger 1 lands directly inside the opaque pin box; finger 2 lands nearby.
+      final g1 = await tester.startGesture(const Offset(148, 240));
+      final g2 = await tester.startGesture(const Offset(240, 240));
+      await tester.pump();
+      await g1.moveBy(const Offset(-40, 0));
+      await g2.moveBy(const Offset(40, 0));
+      await tester.pump();
+      await g1.up();
+      await g2.up();
+      await tester.pump();
+
+      expect(maxPointerCount, 2);
+      expect(lastScale, greaterThan(1.2));
     });
   });
 }

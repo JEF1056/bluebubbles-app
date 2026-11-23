@@ -737,7 +737,38 @@ class ThemesService {
     return results;
   }
 
+  static final Map<({String name, Brightness brightness, String selectedName}), ThemeStruct> _resolvedThemeCache = {};
+
+  @visibleForTesting
+  static int get resolvedThemeCacheSize => _resolvedThemeCache.length;
+
+  static void invalidateResolvedThemeCache([String? themeName]) {
+    if (themeName == null) {
+      _resolvedThemeCache.clear();
+      return;
+    }
+    _resolvedThemeCache.removeWhere(
+      (key, value) => key.name == themeName || value.name == themeName,
+    );
+  }
+
+  static ThemeStruct resolveThemeByName(
+    String? name,
+    Brightness brightness,
+    ThemeStruct Function() loader,
+  ) {
+    final selectedName = GetIt.I.isRegistered<SharedPreferencesService>()
+        ? (brightness == Brightness.dark
+                ? PrefsSvc.theme.getSelectedDarkTheme()
+                : PrefsSvc.theme.getSelectedLightTheme()) ??
+            ''
+        : '';
+    final key = (name: name ?? '', brightness: brightness, selectedName: selectedName);
+    return _resolvedThemeCache.putIfAbsent(key, loader);
+  }
+
   void _loadTheme(BuildContext context, {ThemeStruct? lightOverride, ThemeStruct? darkOverride}) {
+    invalidateResolvedThemeCache();
     // Set the theme to match those of the settings
     ThemeData light = (lightOverride ?? ThemeStruct.getLightTheme()).data;
     ThemeData dark = (darkOverride ?? ThemeStruct.getDarkTheme()).data;
@@ -789,6 +820,7 @@ class ThemesService {
       lightTheme: light?.name,
       darkTheme: dark?.name,
     );
+    invalidateResolvedThemeCache();
 
     if (!context.mounted) return;
     _loadTheme(context);

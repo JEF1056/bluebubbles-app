@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/facetime_link_sheet.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
 import 'package:bluebubbles/app/components/facetime/outgoing_facetime_sheet.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/address_picker.dart';
@@ -50,10 +51,12 @@ Future<void> openFaceTimeJoinLink(String link, {BuildContext? context}) async {
   );
   if (opened) return;
 
-  if (kIsWeb && context != null && context.mounted) {
-    final reducedMotion = facetimeReducedMotionOf(context);
+  final rawContext = (context != null && context.mounted) ? context : null;
+  final targetContext = resolveFaceTimeNavigatorContext(rawContext);
+  if (kIsWeb && targetContext != null) {
+    final reducedMotion = facetimeReducedMotionOf(targetContext);
     await showModalBottomSheet<void>(
-      context: context,
+      context: targetContext,
       useRootNavigator: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
@@ -193,27 +196,21 @@ Future<void> startAudioCallForHandle(
     builder: (sheetCtx) => _CallChooserSheet(
       children: [
         if (hasPhone)
-          _CallChooserOption(
+          FaceTimeSheetOption(
             icon: Icons.phone_outlined,
-            accentColor: FaceTimePalette.green,
             title: 'Phone (SIM)',
             subtitle: 'Call using this device',
-            reducedMotion: reducedMotion,
             onTap: () {
               Navigator.of(sheetCtx).pop();
               showAddressPicker(resolvedContact, handle, context);
             },
           ),
         if (hasFaceTimeAudio) ...[
-          if (hasPhone) const SizedBox(height: 10),
-          _CallChooserOption(
+          if (hasPhone) const SizedBox(height: 4),
+          FaceTimeSheetOption(
             icon: Icons.record_voice_over_outlined,
-            accentColor: Theme.of(sheetCtx).brightness == Brightness.dark
-                ? FaceTimePalette.blueDark
-                : FaceTimePalette.blue,
             title: 'FaceTime Audio',
             subtitle: 'Call via Mac FaceTime',
-            reducedMotion: reducedMotion,
             onTap: () {
               Navigator.of(sheetCtx).pop();
               _startFaceTimeForHandle(context, handle: handle, callerName: callerName, video: false, chatGuid: chat.guid);
@@ -221,13 +218,11 @@ Future<void> startAudioCallForHandle(
           ),
         ],
         if (hasContinuity) ...[
-          if (hasPhone || hasFaceTimeAudio) const SizedBox(height: 10),
-          _CallChooserOption(
+          if (hasPhone || hasFaceTimeAudio) const SizedBox(height: 4),
+          FaceTimeSheetOption(
             icon: Icons.phone_iphone_outlined,
-            accentColor: FaceTimePalette.green,
             title: 'iPhone Cellular (via Mac)',
             subtitle: 'Relay cellular call through paired iPhone',
-            reducedMotion: reducedMotion,
             onTap: () {
               Navigator.of(sheetCtx).pop();
               _startFaceTimeForHandle(
@@ -332,6 +327,24 @@ Future<void> startFaceTimeCall(
   );
 }
 
+Future<void> startFaceTimeForAddress(
+  BuildContext context, {
+  required String address,
+  required String callerName,
+  bool? video = true,
+  bool isTelephony = false,
+  String? chatGuid,
+}) {
+  return _startFaceTimeForHandle(
+    context,
+    handle: Handle(address: address),
+    callerName: callerName,
+    video: video,
+    isTelephony: isTelephony,
+    chatGuid: chatGuid,
+  );
+}
+
 Future<void> _startFaceTimeForHandle(
   BuildContext context, {
   required Handle handle,
@@ -362,8 +375,8 @@ Future<void> _startFaceTimeForHandle(
   if (GetIt.I.isRegistered<ContactServiceV2>()) {
     try {
       final contact = ContactsSvcV2.findContactForAddressSync(address) ?? await ContactsSvcV2.getContact(address);
-      if (contact?.avatarPath != null) {
-        avatarBytes = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
+      if (contact != null) {
+        avatarBytes = await ContactsSvcV2.getContactAvatar(contact.nativeContactId);
       }
     } catch (_) {}
   }
@@ -456,9 +469,24 @@ Future<void> _startFaceTimeForHandle(
           showSnackbar("FaceTime", "Couldn't hang up the call", type: SnackbarType.error);
         }
       },
+      onCreateFaceTimeLink: isTelephony
+          ? null
+          : () {
+              Navigator.of(sheetContext).pop();
+              if (rootNav.mounted) {
+                unawaited(createAndShareFaceTimeLink(
+                  rootNav.context,
+                  displayName: callerName,
+                  chatGuid: chatGuid,
+                  addresses: [address],
+                ));
+              }
+            },
     ),
   );
 }
+
+enum _WebFaceTimeChoice { video, audio, createLink }
 
 Future<void> _startWebFaceTimeForHandle(
   BuildContext context, {
@@ -471,7 +499,7 @@ Future<void> _startWebFaceTimeForHandle(
   bool? chosenVideo = video;
   if (chosenVideo == null && !isTelephony) {
     final reducedMotion = facetimeReducedMotionOf(context);
-    chosenVideo = await showModalBottomSheet<bool>(
+    final choice = await showModalBottomSheet<_WebFaceTimeChoice>(
       context: context,
       isScrollControlled: true,
       useRootNavigator: true,
@@ -479,30 +507,41 @@ Future<void> _startWebFaceTimeForHandle(
       backgroundColor: Colors.transparent,
       sheetAnimationStyle: reducedMotion ? AnimationStyle.noAnimation : null,
       builder: (sheetCtx) {
-        final isDark = Theme.of(sheetCtx).brightness == Brightness.dark;
-        final accent = isDark ? FaceTimePalette.blueDark : FaceTimePalette.blue;
         return _CallChooserSheet(
           children: [
-            _CallChooserOption(
+            FaceTimeSheetOption(
               icon: Icons.videocam_outlined,
-              accentColor: accent,
               title: 'FaceTime Video',
-              reducedMotion: reducedMotion,
-              onTap: () => Navigator.of(sheetCtx).pop(true),
+              onTap: () => Navigator.of(sheetCtx).pop(_WebFaceTimeChoice.video),
             ),
-            const SizedBox(height: 10),
-            _CallChooserOption(
+            const SizedBox(height: 4),
+            FaceTimeSheetOption(
               icon: Icons.call_outlined,
-              accentColor: accent,
               title: 'FaceTime Audio',
-              reducedMotion: reducedMotion,
-              onTap: () => Navigator.of(sheetCtx).pop(false),
+              onTap: () => Navigator.of(sheetCtx).pop(_WebFaceTimeChoice.audio),
+            ),
+            const SizedBox(height: 4),
+            FaceTimeSheetOption(
+              icon: Icons.link_rounded,
+              title: 'Create FaceTime Link',
+              subtitle: 'Share a link anyone can join',
+              onTap: () => Navigator.of(sheetCtx).pop(_WebFaceTimeChoice.createLink),
             ),
           ],
         );
       },
     );
-    if (chosenVideo == null || !context.mounted) return;
+    if (!context.mounted || choice == null) return;
+    if (choice == _WebFaceTimeChoice.createLink) {
+      await createAndShareFaceTimeLink(
+        context,
+        displayName: callerName,
+        chatGuid: chatGuid,
+        addresses: [handle.address],
+      );
+      return;
+    }
+    chosenVideo = choice == _WebFaceTimeChoice.video;
   }
 
   final wantVideo = (chosenVideo ?? false) && !isTelephony;
@@ -515,8 +554,8 @@ Future<void> _startWebFaceTimeForHandle(
     try {
       final contact =
           ContactsSvcV2.findContactForAddressSync(handle.address) ?? await ContactsSvcV2.getContact(handle.address);
-      if (contact?.avatarPath != null) {
-        avatarBytes = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
+      if (contact != null) {
+        avatarBytes = await ContactsSvcV2.getContactAvatar(contact.nativeContactId);
       }
     } catch (_) {}
   }
@@ -651,7 +690,7 @@ class _CallChooserSheet extends StatelessWidget {
           children: [
             Center(
               child: Container(
-                width: 36,
+                width: 32,
                 height: 4,
                 decoration: BoxDecoration(
                   color: dragHandleColor,
@@ -662,105 +701,6 @@ class _CallChooserSheet extends StatelessWidget {
             const SizedBox(height: 18),
             ...children,
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CallChooserOption extends StatefulWidget {
-  const _CallChooserOption({
-    required this.icon,
-    required this.accentColor,
-    required this.title,
-    this.subtitle,
-    required this.reducedMotion,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final Color accentColor;
-  final String title;
-  final String? subtitle;
-  final bool reducedMotion;
-  final VoidCallback onTap;
-
-  @override
-  State<_CallChooserOption> createState() => _CallChooserOptionState();
-}
-
-class _CallChooserOptionState extends State<_CallChooserOption> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final tileColor = isDark ? FaceTimePalette.darkElevated : theme.colorScheme.surfaceContainerHighest;
-    final borderColor = isDark ? FaceTimePalette.hairline : theme.colorScheme.outlineVariant.withValues(alpha: 0.35);
-    final titleColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
-    final subtitleColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
-
-    return AnimatedScale(
-      scale: _pressed && !widget.reducedMotion ? 0.96 : 1.0,
-      duration: widget.reducedMotion ? Duration.zero : const Duration(milliseconds: 100),
-      curve: Curves.easeOut,
-      child: Material(
-        color: tileColor,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
-          side: BorderSide(color: borderColor),
-        ),
-        child: InkWell(
-          onTap: widget.onTap,
-          onHighlightChanged: (v) {
-            if (_pressed != v) setState(() => _pressed = v);
-          },
-          borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 60),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Row(
-                children: [
-                  Container(
-                    width: FaceTimeDims.actionButtonSize,
-                    height: FaceTimeDims.actionButtonSize,
-                    decoration: BoxDecoration(
-                      color: widget.accentColor.withValues(alpha: isDark ? 0.16 : 0.12),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(widget.icon, color: widget.accentColor, size: FaceTimeDims.actionIconSize),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          widget.title,
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: titleColor,
-                          ),
-                        ),
-                        if (widget.subtitle != null) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.subtitle!,
-                            style: theme.textTheme.bodySmall?.copyWith(color: subtitleColor),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(Icons.chevron_right_rounded, color: subtitleColor, size: 20),
-                ],
-              ),
-            ),
-          ),
         ),
       ),
     );

@@ -8,6 +8,7 @@ import com.wearbubbles.WearBubblesApp
 import com.wearbubbles.api.ApiClient
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
+import com.wearbubbles.notifications.CallNotificationHelper
 import com.wearbubbles.notifications.NotificationHelper
 import com.wearbubbles.relay.PhoneRelayClient
 import com.wearbubbles.worker.MessageSyncWorker
@@ -42,7 +43,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     init {
         viewModelScope.launch {
-            relay.refreshPhoneConnected()
+            val phoneConnected = relay.refreshPhoneConnected()
+            if (!phoneConnected && !relay.isPhoneConnected.value) {
+                launch { refreshProfileFromServer() }
+            }
             settings.serverUrl.collect { url ->
                 _uiState.value = _uiState.value.copy(serverUrl = url)
             }
@@ -76,9 +80,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             settings.userAvatarPath.collect { path ->
                 _uiState.value = _uiState.value.copy(userAvatarPath = path)
             }
-        }
-        viewModelScope.launch {
-            refreshProfileFromServer()
         }
     }
 
@@ -134,7 +135,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun resetSetup() {
         viewModelScope.launch {
-            app.socketManager.disconnect()
+            app.foregroundSocketSession.stop()
+            app.socketManager.disconnect(clearCredentials = true)
+            CallNotificationHelper.endCall(getApplication())
             MessageSyncWorker.cancel(getApplication())
             NotificationHelper.cancelAll(getApplication())
             ApiClient.reset()

@@ -142,7 +142,7 @@ class _SamsungConversationListState extends State<SamsungConversationList> with 
                         ),
                       ),
                     SliverPadding(
-                      padding: EdgeInsets.only(bottom: 15 + MediaQuery.paddingOf(context).bottom),
+                      padding: EdgeInsets.only(bottom: MediaQuery.paddingOf(context).bottom),
                       sliver: SliverDecoration(
                         color: _tileColor,
                         borderRadius: BorderRadius.circular(25),

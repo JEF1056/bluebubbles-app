@@ -301,6 +301,7 @@ class ManualMarkState extends State<ManualMark> with ThemeHelpers {
                 marking = true;
               });
               if (!marked) {
+                widget.controller.clearUnreadDivider();
                 await HttpSvc.chat.markRead(chat.guid);
               } else {
                 await HttpSvc.chat.markUnread(chat.guid);

@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/conversation_list.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/header/header_widgets.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/pages/search/search_view.dart';
@@ -58,18 +59,27 @@ class CupertinoHeader extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      ClipOval(
-                        child: Material(
-                          color: context.theme.colorScheme.surfaceContainerHighest,
+                      Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () {
+                            NavigationSvc.pushLeft(context, const SearchView());
+                          },
                           child: SizedBox(
-                            width: 30,
-                            height: 30,
-                            child: InkWell(
-                              child: Icon(CupertinoIcons.search,
-                                  color: context.theme.colorScheme.onSurfaceVariant, size: 18),
-                              onTap: () {
-                                NavigationSvc.pushLeft(context, const SearchView());
-                              },
+                            width: 44,
+                            height: 44,
+                            child: Center(
+                              child: Container(
+                                width: 30,
+                                height: 30,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: context.theme.colorScheme.surfaceContainerHighest,
+                                ),
+                                child: Icon(CupertinoIcons.search,
+                                    color: context.theme.colorScheme.onSurfaceVariant, size: 18),
+                              ),
                             ),
                           ),
                         ),
@@ -77,20 +87,29 @@ class CupertinoHeader extends StatelessWidget {
                       const CupertinoChatListFilterButton(),
                       const SizedBox(width: 10.0),
                       if (SettingsSvc.settings.moveChatCreatorToHeader.value)
-                        ClipOval(
-                          child: Material(
-                            color: context.theme.colorScheme.surfaceContainerHighest,
-                            child: InkWell(
-                              child: SizedBox(
-                                width: 30,
-                                height: 30,
-                                child: Icon(
-                                  CupertinoIcons.pencil,
-                                  color: context.theme.colorScheme.onSurfaceVariant,
-                                  size: 20,
+                        Material(
+                          type: MaterialType.transparency,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => controller.openNewChatCreator(context),
+                            child: SizedBox(
+                              width: 44,
+                              height: 44,
+                              child: Center(
+                                child: Container(
+                                  width: 30,
+                                  height: 30,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: context.theme.colorScheme.surfaceContainerHighest,
+                                  ),
+                                  child: Icon(
+                                    CupertinoIcons.pencil,
+                                    color: context.theme.colorScheme.onSurfaceVariant,
+                                    size: 20,
+                                  ),
                                 ),
                               ),
-                              onTap: () => controller.openNewChatCreator(context),
                             ),
                           ),
                         ),
@@ -103,17 +122,27 @@ class CupertinoHeader extends StatelessWidget {
                           SettingsSvc.settings.cameraFAB.value &&
                           !kIsWeb &&
                           !kIsDesktop)
-                        ClipOval(
-                          child: Material(
-                            color: context.theme.colorScheme.surfaceContainerHighest,
-                            child: InkWell(
-                                child: SizedBox(
+                        Material(
+                          type: MaterialType.transparency,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => controller.openCamera(context),
+                            child: SizedBox(
+                              width: 44,
+                              height: 44,
+                              child: Center(
+                                child: Container(
                                   width: 30,
                                   height: 30,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: context.theme.colorScheme.surfaceContainerHighest,
+                                  ),
                                   child: Icon(CupertinoIcons.camera,
                                       color: context.theme.colorScheme.onSurfaceVariant, size: 20),
                                 ),
-                                onTap: () => controller.openCamera(context)),
+                              ),
+                            ),
                           ),
                         ),
                       if (SettingsSvc.settings.moveChatCreatorToHeader.value) const SizedBox(width: 10.0),
@@ -148,18 +177,27 @@ class CupertinoMiniHeader extends StatelessWidget {
             : kToolbarHeight + 30;
 
     return IgnorePointer(
-      child: FadeOnScroll(
-        scrollController: controller.iosScrollController,
-        fullOpacityOffset: topMargin + 15,
-        child: ClipRect(
-          child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-              child: Obx(() {
-                NavigationSvc.listener.value;
-                return Container(
+      child: ListenableBuilder(
+        listenable: controller.iosScrollController,
+        builder: (context, _) {
+          final fadeDistance = topMargin + 15;
+          final offset = controller.iosScrollController.positions.length == 1
+              ? controller.iosScrollController.offset
+              : 0.0;
+          final opacity = fadeDistance <= 0 ? 1.0 : (offset / fadeDistance).clamp(0.0, 1.0);
+          if (opacity <= 0.0) return const SizedBox.shrink();
+
+          return ClipRect(
+            child: Obx(() {
+              NavigationSvc.listener.value;
+              final useBlur = !SettingsSvc.settings.highPerfMode.value;
+              return RouteSettledBackdropFilter(
+                enabled: useBlur,
+                filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                child: Container(
                   width: NavigationSvc.width(context),
                   height: (topMargin - 20).clamp(kIsDesktop ? 65 : 40, double.infinity),
-                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5 * opacity),
                   alignment: Alignment.bottomCenter,
                   child: Padding(
                     padding: EdgeInsets.only(bottom: kIsDesktop ? 10 : 5),
@@ -169,12 +207,16 @@ class CupertinoMiniHeader extends StatelessWidget {
                           : controller.showUnknownSenders
                               ? "Unknown Senders"
                               : "Messages",
-                      style: context.textTheme.titleMedium!.copyWith(color: context.theme.colorScheme.onSurfaceVariant),
+                      style: context.textTheme.titleMedium!.copyWith(
+                        color: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: opacity),
+                      ),
                     ),
                   ),
-                );
-              })),
-        ),
+                ),
+              );
+            }),
+          );
+        },
       ),
     );
   }

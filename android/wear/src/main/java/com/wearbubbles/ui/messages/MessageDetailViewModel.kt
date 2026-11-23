@@ -155,6 +155,9 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     private val _messages = MutableStateFlow<List<MessageUi>>(emptyList())
     val messages: StateFlow<List<MessageUi>> = _messages.asStateFlow()
 
+    private val _unreadDividerGuid = MutableStateFlow<String?>(null)
+    val unreadDividerGuid: StateFlow<String?> = _unreadDividerGuid.asStateFlow()
+
     private val _showOriginalGuids = MutableStateFlow<Set<String>>(emptySet())
     private val _translatingGuids = MutableStateFlow<Set<String>>(emptySet())
 
@@ -243,6 +246,8 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     private var initialMessageSnapshotSeen = false
     private var lastObservedIncomingGuid: String? = null
     private var hasUnacknowledgedIncoming = false
+    private val unreadTracker = UnreadDividerTracker()
+    private var latestAllEntities: List<com.wearbubbles.db.entities.MessageEntity> = emptyList()
     private var lastRefreshStartedAtMs = 0L
     private var wasPaused = false
     private val _attachmentRevision = MutableStateFlow(0)
@@ -260,14 +265,35 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         initialMessageSnapshotSeen = false
         lastObservedIncomingGuid = null
         hasUnacknowledgedIncoming = false
+        unreadTracker.reset()
+        latestAllEntities = emptyList()
+        _unreadDividerGuid.value = null
+        initialMarkReadJob?.cancel()
+        initialMarkReadJob = null
 
-        if (NotificationHelper.shouldActivateChat(guid)) {
-            pendingInitialOpenRead = false
-            NotificationHelper.setActiveChat(guid)
-            NotificationHelper.cancelNotification(getApplication(), guid)
-            initialMarkReadJob = viewModelScope.launch { markChatReadAndAck(guid) }
-        } else {
-            pendingInitialOpenRead = true
+        // Snapshot chat unread boundary BEFORE markChatReadAndAck mutates Room hasUnreadMessage.
+        viewModelScope.launch {
+            val initialChat = withContext(Dispatchers.IO) { db.chatDao().getChat(guid) }
+            if (chatGuid != guid) return@launch
+            val isUnread = initialChat?.hasUnreadMessage == true
+            if (isUnread) {
+                unreadTracker.snapshotOnOpen(
+                    hasUnread = true,
+                    lastReadMessageTimestamp = initialChat.lastReadMessageTimestamp
+                )
+                hasUnacknowledgedIncoming = true
+                _unreadDividerGuid.value = unreadTracker.onMessages(latestAllEntities)
+            }
+            if (NotificationHelper.shouldActivateChat(guid)) {
+                pendingInitialOpenRead = false
+                NotificationHelper.setActiveChat(guid)
+                NotificationHelper.cancelNotification(getApplication(), guid)
+                if (!isUnread) {
+                    initialMarkReadJob = viewModelScope.launch { markChatReadAndAck(guid) }
+                }
+            } else {
+                pendingInitialOpenRead = !isUnread
+            }
         }
 
         if (!collectorsStarted) {
@@ -532,10 +558,12 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                                 linkPreview = previewUi
                             )
                         }
-                        uiList to eagerGuids
+                        uiList to Pair(eagerGuids, allEntities)
                     }
                     .flowOn(Dispatchers.IO)
-                    .collect { (uiList, eagerGuids) ->
+                    .collect { (uiList, extra) ->
+                        val (eagerGuids, allEntities) = extra
+                        latestAllEntities = allEntities
                         val latestIncomingGuid = uiList.lastOrNull { !it.isFromMe }?.guid
                         if (!initialMessageSnapshotSeen) {
                             initialMessageSnapshotSeen = true
@@ -544,13 +572,14 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                             lastObservedIncomingGuid = latestIncomingGuid
                             hasUnacknowledgedIncoming = true
                         }
+                        _unreadDividerGuid.value = unreadTracker.onMessages(allEntities)
                         _messages.value = uiList
                         eagerGuids.forEach { requestAttachmentIfNeeded(it) }
                     }
             }
         }
 
-        // Socket typing indicators (DB persistence is owned by WearBubblesApp)
+        // Socket typing indicators & read-status sync (DB persistence is owned by WearBubblesApp)
         viewModelScope.launch {
             app.socketManager.events.collect { event ->
                 when (event) {
@@ -564,6 +593,12 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                     is SocketEvent.TypingIndicator -> {
                         if (event.chatGuid == chatGuid) {
                             setTypingIndicator(event.display)
+                        }
+                    }
+                    is SocketEvent.ChatReadStatusChanged -> {
+                        if (event.chatGuid == chatGuid && event.read) {
+                            hasUnacknowledgedIncoming = false
+                            _unreadDividerGuid.value = unreadTracker.clear()
                         }
                     }
                     else -> {}
@@ -588,6 +623,12 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
                         if (msg.chatGuid == chatGuid && !msg.isFromMe) {
                             _isTyping.value = false
                             hasUnacknowledgedIncoming = true
+                        }
+                    }
+                    is RelayEvent.ChatMarkedRead -> {
+                        if (event.chatGuid == chatGuid) {
+                            hasUnacknowledgedIncoming = false
+                            _unreadDividerGuid.value = unreadTracker.clear()
                         }
                     }
                     is RelayEvent.UpdatedMessage -> {}
@@ -677,6 +718,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
 
     private suspend fun markChatReadAndAck(guid: String) {
         hasUnacknowledgedIncoming = false
+        _unreadDividerGuid.value = unreadTracker.clear()
         chatRepo.markChatRead(guid)
     }
 
@@ -747,6 +789,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     fun sendMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isBlank()) return
+        _unreadDividerGuid.value = unreadTracker.clear()
         viewModelScope.launch {
             val tempGuid = "temp-${UUID.randomUUID()}"
             sendWithRetryFallback(trimmed, tempGuid)
@@ -754,6 +797,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private suspend fun sendWithRetryFallback(text: String, tempGuid: String) {
+        _unreadDividerGuid.value = unreadTracker.clear()
         _isSending.value = true
         _error.value = null
         val res = messageRepo.sendMessage(
@@ -786,6 +830,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
     }
 
     fun toggleTapback(messageGuid: String, tapback: TapbackType, currentlyActiveByMe: Boolean) {
+        _unreadDividerGuid.value = unreadTracker.clear()
         viewModelScope.launch {
             val guid = chatGuid
             val res = messageRepo.reactToMessage(guid, messageGuid, tapback, remove = currentlyActiveByMe)
@@ -873,6 +918,7 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         }
         cleanupRecorder(deleteFile = false)
         if (file != null && file.exists() && file.length() > 0) {
+            _unreadDividerGuid.value = unreadTracker.clear()
             viewModelScope.launch {
                 _isSending.value = true
                 val res = messageRepo.sendVoiceMemo(chatGuid, file)
@@ -1029,6 +1075,83 @@ class MessageDetailViewModel(application: Application) : AndroidViewModel(applic
         cleanupRecorder(deleteFile = true)
         stopAudioPlayback()
         super.onCleared()
+    }
+}
+
+internal fun computeUnreadDividerGuid(
+    messages: List<com.wearbubbles.db.entities.MessageEntity>,
+    hasUnread: Boolean,
+    lastReadMessageTimestamp: Long?
+): String? {
+    if (!hasUnread || messages.isEmpty()) return null
+
+    fun isReactionOrGroupEvent(m: com.wearbubbles.db.entities.MessageEntity): Boolean =
+        TapbackUtils.isTapbackCode(m.associatedMessageType) ||
+            (m.groupActionType ?: 0) > 0 ||
+            (m.itemType ?: 0) > 0
+
+    fun isEligibleIncoming(m: com.wearbubbles.db.entities.MessageEntity): Boolean =
+        m.guid.isNotBlank() && !m.isFromMe && !isReactionOrGroupEvent(m)
+
+    val sorted = messages.sortedBy { it.dateCreated }
+    val boundaryMs = lastReadMessageTimestamp?.takeIf { it > 0L }
+    if (boundaryMs != null) {
+        for (m in sorted) {
+            if (!isEligibleIncoming(m)) continue
+            if (m.isRead == true) continue
+            if ((m.dateRead ?: 0L) > 0L) continue
+            if (m.dateCreated > boundaryMs) return m.guid
+        }
+    }
+
+    // Fallback when no read boundary timestamp exists (e.g. phone relay or Mac Mark as Unread):
+    // contiguous incoming run after the latest outgoing non-reaction non-group-event message.
+    var oldestInRun: String? = null
+    for (m in sorted.asReversed()) {
+        if (m.isFromMe && !isReactionOrGroupEvent(m)) break
+        if (isEligibleIncoming(m)) {
+            oldestInRun = m.guid
+        }
+    }
+    return oldestInRun
+}
+
+internal class UnreadDividerTracker {
+    private var hasUnreadSnapshot: Boolean = false
+    private var lastReadSnapshotMs: Long? = null
+    var dividerGuid: String? = null
+        private set
+
+    fun reset() {
+        hasUnreadSnapshot = false
+        lastReadSnapshotMs = null
+        dividerGuid = null
+    }
+
+    fun snapshotOnOpen(hasUnread: Boolean, lastReadMessageTimestamp: Long?) {
+        hasUnreadSnapshot = hasUnread
+        lastReadSnapshotMs = lastReadMessageTimestamp?.takeIf { it > 0L }
+        if (!hasUnread) {
+            dividerGuid = null
+        }
+    }
+
+    fun onMessages(entities: List<com.wearbubbles.db.entities.MessageEntity>): String? {
+        if (!hasUnreadSnapshot) return dividerGuid
+        if (dividerGuid != null || entities.isEmpty()) return dividerGuid
+        dividerGuid = computeUnreadDividerGuid(
+            messages = entities,
+            hasUnread = true,
+            lastReadMessageTimestamp = lastReadSnapshotMs
+        )
+        return dividerGuid
+    }
+
+    fun clear(): String? {
+        hasUnreadSnapshot = false
+        lastReadSnapshotMs = null
+        dividerGuid = null
+        return null
     }
 }
 

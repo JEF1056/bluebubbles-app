@@ -634,7 +634,9 @@ class SocketIOForegroundService : Service() {
                         if (!FaceTimeConnectionService.markCallActive(callUuid, recordIfPending = isOutgoing)) {
                             FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = true)
                             CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(applicationContext, callUuid)
-                            WearSyncManager.notifyCallEndedIfNotWatchAnswered(applicationContext, callUuid)
+                            if (!FaceTimeConnectionService.isCallActive(callUuid)) {
+                                WearSyncManager.notifyCallEndedIfNotWatchAnswered(applicationContext, callUuid)
+                            }
                         }
                     }
                     6 -> {

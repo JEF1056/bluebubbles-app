@@ -262,6 +262,14 @@ class NotificationLogicTest {
     @Test
     fun `channel group routing maps messages, calls, and other channels cleanly`() {
         assertEquals(
+            "com.bluebubbles.incoming_facetimes_v2",
+            NotificationChannelHandler.FACETIME_CHANNEL_ID
+        )
+        assertEquals(
+            "com.bluebubbles.incoming_facetimes",
+            NotificationChannelHandler.LEGACY_FACETIME_CHANNEL_ID
+        )
+        assertEquals(
             NotificationChannelHandler.GROUP_MESSAGES,
             NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.NEW_MESSAGES_CHANNEL_ID)
         )
@@ -270,8 +278,20 @@ class NotificationLogicTest {
             NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.FACETIME_CHANNEL_ID)
         )
         assertEquals(
+            NotificationChannelHandler.GROUP_CALLS,
+            NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.FACETIME_RING_CHANNEL_ID)
+        )
+        assertEquals(
+            NotificationChannelHandler.GROUP_CALLS,
+            NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.LEGACY_FACETIME_CHANNEL_ID)
+        )
+        assertEquals(
             NotificationChannelHandler.GROUP_OTHER,
             NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.FOREGROUND_SERVICE_CHANNEL_ID)
+        )
+        assertEquals(
+            "set-call-tone",
+            com.bluebubbles.messaging.services.telecom.SetCallToneHandler.tag
         )
     }
 
@@ -309,33 +329,45 @@ class NotificationLogicTest {
     }
 
     @Test
-    fun `shouldUseCallStyle stays enabled on Android 14+ regardless of FSI and disables for ongoing or enable-account`() {
+    fun `shouldUseCallStyle gates on canUseFsi and disables for ongoing or enable-account`() {
         assertTrue(
             CreateIncomingFaceTimeNotification.shouldUseCallStyle(
                 sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
                 isOngoing = false,
-                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION,
+                canUseFsi = true
+            )
+        )
+        assertFalse(
+            CreateIncomingFaceTimeNotification.shouldUseCallStyle(
+                sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
+                isOngoing = false,
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION,
+                canUseFsi = false
             )
         )
         assertFalse(
             CreateIncomingFaceTimeNotification.shouldUseCallStyle(
                 sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
                 isOngoing = true,
-                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION,
+                canUseFsi = true
             )
         )
         assertFalse(
             CreateIncomingFaceTimeNotification.shouldUseCallStyle(
                 sdkInt = android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE,
                 isOngoing = false,
-                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT,
+                canUseFsi = true
             )
         )
         assertFalse(
             CreateIncomingFaceTimeNotification.shouldUseCallStyle(
                 sdkInt = android.os.Build.VERSION_CODES.R,
                 isOngoing = false,
-                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION
+                route = com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute.NOTIFICATION,
+                canUseFsi = true
             )
         )
     }
@@ -379,6 +411,181 @@ class NotificationLogicTest {
                 hasActiveConnection = false,
                 isNewlySeen = false
             )
+        )
+    }
+
+    @Test
+    fun `ongoingActionLabels reflects muted and speaker states`() {
+        assertEquals(
+            "Mute" to "Speaker on",
+            com.bluebubbles.messaging.services.telecom.FaceTimeCallForegroundService.ongoingActionLabels(
+                muted = false,
+                speaker = false
+            )
+        )
+        assertEquals(
+            "Unmute" to "Speaker off",
+            com.bluebubbles.messaging.services.telecom.FaceTimeCallForegroundService.ongoingActionLabels(
+                muted = true,
+                speaker = true
+            )
+        )
+    }
+
+    @Test
+    fun `promotion extras key matches Android Live Updates requestPromotedOngoing`() {
+        assertEquals(
+            "android.requestPromotedOngoing",
+            com.bluebubbles.messaging.services.telecom.FaceTimeCallForegroundService.EXTRA_REQUEST_PROMOTED_ONGOING
+        )
+    }
+
+    @Test
+    fun `WearSyncManager clearCallEnded allows re-notifying call ended after active call`() {
+        val uuid = "test-live-call-uuid-dedupe"
+        val now = 1_700_000_000_000L
+        com.bluebubbles.messaging.services.wear.WearSyncManager.clearCallEnded(uuid)
+        assertTrue(com.bluebubbles.messaging.services.wear.WearSyncManager.recordCallEndedIfNew(uuid, now))
+        assertFalse(com.bluebubbles.messaging.services.wear.WearSyncManager.recordCallEndedIfNew(uuid, now + 100L))
+        com.bluebubbles.messaging.services.wear.WearSyncManager.clearCallEnded(uuid)
+        assertTrue(com.bluebubbles.messaging.services.wear.WearSyncManager.recordCallEndedIfNew(uuid, now + 200L))
+        com.bluebubbles.messaging.services.wear.WearSyncManager.clearCallEnded(uuid)
+    }
+
+    @Test
+    fun `resolveIncomingRingOwnership uses app ring only with Telecom binding and system ring otherwise`() {
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingRingOwnership.NONE,
+            CreateIncomingFaceTimeNotification.resolveIncomingRingOwnership(
+                isOngoing = true,
+                hasTelecomConnection = false,
+                hasOtherActiveCall = false
+            )
+        )
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingRingOwnership.APP_TELECOM,
+            CreateIncomingFaceTimeNotification.resolveIncomingRingOwnership(
+                isOngoing = false,
+                hasTelecomConnection = true,
+                hasOtherActiveCall = false
+            )
+        )
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingRingOwnership.APP_TELECOM,
+            CreateIncomingFaceTimeNotification.resolveIncomingRingOwnership(
+                isOngoing = false,
+                hasTelecomConnection = false,
+                hasOtherActiveCall = true
+            )
+        )
+        assertEquals(
+            CreateIncomingFaceTimeNotification.IncomingRingOwnership.SYSTEM_NOTIFICATION,
+            CreateIncomingFaceTimeNotification.resolveIncomingRingOwnership(
+                isOngoing = false,
+                hasTelecomConnection = false,
+                hasOtherActiveCall = false
+            )
+        )
+    }
+
+    @Test
+    fun `shouldHideBubbleOnRead hides bubble only when keepBubble is true and not in car`() {
+        assertTrue(shouldHideBubbleOnRead(keepBubble = true, inCar = false))
+        assertFalse(shouldHideBubbleOnRead(keepBubble = true, inCar = true))
+        assertFalse(shouldHideBubbleOnRead(keepBubble = false, inCar = false))
+        assertFalse(shouldHideBubbleOnRead(keepBubble = false, inCar = true))
+    }
+
+    @Test
+    fun `incoming FaceTime answerIntent includes notificationId and showsUserInterface flags are true`() {
+        val ints = mutableMapOf<String, Int>()
+        val bools = mutableMapOf<String, Boolean>()
+        val strings = mutableMapOf<String, String>()
+        var intentType: String? = null
+
+        CreateIncomingFaceTimeNotification.applyAnswerIntentExtras(
+            notificationId = 4242,
+            isVideo = true,
+            isTelephony = false,
+            callerName = "Alice",
+            isOngoing = false,
+            putInt = { k, v -> ints[k] = v },
+            putBoolean = { k, v -> bools[k] = v },
+            putString = { k, v -> strings[k] = v },
+            setType = { intentType = it }
+        )
+
+        assertEquals(4242, ints["notificationId"])
+        assertEquals(true, bools["answer"])
+        assertEquals(false, bools["audioOnly"])
+        assertEquals(false, bools["isTelephony"])
+        assertEquals("Alice", strings["caller"])
+        assertEquals(true, bools["incomingFaceTime"])
+        assertEquals("AnswerFaceTime", intentType)
+        assertTrue(CreateIncomingFaceTimeNotification.ANSWER_ACTION_SHOWS_USER_INTERFACE)
+        assertTrue(CreateIncomingFaceTimeNotification.AUDIO_ANSWER_ACTION_SHOWS_USER_INTERFACE)
+    }
+
+    @Test
+    fun `AnswerFaceTimeAudio launch uses OpenCall when routed and AnswerFaceTime when not routed`() {
+        val routedBools = mutableMapOf<String, Boolean>()
+        val routedStrings = mutableMapOf<String, String>()
+        var routedFlags = 0
+        var routedType: String? = null
+
+        InternalIntentReceiver.applyAnswerFaceTimeAudioLaunch(
+            routed = true,
+            callUuid = "ft-audio-uuid",
+            isTelephony = false,
+            callerName = "Bob",
+            addFlags = { routedFlags = routedFlags or it },
+            putBoolean = { k, v -> routedBools[k] = v },
+            putString = { k, v -> routedStrings[k] = v },
+            setType = { routedType = it }
+        )
+
+        assertEquals("OpenCall", routedType)
+        assertEquals(true, routedBools["openCall"])
+        assertEquals(null, routedBools["answer"])
+        assertEquals(true, routedBools["audioOnly"])
+        assertEquals(false, routedBools["isTelephony"])
+        assertEquals(true, routedBools["incomingFaceTime"])
+        assertEquals("ft-audio-uuid", routedStrings["callUuid"])
+        assertEquals("Bob", routedStrings["caller"])
+        assertTrue((routedFlags and android.content.Intent.FLAG_ACTIVITY_NEW_TASK) != 0)
+        assertTrue((routedFlags and android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0)
+
+        val fallbackBools = mutableMapOf<String, Boolean>()
+        var fallbackType: String? = null
+        InternalIntentReceiver.applyAnswerFaceTimeAudioLaunch(
+            routed = false,
+            callUuid = "ft-audio-uuid",
+            isTelephony = true,
+            callerName = "Bob",
+            addFlags = {},
+            putBoolean = { k, v -> fallbackBools[k] = v },
+            putString = { _, _ -> },
+            setType = { fallbackType = it }
+        )
+        assertEquals("AnswerFaceTime", fallbackType)
+        assertEquals(true, fallbackBools["answer"])
+        assertEquals(null, fallbackBools["openCall"])
+        assertEquals(true, fallbackBools["isTelephony"])
+    }
+
+    @Test
+    fun `facetime ring channel v2 replaces legacy v1 in calls group`() {
+        assertEquals(
+            "com.bluebubbles.incoming_facetimes_ring_v2",
+            NotificationChannelHandler.FACETIME_RING_CHANNEL_ID
+        )
+        assertEquals(
+            "com.bluebubbles.incoming_facetimes_ring_v1",
+            NotificationChannelHandler.LEGACY_FACETIME_RING_CHANNEL_ID
+        )
+        assertEquals(
+            NotificationChannelHandler.GROUP_CALLS,
+            NotificationChannelHandler.groupIdForChannel(NotificationChannelHandler.LEGACY_FACETIME_RING_CHANNEL_ID)
         )
     }
 }

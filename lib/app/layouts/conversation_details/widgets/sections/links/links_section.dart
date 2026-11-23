@@ -11,6 +11,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/intera
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -44,6 +45,7 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   bool _isLoading = true;
   bool _loadingMore = false;
   String _searchQuery = '';
+  VoidCallback? _cancelTransitionCommit;
 
   List<Message> get _filteredLinks {
     if (!widget.fullPage) return links;
@@ -73,6 +75,13 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
   void initState() {
     super.initState();
     _fetchLinks();
+  }
+
+  @override
+  void dispose() {
+    _cancelTransitionCommit?.call();
+    _cancelTransitionCommit = null;
+    super.dispose();
   }
 
   @override
@@ -110,14 +119,22 @@ class _LinksSectionState extends State<LinksSection> with ThemeHelpers {
           ..sort((a, b) => (b.dateCreated ?? DateTime(0)).compareTo(a.dateCreated ?? DateTime(0)));
       }
 
-      if (mounted) {
+      if (!mounted) return;
+      _cancelTransitionCommit?.call();
+      _cancelTransitionCommit = runAfterRouteTransition(context, () {
+        if (!mounted) return;
         setState(() {
           links = fetchedLinks;
           _isLoading = false;
         });
-      }
+      });
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      if (!mounted) return;
+      _cancelTransitionCommit?.call();
+      _cancelTransitionCommit = runAfterRouteTransition(context, () {
+        if (!mounted) return;
+        setState(() => _isLoading = false);
+      });
     }
   }
 

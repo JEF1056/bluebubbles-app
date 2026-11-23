@@ -16,7 +16,8 @@ data class ChatEntity(
     val lastMessageAttachmentGuid: String? = null,
     val lastMessageAttachmentMimeType: String? = null,
     val isPinned: Boolean = false,
-    val pinIndex: Int? = null
+    val pinIndex: Int? = null,
+    val lastReadMessageTimestamp: Long? = null
 ) {
     val title: String
         get() = displayName?.takeIf { it.isNotBlank() } ?: chatIdentifier

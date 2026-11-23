@@ -1,5 +1,7 @@
 package com.bluebubbles.messaging.services.telecom
 
+import android.media.AudioDeviceInfo
+import android.telecom.CallAudioState
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -7,6 +9,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.webrtc.CameraEnumerationAndroid
 
 class WebRtcAudioClientTest {
 
@@ -224,5 +227,202 @@ class WebRtcAudioClientTest {
         assertEquals(0, audioReleases)
         assertEquals(0, wakeReleases)
         assertEquals(1, wifiReleases)
+    }
+
+    @Test
+    fun `selectCaptureSize picks 1080p30 when supported and falls back cleanly`() {
+        val formats = listOf(
+            CameraEnumerationAndroid.CaptureFormat(640, 480, 15, 30),
+            CameraEnumerationAndroid.CaptureFormat(1280, 720, 15, 30),
+            CameraEnumerationAndroid.CaptureFormat(1920, 1080, 15, 30),
+            CameraEnumerationAndroid.CaptureFormat(3840, 2160, 15, 30)
+        )
+        assertEquals(Triple(1920, 1080, 30), WebRtcAudioClient.selectCaptureSize(formats))
+        assertEquals(Triple(1920, 1080, 30), WebRtcAudioClient.selectCaptureSize(emptyList()))
+
+        val hdOnly = listOf(
+            CameraEnumerationAndroid.CaptureFormat(640, 480, 15, 30),
+            CameraEnumerationAndroid.CaptureFormat(1280, 720, 15, 30)
+        )
+        assertEquals(Triple(1280, 720, 30), WebRtcAudioClient.selectCaptureSize(hdOnly))
+    }
+
+    @Test
+    fun `buildAudioConstraints toggles noise suppression and highpass filter with voice isolation`() {
+        val enabled = WebRtcAudioClient.buildAudioConstraints(true)
+        assertEquals("true", enabled.mandatory.first { it.key == "googNoiseSuppression" }.value)
+        assertEquals("true", enabled.mandatory.first { it.key == "googHighpassFilter" }.value)
+        assertEquals("true", enabled.mandatory.first { it.key == "googEchoCancellation" }.value)
+
+        val disabled = WebRtcAudioClient.buildAudioConstraints(false)
+        assertEquals("false", disabled.mandatory.first { it.key == "googNoiseSuppression" }.value)
+        assertEquals("false", disabled.mandatory.first { it.key == "googHighpassFilter" }.value)
+        assertEquals("true", disabled.mandatory.first { it.key == "googEchoCancellation" }.value)
+    }
+
+    @Test
+    fun `AdaptiveUplinkSupervisor steps down on sustained loss and respects cooldown before stepping up`() {
+        val sup = AdaptiveUplinkSupervisor()
+        assertEquals(1920, sup.currentRung.width)
+
+        assertNull(sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 1_000L))
+        val dropped = sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 3_000L)
+        assertNotNull(dropped)
+        assertEquals(1280, dropped!!.width)
+
+        // Cooldown (8s) blocks step-up even with 3 good samples
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 5_000L))
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 7_000L))
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 9_000L))
+
+        // After 8s cooldown, 3 good samples promote back to 1080p
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 12_000L))
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 14_000L))
+        val promoted = sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 16_000L)
+        assertNotNull(promoted)
+        assertEquals(1920, promoted!!.width)
+    }
+
+    @Test
+    fun `AdaptiveUplinkRung maps landscape and portrait dimensions for 5-arg adaptOutputFormat`() {
+        for (rung in AdaptiveUplinkSupervisor.DEFAULT_RUNGS) {
+            assertTrue(rung.landscapeWidth >= rung.landscapeHeight)
+            assertTrue(rung.portraitWidth <= rung.portraitHeight)
+            assertEquals(rung.width, rung.landscapeWidth)
+            assertEquals(rung.height, rung.landscapeHeight)
+            assertEquals(rung.height, rung.portraitWidth)
+            assertEquals(rung.width, rung.portraitHeight)
+        }
+
+        val portraitInput = AdaptiveUplinkRung(360, 640, 24, 300_000, 650_000)
+        assertEquals(640, portraitInput.landscapeWidth)
+        assertEquals(360, portraitInput.landscapeHeight)
+        assertEquals(360, portraitInput.portraitWidth)
+        assertEquals(640, portraitInput.portraitHeight)
+    }
+
+    @Test
+    fun `FaceTimeVideoEffect parse normalizes camelCase and snake_case`() {
+        assertEquals(FaceTimeVideoEffect.NONE, FaceTimeVideoEffect.parse(null))
+        assertEquals(FaceTimeVideoEffect.NONE, FaceTimeVideoEffect.parse("none"))
+        assertEquals(FaceTimeVideoEffect.BLUR_LIGHT, FaceTimeVideoEffect.parse("blurLight"))
+        assertEquals(FaceTimeVideoEffect.BLUR_LIGHT, FaceTimeVideoEffect.parse("blur_light"))
+        assertEquals(FaceTimeVideoEffect.BLUR_STRONG, FaceTimeVideoEffect.parse("blurStrong"))
+        assertEquals(FaceTimeVideoEffect.BLUR_STRONG, FaceTimeVideoEffect.parse("blur_strong"))
+        assertEquals(FaceTimeVideoEffect.VIRTUAL_BACKGROUND, FaceTimeVideoEffect.parse("virtualBackground"))
+        assertEquals(FaceTimeVideoEffect.VIRTUAL_BACKGROUND, FaceTimeVideoEffect.parse("virtual_background"))
+    }
+
+    @Test
+    fun `FaceTimeAudioRouteManager maps device types and legacy CallAudioState routes`() {
+        assertEquals("earpiece", FaceTimeAudioRouteManager.mapOutputDeviceKind(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE))
+        assertEquals("speaker", FaceTimeAudioRouteManager.mapOutputDeviceKind(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
+        assertEquals("bluetooth", FaceTimeAudioRouteManager.mapOutputDeviceKind(AudioDeviceInfo.TYPE_BLUETOOTH_SCO))
+        assertEquals("usb", FaceTimeAudioRouteManager.mapOutputDeviceKind(AudioDeviceInfo.TYPE_USB_HEADSET))
+        assertEquals("builtinMic", FaceTimeAudioRouteManager.mapInputDeviceKind(AudioDeviceInfo.TYPE_BUILTIN_MIC))
+        assertEquals("wired", FaceTimeAudioRouteManager.mapInputDeviceKind(AudioDeviceInfo.TYPE_WIRED_HEADSET))
+
+        val legacy = FaceTimeAudioRouteManager.buildLegacyOutputs(
+            supportedMask = CallAudioState.ROUTE_EARPIECE or CallAudioState.ROUTE_SPEAKER or CallAudioState.ROUTE_BLUETOOTH,
+            activeRoute = CallAudioState.ROUTE_BLUETOOTH,
+            btNamesAndAddrs = listOf("Pixel Buds Pro" to "AA:BB:CC:DD:EE:FF"),
+            activeBtAddr = "AA:BB:CC:DD:EE:FF"
+        )
+        assertEquals(3, legacy.size)
+        val bt = legacy.first { it.kind == "bluetooth" }
+        assertEquals("bt:AA:BB:CC:DD:EE:FF", bt.id)
+        assertEquals("Pixel Buds Pro", bt.label)
+        assertTrue(bt.isActive)
+    }
+
+    @Test
+    fun `rotatedFrameSize swaps dimensions on quarter turns and preserves them on 0 or 180`() {
+        assertEquals(720 to 1280, WebRtcAudioClient.rotatedFrameSize(1280, 720, 270))
+        assertEquals(720 to 1280, WebRtcAudioClient.rotatedFrameSize(1280, 720, 90))
+        assertEquals(1280 to 720, WebRtcAudioClient.rotatedFrameSize(1280, 720, 0))
+        assertEquals(1280 to 720, WebRtcAudioClient.rotatedFrameSize(1280, 720, 180))
+    }
+
+    @Test
+    fun `isAllowedMediaCodec permits hardware codecs and emulator or Google H264 codecs`() {
+        assertTrue(WebRtcAudioClient.isAllowedMediaCodec("c2.exynos.h264.encoder", isHardwareAccelerated = true))
+        assertTrue(WebRtcAudioClient.isAllowedMediaCodec("c2.android.avc.encoder", isHardwareAccelerated = false))
+        assertTrue(WebRtcAudioClient.isAllowedMediaCodec("c2.google.avc.decoder", isHardwareAccelerated = false))
+        assertTrue(WebRtcAudioClient.isAllowedMediaCodec("OMX.google.h264.encoder", isHardwareAccelerated = false))
+        assertFalse(WebRtcAudioClient.isAllowedMediaCodec("c2.android.vp8.encoder", isHardwareAccelerated = false))
+    }
+
+    @Test
+    fun `summarizeIceCandidate and sdpContainsH264 parse diagnostics cleanly`() {
+        assertEquals(
+            "host 192.168.1.50:54321",
+            WebRtcAudioClient.summarizeIceCandidate("candidate:1 1 udp 2122260223 192.168.1.50 54321 typ host generation 0")
+        )
+        assertEquals("unknown", WebRtcAudioClient.summarizeIceCandidate(null))
+        assertTrue(WebRtcAudioClient.sdpContainsH264("v=0\r\na=rtpmap:96 H264/90000\r\n"))
+        assertFalse(WebRtcAudioClient.sdpContainsH264("v=0\r\na=rtpmap:96 VP8/90000\r\n"))
+    }
+
+    @Test
+    fun `selectH264EncoderColorFormat and prependH264ConfigIfMissing work for fallback encoder`() {
+        assertEquals(
+            android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar,
+            WebRtcAudioClient.selectH264EncoderColorFormat(
+                intArrayOf(
+                    android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
+                    android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
+                )
+            )
+        )
+        assertNull(WebRtcAudioClient.selectH264EncoderColorFormat(intArrayOf(0x7f000789)))
+
+        val config = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x68)
+        val idrWithoutSps = byteArrayOf(0, 0, 0, 1, 0x65, 0x11, 0x22)
+        val combined = WebRtcAudioClient.prependH264ConfigIfMissing(idrWithoutSps, config, isKeyFrame = true)
+        assertEquals(config.size + idrWithoutSps.size, combined.size)
+        assertTrue(WebRtcAudioClient.hasH264SpsPrefix(combined))
+
+        val idrWithSps = byteArrayOf(0, 0, 0, 1, 0x67, 0x42, 0, 0, 0, 1, 0x65)
+        val unchanged = WebRtcAudioClient.prependH264ConfigIfMissing(idrWithSps, config, isKeyFrame = true)
+        assertEquals(idrWithSps.size, unchanged.size)
+
+        val delta = byteArrayOf(0, 0, 0, 1, 0x61, 0x33)
+        assertEquals(delta.size, WebRtcAudioClient.prependH264ConfigIfMissing(delta, config, isKeyFrame = false).size)
+    }
+
+    @Test
+    fun `buildLocalVideoTexturePayload hydrates camera flags and only includes positive dimensions`() {
+        val withDims = WebRtcAudioClient.buildLocalVideoTexturePayload(
+            callUuid = "call-123",
+            textureId = 42L,
+            width = 1080,
+            height = 1920,
+            cameraEnabled = true,
+            canFlipCamera = true,
+            frontCamera = false
+        )
+        assertEquals("local-video-texture", withDims["phase"])
+        assertEquals("call-123", withDims["call_uuid"])
+        assertEquals(42L, withDims["texture_id"])
+        assertEquals(1080, withDims["width"])
+        assertEquals(1920, withDims["height"])
+        assertEquals(true, withDims["camera_enabled"])
+        assertEquals(true, withDims["can_flip_camera"])
+        assertEquals(false, withDims["front_camera"])
+
+        val withoutDims = WebRtcAudioClient.buildLocalVideoTexturePayload(
+            callUuid = "call-123",
+            textureId = 42L,
+            width = 0,
+            height = 0,
+            cameraEnabled = false,
+            canFlipCamera = true,
+            frontCamera = true
+        )
+        assertFalse(withoutDims.containsKey("width"))
+        assertFalse(withoutDims.containsKey("height"))
+        assertEquals(false, withoutDims["camera_enabled"])
+        assertEquals(true, withoutDims["can_flip_camera"])
+        assertEquals(true, withoutDims["front_camera"])
     }
 }

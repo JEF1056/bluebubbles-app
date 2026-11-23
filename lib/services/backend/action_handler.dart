@@ -62,15 +62,25 @@ class ActionHandler extends GetxService {
     if (statusId == null) return;
 
     final enriched = Map<String, dynamic>.from(data);
-    final String? address = (enriched["handle"] is Map ? enriched["handle"]["address"] : null)?.toString() ??
-        enriched["address"]?.toString();
-    if ((enriched["display_name"] == null || enriched["display_name"].toString().trim().isEmpty) &&
-        address != null &&
-        address.isNotEmpty &&
+    final remoteAddresses = _extractRemoteAddresses(enriched);
+    final String? address = remoteAddresses.isNotEmpty ? remoteAddresses.first : null;
+    if ((enriched["display_name"] == null ||
+            ActiveCallController.isGenericCallLabel(enriched["display_name"]?.toString())) &&
+        remoteAddresses.isNotEmpty &&
         GetIt.I.isRegistered<ContactServiceV2>()) {
-      final cachedContact = ContactsSvcV2.findContactForAddressSync(address);
-      if (cachedContact != null && cachedContact.displayName.isNotEmpty) {
-        enriched["display_name"] = cachedContact.displayName;
+      final cachedNames = <String>[];
+      var resolvedAny = false;
+      for (final addr in remoteAddresses) {
+        final cachedContact = ContactsSvcV2.findContactForAddressSync(addr);
+        if (cachedContact != null && cachedContact.displayName.trim().isNotEmpty) {
+          cachedNames.add(cachedContact.displayName.trim());
+          resolvedAny = true;
+        } else {
+          cachedNames.add(addr);
+        }
+      }
+      if (resolvedAny) {
+        enriched["display_name"] = cachedNames.join(", ");
       }
     }
 
@@ -82,26 +92,46 @@ class ActionHandler extends GetxService {
 
     ActiveCallController.instance.applyServerSession(enriched);
 
+    final String? callUuid = _nonEmptyString(enriched["uuid"]) ??
+        _nonEmptyString(enriched["call_uuid"]) ??
+        _nonEmptyString(enriched["session_uuid"]);
+    final bool isTelephony = enriched["is_telephony"] == true;
+    final bool isAudio = isTelephony ||
+        (enriched["is_video"] is bool
+            ? !(enriched["is_video"] as bool)
+            : (enriched["is_audio"] is bool ? enriched["is_audio"] as bool : false));
+    final bool? explicitIsGroup = enriched["is_group"] is bool ? enriched["is_group"] as bool : null;
+
+    if (statusId != 6 &&
+        callUuid != null &&
+        remoteAddresses.isNotEmpty &&
+        GetIt.I.isRegistered<ContactServiceV2>()) {
+      await _resolveAndApplyCallerInfo(
+        callUuid,
+        remoteAddresses,
+        existingDisplayName: _nonEmptyString(enriched["display_name"]),
+        isVideo: !isAudio,
+        isTelephony: isTelephony,
+        explicitIsGroup: explicitIsGroup,
+      );
+    }
+
     final bool isOutgoing = enriched["is_outgoing"] == true;
     final String? endedReason = _nonEmptyString(enriched["ended_reason"])?.toLowerCase();
     if (statusId == 6 && !isOutgoing && endedReason == "missed") {
-      final String? callUuid = _nonEmptyString(enriched["uuid"]) ??
-          _nonEmptyString(enriched["call_uuid"]) ??
-          _nonEmptyString(enriched["session_uuid"]);
       final bool alreadyNotified = callUuid != null && _notifiedMissedCallUuids.contains(callUuid);
       if (!alreadyNotified && GetIt.I.isRegistered<NotificationsService>()) {
         if (callUuid != null) {
           if (_notifiedMissedCallUuids.length >= 100) _notifiedMissedCallUuids.clear();
           _notifiedMissedCallUuids.add(callUuid);
         }
-        final bool isTelephony = enriched["is_telephony"] == true;
-        final bool isAudio = isTelephony ||
-            (enriched["is_video"] is bool
-                ? !(enriched["is_video"] as bool)
-                : (enriched["is_audio"] is bool ? enriched["is_audio"] as bool : false));
         String caller = _nonEmptyString(enriched["display_name"]) ??
             _nonEmptyString(address) ??
-            (isTelephony ? "iPhone Call" : "Unknown Number");
+            ActiveCallController.callKindLabelFor(
+              isVideo: !isAudio,
+              isTelephony: isTelephony,
+              isGroup: !isTelephony && (explicitIsGroup ?? remoteAddresses.length > 1),
+            );
         if (_nonEmptyString(enriched["display_name"]) == null &&
             address != null &&
             address.isNotEmpty &&
@@ -125,34 +155,154 @@ class ActionHandler extends GetxService {
     return (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
   }
 
+  List<String> _extractRemoteAddresses(Map<String, dynamic> data) {
+    final candidates = <String>[];
+    if (data["addresses"] is List) {
+      for (final raw in (data["addresses"] as List)) {
+        final s = _nonEmptyString(raw);
+        if (s != null) candidates.add(s);
+      }
+    }
+    final handleAddr = data["handle"] is Map ? _nonEmptyString(data["handle"]["address"]) : null;
+    if (handleAddr != null) candidates.add(handleAddr);
+    final singleAddr = _nonEmptyString(data["address"]);
+    if (singleAddr != null) candidates.add(singleAddr);
+    return ActiveCallController.filterRemoteAddresses(candidates);
+  }
+
+  Future<({List<CallParticipant> details, Uint8List? primaryAvatar, String? resolvedName})>
+      _resolveParticipants(
+    List<String> remoteAddresses, {
+    String? existingDisplayName,
+    required bool isVideo,
+    required bool isTelephony,
+    required bool isGroup,
+  }) async {
+    final details = <CallParticipant>[];
+    Uint8List? primaryAvatar;
+
+    if (GetIt.I.isRegistered<ContactServiceV2>()) {
+      for (final addr in remoteAddresses) {
+        final ContactV2? contact =
+            ContactsSvcV2.findContactForAddressSync(addr) ?? await ContactsSvcV2.getContact(addr);
+        Uint8List? avatar;
+        if (contact != null && contact.nativeContactId.isNotEmpty) {
+          avatar = await ContactsSvcV2.getContactAvatar(contact.nativeContactId);
+          if (avatar != null && avatar.isEmpty) avatar = null;
+        }
+        primaryAvatar ??= avatar;
+        final contactName = contact?.displayName.trim();
+        details.add(
+          CallParticipant(
+            address: addr,
+            displayName: (contactName != null && contactName.isNotEmpty) ? contactName : null,
+            avatarBytes: avatar,
+          ),
+        );
+      }
+    } else {
+      for (final addr in remoteAddresses) {
+        details.add(CallParticipant(address: addr));
+      }
+    }
+
+    String? resolvedName = existingDisplayName;
+    final hasResolvedContact = details.any((p) => p.displayName != null && p.displayName!.isNotEmpty);
+    final existingIsRawOrGeneric = existingDisplayName == null ||
+        ActiveCallController.isGenericCallLabel(existingDisplayName) ||
+        remoteAddresses.contains(existingDisplayName) ||
+        existingDisplayName == remoteAddresses.join(", ");
+    if (hasResolvedContact && existingIsRawOrGeneric) {
+      resolvedName = ActiveCallController.formatParticipantNames(
+        details.map((p) => p.label),
+        isVideo: isVideo,
+        isTelephony: isTelephony,
+        isGroup: isGroup,
+      );
+    }
+
+    return (details: details, primaryAvatar: primaryAvatar, resolvedName: resolvedName);
+  }
+
+  Future<void> _resolveAndApplyCallerInfo(
+    String callUuid,
+    List<String> remoteAddresses, {
+    String? existingDisplayName,
+    required bool isVideo,
+    required bool isTelephony,
+    bool? explicitIsGroup,
+  }) async {
+    final isGroup = !isTelephony && (explicitIsGroup ?? remoteAddresses.length > 1);
+    final resolved = await _resolveParticipants(
+      remoteAddresses,
+      existingDisplayName: existingDisplayName,
+      isVideo: isVideo,
+      isTelephony: isTelephony,
+      isGroup: isGroup,
+    );
+    final currentAvatar = ActiveCallController.instance.state.avatarBytes;
+    final nextAvatar = (currentAvatar == null || currentAvatar.isEmpty) ? resolved.primaryAvatar : null;
+    ActiveCallController.instance.updateCallerInfo(
+      callUuid,
+      callerName: resolved.resolvedName,
+      callerAddress: remoteAddresses.first,
+      avatarBytes: nextAvatar,
+      isGroup: isGroup,
+      participants: remoteAddresses,
+      participantDetails: resolved.details,
+    );
+  }
+
   Future<void> handleIncomingFaceTimeCall(Map<String, dynamic> data) async {
     Logger.info("Handling incoming FaceTime call");
     final String? callUuid = _nonEmptyString(data["uuid"]);
     final bool isTelephony = data["is_telephony"] == true;
-    final String? address = (data["handle"] is Map ? _nonEmptyString(data["handle"]["address"]) : null) ??
-        _nonEmptyString(data["address"]);
-    String caller = _nonEmptyString(data["address"]) ?? (isTelephony ? "iPhone call" : "Unknown Number");
+    final remoteAddresses = _extractRemoteAddresses(data);
+    final String? address = remoteAddresses.isNotEmpty ? remoteAddresses.first : null;
     final bool isAudio = isTelephony ||
         (data["is_video"] is bool
             ? !(data["is_video"] as bool)
             : (data["is_audio"] is bool ? data["is_audio"] as bool : false));
-    Uint8List? chatIcon;
+    final bool isGroup = !isTelephony && (data["is_group"] == true || remoteAddresses.length > 1);
 
-    if (address != null && GetIt.I.isRegistered<ContactServiceV2>()) {
-      ContactV2? contact = await ContactsSvcV2.getContact(address);
-      if (contact?.avatarPath != null) {
-        chatIcon = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
-      }
-      caller = contact?.displayName ?? caller;
+    final resolved = await _resolveParticipants(
+      remoteAddresses,
+      existingDisplayName: _nonEmptyString(data["display_name"]),
+      isVideo: !isAudio,
+      isTelephony: isTelephony,
+      isGroup: isGroup,
+    );
+
+    final String caller = resolved.resolvedName ??
+        address ??
+        ActiveCallController.callKindLabelFor(
+          isVideo: !isAudio,
+          isTelephony: isTelephony,
+          isGroup: isGroup,
+        );
+
+    if (callUuid != null) {
+      ActiveCallController.instance.updateCallerInfo(
+        callUuid,
+        callerName: caller,
+        callerAddress: address,
+        avatarBytes: resolved.primaryAvatar,
+        isGroup: isGroup,
+        participants: remoteAddresses,
+        participantDetails: resolved.details,
+      );
     }
 
     await _dispatchIncomingFaceTimeUI(
       callUuid: callUuid,
       caller: caller,
-      chatIcon: chatIcon,
+      chatIcon: resolved.primaryAvatar,
       isAudio: isAudio,
       callerAddress: address,
       isTelephony: isTelephony,
+      isGroup: isGroup,
+      participants: remoteAddresses,
+      participantDetails: resolved.details,
     );
   }
 
@@ -160,37 +310,43 @@ class ActionHandler extends GetxService {
     Logger.info("Handling incoming FaceTime call (legacy)");
     final String? callUuid = _nonEmptyString(data["uuid"]);
     final bool isTelephony = data["is_telephony"] == true;
-    final String? rawAddress = _nonEmptyString(data["address"]) ??
-        (data["handle"] is Map ? _nonEmptyString(data["handle"]["address"]) : null);
+    final remoteAddresses = _extractRemoteAddresses(data);
     final String? rawCaller = _nonEmptyString(data["caller"]);
-    final String? address = rawAddress ?? rawCaller;
-    String? caller = rawCaller ?? address;
+    final String? address = remoteAddresses.isNotEmpty ? remoteAddresses.first : rawCaller;
     final bool isAudio = isTelephony ||
         (data["is_video"] is bool
             ? !(data["is_video"] as bool)
             : (data["is_audio"] is bool ? data["is_audio"] as bool : false));
-    Uint8List? chatIcon;
+    final bool isGroup = !isTelephony && (data["is_group"] == true || remoteAddresses.length > 1);
 
-    if (address != null && GetIt.I.isRegistered<ContactServiceV2>()) {
-      ContactV2? contact = await ContactsSvcV2.getContact(address);
-      if (contact?.avatarPath != null) {
-        chatIcon = await ContactsSvcV2.getContactAvatar(contact!.nativeContactId);
-      }
-      caller = contact?.displayName ?? caller;
-    }
+    final resolved = await _resolveParticipants(
+      remoteAddresses.isNotEmpty ? remoteAddresses : [if (address != null) address],
+      existingDisplayName: rawCaller,
+      isVideo: !isAudio,
+      isTelephony: isTelephony,
+      isGroup: isGroup,
+    );
 
+    String? caller = resolved.resolvedName ?? address;
     if (caller == null) {
       if (callUuid == null) return;
-      caller = isTelephony ? "iPhone call" : "Unknown Number";
+      caller = ActiveCallController.callKindLabelFor(
+        isVideo: !isAudio,
+        isTelephony: isTelephony,
+        isGroup: isGroup,
+      );
     }
 
     await _dispatchIncomingFaceTimeUI(
       callUuid: callUuid,
       caller: caller,
-      chatIcon: chatIcon,
+      chatIcon: resolved.primaryAvatar,
       isAudio: isAudio,
       callerAddress: address,
       isTelephony: isTelephony,
+      isGroup: isGroup,
+      participants: remoteAddresses,
+      participantDetails: resolved.details,
       allowFallbackOverlayUuid: true,
     );
   }
@@ -202,6 +358,9 @@ class ActionHandler extends GetxService {
     required bool isAudio,
     required String? callerAddress,
     required bool isTelephony,
+    bool isGroup = false,
+    List<String> participants = const [],
+    List<CallParticipant> participantDetails = const [],
     bool allowFallbackOverlayUuid = false,
   }) async {
     final String? overlayUuid =
@@ -225,6 +384,9 @@ class ActionHandler extends GetxService {
           isAudio,
           callerAddress: callerAddress,
           isTelephony: isTelephony,
+          isGroup: isGroup,
+          participants: participants,
+          participantDetails: participantDetails,
         );
       }
       return;
@@ -239,6 +401,9 @@ class ActionHandler extends GetxService {
           isAudio,
           callerAddress: callerAddress,
           isTelephony: isTelephony,
+          isGroup: isGroup,
+          participants: participants,
+          participantDetails: participantDetails,
         );
       }
       await NotificationsSvc.createIncomingFaceTimeNotification(
@@ -257,6 +422,9 @@ class ActionHandler extends GetxService {
         isAudio,
         callerAddress: callerAddress,
         isTelephony: isTelephony,
+        isGroup: isGroup,
+        participants: participants,
+        participantDetails: participantDetails,
       );
     }
   }
@@ -358,6 +526,10 @@ class ActionHandler extends GetxService {
         Chat? chat = Chat.findOne(guid: data["chatGuid"]);
         final dynamic rawRead = data["read"] ?? data["status"];
         final int? readBefore = extractReadBefore(data);
+        if (chat != null && readBefore != null) {
+          chat.lastReadAt = readBefore;
+          ChatsSvc.getChatState(chat.guid)?.chat.lastReadAt = readBefore;
+        }
         if (chat != null && rawRead == true && await chat.clearNotificationsForPartialRead(readBefore)) return;
         if (chat != null && rawRead is bool) {
           // Route through ChatsService so the ChatState the conversation list
@@ -366,6 +538,9 @@ class ActionHandler extends GetxService {
           // Forced so a chat already marked read locally (e.g. by a reply from another device) still clears.
           await ChatsSvc.setChatHasUnread(chat, !rawRead,
               force: rawRead, privateMark: false, readBefore: readBefore);
+          if (rawRead && Get.isRegistered<ConversationViewController>(tag: chat.guid)) {
+            Get.find<ConversationViewController>(tag: chat.guid).clearUnreadDivider();
+          }
         }
         return;
       case "typing-indicator":

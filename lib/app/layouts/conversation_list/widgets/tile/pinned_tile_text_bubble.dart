@@ -168,6 +168,19 @@ class PinnedTileTextBubbleState extends CustomState<PinnedTileTextBubble, void, 
           : _attachmentLabel(attachments, lastMessage) ?? subtitle;
 
       final background = getBubbleColors(lastMessage).first.withValues(alpha: 0.95);
+      final bubbleBody = Container(
+        padding: EdgeInsets.symmetric(
+          vertical: showPreview ? 2.0 : 3.0,
+          horizontal: showPreview ? 2.0 : 6.0,
+        ),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(size * 0.125),
+          color: background,
+        ),
+        child: showPreview
+            ? _previewContent(previewAttachment)
+            : _subtitleText(label, lastMessage),
+      );
       return Align(
         // Groups: bubble grows up from its Positioned anchor → top-left align.
         // DMs: center the bubble on the appropriate side.
@@ -198,22 +211,12 @@ class PinnedTileTextBubbleState extends CustomState<PinnedTileTextBubble, void, 
                   child: ClipRRect(
                     clipBehavior: Clip.antiAlias,
                     borderRadius: BorderRadius.circular(size * 0.125),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
-                      child: Container(
-                        padding: EdgeInsets.symmetric(
-                          vertical: showPreview ? 2.0 : 3.0,
-                          horizontal: showPreview ? 2.0 : 6.0,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(size * 0.125),
-                          color: background,
-                        ),
-                        child: showPreview
-                            ? _previewContent(previewAttachment)
-                            : _subtitleText(label, lastMessage),
-                      ),
-                    ),
+                    child: (kIsWeb || SettingsSvc.settings.highPerfMode.value)
+                        ? bubbleBody
+                        : BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+                            child: bubbleBody,
+                          ),
                   ),
                 ),
               ),

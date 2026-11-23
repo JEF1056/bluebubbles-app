@@ -50,7 +50,7 @@ class TrimMemoryHandler : MethodCallHandlerImpl() {
             result.success(true)
         } catch (e: Exception) {
             PersistentLog.e(context, Constants.logTag, "$tag: failed to purge engine caches", e)
-            result.error("TRIM_MEMORY_ERROR", e.message, e)
+            result.error("TRIM_MEMORY_ERROR", e.message, e.stackTraceToString())
         }
     }
 }

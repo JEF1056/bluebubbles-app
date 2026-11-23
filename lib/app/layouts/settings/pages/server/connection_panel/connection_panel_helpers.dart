@@ -1,9 +1,7 @@
 import 'package:animated_size_and_fade/animated_size_and_fade.dart';
 import 'dart:convert';
 
-import 'package:bluebubbles/app/layouts/conversation_details/dialogs/timeframe_picker.dart';
 import 'package:bluebubbles/app/layouts/settings/dialogs/custom_headers_dialog.dart';
-import 'package:bluebubbles/app/layouts/settings/dialogs/sync_dialog.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/imessage_stats/imessage_stats_page.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/oauth_panel.dart';
 import 'package:bluebubbles/app/layouts/settings/pages/server/server_management_panel.dart';
@@ -393,9 +391,9 @@ mixin ConnectionPanelHelpersMixin {
               Obx(
                 () => SettingsTile(
                   title: "Manually Sync Messages",
-                  subtitle: SocketSvc.state.value == SocketState.connected
-                      ? "Tap to sync messages"
-                      : "Disconnected, cannot sync",
+                  subtitle: (SyncSvc.isIncrementalSyncing.value || SyncSvc.status.value.retrying)
+                      ? "Syncing messages..."
+                      : "Tap to sync messages",
                   backgroundColor: tileColor,
                   leading: SettingsLeadingIcon(
                     iosIcon: CupertinoIcons.arrow_2_circlepath,
@@ -403,32 +401,7 @@ mixin ConnectionPanelHelpersMixin {
                     containerColor: Colors.yellow[700],
                   ),
                   onTap: () async {
-                    if (SocketSvc.state.value != SocketState.connected) return;
-                    final mgr = getManager();
-                    if (mgr != null) {
-                      showDialog(
-                        context: context,
-                        builder: (context) => SyncDialog(manager: mgr),
-                      );
-                    } else {
-                      final date = await showTimeframePicker("How Far Back?", context, showHourPicker: false);
-                      if (date == null) return;
-                      try {
-                        SyncSvc.isIncrementalSyncing.value = true;
-                        final newMgr = IncrementalSyncManager(startTimestamp: date.millisecondsSinceEpoch);
-                        setManager(newMgr);
-                        showDialog(
-                          context: context,
-                          builder: (context) => SyncDialog(manager: newMgr),
-                        );
-                        await newMgr.start();
-                      } catch (e, s) {
-                        Logger.warn("Incremental sync failed", error: e, trace: s, tag: 'ConnectionPanel');
-                      }
-                      Navigator.of(context, rootNavigator: true).pop();
-                      setManager(null);
-                      SyncSvc.isIncrementalSyncing.value = false;
-                    }
+                    await SyncSvc.retryNow();
                   },
                 ),
               ),

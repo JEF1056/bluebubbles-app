@@ -751,10 +751,12 @@ class ChatActions {
       final messageBox = Database.messages;
       final messages = <Message>[];
 
+      final validGuid = Message_.guid.notNull().and(Message_.guid.notEquals(''));
       if (searchAround == null) {
-        final dated = includeDeleted
-            ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-            : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull());
+        final dated = (includeDeleted
+                ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
+                : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
+            .and(validGuid);
         final query = (messageBox.query(since == null ? dated : dated.and(Message_.dateCreated.greaterOrEqual(since)))
               ..link(Message_.chat, Chat_.id.equals(chatId))
               ..order(Message_.dateCreated, flags: Order.descending))
@@ -766,9 +768,14 @@ class ChatActions {
         messages.addAll(query.find());
         query.close();
       } else {
-        final beforeQuery = (messageBox.query(Message_.dateCreated.lessThan(searchAround).and(includeDeleted
-                ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-                : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull())))
+        final beforeQuery = (messageBox.query(Message_.dateCreated
+                .lessThan(searchAround)
+                .and(includeDeleted
+                    ? Message_.dateCreated
+                        .notNull()
+                        .and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
+                    : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
+                .and(validGuid))
               ..link(Message_.chat, Chat_.id.equals(chatId))
               ..order(Message_.dateCreated, flags: Order.descending))
             .build();
@@ -776,9 +783,14 @@ class ChatActions {
         messages.addAll(beforeQuery.find());
         beforeQuery.close();
 
-        final afterQuery = (messageBox.query(Message_.dateCreated.greaterThan(searchAround).and(includeDeleted
-                ? Message_.dateCreated.notNull().and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
-                : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull())))
+        final afterQuery = (messageBox.query(Message_.dateCreated
+                .greaterThan(searchAround)
+                .and(includeDeleted
+                    ? Message_.dateCreated
+                        .notNull()
+                        .and(Message_.dateDeleted.isNull().or(Message_.dateDeleted.notNull()))
+                    : Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()))
+                .and(validGuid))
               ..link(Message_.chat, Chat_.id.equals(chatId))
               ..order(Message_.dateCreated))
             .build();

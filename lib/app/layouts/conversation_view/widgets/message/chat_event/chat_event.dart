@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -74,6 +76,14 @@ class ChatEvent extends StatelessWidget {
           },
           child: Obx(() {
             final chatState = ChatStateScope.maybeOf(context);
+            final chat = chatState?.chat;
+            if (message.itemType == 6 && !part.isUnsent) {
+              return _FaceTimeHistoryCard(
+                senderName: state.senderDisplayName,
+                dateCreated: message.dateCreated,
+                onCallBack: chat != null && canVideoCall(chat) ? () => startVideoCall(context, chat) : null,
+              );
+            }
             final hasBackground = chatState?.hasCustomWallpaper ?? false;
             final senderName = state.senderDisplayName;
             final text = part.isUnsent
@@ -102,6 +112,98 @@ class ChatEvent extends StatelessWidget {
               ),
             );
           }),
+        ),
+      ),
+    );
+  }
+}
+
+class _FaceTimeHistoryCard extends StatelessWidget {
+  const _FaceTimeHistoryCard({
+    required this.senderName,
+    required this.dateCreated,
+    this.onCallBack,
+  });
+
+  final String senderName;
+  final DateTime? dateCreated;
+  final VoidCallback? onCallBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final title = '$senderName started a FaceTime call';
+    final timeStr = dateCreated != null ? DateFormat.jm().format(dateCreated!) : null;
+    final semanticsLabel = timeStr != null ? '$title, $timeStr' : title;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: colors.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Semantics(
+                  label: semanticsLabel,
+                  excludeSemantics: true,
+                  child: Row(
+                    children: [
+                      Icon(Icons.videocam_rounded, size: 20, color: colors.primary),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontSize: 14,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                            if (timeStr != null) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                timeStr,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontSize: 12,
+                                  color: colors.onSurfaceVariant,
+                                  fontFeatures: const [FontFeature.tabularFigures()],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (onCallBack != null) ...[
+                const SizedBox(width: 12),
+                FilledButton.tonal(
+                  onPressed: onCallBack,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size(0, 40),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    tapTargetSize: MaterialTapTargetSize.padded,
+                  ),
+                  child: const Text('Call back'),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

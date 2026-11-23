@@ -1,13 +1,17 @@
 import 'dart:async';
-import 'dart:ui';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/call_controls.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
+import 'package:bluebubbles/helpers/ui/theme_helpers.dart';
 import 'package:flutter/material.dart';
 
-/// Unified layout-integrated call bar for incoming, outgoing, connecting,
-/// ongoing, and cross-device Handoff calls.
+/// Unified layout-integrated flat M3 Expressive call bar for incoming,
+/// outgoing, connecting, ongoing, and cross-device Handoff calls.
 class OngoingCallPillOverlay extends StatefulWidget {
   const OngoingCallPillOverlay({
     super.key,
@@ -49,15 +53,18 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
   }
 
   void _closeKeypad() {
-    if (!_showKeypad) return;
+    if (!mounted || !_showKeypad) return;
     setState(() {
       _showKeypad = false;
-      _keypadPortal.hide();
+      if (_keypadPortal.isShowing) {
+        _keypadPortal.hide();
+      }
     });
   }
 
   @override
   void dispose() {
+    _showKeypad = false;
     if (_keypadPortal.isShowing) {
       _keypadPortal.hide();
     }
@@ -66,8 +73,7 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final reduceMotion = facetimeReducedMotionOf(context);
-    final duration = reduceMotion ? Duration.zero : const Duration(milliseconds: 180);
+    final duration = FaceTimeMotion.of(context, FaceTimeMotion.short);
 
     return AnimatedBuilder(
       animation: _controller,
@@ -85,11 +91,11 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
         return Align(
           alignment: Alignment.topCenter,
           heightFactor: 1.0,
-          child: reduceMotion
+          child: duration == Duration.zero
               ? content
               : AnimatedSize(
                   duration: duration,
-                  curve: Curves.easeOutCubic,
+                  curve: FaceTimeMotion.emphasized,
                   alignment: Alignment.topCenter,
                   child: content,
                 ),
@@ -101,21 +107,9 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
   Widget _buildBar(BuildContext context, ActiveCallState state) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final reducedMotion = facetimeReducedMotionOf(context);
-    final tone = state.isOnOtherDevice
-        ? (isDark ? FaceTimePalette.blueDark : FaceTimePalette.blue)
-        : FaceTimePalette.green;
-    final baseSurface = isDark ? FaceTimePalette.darkSurface : theme.colorScheme.surfaceContainerHigh;
-    final bgColor = Color.alphaBlend(
-      tone.withValues(alpha: isDark ? 0.16 : 0.09),
-      baseSurface,
-    ).withValues(alpha: isDark ? 0.72 : 0.76);
-    final borderColor = Color.alphaBlend(
-      tone.withValues(alpha: 0.24),
-      isDark ? FaceTimePalette.onCanvas : theme.colorScheme.outline,
-    ).withValues(alpha: isDark ? 0.18 : 0.16);
+    final bgColor = isDark ? FaceTimePalette.darkSurface : theme.colorScheme.surfaceContainerHigh;
+    final borderColor = theme.colorScheme.outlineVariant;
     final fgColor = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
-    final subColor = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
 
     return OverlayPortal(
       controller: _keypadPortal,
@@ -124,35 +118,148 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
         onDismiss: _closeKeypad,
         onDigit: (d) => unawaited(_controller.sendDtmf(d)),
       ),
-      child: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Material(
-            type: MaterialType.transparency,
-            child: Container(
-              key: ValueKey('call_bar_${state.phase.name}'),
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: bgColor,
-                border: Border(bottom: BorderSide(color: borderColor, width: 1)),
+      child: Material(
+        color: bgColor,
+        child: Container(
+          key: ValueKey('call_bar_${state.phase.name}'),
+          width: double.infinity,
+          constraints: const BoxConstraints(minHeight: 56),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: borderColor, width: 1)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          child: Builder(
+            builder: (context) {
+              if (state.isIncoming) {
+                return _buildIncomingRow(context, state, fgColor);
+              }
+              if (state.isOnOtherDevice ||
+                  (!state.isHeldHere && state.hasCallUuid && (state.isOngoing || state.isOutgoingPhase))) {
+                return _buildHandoffRow(context, state, fgColor, isDark, theme);
+              }
+              if (state.isOutgoingPhase || state.isConnecting) {
+                return _buildOutgoingOrConnectingRow(context, state, fgColor);
+              }
+              return _buildOngoingRow(context, state, fgColor);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoLead({
+    required Key tapKey,
+    required VoidCallback? onTap,
+    required ActiveCallState state,
+    required String title,
+    required String statusText,
+    required Color fgColor,
+    String? kindLabel,
+    String? duration,
+    bool muted = false,
+  }) {
+    final displayTitle = state.displayCallerName;
+    final distinctHandle = state.distinctCallerHandle;
+    final hasKind = kindLabel != null && kindLabel.isNotEmpty;
+    final statusWithHandle = (distinctHandle != null && statusText.isNotEmpty)
+        ? '$statusText · $distinctHandle'
+        : statusText;
+
+    Uint8List? stageAvatar = state.avatarBytes;
+    if ((stageAvatar == null || stageAvatar.isEmpty) && state.participantDetails.isNotEmpty) {
+      for (final p in state.participantDetails) {
+        if (p.avatarBytes != null && p.avatarBytes!.isNotEmpty) {
+          stageAvatar = p.avatarBytes;
+          break;
+        }
+      }
+    }
+
+    return Expanded(
+      child: InkWell(
+        key: tapKey,
+        borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+          child: Row(
+            children: [
+              if (state.participantDetails.length > 1)
+                FaceTimeGroupedAvatar(
+                  participants: state.participantDetails,
+                  size: 32,
+                )
+              else
+                FaceTimeAvatar(
+                  callerName: displayTitle,
+                  avatarBytes: stageAvatar,
+                  handle: (state.callerAddress?.isNotEmpty ?? false) ? Handle(address: state.callerAddress!) : null,
+                  size: 32,
+                ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: kDefaultAppFontFamily,
+                        color: fgColor,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        height: 1.2,
+                      ),
+                    ),
+                    if (hasKind)
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              kindLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: kDefaultAppFontFamily,
+                                color: FaceTimePalette.secondaryText,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                                height: 1.2,
+                              ),
+                            ),
+                          ),
+                          const Text(
+                            ' · ',
+                            style: TextStyle(
+                              fontFamily: kDefaultAppFontFamily,
+                              color: FaceTimePalette.secondaryText,
+                              fontSize: 12,
+                              height: 1.2,
+                            ),
+                          ),
+                          Flexible(
+                            child: FaceTimeStatusText(
+                              statusWithHandle,
+                              duration: duration,
+                              muted: muted,
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      FaceTimeStatusText(
+                        statusWithHandle,
+                        duration: duration,
+                        muted: muted,
+                      ),
+                  ],
+                ),
               ),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final compact = constraints.maxWidth < 600;
-                  if (state.isIncoming) {
-                    return _buildIncomingRow(context, state, fgColor, subColor, compact, reducedMotion);
-                  }
-                  if (state.isOnOtherDevice || (!state.isHeldHere && state.hasCallUuid && (state.isOngoing || state.isOutgoingPhase))) {
-                    return _buildHandoffRow(context, state, fgColor, subColor, compact, reducedMotion);
-                  }
-                  if (state.isOutgoingPhase || state.isConnecting) {
-                    return _buildOutgoingOrConnectingRow(context, state, fgColor, subColor, compact, reducedMotion);
-                  }
-                  return _buildOngoingRow(context, state, fgColor, subColor, compact, isDark, reducedMotion);
-                },
-              ),
-            ),
+            ],
           ),
         ),
       ),
@@ -163,96 +270,41 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
     BuildContext context,
     ActiveCallState state,
     Color fgColor,
-    Color subColor,
-    bool compact,
-    bool reducedMotion,
   ) {
     final callUuid = state.callUuid ?? '';
     final actions = faceTimeIncomingActions[callUuid];
     final isVideo = state.isVideo && !state.isTelephony;
-    final subtitle = state.isTelephony
-        ? 'iPhone Call'
-        : (isVideo ? 'FaceTime' : 'FaceTime Audio');
+    final kindLabel = state.callKindLabel;
+    final subtitle = 'Incoming $kindLabel';
 
     return Row(
       children: [
-        Expanded(
-          child: InkWell(
-            key: const Key('incoming_call_banner_tap'),
-            borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
-            onTap: callUuid.isEmpty
-                ? null
-                : () => openIncomingFaceTimeScreen(
-                      callUuid,
-                      context: context,
-                      controller: _controller,
-                    ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-              child: Row(
-                children: [
-                  FaceTimeAvatar(
-                    callerName: state.callerName,
-                    avatarBytes: state.avatarBytes,
-                    size: 32,
+        _buildInfoLead(
+          tapKey: const Key('incoming_call_banner_tap'),
+          onTap: callUuid.isEmpty
+              ? null
+              : () => openIncomingFaceTimeScreen(
+                    callUuid,
+                    context: context,
+                    controller: _controller,
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          state.callerName.isNotEmpty ? state.callerName : subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: fgColor, fontSize: 14, fontWeight: FontWeight.w600),
-                        ),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: subColor, fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+          state: state,
+          title: state.displayCallerName,
+          statusText: subtitle,
+          fgColor: fgColor,
         ),
-        if (isVideo) ...[
-          const SizedBox(width: 4),
-          _BarIconAction(
-            icon: Icons.call_rounded,
-            tooltip: 'Accept audio',
-            semanticsLabel: 'Accept audio',
-            color: fgColor.withValues(alpha: 0.9),
-            backgroundColor: fgColor.withValues(alpha: 0.1),
-            reducedMotion: reducedMotion,
-            onPressed: actions?.onAnswerAudio ??
-                () => unawaited(_controller.answerCall(audioOnly: true, context: context)),
-          ),
-        ],
-        const SizedBox(width: 6),
-        _BarPillAction(
-          label: compact ? null : 'Decline',
+        const SizedBox(width: 8),
+        _DenseCircleAction(
           icon: Icons.call_end_rounded,
           semanticsLabel: 'Decline call',
-          backgroundColor: FaceTimePalette.red,
-          foregroundColor: Colors.white,
-          reducedMotion: reducedMotion,
+          backgroundColor: FaceTimePalette.decline,
           onPressed: actions?.onDecline ?? () => unawaited(_controller.declineCall()),
         ),
-        const SizedBox(width: 6),
-        _BarPillAction(
-          label: compact ? null : 'Accept',
+        const SizedBox(width: 8),
+        _DenseCircleAction(
           icon: isVideo ? Icons.videocam_rounded : Icons.call_rounded,
           semanticsLabel: 'Accept call',
-          backgroundColor: FaceTimePalette.green,
-          foregroundColor: Colors.white,
-          reducedMotion: reducedMotion,
+          backgroundColor: FaceTimePalette.accept,
           onPressed: (isVideo ? actions?.onAnswerVideo : actions?.onAnswerAudio) ??
               () => unawaited(_controller.answerCall(audioOnly: !isVideo, context: context)),
         ),
@@ -264,79 +316,37 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
     BuildContext context,
     ActiveCallState state,
     Color fgColor,
-    Color subColor,
-    bool compact,
-    bool reducedMotion,
   ) {
-    final subtitle = state.statusSubtitle.isNotEmpty
+    final phaseLabel = state.statusSubtitle.isNotEmpty
         ? state.statusSubtitle
         : (state.isConnecting ? 'Connecting…' : 'Calling…');
 
     return Row(
       children: [
-        Expanded(
-          child: InkWell(
-            key: const Key('ongoing_call_banner_tap'),
-            borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
-            onTap: () => openInAppCallScreen(
-              context: context,
-              controller: _controller,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-              child: Row(
-                children: [
-                  FaceTimeAvatar(
-                    callerName: state.callerName,
-                    avatarBytes: state.avatarBytes,
-                    size: 28,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          state.callerName.isNotEmpty ? state.callerName : 'FaceTime Call',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: fgColor, fontSize: 13.5, fontWeight: FontWeight.w600),
-                        ),
-                        Text(
-                          subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: subColor, fontSize: 12),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        _buildInfoLead(
+          tapKey: const Key('ongoing_call_banner_tap'),
+          onTap: () => openInAppCallScreen(
+            context: context,
+            controller: _controller,
           ),
+          state: state,
+          title: state.displayCallerName,
+          kindLabel: state.callKindLabel,
+          statusText: phaseLabel,
+          fgColor: fgColor,
         ),
         if (_controller.canReturn) ...[
           const SizedBox(width: 6),
-          _BarPillAction(
-            label: 'Join',
+          FaceTimeDockButton(
+            dense: true,
             icon: Icons.open_in_new_rounded,
-            semanticsLabel: 'Return to call',
-            backgroundColor: FaceTimePalette.green,
-            foregroundColor: Colors.white,
-            reducedMotion: reducedMotion,
+            label: 'Return to call',
             onPressed: () => unawaited(_controller.returnToCall(context)),
           ),
         ],
         const SizedBox(width: 6),
-        _BarPillAction(
-          label: 'End',
-          icon: Icons.call_end_rounded,
-          semanticsLabel: 'End call',
-          backgroundColor: FaceTimePalette.red,
-          foregroundColor: Colors.white,
-          reducedMotion: reducedMotion,
+        FaceTimeEndCallPill(
+          dense: true,
           onPressed: () => unawaited(_controller.endCall()),
         ),
       ],
@@ -347,86 +357,54 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
     BuildContext context,
     ActiveCallState state,
     Color fgColor,
-    Color subColor,
-    bool compact,
-    bool reducedMotion,
+    bool isDark,
+    ThemeData theme,
   ) {
     final deviceName = (state.activeDeviceName != null && state.activeDeviceName!.isNotEmpty)
         ? state.activeDeviceName!
         : null;
-    final statusText = state.isOutgoingPhase
+    final statusLabel = state.isOutgoingPhase
         ? (deviceName != null ? 'Calling on $deviceName' : 'Calling…')
-        : (deviceName != null ? 'On $deviceName · ${_controller.formattedDuration}' : _controller.formattedDuration);
+        : (deviceName != null ? 'On $deviceName' : state.callKindLabel);
+    final duration = state.isOutgoingPhase ? null : _controller.formattedDuration;
 
     return Row(
       children: [
-        Expanded(
-          child: InkWell(
-            key: const Key('ongoing_call_banner_tap'),
-            borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
-            onTap: () => openInAppCallScreen(
-              context: context,
-              controller: _controller,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-              child: Row(
-                children: [
-                  FaceTimeAvatar(
-                    callerName: state.callerName,
-                    avatarBytes: state.avatarBytes,
-                    size: 28,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          state.callerName.isNotEmpty ? state.callerName : 'Active Call',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: fgColor, fontSize: 13.5, fontWeight: FontWeight.w600),
-                        ),
-                        Text(
-                          statusText,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: subColor,
-                            fontSize: 12,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        _buildInfoLead(
+          tapKey: const Key('ongoing_call_banner_tap'),
+          onTap: () => openInAppCallScreen(
+            context: context,
+            controller: _controller,
           ),
+          state: state,
+          title: state.displayCallerName,
+          kindLabel: deviceName != null ? state.callKindLabel : null,
+          statusText: statusLabel,
+          duration: duration,
+          fgColor: fgColor,
         ),
         if (state.canTransferHere) ...[
-          const SizedBox(width: 6),
-          _BarPillAction(
-            label: 'Switch',
-            icon: Icons.devices_rounded,
-            semanticsLabel: 'Switch to this device',
-            backgroundColor: FaceTimePalette.blue,
-            foregroundColor: Colors.white,
-            reducedMotion: reducedMotion,
+          const SizedBox(width: 8),
+          FilledButton.tonal(
             onPressed: () => unawaited(_controller.transferHere(context: context)),
+            style: FilledButton.styleFrom(
+              backgroundColor: isDark ? FaceTimePalette.darkElevated : theme.colorScheme.secondaryContainer,
+              foregroundColor: isDark ? FaceTimePalette.blueDark : theme.colorScheme.onSecondaryContainer,
+              minimumSize: const Size(0, 40),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              shape: const StadiumBorder(),
+              textStyle: const TextStyle(
+                fontFamily: kDefaultAppFontFamily,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            child: const Text('Move here'),
           ),
         ],
-        const SizedBox(width: 6),
-        _BarPillAction(
-          label: compact ? null : 'End',
-          icon: Icons.call_end_rounded,
-          semanticsLabel: 'End call',
-          backgroundColor: FaceTimePalette.red,
-          foregroundColor: Colors.white,
-          reducedMotion: reducedMotion,
+        const SizedBox(width: 8),
+        FaceTimeEndCallPill(
+          dense: true,
           onPressed: () => unawaited(_controller.endCall()),
         ),
       ],
@@ -437,143 +415,69 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
     BuildContext context,
     ActiveCallState state,
     Color fgColor,
-    Color subColor,
-    bool compact,
-    bool isDark,
-    bool reducedMotion,
   ) {
-    final showKeypadButton = !state.isVideo && state.hasCallUuid;
+    final showKeypadButton = !state.isVideo && state.canShowKeypad;
     final muted = state.isMuted;
-    final callerLabel = state.callerName.isNotEmpty ? state.callerName : 'Active Call';
-    final durationStyle = TextStyle(
-      color: subColor,
-      fontSize: compact ? 12 : 12.5,
-      fontWeight: FontWeight.w500,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
+    final callerLabel = state.displayCallerName;
+    final statusLabel = state.callKindLabel;
 
     return Row(
       children: [
-        Expanded(
-          child: InkWell(
-            key: const Key('ongoing_call_banner_tap'),
-            borderRadius: BorderRadius.circular(FaceTimeDims.ongoingPillRadius),
-            onTap: () => openInAppCallScreen(
-              context: context,
-              controller: _controller,
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-              child: Row(
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: FaceTimePalette.green,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FaceTimeAvatar(
-                    callerName: state.callerName,
-                    avatarBytes: state.avatarBytes,
-                    size: 26,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: compact
-                        ? Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                callerLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(color: fgColor, fontSize: 13.5, fontWeight: FontWeight.w600),
-                              ),
-                              Text(
-                                _controller.formattedDuration,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: durationStyle,
-                              ),
-                            ],
-                          )
-                        : Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  callerLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(color: fgColor, fontSize: 13.5, fontWeight: FontWeight.w600),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(_controller.formattedDuration, style: durationStyle),
-                            ],
-                          ),
-                  ),
-                ],
-              ),
-            ),
+        _buildInfoLead(
+          tapKey: const Key('ongoing_call_banner_tap'),
+          onTap: () => openInAppCallScreen(
+            context: context,
+            controller: _controller,
           ),
+          state: state,
+          title: callerLabel,
+          statusText: statusLabel,
+          duration: _controller.formattedDuration,
+          muted: muted,
+          fgColor: fgColor,
         ),
-        const SizedBox(width: 4),
-        _BarPillAction(
-          label: muted ? 'Unmute' : 'Mute',
+        const SizedBox(width: 6),
+        FaceTimeDockButton(
+          dense: true,
+          engaged: muted,
           icon: muted ? Icons.mic_off_rounded : Icons.mic_rounded,
-          semanticsLabel: 'Mute mic',
-          backgroundColor: muted
-              ? (isDark ? FaceTimePalette.onCanvas : FaceTimePalette.darkCanvas)
-              : fgColor.withValues(alpha: 0.12),
-          foregroundColor: muted
-              ? (isDark ? FaceTimePalette.darkCanvas : FaceTimePalette.onCanvas)
-              : fgColor,
-          showLabelInCompact: !compact,
-          reducedMotion: reducedMotion,
+          label: muted ? 'Unmute mic' : 'Mute mic',
           onPressed: () => _controller.toggleMute(),
         ),
         if (showKeypadButton) ...[
-          SizedBox(width: compact ? 0 : 4),
+          const SizedBox(width: 6),
           KeyedSubtree(
             key: _keypadButtonKey,
-            child: _BarPillAction(
-              label: 'Keypad',
+            child: FaceTimeDockButton(
+              dense: true,
+              engaged: _showKeypad,
               icon: Icons.dialpad_rounded,
-              semanticsLabel: 'Keypad',
-              backgroundColor: _showKeypad ? fgColor.withValues(alpha: 0.22) : fgColor.withValues(alpha: 0.12),
-              foregroundColor: fgColor,
-              showLabelInCompact: !compact,
-              reducedMotion: reducedMotion,
+              label: 'Keypad',
               onPressed: _toggleKeypad,
             ),
           ),
         ],
         if (_controller.canReturn) ...[
-          SizedBox(width: compact ? 0 : 4),
-          _BarPillAction(
-            label: 'Return',
+          const SizedBox(width: 6),
+          FaceTimeDockButton(
+            dense: true,
             icon: Icons.open_in_new_rounded,
-            semanticsLabel: 'Return to call',
-            backgroundColor: fgColor.withValues(alpha: 0.12),
-            foregroundColor: fgColor,
-            showLabelInCompact: !compact,
-            reducedMotion: reducedMotion,
+            label: 'Return to call',
             onPressed: () => unawaited(_controller.returnToCall(context)),
           ),
         ],
-        SizedBox(width: compact ? 0 : 6),
-        _BarPillAction(
-          label: 'End',
-          icon: Icons.call_end_rounded,
-          semanticsLabel: 'End call',
-          backgroundColor: FaceTimePalette.red,
-          foregroundColor: Colors.white,
-          showLabelInCompact: !compact,
-          reducedMotion: reducedMotion,
+        if (state.fromIphone && state.hasCallUuid) ...[
+          const SizedBox(width: 6),
+          FaceTimeDockButton(
+            dense: true,
+            icon: Icons.phone_iphone_rounded,
+            label: 'Move to iPhone',
+            onPressed: () => unawaited(_controller.transferBack()),
+          ),
+        ],
+        const SizedBox(width: 6),
+        FaceTimeEndCallPill(
+          dense: true,
           onPressed: () => unawaited(_controller.endCall()),
         ),
       ],
@@ -581,62 +485,17 @@ class _OngoingCallPillOverlayState extends State<OngoingCallPillOverlay> {
   }
 }
 
-class _PillTactilePress extends StatefulWidget {
-  const _PillTactilePress({
-    required this.onTap,
-    required this.reducedMotion,
-    required this.borderRadius,
-    required this.child,
-  });
-
-  final VoidCallback onTap;
-  final bool reducedMotion;
-  final BorderRadius borderRadius;
-  final Widget child;
-
-  @override
-  State<_PillTactilePress> createState() => _PillTactilePressState();
-}
-
-class _PillTactilePressState extends State<_PillTactilePress> {
-  bool _pressed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final scale = (!widget.reducedMotion && _pressed) ? 0.96 : 1.0;
-    return AnimatedScale(
-      scale: scale,
-      duration: widget.reducedMotion ? Duration.zero : const Duration(milliseconds: 100),
-      curve: Curves.easeOut,
-      child: InkWell(
-        onTap: widget.onTap,
-        onTapDown: (_) => setState(() => _pressed = true),
-        onTapUp: (_) => setState(() => _pressed = false),
-        onTapCancel: () => setState(() => _pressed = false),
-        borderRadius: widget.borderRadius,
-        child: widget.child,
-      ),
-    );
-  }
-}
-
-class _BarIconAction extends StatelessWidget {
-  const _BarIconAction({
+class _DenseCircleAction extends StatelessWidget {
+  const _DenseCircleAction({
     required this.icon,
-    required this.tooltip,
     required this.semanticsLabel,
-    required this.color,
     required this.backgroundColor,
-    required this.reducedMotion,
     required this.onPressed,
   });
 
   final IconData icon;
-  final String tooltip;
   final String semanticsLabel;
-  final Color color;
   final Color backgroundColor;
-  final bool reducedMotion;
   final VoidCallback onPressed;
 
   @override
@@ -646,103 +505,27 @@ class _BarIconAction extends StatelessWidget {
       excludeSemantics: true,
       label: semanticsLabel,
       child: Tooltip(
-        message: tooltip,
-        child: _PillTactilePress(
-          onTap: onPressed,
-          reducedMotion: reducedMotion,
-          borderRadius: BorderRadius.circular(20),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              minWidth: FaceTimeDims.actionButtonSize,
-              minHeight: FaceTimeDims.actionButtonSize,
-            ),
-            child: Center(
-              widthFactor: 1.0,
-              heightFactor: 1.0,
-              child: Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: backgroundColor,
-                  shape: BoxShape.circle,
+        message: semanticsLabel,
+        excludeFromSemantics: true,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onPressed,
+            customBorder: const CircleBorder(),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 48),
+              child: Center(
+                widthFactor: 1.0,
+                heightFactor: 1.0,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: backgroundColor,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, size: 20, color: Colors.white),
                 ),
-                child: Icon(icon, size: 18, color: color),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BarPillAction extends StatelessWidget {
-  const _BarPillAction({
-    required this.label,
-    required this.icon,
-    required this.semanticsLabel,
-    required this.backgroundColor,
-    required this.foregroundColor,
-    required this.reducedMotion,
-    required this.onPressed,
-    this.showLabelInCompact = true,
-  });
-
-  final String? label;
-  final IconData icon;
-  final String semanticsLabel;
-  final Color backgroundColor;
-  final Color foregroundColor;
-  final bool reducedMotion;
-  final VoidCallback onPressed;
-  final bool showLabelInCompact;
-
-  @override
-  Widget build(BuildContext context) {
-    final displayLabel = showLabelInCompact ? label : null;
-    return Semantics(
-      button: true,
-      excludeSemantics: true,
-      label: semanticsLabel,
-      child: _PillTactilePress(
-        onTap: onPressed,
-        reducedMotion: reducedMotion,
-        borderRadius: BorderRadius.circular(999),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(
-            minWidth: FaceTimeDims.actionButtonSize,
-            minHeight: FaceTimeDims.actionButtonSize,
-          ),
-          child: Center(
-            widthFactor: 1.0,
-            heightFactor: 1.0,
-            child: Container(
-              width: displayLabel != null ? null : 38,
-              height: displayLabel != null ? null : 38,
-              padding: displayLabel != null
-                  ? const EdgeInsets.symmetric(horizontal: 12, vertical: 7)
-                  : EdgeInsets.zero,
-              decoration: BoxDecoration(
-                color: backgroundColor,
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, size: displayLabel != null ? 15 : 17, color: foregroundColor),
-                  if (displayLabel != null) ...[
-                    const SizedBox(width: 5),
-                    Text(
-                      displayLabel,
-                      style: TextStyle(
-                        color: foregroundColor,
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ],
               ),
             ),
           ),
@@ -764,29 +547,35 @@ class _KeypadOverlay extends StatelessWidget {
   final ValueChanged<String> onDigit;
 
   static const _digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
-  static const _panelWidth = 216.0;
+  static const _letters = ['', 'ABC', 'DEF', 'GHI', 'JKL', 'MNO', 'PQRS', 'TUV', 'WXYZ', '', '+', ''];
+  static const _keySize = FaceTimeDims.dialpadKeyHeight;
+  static const _panelWidth = (_keySize * 3) + 16.0 + 24.0;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final reducedMotion = facetimeReducedMotionOf(context);
-    final base = isDark ? FaceTimePalette.darkElevated : theme.colorScheme.surfaceContainerHighest;
-    final bg = base.withValues(alpha: isDark ? 0.84 : 0.88);
+    final bg = isDark ? FaceTimePalette.darkSurface : theme.colorScheme.surfaceContainerHigh;
     final fg = isDark ? FaceTimePalette.onCanvas : theme.colorScheme.onSurface;
-    final border = (isDark ? FaceTimePalette.onCanvas : theme.colorScheme.outline)
-        .withValues(alpha: isDark ? 0.18 : 0.16);
-    final panelRadius = BorderRadius.circular(FaceTimeDims.ongoingPillRadius);
+    final subFg = isDark ? FaceTimePalette.secondaryText : theme.colorScheme.onSurfaceVariant;
+    final border = theme.colorScheme.outlineVariant;
+    final pressedFill = isDark ? FaceTimePalette.darkElevated : theme.colorScheme.surfaceContainerHighest;
+    final panelRadius = BorderRadius.circular(FaceTimeDims.dockRadius);
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final screenWidth = constraints.maxWidth.isFinite && constraints.maxWidth > 0
             ? constraints.maxWidth
             : MediaQuery.sizeOf(context).width;
+        final screenHeight = constraints.maxHeight.isFinite && constraints.maxHeight > 0
+            ? constraints.maxHeight
+            : MediaQuery.sizeOf(context).height;
         final top = (anchorRect?.bottom ?? 56.0) + 6.0;
         final targetCenterX = anchorRect?.center.dx ?? (screenWidth - _panelWidth / 2 - 12);
         final left = (targetCenterX - _panelWidth / 2)
-            .clamp(12.0, (screenWidth - _panelWidth - 12.0).clamp(12.0, double.infinity));
+            .clamp(12.0, math.max(12.0, screenWidth - _panelWidth - 12.0))
+            .toDouble();
+        final maxHeight = math.max(120.0, screenHeight - top - 12.0);
 
         return Stack(
           children: [
@@ -800,73 +589,44 @@ class _KeypadOverlay extends StatelessWidget {
             Positioned(
               top: top,
               left: left,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: panelRadius,
-                  boxShadow: [
-                    BoxShadow(
-                      color: theme.colorScheme.shadow.withValues(alpha: isDark ? 0.34 : 0.14),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: panelRadius,
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                    child: Material(
-                      type: MaterialType.transparency,
-                      child: Container(
-                        width: _panelWidth,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: bg,
-                          borderRadius: panelRadius,
-                          border: Border.all(color: border),
-                        ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (var row = 0; row < 4; row++) ...[
-                              if (row > 0) const SizedBox(height: 6),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  for (var col = 0; col < 3; col++) ...[
-                                    if (col > 0) const SizedBox(width: 6),
-                                    SizedBox(
-                                      width: 60,
-                                      height: FaceTimeDims.actionButtonSize,
-                                      child: _PillTactilePress(
-                                        reducedMotion: reducedMotion,
-                                        borderRadius: BorderRadius.circular(12),
-                                        onTap: () => onDigit(_digits[row * 3 + col]),
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                            color: fg.withValues(alpha: 0.08),
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          child: Center(
-                                            child: Text(
-                                              _digits[row * 3 + col],
-                                              style: TextStyle(
-                                                color: fg,
-                                                fontSize: 16,
-                                                fontWeight: FontWeight.w600,
-                                                fontFeatures: const [FontFeature.tabularFigures()],
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: Material(
+                  color: bg,
+                  elevation: 3,
+                  shadowColor: theme.colorScheme.shadow.withValues(alpha: isDark ? 0.4 : 0.16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: panelRadius,
+                    side: BorderSide(color: border),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: _keySize * 3 + 16,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (var row = 0; row < 4; row++) ...[
+                            if (row > 0) const SizedBox(height: 8),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                for (var col = 0; col < 3; col++) ...[
+                                  if (col > 0) const SizedBox(width: 8),
+                                  _OverlayKeypadButton(
+                                    digit: _digits[row * 3 + col],
+                                    letters: _letters[row * 3 + col],
+                                    fg: fg,
+                                    subFg: subFg,
+                                    pressedFill: pressedFill,
+                                    onTap: () => onDigit(_digits[row * 3 + col]),
+                                  ),
                                 ],
-                              ),
-                            ],
+                              ],
+                            ),
                           ],
-                        ),
+                        ],
                       ),
                     ),
                   ),
@@ -876,6 +636,77 @@ class _KeypadOverlay extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _OverlayKeypadButton extends StatelessWidget {
+  const _OverlayKeypadButton({
+    required this.digit,
+    required this.letters,
+    required this.fg,
+    required this.subFg,
+    required this.pressedFill,
+    required this.onTap,
+  });
+
+  final String digit;
+  final String letters;
+  final Color fg;
+  final Color subFg;
+  final Color pressedFill;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'DTMF $digit',
+      child: SizedBox(
+        width: FaceTimeDims.dialpadKeyHeight,
+        height: FaceTimeDims.dialpadKeyHeight,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onTap,
+            customBorder: const CircleBorder(),
+            highlightColor: pressedFill,
+            splashColor: pressedFill,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    digit,
+                    style: TextStyle(
+                      fontFamily: kDefaultAppFontFamily,
+                      color: fg,
+                      fontSize: 32,
+                      fontWeight: FontWeight.w400,
+                      height: 1.0,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  if (letters.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      letters,
+                      style: TextStyle(
+                        fontFamily: kDefaultAppFontFamily,
+                        color: subFg,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.8,
+                        height: 1.0,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

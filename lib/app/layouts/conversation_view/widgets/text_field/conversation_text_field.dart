@@ -16,9 +16,12 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/tex
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_icon_bar.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_recording_overlay.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/text_field_suffix.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/handlers/web_input_interop.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/text_field/voice_message_recorder.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/services/ui/chat/send_data.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
@@ -52,7 +55,9 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   final recorderController = kIsWeb ? null : RecorderController();
   final AudioRecorder? audioRecorder = kIsWeb ? AudioRecorder() : null;
   final localController = ConversationTextFieldLocalController();
+  final RxBool _isScheduling = false.obs;
   bool _suppressInteractionOnTextChange = false;
+  VoidCallback? _cancelAutoFocusTransition;
 
   // Persist in-memory web attachment drafts (which have bytes != null, path == null) across chat switches.
   static final Map<String, List<PlatformFile>> _webAttachmentDrafts = <String, List<PlatformFile>>{};
@@ -89,8 +94,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     if (controller.fromChatCreator) {
       controller.focusNode.requestFocus();
     } else if (SettingsSvc.settings.autoOpenKeyboard.value && !controller.fromSearchResult) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        controller.focusNode.requestFocus();
+      _cancelAutoFocusTransition = runAfterRouteTransition(context, () {
+        if (mounted) controller.focusNode.requestFocus();
       });
     }
 
@@ -280,6 +285,8 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
 
   @override
   void dispose() {
+    _cancelAutoFocusTransition?.call();
+    _cancelAutoFocusTransition = null;
     final hasDraft = controller.textController.text.trim().isNotEmpty;
     final draftAttachments = controller.pickedAttachments.where((e) => e.path != null).map((e) => e.path!).toList();
     if (kIsWeb) {
@@ -299,8 +306,51 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
     controller.subjectFocusNode.removeListener(_onSubjectFocusChange);
     controller.textController.removeListener(_onTextChange);
     controller.subjectTextController.removeListener(_onSubjectTextChange);
-    recorderController?.dispose();
-    audioRecorder?.dispose();
+
+    final recordingCtrl = recorderController;
+    final webRecorder = audioRecorder;
+    final previewRx = voicePreviewFor(controller);
+    final pendingPreview = previewRx.value;
+    final wasRecording = controller.showRecording.value || (recordingCtrl?.isRecording ?? false);
+
+    if (pendingPreview != null && pendingPreview.path.isNotEmpty) {
+      if (kIsWeb) {
+        revokeWebObjectUrl(pendingPreview.path);
+      } else {
+        final f = File(pendingPreview.path);
+        unawaited(f.delete().catchError((_) => f));
+      }
+    }
+
+    if (recordingCtrl != null) {
+      if (recordingCtrl.isRecording) {
+        unawaited(recordingCtrl.stop().then((path) {
+          if (path != null && path.isNotEmpty) {
+            final f = File(path);
+            unawaited(f.delete().catchError((_) => f));
+          }
+        }).catchError((_) => null).whenComplete(recordingCtrl.dispose));
+      } else {
+        recordingCtrl.dispose();
+      }
+    }
+
+    if (webRecorder != null) {
+      if (wasRecording) {
+        unawaited(webRecorder.cancel().catchError((_) {}).whenComplete(webRecorder.dispose));
+      } else {
+        webRecorder.dispose();
+      }
+    }
+
+    if (wasRecording || pendingPreview != null) {
+      final ctrl = controller;
+      Future.microtask(() {
+        ctrl.showRecording.value = false;
+        previewRx.value = null;
+      });
+    }
+
     controller.showAttachmentPicker.value = false;
     unawaited(controller.stopDictation?.call());
     localController.cancelAllTimers();
@@ -313,6 +363,7 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
   }
 
   Future<void> sendMessage({String? effect}) async {
+    if (_isScheduling.value) return;
     controller.onUserChatInteraction(immediate: true);
     if (controller.isDictating.value) {
       await controller.stopDictation?.call();
@@ -344,19 +395,18 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
       if (controller.textController.sendableRuns.isNotEmpty) {
         return showSnackbar("Error", "Formatting is not allowed in scheduled messages!", type: SnackbarType.error);
       }
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (BuildContext dialogContext) => const BBProgressDialog(title: "Scheduling message..."),
-      );
-      final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
-      if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
-      if (response.statusCode == 200 && response.data != null) {
-        showSnackbar("Notice", "Message scheduled successfully for ${buildFullDate(date)}");
-      } else {
-        Logger.error("Scheduled message error: ${response.statusCode}");
-        Logger.error(response.data);
-        showSnackbar("Error", "Something went wrong!", type: SnackbarType.error);
+      _isScheduling.value = true;
+      try {
+        final response = await HttpSvc.message.createScheduled(chat.guid, text, date.toUtc(), {"type": "once"});
+        if (response.statusCode == 200 && response.data != null) {
+          showSnackbar("Notice", "Message scheduled successfully for ${buildFullDate(date)}");
+        } else {
+          Logger.error("Scheduled message error: ${response.statusCode}");
+          Logger.error(response.data);
+          showSnackbar("Error", "Something went wrong!", type: SnackbarType.error);
+        }
+      } finally {
+        _isScheduling.value = false;
       }
     } else {
       if (text.isEmpty &&
@@ -393,13 +443,16 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
         }
       }
       final replyTarget = controller.replyToMessage;
-      final isNestedReply = replyTarget?.message.threadOriginatorGuid != null;
+      final isRcs = chat.isRCS;
+      final isNestedReply = !isRcs && replyTarget?.message.threadOriginatorGuid != null;
       await controller.send(SendData(
         attachments: controller.pickedAttachments,
         text: text,
         runs: controller.textController.sendableRuns,
         subject: controller.subjectTextController.text,
-        replyGuid: replyTarget?.message.threadOriginatorGuid ?? replyTarget?.message.guid,
+        replyGuid: isRcs
+            ? replyTarget?.message.guid
+            : (replyTarget?.message.threadOriginatorGuid ?? replyTarget?.message.guid),
         replyPart: isNestedReply ? replyTarget!.message.normalizedThreadPart : replyTarget?.partIndex,
         effectId: effect,
       ));
@@ -511,19 +564,66 @@ class ConversationTextFieldState extends CustomState<ConversationTextField, void
                     ),
                   ),
                   if (iOS) const SizedBox(width: 10),
+                  if (iOS)
+                    Obx(() => _isScheduling.value
+                        ? Padding(
+                            padding: const EdgeInsets.only(right: 6, bottom: 4),
+                            child: Tooltip(
+                              message: "Scheduling message…",
+                              child: SizedBox.square(
+                                dimension: 32,
+                                child: Center(
+                                  child: SizedBox.square(
+                                    dimension: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.2,
+                                      color: context.theme.colorScheme.primary,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink()),
                   if (material) const SizedBox(width: 8),
                   if (samsung || material)
                     Padding(
                       // Center 48dp Send/Mic vertically beside the 56dp Material pill.
                       padding: EdgeInsets.only(right: material ? 8.0 : 5.0, bottom: material ? 4.0 : 0.0),
-                      child: TextFieldSuffix(
-                        subjectTextController: controller.subjectTextController,
-                        textController: controller.textController,
-                        controller: controller,
-                        recorderController: recorderController,
-                        audioRecorder: audioRecorder,
-                        sendMessage: sendMessage,
-                      ),
+                      child: Obx(() {
+                        if (_isScheduling.value) {
+                          final scheme = context.theme.colorScheme;
+                          return Tooltip(
+                            message: "Scheduling message…",
+                            child: SizedBox.square(
+                              dimension: 48,
+                              child: DecoratedBox(
+                                decoration: ShapeDecoration(
+                                  shape: const CircleBorder(),
+                                  color: scheme.primaryContainer,
+                                ),
+                                child: Center(
+                                  child: SizedBox.square(
+                                    dimension: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      color: scheme.onPrimaryContainer,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                        return TextFieldSuffix(
+                          subjectTextController: controller.subjectTextController,
+                          textController: controller.textController,
+                          controller: controller,
+                          recorderController: recorderController,
+                          audioRecorder: audioRecorder,
+                          sendMessage: sendMessage,
+                        );
+                      }),
                     ),
                 ]),
               ),

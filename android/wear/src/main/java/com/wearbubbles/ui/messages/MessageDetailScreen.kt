@@ -76,6 +76,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -239,8 +240,11 @@ fun MessageDetailScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     val sendFailedCount = remember(messages) { messages.count { it.sendFailed } }
     val playingMessageGuid by viewModel.playingMessageGuid.collectAsStateWithLifecycle()
+    val unreadDividerGuid by viewModel.unreadDividerGuid.collectAsStateWithLifecycle()
 
-    val messageRows = remember(messages) { buildMessageRows(messages) }
+    val messageRows = remember(messages, unreadDividerGuid) {
+        buildMessageRows(messages, unreadDividerGuid)
+    }
 
     val imageLoader = remember(context) { Coil.imageLoader(context) }
 
@@ -475,6 +479,7 @@ fun MessageDetailScreen(
                     message = msg,
                     meta = row.meta,
                     prevHadReactions = row.prevHadReactions,
+                    showUnreadDivider = row.showUnreadDivider,
                     maxBubbleWidth = maxBubbleWidth,
                     imageLoader = imageLoader,
                     isPlayingAudio = playingMessageGuid == msg.guid,
@@ -1390,12 +1395,51 @@ private fun MessageUi.imageAttachmentsForUi(): List<AttachmentUi> {
     return emptyList()
 }
 
+@Composable
+private fun LastReadMarker(
+    color: Color,
+    bottomPadding: Dp
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp, bottom = bottomPadding)
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(1f, fill = true)
+                .height(1.dp)
+                .background(color, RectangleShape)
+        )
+        Text(
+            text = "Unread",
+            style = centeredTextStyle(
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.Normal,
+                letterSpacing = 0.4.sp
+            ),
+            color = color,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 2.dp)
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f, fill = true)
+                .height(1.dp)
+                .background(color, RectangleShape)
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     message: MessageUi,
     meta: GroupedMessageMeta,
     prevHadReactions: Boolean,
+    showUnreadDivider: Boolean = false,
     maxBubbleWidth: Dp,
     imageLoader: ImageLoader,
     isPlayingAudio: Boolean,
@@ -1469,7 +1513,13 @@ private fun MessageBubble(
     val isAudioAttachment = message.attachmentMimeType?.startsWith("audio/") == true ||
         message.attachments.any { it.isAudio }
 
+    val timestampLabel = remember(meta.showTimestampHeader, message.dateCreated) {
+        if (meta.showTimestampHeader) formatMessageTimestampHeader(message.dateCreated) else ""
+    }
+    val hasTimestampHeader = timestampLabel.isNotBlank()
+
     val topGap = when {
+        showUnreadDivider -> 0.dp
         meta.showTimestampHeader -> 4.dp
         prevHadReactions -> 6.dp
         meta.connectUpper -> 4.dp
@@ -1482,21 +1532,23 @@ private fun MessageBubble(
             .padding(top = topGap),
         horizontalAlignment = if (message.isFromMe) Alignment.End else Alignment.Start
     ) {
-        if (meta.showTimestampHeader) {
-            val timestampLabel = remember(message.dateCreated) {
-                formatMessageTimestampHeader(message.dateCreated)
-            }
-            if (timestampLabel.isNotBlank()) {
-                Text(
-                    text = timestampLabel,
-                    style = centeredTextStyle(12.5.sp, 16.sp, FontWeight.Medium),
-                    color = palette.onSurface.copy(alpha = 0.88f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 6.dp, bottom = 8.dp)
-                )
-            }
+        if (showUnreadDivider) {
+            LastReadMarker(
+                color = palette.primary,
+                bottomPadding = if (hasTimestampHeader) 8.dp else 16.dp
+            )
+        }
+
+        if (hasTimestampHeader) {
+            Text(
+                text = timestampLabel,
+                style = centeredTextStyle(12.5.sp, 16.sp, FontWeight.Medium),
+                color = palette.onSurface.copy(alpha = 0.88f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = if (showUnreadDivider) 0.dp else 6.dp, bottom = 8.dp)
+            )
         }
 
         if (meta.showSenderName && !message.senderName.isNullOrBlank()) {

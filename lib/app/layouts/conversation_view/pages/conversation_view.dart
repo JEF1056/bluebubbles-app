@@ -10,6 +10,7 @@ import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
 import 'package:bluebubbles/app/wrappers/gradient_background_wrapper.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/messages_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/screen_effects_widget.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -178,6 +179,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
   final ValueNotifier<double> _composerBottomPadding = ValueNotifier<double>(68.0);
   double? _pendingComposerHeight;
   bool _didInitComposerPadding = false;
+  VoidCallback? _cancelPrecacheTransition;
 
   void _onComposerHeightChanged(double height) {
     if ((height - _composerBottomPadding.value).abs() <= 0.5) return;
@@ -216,6 +218,7 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     controller.fromChatCreator = widget.fromChatCreator;
     controller.fromSearchResult = widget.initialScrollToGuid != null;
     controller.autoOpened = widget.autoOpened;
+    controller.snapshotUnreadOnOpen();
     ChatsSvc.setActiveChatSync(chat, clearNotifications: !widget.autoOpened);
     _sectionWorker = ever(NavigationSvc.openSection, (_) => _updateCovered());
     _updateCovered();
@@ -234,10 +237,10 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     _appBar = _buildAppBar();
     _bodyContent = _buildBodyContent();
 
-    // Warm the image cache for the custom background so it's ready on first paint.
+    // Warm the image cache for the custom background after the route transition settles.
     final bgPath = ChatsSvc.getChatState(chat.guid)?.customBackgroundPath.value;
     if (bgPath != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      _cancelPrecacheTransition = runAfterRouteTransition(context, () {
         if (!mounted) return;
         // Same resize parameters as GradientBackgroundWrapper, or this warms a
         // cache entry the wrapper never reads and the file decodes twice. The
@@ -381,6 +384,8 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
 
   @override
   void dispose() {
+    _cancelPrecacheTransition?.call();
+    _cancelPrecacheTransition = null;
     _unreadWhileScrolledCount.dispose();
     _composerBottomPadding.dispose();
     _sectionWorker.dispose();

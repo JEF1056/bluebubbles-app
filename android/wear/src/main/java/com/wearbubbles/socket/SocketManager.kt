@@ -25,6 +25,11 @@ sealed class SocketEvent {
     data class UpdatedMessage(val message: MessageDto) : SocketEvent()
     data class MessageSendError(val message: MessageDto) : SocketEvent()
     data class TypingIndicator(val chatGuid: String, val display: Boolean) : SocketEvent()
+    data class ChatReadStatusChanged(
+        val chatGuid: String,
+        val read: Boolean,
+        val readAt: Long? = null
+    ) : SocketEvent()
     data class PinnedChatsUpdated(val pinnedChatGuids: List<String>) : SocketEvent()
     data class IncomingFaceTime(
         val callUuid: String,
@@ -45,6 +50,7 @@ class SocketManager {
 
     companion object {
         private const val TAG = "SocketManager"
+        internal const val MAX_RECONNECTION_ATTEMPTS = 10
         private val gsonStatic = Gson()
 
         internal fun orderIpv4First(addresses: List<InetAddress>): List<InetAddress> {
@@ -92,7 +98,7 @@ class SocketManager {
                 .setTransports(arrayOf("polling", "websocket"))
                 .setForceNew(true)
                 .setReconnection(true)
-                .setReconnectionAttempts(Int.MAX_VALUE)
+                .setReconnectionAttempts(MAX_RECONNECTION_ATTEMPTS)
                 .setReconnectionDelay(2000)
                 .setReconnectionDelayMax(120_000)
                 .setTimeout(15000)
@@ -159,6 +165,34 @@ class SocketManager {
             } catch (_: Exception) {
                 default
             }
+
+        private fun com.google.gson.JsonObject.longOrNull(key: String): Long? =
+            try {
+                get(key)?.takeIf { !it.isJsonNull }?.asLong
+            } catch (_: Exception) {
+                null
+            }
+
+        internal fun parseChatReadStatusChanged(arg: Any?): SocketEvent.ChatReadStatusChanged? {
+            val root = parseGsonObject(arg) ?: return null
+            val target = if (!root.has("chatGuid") && !root.has("guid") && root.get("data")?.isJsonObject == true) {
+                root.getAsJsonObject("data")
+            } else {
+                root
+            }
+            val chatGuid = target.strOrBlank("chatGuid").ifBlank { target.strOrBlank("guid") }
+            if (chatGuid.isBlank()) return null
+            val readElem = target.get("read")?.takeIf { !it.isJsonNull && it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                ?: target.get("status")?.takeIf { !it.isJsonNull && it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }
+                ?: return null
+            val readAt = (target.longOrNull("readAt") ?: target.longOrNull("lastReadMessageTimestamp"))
+                ?.takeIf { it > 0L }
+            return SocketEvent.ChatReadStatusChanged(
+                chatGuid = chatGuid,
+                read = readElem.asBoolean,
+                readAt = readAt
+            )
+        }
 
         internal fun parseIncomingFaceTimeEvent(arg: Any?): SocketEvent.IncomingFaceTime? {
             val json = parseGsonObject(arg) ?: return null
@@ -288,6 +322,10 @@ class SocketManager {
                     }
                 }
 
+                on("chat-read-status-changed") { args ->
+                    parseChatReadStatusChanged(args.firstOrNull())?.let { _events.tryEmit(it) }
+                }
+
                 on("pinned-chats-updated") { args ->
                     val json = args.firstOrNull() as? JSONObject ?: return@on
                     val arr = json.optJSONArray("pinnedChatGuids") ?: return@on
@@ -316,6 +354,17 @@ class SocketManager {
     }
 
     @Synchronized
+    internal fun setCredentialsForTest(url: String, password: String, headers: Map<String, String> = emptyMap()) {
+        currentUrl = url.trim().trimEnd('/')
+        currentPassword = password
+        currentHeaders = headers
+    }
+
+    @Synchronized
+    internal fun hasConfiguredCredentials(): Boolean =
+        currentUrl.isNotBlank() && currentPassword.isNotBlank()
+
+    @Synchronized
     fun reconnectIfConfigured() {
         if (currentUrl.isNotBlank() && currentPassword.isNotBlank() && socket?.connected() != true) {
             connect(currentUrl, currentPassword, currentHeaders)
@@ -323,7 +372,12 @@ class SocketManager {
     }
 
     @Synchronized
-    fun disconnect() {
+    fun disconnect(clearCredentials: Boolean = false) {
+        if (clearCredentials) {
+            currentUrl = ""
+            currentPassword = ""
+            currentHeaders = emptyMap()
+        }
         try {
             socket?.disconnect()
             socket?.off()

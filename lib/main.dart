@@ -820,6 +820,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   bool _syncingFromUrl = false;
   bool _handledShareTarget = false;
   String? _lastPushedHashPath;
+  String? _pendingWebHashRoute;
+  Worker? _pendingHashRouteWorker;
 
   void _pushWebHashRoute({bool replace = false}) => _lastPushedHashPath = pushWebHashRoute(
         syncingFromUrl: _syncingFromUrl,
@@ -831,6 +833,20 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     if (!kIsWeb || !mounted || !SettingsSvc.settings.finishedSetup.value) return;
     final navContext = NavigationSvc.key.currentContext ?? context;
     final target = parseWebHashRoute(rawLocation);
+    if (target.kind == WebHashRouteKind.chat && !ChatsSvc.loadedFirstChatBatch.value) {
+      _pendingWebHashRoute = rawLocation;
+      _pendingHashRouteWorker?.dispose();
+      _pendingHashRouteWorker = ever(ChatsSvc.loadedFirstChatBatch, (loaded) {
+        if (!loaded) return;
+        _pendingHashRouteWorker?.dispose();
+        _pendingHashRouteWorker = null;
+        if (!mounted || _pendingWebHashRoute != rawLocation) return;
+        _pendingWebHashRoute = null;
+        unawaited(_applyWebHashRoute(rawLocation));
+      });
+      return;
+    }
+    _pendingWebHashRoute = null;
     _syncingFromUrl = true;
     try {
       switch (target.kind) {
@@ -850,8 +866,9 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
             NavigationSvc.closeSections();
           }
           if (ChatsSvc.activeChatGuid.value != guid) {
-            final chat = Chat.findOne(guid: guid);
-            if (chat != null && mounted) {
+            final chat =
+                ChatsSvc.allChats.firstWhereOrNull((c) => c.guid == guid) ?? await Chat.findOneWeb(guid: guid);
+            if (chat != null && mounted && navContext.mounted) {
               await NavigationSvc.pushAndRemoveUntil(
                 navContext,
                 ConversationView(chat: chat),
@@ -1044,6 +1061,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
     _settingsUrlWorker?.dispose();
     _webBadgeWorker?.dispose();
     _setupFinishedWorker?.dispose();
+    _pendingHashRouteWorker?.dispose();
     // Clean up observer when app is fully closed
     WidgetsBinding.instance.removeObserver(this);
     windowManager.removeListener(DesktopWindowListener.instance);
@@ -1079,8 +1097,6 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
   /// Render
   @override
   Widget build(BuildContext context) {
-    // Not in the Obx: tracking it swaps in the chat list before setup's last page offers a backup restore
-    final finishedSetup = SettingsSvc.settings.finishedSetup.value;
     return Actions(
       actions: {
         OpenSettingsIntent: OpenSettingsAction(context),
@@ -1111,13 +1127,16 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         ),
         GoBackIntent: GoBackAction(context),
       },
-      child: Obx(() => BBScaffold(
+      child: Obx(() {
+        final showChatList =
+            SettingsSvc.settings.finishedSetup.value && !Get.isRegistered<SetupViewController>();
+        return BBScaffold(
             backgroundColor: context.theme.colorScheme.surface.themeOpacity(context),
-            resizeToAvoidBottomInset: !finishedSetup,
-            safeAreaBottom: finishedSetup ? false : null,
+            resizeToAvoidBottomInset: !showChatList,
+            safeAreaBottom: showChatList ? false : null,
             body: Builder(
               builder: (BuildContext context) {
-                if (SettingsSvc.settings.finishedSetup.value) {
+                if (showChatList) {
                   if (!serverCompatible && kIsWeb) {
                     return const FailureToStart(
                       otherTitle: "Server version too low, please upgrade!",
@@ -1136,7 +1155,8 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                 }
               },
             ),
-          )),
+          );
+      }),
     );
   }
 }
@@ -1265,6 +1285,7 @@ class AppShellFrame extends StatelessWidget {
                       child: ColoredBox(color: Theme.of(context).colorScheme.surface),
                     ),
                   Column(
+                    key: const ValueKey('shell-body'),
                     children: [
                       AnimatedSize(
                         duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 180),
@@ -1296,10 +1317,15 @@ class AppShellFrame extends StatelessWidget {
                             : const SizedBox(width: double.infinity, height: 0),
                       ),
                       Expanded(
-                        child: MediaQuery.removePadding(
-                          context: context,
-                          removeTop: hasTopBanner,
-                          child: navigator,
+                        // Isolate route-level BlockSemantics inside Navigator so shell banners stay accessible.
+                        child: Semantics(
+                          container: true,
+                          explicitChildNodes: true,
+                          child: MediaQuery.removePadding(
+                            context: context,
+                            removeTop: hasTopBanner,
+                            child: navigator,
+                          ),
                         ),
                       ),
                     ],
@@ -1354,6 +1380,8 @@ class AppShellFrame extends StatelessWidget {
       content = buildWithSync(SyncStatusSnapshot.idle, showSyncIndicatorOverride ?? true);
     }
 
-    return AppNoticeHost(child: content);
+    return Overlay.wrap(
+      child: AppNoticeHost(child: content),
+    );
   }
 }

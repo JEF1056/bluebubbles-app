@@ -12,6 +12,7 @@ import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide BackButton;
@@ -294,7 +295,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
         if (hasCurve) {
           Widget curvedSurface = ColoredBox(color: backgroundColor);
           if (useBlur) {
-            curvedSurface = BackdropFilter(
+            curvedSurface = RouteSettledBackdropFilter(
               filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
               child: curvedSurface,
             );
@@ -320,7 +321,7 @@ class MaterialHeader extends StatelessWidget implements PreferredSizeWidget {
         }
         if (hasWallpaper && useBlur) {
           return ClipRect(
-            child: BackdropFilter(
+            child: RouteSettledBackdropFilter(
               filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
               child: appBar,
             ),

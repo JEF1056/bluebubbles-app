@@ -8,10 +8,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.content.ContextCompat
@@ -22,6 +25,7 @@ import com.bluebubbles.messaging.models.MethodCallHandlerImpl
 import com.bluebubbles.messaging.services.intents.InternalIntentReceiver
 import com.bluebubbles.messaging.services.system.PushShareTargetsHandler
 import com.bluebubbles.messaging.services.telecom.BoundedUuidSet
+import com.bluebubbles.messaging.services.telecom.CallTonePlayer
 import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy
 import com.bluebubbles.messaging.services.telecom.IncomingFaceTimeRoute
@@ -41,13 +45,41 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
         DROP_ENDED
     }
 
+    internal enum class IncomingRingOwnership {
+        NONE,
+        APP_TELECOM,
+        SYSTEM_NOTIFICATION
+    }
+
     companion object {
         const val tag = "create-incoming-facetime-notification"
         internal const val INCOMING_CALL_TIMEOUT_MS = 60_000L
         internal const val DIALER_PRIMARY_COLOR = 0xFF0B57D0.toInt()
         internal const val DIALER_ANSWER_COLOR = 0xFF34A853.toInt()
         internal const val DIALER_DECLINE_COLOR = 0xFFD93025.toInt()
+        internal const val ANSWER_ACTION_SHOWS_USER_INTERFACE = true
+        internal const val AUDIO_ANSWER_ACTION_SHOWS_USER_INTERFACE = true
         private val seenIncomingCallUuids = BoundedUuidSet(64)
+
+        internal fun applyAnswerIntentExtras(
+            notificationId: Int,
+            isVideo: Boolean,
+            isTelephony: Boolean,
+            callerName: String,
+            isOngoing: Boolean,
+            putInt: (String, Int) -> Unit,
+            putBoolean: (String, Boolean) -> Unit,
+            putString: (String, String) -> Unit,
+            setType: (String) -> Unit
+        ) {
+            putInt("notificationId", notificationId)
+            putBoolean("answer", true)
+            putBoolean("audioOnly", !isVideo)
+            putBoolean("isTelephony", isTelephony)
+            putString("caller", callerName)
+            putBoolean(MainActivity.EXTRA_INCOMING_FACETIME, !isOngoing)
+            setType("AnswerFaceTime")
+        }
 
         internal fun resolveWearCallUuid(callUuid: String?, callerName: String): String =
             callUuid?.takeIf { it.isNotBlank() } ?: "ft_${callerName.hashCode()}"
@@ -55,13 +87,25 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
         internal fun resolveNotificationTimeoutMs(isOngoing: Boolean): Long? =
             if (!isOngoing) INCOMING_CALL_TIMEOUT_MS else null
 
+        internal fun resolveIncomingRingOwnership(
+            isOngoing: Boolean,
+            hasTelecomConnection: Boolean,
+            hasOtherActiveCall: Boolean
+        ): IncomingRingOwnership = when {
+            isOngoing -> IncomingRingOwnership.NONE
+            hasTelecomConnection || hasOtherActiveCall -> IncomingRingOwnership.APP_TELECOM
+            else -> IncomingRingOwnership.SYSTEM_NOTIFICATION
+        }
+
         internal fun shouldUseCallStyle(
             sdkInt: Int,
             isOngoing: Boolean,
-            route: IncomingFaceTimeRoute
+            route: IncomingFaceTimeRoute,
+            canUseFsi: Boolean = true
         ): Boolean = sdkInt >= Build.VERSION_CODES.S &&
             !isOngoing &&
-            route != IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT
+            route != IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT &&
+            canUseFsi
 
         internal fun computeFaceTimeNotificationId(callUuid: String): Int {
             val numeric = callUuid.filter { it.isDigit() }
@@ -172,7 +216,9 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                         if (!FaceTimeConnectionService.markCallActive(callUuid, recordIfPending = isOutgoing)) {
                             FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = true)
                             cancelIncomingCallNotification(appContext, callUuid)
-                            WearSyncManager.notifyCallEndedIfNotWatchAnswered(appContext, callUuid)
+                            if (!FaceTimeConnectionService.isCallActive(callUuid)) {
+                                WearSyncManager.notifyCallEndedIfNotWatchAnswered(appContext, callUuid)
+                            }
                         }
                     }
                     6 -> {
@@ -180,6 +226,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                         FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
                         cancelIncomingCallNotification(appContext, callUuid)
                         WearSyncManager.notifyCallEnded(appContext, callUuid)
+                        MainActivity.clearCallLockScreenFlags()
                     }
                 }
             }
@@ -212,9 +259,10 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             callerAddress: String?,
             callerName: String,
             callerIcon: ByteArray?,
-            silentUpdateOnly: Boolean = false
+            silentUpdateOnly: Boolean = false,
+            skipTelecomDirect: Boolean = false
         ): Boolean {
-            if (!isOngoing && !silentUpdateOnly) {
+            if (!isOngoing && !silentUpdateOnly && !skipTelecomDirect) {
                 WearSyncManager.notifyIncomingCall(
                     context = context,
                     callUuid = resolveWearCallUuid(callUuid, callerName),
@@ -226,29 +274,53 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             }
 
             val phoneAccountEnabled = if (!isOngoing) FaceTimeConnectionService.isPhoneAccountEnabled(context) else false
+            val inCar = if (!isOngoing) isCarMode(context) else false
             val route = if (!isOngoing) {
                 FaceTimeRoutingPolicy.resolveIncomingRoute(
                     isVideo = isVideo,
                     callUuid = callUuid,
                     phoneAccountEnabled = phoneAccountEnabled,
-                    isTelephony = isTelephony
+                    isTelephony = isTelephony,
+                    inCar = inCar
                 )
             } else {
                 IncomingFaceTimeRoute.NOTIFICATION
             }
 
-            if (!isOngoing && !silentUpdateOnly && route == IncomingFaceTimeRoute.TELECOM_DIRECT && callUuid != null) {
+            if (!skipTelecomDirect && !isOngoing && !silentUpdateOnly && route == IncomingFaceTimeRoute.TELECOM_DIRECT && callUuid != null) {
                 val added = FaceTimeConnectionService.addIncomingCall(
                     context = context,
                     callUuid = callUuid,
                     callerName = callerName,
                     address = callerAddress,
                     isTelephony = isTelephony,
-                    isVideo = isVideo
+                    isVideo = isVideo && !inCar
                 )
                 if (added) {
                     return true
                 }
+            }
+
+            val toneUuid = callUuid ?: resolveWearCallUuid(null, callerName)
+            val hasOtherActiveCall = !isOngoing && FaceTimeConnectionService.hasActiveNonRingingCall(toneUuid)
+            val hasTelecomConnection = !isOngoing && (
+                skipTelecomDirect ||
+                    (callUuid != null && FaceTimeConnectionService.isConnectionRegistered(callUuid))
+                )
+            val ringOwnership = resolveIncomingRingOwnership(
+                isOngoing = isOngoing,
+                hasTelecomConnection = hasTelecomConnection,
+                hasOtherActiveCall = hasOtherActiveCall
+            )
+
+            // Only play app-owned CallTonePlayer while a Telecom FaceTimeConnection keeps the process bound.
+            // Callers via skipTelecomDirect already started ringing in FaceTimeConnectionService.onCreateIncomingConnection.
+            if (ringOwnership == IncomingRingOwnership.APP_TELECOM && !silentUpdateOnly && !skipTelecomDirect) {
+                CallTonePlayer.startIncomingRing(
+                    context = context,
+                    callUuid = toneUuid,
+                    isCallInProgress = hasOtherActiveCall
+                )
             }
 
             val callerBitmap = if ((callerIcon?.size ?: 0) == 0) null else BitmapFactory.decodeByteArray(callerIcon!!, 0, callerIcon.size)
@@ -288,6 +360,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                     .putExtra("audioOnly", !isVideo)
                     .putExtra("isTelephony", isTelephony)
                     .putExtra("caller", callerName)
+                    .putExtra(MainActivity.EXTRA_INCOMING_FACETIME, !isOngoing)
                     .setType("OpenSummary"),
                 piFlags
             )
@@ -296,17 +369,24 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             val answerIntent = PendingIntent.getActivity(
                 context,
                 notificationId + Constants.pendingIntentAnswerFaceTimeOffset,
-                Intent(context, MainActivity::class.java)
-                    .putExtras(extras)
-                    .putExtra("answer", true)
-                    .putExtra("audioOnly", !isVideo)
-                    .putExtra("isTelephony", isTelephony)
-                    .putExtra("caller", callerName)
-                    .setType("AnswerFaceTime"),
+                Intent(context, MainActivity::class.java).apply {
+                    putExtras(extras)
+                    applyAnswerIntentExtras(
+                        notificationId = notificationId,
+                        isVideo = isVideo,
+                        isTelephony = isTelephony,
+                        callerName = callerName,
+                        isOngoing = isOngoing,
+                        putInt = ::putExtra,
+                        putBoolean = ::putExtra,
+                        putString = ::putExtra,
+                        setType = ::setType
+                    )
+                },
                 piFlags
             )
             val answerAction = NotificationCompat.Action.Builder(0, if (isVideo) "Answer Video" else "Answer", answerIntent)
-                .setShowsUserInterface(false)
+                .setShowsUserInterface(ANSWER_ACTION_SHOWS_USER_INTERFACE)
                 .build()
 
             // Create intent to open Calling Accounts settings when Telecom PhoneAccount is disabled
@@ -347,6 +427,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                             .putExtra("audioOnly", true)
                             .putExtra("isTelephony", isTelephony)
                             .putExtra("caller", callerName)
+                            .putExtra(MainActivity.EXTRA_INCOMING_FACETIME, !isOngoing)
                             .setType("AnswerFaceTime"),
                         piFlags
                     )
@@ -356,7 +437,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             }
             val audioAnswerAction = audioAnswerIntent?.let {
                 NotificationCompat.Action.Builder(0, "Audio", it)
-                    .setShowsUserInterface(!phoneAccountEnabled)
+                    .setShowsUserInterface(AUDIO_ANSWER_ACTION_SHOWS_USER_INTERFACE)
                     .build()
             }
 
@@ -375,8 +456,21 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 .setShowsUserInterface(false)
                 .build()
 
+            val useSystemRingNotification = ringOwnership == IncomingRingOwnership.SYSTEM_NOTIFICATION
             val notificationManager = context.getSystemService(NotificationManager::class.java)
-            val notificationBuilder = NotificationCompat.Builder(context, channelId)
+            val resolvedChannelId = if (
+                channelId == NotificationChannelHandler.FACETIME_CHANNEL_ID ||
+                channelId == NotificationChannelHandler.LEGACY_FACETIME_CHANNEL_ID
+            ) {
+                if (useSystemRingNotification) {
+                    NotificationChannelHandler.ensureFaceTimeRingChannel(context)
+                } else {
+                    NotificationChannelHandler.ensureFaceTimeChannel(context)
+                }
+            } else {
+                channelId
+            }
+            val notificationBuilder = NotificationCompat.Builder(context, resolvedChannelId)
                 .setSmallIcon(R.mipmap.ic_stat_icon)
                 .setAutoCancel(!isOngoing)
                 .setOngoing(true)
@@ -387,17 +481,25 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 .addExtras(extras)
                 .addPerson(caller)
                 .setColor(DIALER_PRIMARY_COLOR)
+            if (!useSystemRingNotification) {
+                notificationBuilder.setSilent(true)
+            } else if (!silentUpdateOnly) {
+                val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    ?: Settings.System.DEFAULT_RINGTONE_URI
+                notificationBuilder
+                    .setSound(ringtoneUri, AudioManager.STREAM_RING)
+                    .setVibrate(longArrayOf(0, 1000, 1000))
+            }
             if (isOngoing) {
                 notificationBuilder
                     .setUsesChronometer(true)
                     .setOnlyAlertOnce(true)
-                    .setSilent(true)
             } else if (silentUpdateOnly) {
                 notificationBuilder.setOnlyAlertOnce(true)
             }
             val canUseFsi = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
                 notificationManager.canUseFullScreenIntent()
-            val useCallStyle = shouldUseCallStyle(Build.VERSION.SDK_INT, isOngoing, route)
+            val useCallStyle = shouldUseCallStyle(Build.VERSION.SDK_INT, isOngoing, route, canUseFsi) && canUseFsi
             if (useCallStyle) {
                 val callStyle = NotificationCompat.CallStyle.forIncomingCall(caller, declineIntent, answerIntent)
                     .setIsVideo(isVideo)
@@ -465,7 +567,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
             }
 
             val builtNotification = notificationBuilder.build().apply {
-                if (!isOngoing) {
+                if (useSystemRingNotification) {
                     flags = flags or Notification.FLAG_INSISTENT
                 }
             }

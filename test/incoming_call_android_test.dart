@@ -1,11 +1,16 @@
+import 'dart:async';
+
 import 'package:bluebubbles/app/components/app_notice_bar.dart';
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/in_app_call_screen.dart';
 import 'package:bluebubbles/app/components/facetime/incoming_facetime_screen.dart';
+import 'package:bluebubbles/helpers/backend/startup_tasks.dart';
 import 'package:bluebubbles/helpers/ui/facetime_helpers.dart';
 import 'package:bluebubbles/models/facetime.dart';
 import 'package:bluebubbles/services/backend/action_handler.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/intents_service.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/method_channel_service.dart';
+import 'package:bluebubbles/services/backend/lifecycle/lifecycle_service.dart';
 import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:bluebubbles/services/network/api/facetime_api.dart';
 import 'package:bluebubbles/services/network/method_channel_actions.dart';
@@ -16,6 +21,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart' hide Response;
 import 'package:get_it/get_it.dart';
+import 'package:receive_intent/receive_intent.dart' as receive_intent;
 
 class _TestMethodChannelService extends MethodChannelService {
   _TestMethodChannelService() {
@@ -60,9 +66,11 @@ void main() {
 
   tearDown(() async {
     debugDefaultTargetPlatformOverride = null;
+    hideInAppCallScreen();
     AppNoticeController.instance.resetForTest();
     ActiveCallController.instance.clear();
     faceTimeOverlays.clear();
+    faceTimeIncomingActions.clear();
     await GetIt.I.reset();
     Get.reset();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -71,7 +79,7 @@ void main() {
         .setMockMethodCallHandler(const MethodChannel('plugins.flutter.io/url_launcher'), null);
   });
 
-  testWidgets('IncomingFaceTimeScreen hides video actions and labels iPhone Call for telephony',
+  testWidgets('IncomingFaceTimeScreen hides video actions and labels Phone Call for telephony',
       (tester) async {
     var answeredAudio = false;
     var declined = false;
@@ -89,22 +97,22 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('iPhone Call'), findsOneWidget);
-    expect(find.text('Incoming iPhone Call'), findsOneWidget);
-    expect(find.text('Answer Audio'), findsOneWidget);
+    expect(find.text('Phone Call'), findsOneWidget);
+    expect(find.text('Incoming Phone Call'), findsOneWidget);
+    expect(find.text('Accept'), findsOneWidget);
     expect(find.text('Decline'), findsOneWidget);
-    expect(find.text('Answer Video'), findsNothing);
-    expect(find.text('Audio Only'), findsNothing);
+    expect(find.text('Answer with audio'), findsNothing);
 
     await tester.tap(find.bySemanticsLabel('Decline'));
     await tester.pump();
     expect(declined, isTrue);
 
-    await tester.tap(find.bySemanticsLabel('Answer Audio'));
+    await tester.tap(find.bySemanticsLabel('Accept'));
     await tester.pump();
     expect(answeredAudio, isTrue);
     expect(find.text('Connecting…'), findsOneWidget);
     expect(find.text('Connecting audio…'), findsOneWidget);
+    expect(find.text('Cancel'), findsOneWidget);
   });
 
   test('ActiveCallController propagates isTelephony and forces audio-only', () {
@@ -305,6 +313,37 @@ void main() {
     ]);
     expect(recorded[0].arguments, {'call_uuid': 'out-1', 'is_outgoing': true});
     expect(recorded[1].arguments, {'call_uuid': 'out-1', 'muted': true});
+
+    final smallAvatar = Uint8List(512);
+    await actions.markFaceTimeCallActive(
+      callUuid: 'out-2',
+      isOutgoing: true,
+      callerName: 'Alice, Bob',
+      callerAddress: '+15551112222',
+      callerAvatar: smallAvatar,
+      isVideo: true,
+      isGroup: true,
+      isTelephony: false,
+    );
+    final args2 = Map<String, dynamic>.from(recorded[2].arguments as Map);
+    expect(args2['call_uuid'], 'out-2');
+    expect(args2['callerName'], 'Alice, Bob');
+    expect(args2['callerAddress'], '+15551112222');
+    expect(args2['callerAvatar'], smallAvatar);
+    expect(args2['isVideo'], isTrue);
+    expect(args2['isGroup'], isTrue);
+    expect(args2['isTelephony'], isFalse);
+
+    final oversizeAvatar = Uint8List(100 * 1024 + 1);
+    await actions.markFaceTimeCallActive(
+      callUuid: 'out-3',
+      isOutgoing: false,
+      callerName: 'Carol',
+      callerAvatar: oversizeAvatar,
+    );
+    final args3 = Map<String, dynamic>.from(recorded[3].arguments as Map);
+    expect(args3.containsKey('callerAvatar'), isFalse);
+    expect(args3['callerName'], 'Carol');
   });
 
   test('IntentsService.answerFaceTime routes Android non-telephony FaceTime Audio through ActiveCallController',
@@ -343,7 +382,7 @@ void main() {
         });
         return telecomEnabled;
       },
-      onAnswerServerCall: (uuid, {audioOnly = false, displayName, chatGuid}) async {
+      onAnswerServerCall: (uuid, {audioOnly = false, mode, displayName, chatGuid}) async {
         serverAnswerCalls++;
         return PlacedFaceTimeCall(
           link: 'https://facetime.apple.com/join#$uuid',
@@ -405,9 +444,353 @@ void main() {
     recorded.clear();
     ctrl.clear();
     await intents.answerFaceTime('ft-cold-audio', audioOnly: true);
-    expect(telecomCalls.last, {'callUuid': 'ft-cold-audio', 'callerName': 'FaceTime Call', 'isTelephony': false});
+    expect(telecomCalls.last, {'callUuid': 'ft-cold-audio', 'callerName': 'FaceTime Audio', 'isTelephony': false});
     expect(recorded.map((m) => m.method), isNot(contains('open-calling-accounts')));
     expect(ctrl.state.phase, ActiveCallPhase.ongoing);
     expect(ctrl.state.isVideo, isFalse);
+  });
+
+  testWidgets('Android audio, telephony, and video answerCall() opens InAppCallScreen immediately before handoff completes',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      late BuildContext rootContext;
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: Builder(
+            builder: (context) {
+              rootContext = context;
+              return const Scaffold(body: SizedBox.shrink());
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      Completer<PlacedFaceTimeCall?>? pendingHandoff;
+      final ctrl = ActiveCallController(
+        onStartTelecomCall: ({
+          required callUuid,
+          required callerName,
+          callerAddress,
+          isTelephony = false,
+          isVideo = false,
+        }) async =>
+            true,
+        onHandoffServerCall: (uuid, {mode}) => pendingHandoff!.future,
+        onDismissOverlay: (uuid, {keepCallState = false}) {
+          hideFaceTimeOverlay(uuid, keepCallState: keepCallState);
+        },
+      );
+      addTearDown(ctrl.dispose);
+
+      // 1. FaceTime Audio pickup opens InAppCallScreen immediately before _handoffServer completes.
+      pendingHandoff = Completer<PlacedFaceTimeCall?>();
+      ctrl.startIncoming(callUuid: 'pickup-audio-1', callerName: 'Alice', isVideo: false);
+      final audioFuture = ctrl.answerCall(audioOnly: true, context: rootContext);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.isVideo, isFalse);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+      pendingHandoff.complete(null);
+      expect(await audioFuture, isTrue);
+
+      hideInAppCallScreen();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // 2. Telephony pickup opens InAppCallScreen immediately before _handoffServer completes.
+      pendingHandoff = Completer<PlacedFaceTimeCall?>();
+      ctrl.startIncoming(callUuid: 'pickup-tel-1', callerName: 'Mom', isVideo: false, isTelephony: true);
+      final telFuture = ctrl.answerCall(audioOnly: true, context: rootContext);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.isTelephony, isTrue);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+      pendingHandoff.complete(null);
+      expect(await telFuture, isTrue);
+
+      hideInAppCallScreen();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // 3. Video pickup also opens InAppCallScreen immediately before _handoffServer completes.
+      pendingHandoff = Completer<PlacedFaceTimeCall?>();
+      ctrl.startIncoming(callUuid: 'pickup-vid-1', callerName: 'Dan', isVideo: true);
+      final vidFuture = ctrl.answerCall(audioOnly: false, context: rootContext);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.isVideo, isTrue);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+      pendingHandoff.complete(null);
+      expect(await vidFuture, isTrue);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('IntentsService.handleIntent opens InAppCallScreen for openCall without regressing ongoing state',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      if (!StartupTasks.uiReady.isCompleted) StartupTasks.uiReady.complete();
+      GetIt.I.registerSingleton<LifecycleService>(LifecycleService());
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+      await tester.pump();
+
+      final ctrl = ActiveCallController();
+      addTearDown(ctrl.dispose);
+      final intents = IntentsService()..callControllerOverride = ctrl;
+
+      // 1. Existing ongoing call tapped via OpenCall (even without openCall extra) stays ongoing and opens InAppCallScreen.
+      ctrl.startOngoing(
+        callUuid: 'ongoing-open-1',
+        callerName: 'Alice',
+        isVideo: false,
+        isTelecomCall: true,
+      );
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {'callUuid': 'ongoing-open-1'},
+        ),
+        isInitialIntent: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.callerName, 'Alice');
+      expect(faceTimeOverlays, isEmpty);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+
+      hideInAppCallScreen();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // 2. Cold-start openCall=true from idle hydrates ongoing state with caller metadata and opens InAppCallScreen.
+      ctrl.clear();
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'cold-open-1',
+            'openCall': true,
+            'audioOnly': true,
+            'isTelephony': true,
+            'caller': 'Mom',
+          },
+        ),
+        isInitialIntent: true,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.callUuid, 'cold-open-1');
+      expect(ctrl.state.callerName, 'Mom');
+      expect(ctrl.state.isTelephony, isTrue);
+      expect(ctrl.state.isVideo, isFalse);
+      expect(ctrl.state.isTelecomCall, isTrue);
+      expect(faceTimeOverlays, isEmpty);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('IntentsService.handleIntent with OpenSummary (answer=false) pushes IncomingFaceTimeScreen',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      if (!StartupTasks.uiReady.isCompleted) StartupTasks.uiReady.complete();
+      GetIt.I.registerSingleton<LifecycleService>(LifecycleService());
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+      await tester.pump();
+
+      final ctrl = ActiveCallController();
+      addTearDown(ctrl.dispose);
+      final intents = IntentsService()..callControllerOverride = ctrl;
+
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'summary-1',
+            'answer': false,
+            'audioOnly': false,
+            'caller': 'Elena',
+          },
+        ),
+        isInitialIntent: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.incoming);
+      expect(ctrl.state.callerName, 'Elena');
+      expect(faceTimeOverlays['summary-1'], isNotNull);
+      expect(find.byType(IncomingFaceTimeScreen), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('IntentsService.handleIntent with answer=true preserves caller extra on cold start and opens InAppCallScreen',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      if (!StartupTasks.uiReady.isCompleted) StartupTasks.uiReady.complete();
+      GetIt.I.registerSingleton<LifecycleService>(LifecycleService());
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('com.bluebubbles.messaging'),
+        (call) async {
+          if (call.method == 'is-telecom-enabled') return true;
+          return true;
+        },
+      );
+      final svc = _TestMethodChannelService();
+      svc.actions = MethodChannelActions(svc);
+      GetIt.I.registerSingleton<MethodChannelService>(svc);
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+      await tester.pump();
+
+      final ctrl = ActiveCallController(
+        onStartTelecomCall: ({
+          required callUuid,
+          required callerName,
+          callerAddress,
+          isTelephony = false,
+          isVideo = false,
+        }) async =>
+            true,
+        onHandoffServerCall: (uuid, {mode}) async => null,
+        onDismissOverlay: (uuid, {keepCallState = false}) {
+          hideFaceTimeOverlay(uuid, keepCallState: keepCallState);
+        },
+      );
+      addTearDown(ctrl.dispose);
+      final intents = IntentsService()..callControllerOverride = ctrl;
+
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'cold-ans-1',
+            'answer': true,
+            'audioOnly': true,
+            'isTelephony': false,
+            'caller': 'Maya Lin',
+          },
+        ),
+        isInitialIntent: true,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.callUuid, 'cold-ans-1');
+      expect(ctrl.state.callerName, 'Maya Lin');
+      expect(ctrl.state.isVideo, isFalse);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('ActiveCallController.notifyTelecomActive dismisses incoming overlay and opens InAppCallScreen (including post-frame retry)',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final ctrl = ActiveCallController(
+        onHandoffServerCall: (uuid, {mode}) async => null,
+      );
+      addTearDown(ctrl.dispose);
+
+      // 1. Active widget tree with IncomingFaceTimeScreen open -> notifyTelecomActive dismisses it and opens InAppCallScreen.
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+      await tester.pump();
+
+      await showFaceTimeOverlay('telecom-active-1', 'Noah', null, true, controller: ctrl);
+      openIncomingFaceTimeScreen('telecom-active-1', context: Get.context, controller: ctrl);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byType(IncomingFaceTimeScreen), findsOneWidget);
+      expect(faceTimeOverlays['telecom-active-1'], isNotNull);
+
+      ctrl.handleFacetimeCallState({
+        'phase': 'active',
+        'call_uuid': 'telecom-active-1',
+        'is_video': false,
+        'caller_name': 'Noah',
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.callerName, 'Noah');
+      expect(faceTimeOverlays.containsKey('telecom-active-1'), isFalse);
+      expect(find.byType(IncomingFaceTimeScreen), findsNothing);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+
+      // 2. Post-frame retry when Navigator is not yet mounted at the moment notifyTelecomActive fires.
+      hideInAppCallScreen();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      ctrl.clear();
+      Get.reset();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+
+      ctrl.handleFacetimeCallState({
+        'phase': 'active',
+        'call_uuid': 'telecom-retry-1',
+        'is_video': true,
+        'caller_name': 'Zoe',
+      });
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(ctrl.state.callerName, 'Zoe');
+      expect(ctrl.state.isVideo, isTrue);
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 }

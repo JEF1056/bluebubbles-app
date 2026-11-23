@@ -546,6 +546,8 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   final RxBool is3DEnabled = true.obs;
   final RxDouble cameraPitch = default3DPitch.obs;
   final RxDouble cameraBearing = 0.0.obs;
+  // Settled bearing for MapLibre marker z-ordering so 60-120Hz rotation moves don't rebuild WidgetLayer.
+  final RxDouble markerOrderBearing = 0.0.obs;
   final RxDouble cameraZoom = defaultInitialZoom.obs;
   final Rx<LatLng> cameraCenter = const LatLng(37.7749, -122.4194).obs;
   final RxnString hoveredMarkerKey = RxnString();
@@ -558,6 +560,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   final RxInt pinVersion = 0.obs;
   String? _pendingFocusFriendId;
   bool _pageActivated = false;
+  bool _deactivated = false;
   bool get _interactive => autoFetch || _pageActivated;
 
   /// Reverse-geocoded addresses for friends whose server payload carries none
@@ -582,6 +585,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   bool _fetchingUserLocation = false;
   bool _hasAutoFittedInitialPins = false;
   bool _waitingMapReadyForAutoFit = false;
+  bool _routeTransitionSettled = true;
   bool _hasUserInteractedWithMap = false;
   LatLng? _lastFollowedTargetPoint;
   DateTime? _lastHardRefreshAt;
@@ -667,12 +671,14 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   /// Starts full Find My page data fetching & live socket listeners (idempotent).
   void activatePage() {
     if (_pageActivated) {
+      _deactivated = false;
       _startStalenessTimer();
       _scheduleInitialAutoFitIfNeeded();
       refreshOnView(refreshFriends: tabIndex.value == 0, refreshDevices: tabIndex.value != 0);
       return;
     }
     _pageActivated = true;
+    _deactivated = false;
     _startStalenessTimer();
     _scheduleInitialAutoFitIfNeeded();
     getLocations(refreshFriends: true, refreshDevices: true);
@@ -694,10 +700,18 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   /// Stops page-only continuous GPS streaming and resets page-scoped map state.
   void deactivatePage() {
     _pageActivated = false;
+    _deactivated = true;
     if (!isBackgroundShared) {
       _stopStalenessTimer();
     }
+    _liveHeartbeatTimer?.cancel();
+    _liveHeartbeatTimer = null;
+    _cancelPendingFriendRefresh();
+    if (_activeLiveStreamHandle != null || _liveStartCancelToken != null) {
+      unawaited(_stopLiveFriendStream());
+    }
     _waitingMapReadyForAutoFit = false;
+    _routeTransitionSettled = true;
     _hasAutoFittedInitialPins = false;
     _hasUserInteractedWithMap = false;
     _lastFollowedTargetPoint = null;
@@ -774,6 +788,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     cameraZoom.value = clampedZoom;
     cameraPitch.value = effectivePitch;
     cameraBearing.value = effectiveBearing;
+    markerOrderBearing.value = effectiveBearing;
     cameraPadding = effectivePadding;
 
     if (_cameraAnimator != null) {
@@ -877,11 +892,16 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     required double pitch,
     required double bearing,
     maplibre.CameraChangeReason? reason,
+    bool settled = true,
   }) {
+    final normalizedBearing = _normalizeBearing(bearing);
     cameraCenter.value = center;
     cameraZoom.value = zoom;
     cameraPitch.value = pitch.clamp(0.0, 60.0);
-    cameraBearing.value = _normalizeBearing(bearing);
+    cameraBearing.value = normalizedBearing;
+    if (settled) {
+      markerOrderBearing.value = normalizedBearing;
+    }
     if (reason == maplibre.CameraChangeReason.gesture) {
       _hasUserInteractedWithMap = true;
       if (cameraPitch.value >= pitch3DSyncThreshold && !is3DEnabled.value) {
@@ -1359,15 +1379,25 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     return null;
   }
 
+  void deferInitialAutoFitForRouteTransition() {
+    _routeTransitionSettled = false;
+  }
+
+  void resumeInitialAutoFitAfterTransition() {
+    if (_routeTransitionSettled) return;
+    _routeTransitionSettled = true;
+    _scheduleInitialAutoFitIfNeeded();
+  }
+
   void _scheduleInitialAutoFitIfNeeded() {
-    if (_hasAutoFittedInitialPins || _hasUserInteractedWithMap) return;
+    if (!_routeTransitionSettled || _hasAutoFittedInitialPins || _hasUserInteractedWithMap) return;
     if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
     // Do not consume initial camera focus on a random friend/device while initial GPS fetch is in flight.
     if (location.value == null && _fetchingUserLocation) return;
     if (location.value == null && !_hasAnyPins) return;
 
     void runInitialFocus() {
-      if (!_isAlive || _hasAutoFittedInitialPins || _hasUserInteractedWithMap) return;
+      if (!_isAlive || !_routeTransitionSettled || _hasAutoFittedInitialPins || _hasUserInteractedWithMap) return;
       if (selectedFriendId.value != null || selectedDeviceId.value != null || _pendingFocusFriendId != null) return;
       if (location.value == null && _fetchingUserLocation) return;
       if (location.value == null && !_hasAnyPins) return;
@@ -1416,6 +1446,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     _resortFriendsLists();
     buildLocationMarker(pos);
     if (allowAutoMove &&
+        _routeTransitionSettled &&
         !hasMovedToCurrentLocation.value &&
         !_hasAutoFittedInitialPins &&
         !_hasUserInteractedWithMap &&
@@ -1472,7 +1503,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
       final loc = await _performFetchCurrentPosition(requestPermission: requestPermission);
       if (!_isAlive || loc == null) return;
       _applyUserPosition(loc, startStream);
-      if (startStream && (_positionStreamFn != null || !kIsDesktop) && locationSub == null) {
+      if (startStream && _pageActivated && _isForeground && (_positionStreamFn != null || !kIsDesktop) && locationSub == null) {
         _startLocationStream();
       }
     } catch (e, s) {
@@ -1846,12 +1877,15 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     }
   }
 
+  bool get _canRunLiveHeartbeat =>
+      _pageActivated || (!_deactivated && (_refreshFriendsFn != null || _startLiveFriendFn != null));
+
   void onAppResumed() {
     _isForeground = true;
     if (_isAlive && (_pageActivated || _interactive || isBackgroundShared)) {
       _startStalenessTimer();
     }
-    if (_isAlive && _pageActivated && locationSub == null && (_positionStreamFn != null || !kIsDesktop)) {
+    if (_isAlive && _pageActivated && _isForeground && locationSub == null && (_positionStreamFn != null || !kIsDesktop)) {
       if (location.value == null && !_fetchingUserLocation) {
         unawaited(_initUserLocation(requestPermission: false, startStream: true));
       } else {
@@ -1860,7 +1894,9 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     }
     final friendId = selectedFriendId.value;
     final handle = _selectedFriendHandle() ?? _selectedFriendTargetHandle;
-    if (friendId != null &&
+    if ((_pageActivated || (!_deactivated && _startLiveFriendFn != null)) &&
+        _isForeground &&
+        friendId != null &&
         handle != null &&
         handle.trim().isNotEmpty &&
         liveTrackingEnabled.value &&
@@ -2356,7 +2392,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
   void _syncLiveHeartbeat() {
     _liveHeartbeatTimer?.cancel();
     _liveHeartbeatTimer = null;
-    if (!_isAlive || !_isForeground || !liveTrackingEnabled.value) return;
+    if (!_isAlive || !_isForeground || !_canRunLiveHeartbeat || !liveTrackingEnabled.value) return;
 
     final friendId = selectedFriendId.value;
     if (friendId != null) {
@@ -2372,7 +2408,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
             ? _liveKeepaliveInterval
             : _liveFallbackInterval;
         _liveHeartbeatTimer = Timer.periodic(tickInterval, (_) {
-          if (!_isAlive || !_isForeground || !liveTrackingEnabled.value) return;
+          if (!_isAlive || !_isForeground || !_canRunLiveHeartbeat || !liveTrackingEnabled.value) return;
           if (selectedFriendId.value != friendId) return;
           final currentTime = _now();
           final lastStart = _lastLiveStreamStartAt;
@@ -2398,7 +2434,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
         return;
       }
       _liveHeartbeatTimer = Timer.periodic(_livePollInterval, (_) {
-        if (!_isAlive || !_isForeground || !liveTrackingEnabled.value) return;
+        if (!_isAlive || !_isForeground || !_canRunLiveHeartbeat || !liveTrackingEnabled.value) return;
         if (selectedFriendId.value != friendId) return;
         unawaited(_refreshTargetedFriend(
           friendId: friendId,
@@ -2841,7 +2877,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     if (!(Platform.isLinux && !kIsWeb) &&
         locationSub == null &&
         !_fetchingUserLocation) {
-      unawaited(_initUserLocation());
+      unawaited(_initUserLocation(startStream: _pageActivated && _isForeground));
     }
 
     Response emptyResponse() => Response(requestOptions: RequestOptions(path: ''));
@@ -3140,6 +3176,7 @@ class FindMyController extends GetxController with WidgetsBindingObserver {
     mapLibreController = null;
     mapStyleController = null;
     tabController?.dispose();
+    tabController = null;
     activeSheetScrollController = null;
     sheetController.dispose();
     itemsController.dispose();

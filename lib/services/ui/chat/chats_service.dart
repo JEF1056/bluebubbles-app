@@ -870,6 +870,7 @@ class ChatsService {
     // Create new ChatState and add to map
     chatStates[toAdd.guid] = ChatState(toAdd);
     _setupChatStateListeners(chatStates[toAdd.guid]!);
+    _recalculateUnreadCount();
 
     // Insert into sorted list at correct position
     _insertChatSorted(toAdd);
@@ -883,6 +884,7 @@ class ChatsService {
     _chatStateSubs.remove(toRemove.guid)?.cancel();
     chatStates.remove(toRemove.guid);
     _sortedChats.removeWhere((c) => c.guid == toRemove.guid);
+    _recalculateUnreadCount();
     _scheduleListVersionUpdate(immediate: true);
   }
 
@@ -1918,6 +1920,7 @@ class ChatsService {
     _chatStateSubs.clear();
     chatStates.clear();
     _sortedChats.clear();
+    _recalculateUnreadCount();
     loadedAllChats = Completer();
     loadedFirstChatBatch.value = false;
     webCachedHandles.clear();

@@ -27,6 +27,10 @@ class TabletModeWrapper extends StatefulWidget {
   /// layout switch
   final RxBool? rightOpen;
 
+  /// When set, hides [left] only while true (after the covering push transition completes). Defaults to the
+  /// `PaneObserver.covered` associated with [rightOpen], falling back to [rightOpen].
+  final RxBool? rightCovered;
+
   const TabletModeWrapper(
       {super.key,
       required this.left,
@@ -39,7 +43,8 @@ class TabletModeWrapper extends StatefulWidget {
       this.minWidthLeft,
       this.maxWidthLeft,
       this.enableInspector = true,
-      this.rightOpen})
+      this.rightOpen,
+      this.rightCovered})
       : assert(initialRatio >= 0),
         assert(initialRatio <= 1);
 
@@ -68,6 +73,8 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
   double? _maxWidth;
   StreamSubscription? _eventSub;
   Worker? _activeChatWorker;
+  bool? _lastAvatarOnly;
+  bool _postFrameAvatarCheckScheduled = false;
 
   double get _width1 => max(
       min(_ratio * _maxWidth!, widget.maxWidthLeft ?? double.infinity), widget.minWidthLeft ?? double.negativeInfinity);
@@ -107,22 +114,55 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
     super.dispose();
   }
 
+  void _syncAvatarOnlyIfFlipped() {
+    final currentAvatarOnly = NavigationSvc.isAvatarOnly(context);
+    if (_lastAvatarOnly != null && currentAvatarOnly != _lastAvatarOnly) {
+      NavigationSvc.listener.refresh();
+    }
+    _lastAvatarOnly = currentAvatarOnly;
+  }
+
+  void _onResizeUpdate(DragUpdateDetails details) {
+    if (_maxWidth == null || _maxWidth! <= 0) return;
+    _lastAvatarOnly ??= NavigationSvc.isAvatarOnly(context);
+    _ratio.value = (_ratio.value + (details.delta.dx / _maxWidth!)).clamp(widget.minRatio, widget.maxRatio);
+    _syncAvatarOnlyIfFlipped();
+    if (!_postFrameAvatarCheckScheduled) {
+      _postFrameAvatarCheckScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _postFrameAvatarCheckScheduled = false;
+        if (!mounted) return;
+        _syncAvatarOnlyIfFlipped();
+      });
+    }
+  }
+
+  void _onResizeEnd(DragEndDetails _) {
+    if (!mounted) return;
+    _lastAvatarOnly = NavigationSvc.isAvatarOnly(context);
+    NavigationSvc.listener.refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!showAltLayout) {
       final rightOpen = widget.rightOpen;
       if (rightOpen == null) return TitleBarWrapper(child: widget.left);
+      final rightCovered = widget.rightCovered ?? PaneObserver.coveredFor(rightOpen) ?? rightOpen;
       return TitleBarWrapper(
         child: Stack(
           children: [
             // Offstage alone keeps the hidden pane's animations running and its focusables reachable
-            Obx(() => Offstage(
-                  offstage: rightOpen.value,
-                  child: TickerMode(
-                    enabled: !rightOpen.value,
-                    child: ExcludeFocus(excluding: rightOpen.value, child: widget.left),
-                  ),
-                )),
+            Obx(() {
+              final covered = rightCovered.value;
+              return Offstage(
+                offstage: covered,
+                child: TickerMode(
+                  enabled: !covered,
+                  child: ExcludeFocus(excluding: covered, child: widget.left),
+                ),
+              );
+            }),
             Obx(() => IgnorePointer(ignoring: !rightOpen.value, child: widget.right)),
           ],
         ),
@@ -157,12 +197,6 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                 showInspectorToggle: false,
               );
 
-              void onResizeUpdate(DragUpdateDetails details) {
-                if (_maxWidth == null || _maxWidth! <= 0) return;
-                _ratio.value = (_ratio.value + (details.delta.dx / _maxWidth!)).clamp(widget.minRatio, widget.maxRatio);
-                NavigationSvc.listener.refresh();
-              }
-
               return TweenAnimationBuilder<double>(
                 tween: Tween<double>(end: showInspectorPane ? 1.0 : 0.0),
                 duration: const Duration(milliseconds: 240),
@@ -175,14 +209,21 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                       )
                     : null,
                 builder: (context, t, inspectorChild) {
-                  final leftWidth = hasInspectorHost
-                      ? lerpDouble(closedPanes.leftWidth, openPanes.leftWidth, t)!
-                      : closedPanes.leftWidth;
-                  final rightWidth = hasInspectorHost
-                      ? lerpDouble(closedPanes.rightWidth, openPanes.rightWidth, t)!
-                      : closedPanes.rightWidth;
+                  // Keep pane layout widths fixed across transition frames so ConversationView doesn't re-layout 15x;
+                  // snap to open widths once settled open and back to closed widths on close while clipping the slot.
+                  final useOpenWidths = showInspectorPane && t == 1.0;
+                  final leftWidth = (hasInspectorHost && useOpenWidths) ? openPanes.leftWidth : closedPanes.leftWidth;
+                  final layoutRightWidth =
+                      (hasInspectorHost && useOpenWidths) ? openPanes.rightWidth : closedPanes.rightWidth;
                   final collapsedInspectorWidth = showCollapsedInspectorEdge ? 28.0 : 0.0;
+                  final showInspectorWidgets = hasInspectorHost && (showCollapsedInspectorEdge || t > 0.001);
+                  final inspectorDividerWidth =
+                      showInspectorWidgets ? (showCollapsedInspectorEdge ? 1.0 : t.clamp(0.0, 1.0)) : 0.0;
                   final inspectorWidth = hasInspectorHost ? lerpDouble(collapsedInspectorWidth, 320.0, t)! : 0.0;
+                  final visibleRightSlotWidth = max(
+                    0.0,
+                    _maxWidth! - leftWidth - (showInspectorWidgets ? inspectorDividerWidth + inspectorWidth : 0.0),
+                  );
 
                   final row = Row(
                     children: <Widget>[
@@ -201,7 +242,8 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                           cursor: SystemMouseCursors.resizeLeftRight,
                           child: GestureDetector(
                             behavior: HitTestBehavior.translucent,
-                            onPanUpdate: onResizeUpdate,
+                            onPanUpdate: _onResizeUpdate,
+                            onPanEnd: _onResizeEnd,
                             child: Container(
                               color: context.theme.colorScheme.surfaceContainerHighest,
                               width: widget.dividerWidth,
@@ -244,12 +286,25 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                             height: constraints.maxHeight,
                             color: context.theme.colorScheme.surfaceContainerHighest),
                       SizedBox(
-                        width: rightWidth,
-                        child: widget.right,
+                        width: visibleRightSlotWidth,
+                        height: constraints.maxHeight,
+                        child: ClipRect(
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                left: 0,
+                                top: 0,
+                                bottom: 0,
+                                width: layoutRightWidth,
+                                child: widget.right,
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      if (hasInspectorHost && (showCollapsedInspectorEdge || t > 0.001)) ...[
+                      if (showInspectorWidgets) ...[
                         SizedBox(
-                          width: showCollapsedInspectorEdge ? 1.0 : t.clamp(0.0, 1.0),
+                          width: inspectorDividerWidth,
                           height: constraints.maxHeight,
                           child: ColoredBox(
                             color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
@@ -273,7 +328,7 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                                           padding: const EdgeInsets.only(top: 10),
                                           child: IconButton(
                                             padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                                            constraints: const BoxConstraints(minWidth: 28, minHeight: 44),
                                             tooltip: 'Show chat details (Alt+I)',
                                             icon: Icon(
                                               Icons.chevron_left_rounded,
@@ -325,7 +380,8 @@ class _TabletModeWrapperState extends State<TabletModeWrapper> with ThemeHelpers
                           cursor: SystemMouseCursors.resizeLeftRight,
                           child: GestureDetector(
                             behavior: HitTestBehavior.translucent,
-                            onPanUpdate: onResizeUpdate,
+                            onPanUpdate: _onResizeUpdate,
+                            onPanEnd: _onResizeEnd,
                           ),
                         ),
                       ),

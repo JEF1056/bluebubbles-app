@@ -10,6 +10,7 @@ import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/bb_app_bar.dart';
 import 'package:bluebubbles/app/wrappers/bb_scaffold.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
@@ -45,6 +46,7 @@ class NewChatCreator extends StatefulWidget {
 class _NewChatCreatorState extends State<NewChatCreator> with ThemeHelpers<NewChatCreator> {
   late final String _tag;
   late final ChatCreatorController controller;
+  VoidCallback? _cancelInitialFocusTransition;
 
   @override
   void initState() {
@@ -59,21 +61,22 @@ class _NewChatCreatorState extends State<NewChatCreator> with ThemeHelpers<NewCh
       tag: _tag,
     );
 
-    if (widget.initialSelected.isNotEmpty) {
-      // Focus the message field when contacts have been pre-selected (e.g. deep link).
-      Future.delayed(Duration.zero, () {
-        if (mounted) controller.messageNode.requestFocus();
-      });
-    } else {
-      // Auto-focus the address field when opening fresh.
-      Future.delayed(Duration.zero, () {
-        if (mounted) controller.addressNode.requestFocus();
-      });
-    }
+    _cancelInitialFocusTransition = runAfterRouteTransition(context, () {
+      if (!mounted) return;
+      if (widget.initialSelected.isNotEmpty) {
+        // Focus the message field when contacts have been pre-selected (e.g. deep link).
+        controller.messageNode.requestFocus();
+      } else {
+        // Auto-focus the address field when opening fresh.
+        controller.addressNode.requestFocus();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _cancelInitialFocusTransition?.call();
+    _cancelInitialFocusTransition = null;
     Get.delete<ChatCreatorController>(tag: _tag);
     super.dispose();
   }

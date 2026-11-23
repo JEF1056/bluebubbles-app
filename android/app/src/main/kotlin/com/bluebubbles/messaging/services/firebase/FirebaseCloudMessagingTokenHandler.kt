@@ -23,7 +23,7 @@ class FirebaseCloudMessagingTokenHandler {
             } catch (exception: Exception) {
                 val error = "Failed to get FCM token!"
                 PersistentLog.e(context, Constants.logTag, error, exception)
-                result?.error("500", error, exception)
+                result?.error("500", error, exception.stackTraceToString())
             }
         }
     }
@@ -38,7 +38,7 @@ class FirebaseCloudMessagingTokenHandler {
             } catch (exception: Exception) {
                 val error = "Failed to delete FCM token!"
                 PersistentLog.e(context, Constants.logTag, error, exception)
-                result?.error("500", error, exception)
+                result?.error("500", error, exception.stackTraceToString())
             }
         }
     }

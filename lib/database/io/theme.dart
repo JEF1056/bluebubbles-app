@@ -61,6 +61,7 @@ class ThemeStruct {
         }
       } on UniqueViolationException catch (_) {}
     });
+    ThemesService.invalidateResolvedThemeCache(name);
     return this;
   }
 
@@ -69,6 +70,7 @@ class ThemeStruct {
     Database.runInTransaction(TxMode.write, () {
       Database.themes.remove(id!);
     });
+    ThemesService.invalidateResolvedThemeCache(name);
   }
 
   static ThemeStruct _clonePreset(dynamic preset) {
@@ -84,24 +86,32 @@ class ThemeStruct {
     final name = PrefsSvc.theme.getSelectedLightTheme();
     final query = Database.themes.query(ThemeStruct_.name.equals(name ?? ThemesService.materialYouLightName)).build();
     query.limit = 1;
-    final result = query.findFirst();
-    if (result == null) {
-      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouLightName);
-      return _clonePreset(preset);
+    try {
+      final result = query.findFirst();
+      if (result == null) {
+        final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouLightName);
+        return _clonePreset(preset);
+      }
+      return result;
+    } finally {
+      query.close();
     }
-    return result;
   }
 
   static ThemeStruct getDarkTheme() {
     final name = PrefsSvc.theme.getSelectedDarkTheme();
     final query = Database.themes.query(ThemeStruct_.name.equals(name ?? ThemesService.materialYouDarkName)).build();
     query.limit = 1;
-    final result = query.findFirst();
-    if (result == null) {
-      final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouDarkName);
-      return _clonePreset(preset);
+    try {
+      final result = query.findFirst();
+      if (result == null) {
+        final preset = ThemesService.defaultThemes.firstWhere((t) => t.name == ThemesService.materialYouDarkName);
+        return _clonePreset(preset);
+      }
+      return result;
+    } finally {
+      query.close();
     }
-    return result;
   }
 
   static ThemeStruct? findOne(String name) {
@@ -109,21 +119,29 @@ class ThemeStruct {
     return Database.runInTransaction(TxMode.read, () {
       final query = Database.themes.query(ThemeStruct_.name.equals(name)).build();
       query.limit = 1;
-      final result = query.findFirst();
-      query.close();
-      return result;
+      try {
+        return query.findFirst();
+      } finally {
+        query.close();
+      }
     });
   }
 
   static ThemeStruct resolveByName(String? name, Brightness brightness) {
-    final fallback = brightness == Brightness.dark ? getDarkTheme() : getLightTheme();
-    if (name == null || name.isEmpty) return fallback;
-    final found = findOne(name);
-    if (found != null) return found;
-    for (final preset in ThemesService.defaultThemes) {
-      if (preset.name == name) return _clonePreset(preset);
-    }
-    return fallback;
+    return ThemesService.resolveThemeByName(
+      name,
+      brightness,
+      () {
+        if (name != null && name.isNotEmpty) {
+          final found = findOne(name);
+          if (found != null) return found;
+          for (final preset in ThemesService.defaultThemes) {
+            if (preset.name == name) return _clonePreset(preset);
+          }
+        }
+        return brightness == Brightness.dark ? getDarkTheme() : getLightTheme();
+      },
+    );
   }
 
   static List<ThemeStruct> getThemes() {

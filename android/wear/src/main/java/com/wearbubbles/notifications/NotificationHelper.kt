@@ -13,6 +13,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -176,8 +177,10 @@ object NotificationHelper {
         ).apply {
             description = "Incoming FaceTime calls"
             enableVibration(true)
+            vibrationPattern = WearCallTonePlayer.RING_VIBRATION_PATTERN
             setSound(
-                Settings.System.DEFAULT_RINGTONE_URI,
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                    ?: Settings.System.DEFAULT_RINGTONE_URI,
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)

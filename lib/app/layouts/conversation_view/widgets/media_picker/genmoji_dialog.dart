@@ -1,15 +1,17 @@
 import 'dart:async';
 
-import 'package:bluebubbles/app/components/custom/custom_cupertino_alert_dialog.dart';
 import 'package:bluebubbles/app/components/wallpaper/dynamic_wallpaper_view.dart';
 import 'package:bluebubbles/app/components/wallpaper/theme_wallpaper_palette.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/composer_popover.dart';
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/genmoji.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/cupertino.dart' hide CupertinoAlertDialog, CupertinoDialogAction;
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 /// Opens the Genmoji creator: the user describes a Genmoji, the server's Mac draws it with
@@ -17,23 +19,95 @@ import 'package:get/get.dart';
 ///
 /// Resolves to the image to attach, or null when the user backs out. Only call this when
 /// `ServerDetails.supportsGenmoji` is true — the routes are v2-only.
-Future<GenmojiImage?> showGenmojiDialog(BuildContext context, {required bool isIMessage}) {
-  return showDialog<GenmojiImage>(
-    context: context,
-    // A tap outside would throw away a generation in flight; leaving is always a button.
-    barrierDismissible: false,
-    useRootNavigator: true,
-    builder: (_) => GenmojiDialog(isIMessage: isIMessage),
+Future<GenmojiImage?> showGenmojiDialog(BuildContext context, {required bool isIMessage}) async {
+  final isWide = MediaQuery.sizeOf(context).width >= 600;
+  final scheme = context.theme.colorScheme;
+
+  if (!isWide) {
+    return showModalBottomSheet<GenmojiImage>(
+      context: context,
+      isScrollControlled: true,
+      useRootNavigator: true,
+      isDismissible: false,
+      enableDrag: false,
+      showDragHandle: true,
+      backgroundColor: scheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(sheetContext).bottom),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: GenmojiDialog(isIMessage: isIMessage),
+          ),
+        ),
+      ),
+    );
+  }
+
+  final chat = ChatStateScope.maybeChatOf(context);
+  final controller = chat != null && Get.isRegistered<ConversationViewController>(tag: chat.guid)
+      ? Get.find<ConversationViewController>(tag: chat.guid)
+      : null;
+
+  GenmojiImage? picked;
+  Widget buildCard(BuildContext _) => ComposerPopoverCard(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+          child: SingleChildScrollView(
+            child: GenmojiDialog(
+              isIMessage: isIMessage,
+              onResult: (image) => picked = image,
+            ),
+          ),
+        ),
+      );
+
+  if (controller != null) {
+    final wasShowingOverlays = controller.showingOverlays;
+    final anchorContext = controller.textFieldKey.currentContext ?? context;
+    await showComposerPopover(
+      anchorContext,
+      controller,
+      width: 380,
+      height: 500,
+      builder: buildCard,
+    );
+    controller.showingOverlays = wasShowingOverlays;
+    return picked;
+  }
+
+  final themes = InheritedTheme.capture(from: context, to: Navigator.of(context, rootNavigator: true).context);
+  await Navigator.of(context, rootNavigator: true).push(
+    RawDialogRoute<void>(
+      barrierDismissible: true,
+      barrierLabel: "Dismiss",
+      barrierColor: Colors.black38,
+      transitionDuration: const Duration(milliseconds: 160),
+      pageBuilder: (routeContext, _, _) => SafeArea(
+        child: Center(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.viewInsetsOf(routeContext).bottom),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380, maxHeight: 500),
+              child: themes.wrap(Builder(builder: buildCard)),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
+  return picked;
 }
 
 enum _GenmojiPhase { checking, unavailable, prompt, generating, result, failed }
 
 class GenmojiDialog extends StatefulWidget {
-  const GenmojiDialog({super.key, required this.isIMessage});
+  const GenmojiDialog({super.key, required this.isIMessage, this.onResult});
 
   /// Seeds the nebula's colors from the chat's bubble color.
   final bool isIMessage;
+  final ValueChanged<GenmojiImage?>? onResult;
 
   @override
   State<GenmojiDialog> createState() => _GenmojiDialogState();
@@ -42,6 +116,7 @@ class GenmojiDialog extends StatefulWidget {
 class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
   final TextEditingController _promptController = TextEditingController();
   final FocusNode _promptFocus = FocusNode();
+  final FocusNode _generatingFocus = FocusNode();
 
   _GenmojiPhase _phase = _GenmojiPhase.checking;
   int _maxLength = GenmojiSupport.defaultMaximumDescriptionLength;
@@ -63,6 +138,7 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
     _promptController.removeListener(_onPromptChanged);
     _promptController.dispose();
     _promptFocus.dispose();
+    _generatingFocus.dispose();
     super.dispose();
   }
 
@@ -115,7 +191,8 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
     final description = _promptController.text.trim();
     if (description.isEmpty) return;
 
-    _promptFocus.unfocus();
+    // Keep focus inside GenmojiDialog so our CallbackShortcuts intercepts Escape during generation.
+    _generatingFocus.requestFocus();
     final token = CancelToken();
     _cancelToken = token;
     _setPhase(_GenmojiPhase.generating);
@@ -151,7 +228,12 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
 
   void _close([GenmojiImage? result]) {
     _cancelToken?.cancel();
-    Navigator.of(context).pop(result);
+    if (widget.onResult != null) {
+      widget.onResult!(result);
+      Navigator.of(context).pop();
+    } else {
+      Navigator.of(context).pop(result);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -190,75 +272,75 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
 
   @override
   Widget build(BuildContext context) {
-    final content = _buildContent(context);
-
-    if (iOS) {
-      final scheme = context.theme.colorScheme;
-      return CupertinoTheme(
-        // Bridge Material brightness & primary accent into the Cupertino color system (as showBBDialog does).
-        data: CupertinoThemeData(
-          brightness: Theme.of(context).brightness,
-          primaryColor: scheme.primary,
-        ),
-        child: CupertinoAlertDialog(
-          backgroundColor: scheme.surfaceContainerHighest.withValues(alpha: 0.78),
-          title: const Text("Genmoji"),
-          content: Material(type: MaterialType.transparency, child: content),
-          actions: _actions
-              .map(
-                (a) => CupertinoDialogAction(
-                  isDefaultAction: a.isDefault,
-                  isDestructiveAction: a.isDestructive,
-                  onPressed: a.onPressed,
-                  child: Text(a.label),
-                ),
-              )
-              .toList(),
-        ),
-      );
-    }
-
     final scheme = context.theme.colorScheme;
     const minSize = Size(64, 48);
     const btnPadding = EdgeInsets.symmetric(horizontal: 20, vertical: 10);
     const shape = StadiumBorder();
-    return AlertDialog(
-      title: Text("Genmoji", style: context.theme.textTheme.titleLarge),
-      backgroundColor: scheme.surfaceContainerHigh,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-      titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
-      contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-      content: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 280, maxWidth: 340),
-        child: content,
-      ),
-      actions: _actions.map((a) {
-        if (a.isDefault) {
-          return FilledButton(
-            onPressed: a.onPressed,
-            style: FilledButton.styleFrom(
-              backgroundColor: a.isDestructive ? scheme.error : scheme.primary,
-              foregroundColor: a.isDestructive ? scheme.onError : scheme.onPrimary,
-              minimumSize: minSize,
-              padding: btnPadding,
-              shape: shape,
+    final generating = _phase == _GenmojiPhase.generating;
+
+    return PopScope(
+      canPop: !generating,
+      child: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): () {
+            if (!generating) _close();
+          },
+        },
+        child: Focus(
+          focusNode: _generatingFocus,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_awesome_rounded, size: 22, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    "Genmoji",
+                    style: context.theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
             ),
-            child: Text(a.label),
-          );
-        }
-        return TextButton(
-          onPressed: a.onPressed,
-          style: TextButton.styleFrom(
-            foregroundColor: a.isDestructive ? scheme.error : scheme.primary,
-            minimumSize: minSize,
-            padding: btnPadding,
-            shape: shape,
+            const SizedBox(height: 14),
+            _buildContent(context),
+            const SizedBox(height: 16),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              runSpacing: 8,
+              children: _actions.map((a) {
+                if (a.isDefault) {
+                  return FilledButton(
+                    onPressed: a.onPressed,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: a.isDestructive ? scheme.error : scheme.primary,
+                      foregroundColor: a.isDestructive ? scheme.onError : scheme.onPrimary,
+                      minimumSize: minSize,
+                      padding: btnPadding,
+                      shape: shape,
+                    ),
+                    child: Text(a.label),
+                  );
+                }
+                return TextButton(
+                  onPressed: a.onPressed,
+                  style: TextButton.styleFrom(
+                    foregroundColor: a.isDestructive ? scheme.error : scheme.primary,
+                    minimumSize: minSize,
+                    padding: btnPadding,
+                    shape: shape,
+                  ),
+                  child: Text(a.label),
+                );
+              }).toList(),
+            ),
+          ],
           ),
-          child: Text(a.label),
-        );
-      }).toList(),
+        ),
+      ),
     );
   }
 
@@ -267,7 +349,6 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(height: iOS ? 12 : 4),
         Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 220),
@@ -275,13 +356,14 @@ class _GenmojiDialogState extends State<GenmojiDialog> with ThemeHelpers {
               aspectRatio: 1,
               child: Container(
                 foregroundDecoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: context.theme.colorScheme.outlineVariant.withValues(alpha: 0.45)),
                 ),
                 clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(12)),
+                decoration: BoxDecoration(borderRadius: BorderRadius.circular(20)),
                 child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 350),
+                  duration: const Duration(milliseconds: 200),
+                  switchInCurve: Curves.easeOutCubic,
                   child: KeyedSubtree(key: ValueKey(_phase), child: _buildCanvas(context)),
                 ),
               ),

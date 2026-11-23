@@ -218,7 +218,8 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                         val hName = (h["sender_name"] as? String)?.takeIf { it.isNotBlank() } ?: contactName
                         val hKey = h["sender_key"] as? String ?: contactKey
                         val hUri = h["sender_uri"] as? String ?: resolvedSenderUri
-                        buildPerson(hName, null, hUri, hKey, true)
+                        val hIcon = if (hKey == contactKey && (hKey != null || !chatIsGroup)) contactBitmap else null
+                        buildPerson(hName, hIcon, hUri, hKey, true)
                     }
                     newStyle.addHistoricMessage(NotificationCompat.MessagingStyle.Message(hText, hDate, hSender))
                 }

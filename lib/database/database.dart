@@ -48,6 +48,7 @@ class Database {
   static _WebPersistenceLifecycleObserver? _webLifecycleObserver;
 
   static final Completer<void> initComplete = Completer();
+  static bool boxesOpened = false;
 
   static Future<void> init() async {
     try {
@@ -81,6 +82,7 @@ class Database {
         Database.themeEntries = store.box<ThemeEntry>();
         // ignore: deprecated_member_use_from_same_package
         themeObjects = store.box<ThemeObject>();
+        boxesOpened = true;
 
         // Wait for SettingsService to be fully initialized before accessing settings.
         // This _shouldn't_ be needed, but we're going to do it just in case...
@@ -107,6 +109,8 @@ class Database {
           Database.themes.removeAll();
           Database.themeEntries.removeAll();
           themeObjects.removeAll();
+        } else if (!kIsWeb && !isIsolate) {
+          cleanupMalformedMessages();
         }
       } catch (e, s) {
         Logger.error("Failed to setup ObjectBox boxes!", error: e, trace: s);
@@ -197,6 +201,83 @@ class Database {
       }
       rethrow;
     }
+  }
+
+  /// Idempotently removes poisoned `Message` rows with null/empty GUIDs (and
+  /// their orphaned attachments) and repairs affected `Chat.dbLatestMessage`
+  /// pointers so chat history immediately loads cleanly on startup.
+  static int cleanupMalformedMessages() {
+    if (kIsWeb) return 0;
+    return Database.runInTransaction(TxMode.write, () {
+      final malformedQuery =
+          Database.messages.query(Message_.guid.isNull().or(Message_.guid.equals(''))).build();
+      final malformed = malformedQuery.find();
+      malformedQuery.close();
+      if (malformed.isEmpty) return 0;
+
+      final malformedIds = malformed.map((m) => m.id).whereType<int>().toList();
+      final malformedIdSet = malformedIds.toSet();
+      final attachmentIds = <int>{};
+      for (final m in malformed) {
+        for (final a in m.dbAttachments) {
+          if (a.id != null) attachmentIds.add(a.id!);
+        }
+      }
+      if (malformedIds.isNotEmpty) {
+        final attQuery = (Database.attachments.query()
+              ..link(Attachment_.message, Message_.id.oneOf(malformedIds)))
+            .build();
+        for (final a in attQuery.find()) {
+          if (a.id != null) attachmentIds.add(a.id!);
+        }
+        attQuery.close();
+      }
+
+      final affectedChats = <Chat>[];
+      if (malformedIds.isNotEmpty) {
+        final chatQuery = (Database.chats.query()
+              ..link(Chat_.dbLatestMessage, Message_.id.oneOf(malformedIds)))
+            .build();
+        affectedChats.addAll(chatQuery.find());
+        chatQuery.close();
+      }
+
+      if (attachmentIds.isNotEmpty) {
+        Database.attachments.removeMany(attachmentIds.toList());
+      }
+      final removed = malformedIds.isEmpty ? 0 : Database.messages.removeMany(malformedIds);
+
+      if (affectedChats.isNotEmpty) {
+        final validGuid = Message_.guid.notNull().and(Message_.guid.notEquals(''));
+        for (final chat in affectedChats) {
+          if (chat.id == null) continue;
+          if (!malformedIdSet.contains(chat.dbLatestMessage.targetId)) continue;
+          final latestQuery = (Database.messages.query(
+                Message_.dateDeleted.isNull().and(Message_.dateCreated.notNull()).and(validGuid),
+              )
+                ..link(Message_.chat, Chat_.id.equals(chat.id!))
+                ..order(Message_.dateCreated, flags: Order.descending))
+              .build();
+          latestQuery.limit = 1;
+          final latest = latestQuery.findFirst();
+          latestQuery.close();
+          if (latest != null) {
+            chat.dbLatestMessage.target = latest;
+            chat.dbOnlyLatestMessageDate = latest.dateCreated;
+          } else {
+            chat.dbLatestMessage.target = null;
+            chat.dbOnlyLatestMessageDate = null;
+          }
+        }
+        Database.chats.putMany(affectedChats);
+      }
+
+      Logger.warn(
+        'Cleaned up $removed malformed message(s) with null/empty guid and ${attachmentIds.length} orphaned attachment(s)',
+        tag: 'DB-Cleanup',
+      );
+      return removed;
+    });
   }
 
   static Future<void> _performDatabaseMigrations({int? versionOverride}) async {

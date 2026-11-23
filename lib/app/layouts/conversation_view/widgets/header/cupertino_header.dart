@@ -9,6 +9,7 @@ import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -40,13 +41,17 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final filter = ImageFilter.compose(
+      outer: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
+      inner: ColorFilter.matrix(
+        CupertinoTheme.maybeBrightnessOf(context) == Brightness.dark ? darkMatrix : lightMatrix,
+      ),
+    );
     return ClipRect(
-      child: BackdropFilter(
-          filter: ImageFilter.compose(
-              outer: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-              inner: ColorFilter.matrix(
-                CupertinoTheme.maybeBrightnessOf(context) == Brightness.dark ? darkMatrix : lightMatrix,
-              )),
+      child: Obx(
+        () => RouteSettledBackdropFilter(
+          enabled: !SettingsSvc.settings.highPerfMode.value,
+          filter: filter,
           child: Stack(
             children: [
               Container(
@@ -168,7 +173,9 @@ class CupertinoHeader extends StatelessWidget implements PreferredSizeWidget {
                 child: HeaderProgressIndicator(),
               ),
             ],
-          )),
+          ),
+        ),
+      ),
     );
   }
 

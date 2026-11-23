@@ -158,7 +158,7 @@ class _MaterialConversationListState extends State<MaterialConversationList> {
                               )
                             else ...[
                               SliverPadding(
-                                padding: EdgeInsets.only(top: 8, bottom: 88 + MediaQuery.paddingOf(bodyContext).bottom),
+                                padding: EdgeInsets.only(top: 8, bottom: MediaQuery.paddingOf(bodyContext).bottom),
                                 // Only the rows watch the drag, for the room a pin dragged over them makes, so a drag
                                 // doesn't refilter the chats.
                                 sliver: Obx(() {

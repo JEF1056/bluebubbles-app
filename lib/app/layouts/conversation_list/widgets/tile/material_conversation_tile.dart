@@ -2,6 +2,7 @@ import 'package:bluebubbles/app/components/blur_fade_switcher.dart';
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/conversation_tile.dart';
 import 'package:bluebubbles/app/layouts/conversation_list/widgets/tile/trailing_state_mixin.dart';
+import 'package:bluebubbles/app/state/chat_state.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/wrappers/stateful_boilerplate.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -177,22 +178,8 @@ class MaterialTrailing extends CustomStateful<ConversationTileController> {
     Chat chat,
     String? lastReadGuid, {
     List<Message> Function(Chat chat, {int limit})? fetchMessages,
-  }) {
-    if (chat.id == null) return 1;
-    try {
-      final messages = (fetchMessages ?? (c, {int limit = 25}) => Chat.getMessages(c, limit: limit))(chat, limit: 25);
-      int count = 0;
-      for (final m in messages) {
-        if (lastReadGuid != null && m.guid == lastReadGuid) break;
-        if (m.isFromMe != true && m.associatedMessageGuid == null) {
-          count++;
-        }
-      }
-      return count > 0 ? count : 1;
-    } catch (_) {
-      return 1;
-    }
-  }
+  }) =>
+      ChatState.computeUnreadCount(chat, lastReadGuid, fetchMessages: fetchMessages);
 
   @override
   State<StatefulWidget> createState() => _MaterialTrailingState();
@@ -215,7 +202,7 @@ class _MaterialTrailingState extends CustomState<MaterialTrailing, void, Convers
             message.isFromMe != true &&
             message.attributedBody.any((b) => b.runs.any((r) => r.hasMention));
         final showHoverMenu = (kIsDesktop || kIsWeb) && widget.isHovered && !controller.isSelected;
-        final unreadCount = unread ? MaterialTrailing.computeUnreadCount(controller.chat, chatState.lastReadMessageGuid.value) : 0;
+        final unreadCount = (unread && muteType != "mute") ? chatState.getUnreadCount() : 0;
         syncRelativeTimestamp(hasError ? null : message?.dateCreated, isRelative: true);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.end,

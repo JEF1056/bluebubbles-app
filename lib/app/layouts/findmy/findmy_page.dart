@@ -12,6 +12,7 @@ import 'package:bluebubbles/app/wrappers/scrollbar_wrapper.dart';
 import 'package:bluebubbles/app/wrappers/tablet_mode_wrapper.dart';
 import 'package:bluebubbles/app/wrappers/theme_switcher.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -29,6 +30,7 @@ class FindMyPage extends StatefulWidget {
 class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateMixin {
   late final FindMyController controller;
   late final bool _ownsController;
+  VoidCallback? _cancelRouteTransitionAutoFit;
   static const double _detailSnapPoint = 0.48;
 
   @override
@@ -42,12 +44,17 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
     controller.onRequestDetailSheetOpen = _openDetailSheet;
     controller.detailSheetOffsetProvider = _detailSheetOffsetPx;
     controller.fitAllPinsPaddingProvider = _fitAllPinsPadding;
+    controller.deferInitialAutoFitForRouteTransition();
     if (wasRegistered) {
       if (controller.isBackgroundShared) {
         controller.activatePage();
       }
       controller.consumePendingFocus();
     }
+    _cancelRouteTransitionAutoFit = runAfterRouteTransition(context, () {
+      if (!mounted) return;
+      controller.resumeInitialAutoFitAfterTransition();
+    });
   }
 
   void _resetActiveSheetScrollToTop() {
@@ -115,6 +122,8 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    _cancelRouteTransitionAutoFit?.call();
+    _cancelRouteTransitionAutoFit = null;
     controller.onRequestDetailSheetOpen = null;
     controller.detailSheetOffsetProvider = null;
     controller.fitAllPinsPaddingProvider = null;
@@ -436,12 +445,11 @@ class _FindMyPageState extends State<FindMyPage> with SingleTickerProviderStateM
                         child: buildBackButton(context, padding: const EdgeInsets.only(right: 2)),
                       );
                       final highPerf = GetIt.I.isRegistered<SettingsService>() && SettingsSvc.settings.highPerfMode.value;
-                      return highPerf
-                          ? button
-                          : BackdropFilter(
-                              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                              child: button,
-                            );
+                      return RouteSettledBackdropFilter(
+                        enabled: !highPerf,
+                        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                        child: button,
+                      );
                     }),
                   ),
                 ),
@@ -741,12 +749,11 @@ class FindMyFloatingNavPill extends StatelessWidget {
       return ClipRRect(
         key: const ValueKey('findmy-floating-nav'),
         borderRadius: BorderRadius.circular(32),
-        child: highPerf
-            ? nav
-            : BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                child: nav,
-              ),
+        child: RouteSettledBackdropFilter(
+          enabled: !highPerf,
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+          child: nav,
+        ),
       );
     });
   }

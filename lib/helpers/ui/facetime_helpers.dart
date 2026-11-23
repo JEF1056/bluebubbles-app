@@ -8,6 +8,7 @@ import 'package:bluebubbles/app/components/facetime/web_ringtone.dart';
 import 'package:bluebubbles/services/backend/java_dart_interop/intents_service.dart';
 import 'package:bluebubbles/services/backend/notifications/notifications_service.dart';
 import 'package:bluebubbles/services/backend/settings/settings_service.dart';
+import 'package:bluebubbles/services/ui/navigator/navigator_service.dart';
 import 'package:faker/faker.dart' hide Image;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -17,9 +18,13 @@ import 'package:get_it/get_it.dart';
 class FaceTimeIncomingActions {
   const FaceTimeIncomingActions({
     required this.callerName,
+    this.callerAddress,
     this.avatarBytes,
     required this.isAudio,
     required this.isTelephony,
+    this.isGroup = false,
+    this.participants = const [],
+    this.participantDetails = const [],
     this.onAnswerVideo,
     required this.onAnswerAudio,
     required this.onDecline,
@@ -27,9 +32,13 @@ class FaceTimeIncomingActions {
   });
 
   final String callerName;
+  final String? callerAddress;
   final Uint8List? avatarBytes;
   final bool isAudio;
   final bool isTelephony;
+  final bool isGroup;
+  final List<String> participants;
+  final List<CallParticipant> participantDetails;
   final VoidCallback? onAnswerVideo;
   final VoidCallback onAnswerAudio;
   final VoidCallback onDecline;
@@ -54,6 +63,55 @@ void hideInAppCallScreen() {
   }
 }
 
+/// Resolves a mounted [BuildContext] inside the root [Navigator] (never a builder-slot
+/// context above the navigator, nor a [Navigator]'s own element whose ancestor lookup skips it).
+BuildContext? resolveFaceTimeNavigatorContext(BuildContext? context) {
+  if (context != null && context.mounted) {
+    if (Navigator.maybeOf(context, rootNavigator: true) != null) {
+      return context;
+    }
+    if (context is StatefulElement && context.state is NavigatorState) {
+      final overlayCtx = (context.state as NavigatorState).overlay?.context;
+      if (overlayCtx != null &&
+          overlayCtx.mounted &&
+          Navigator.maybeOf(overlayCtx, rootNavigator: true) != null) {
+        return overlayCtx;
+      }
+    }
+  }
+  final navOverlayCtx = Get.isRegistered<NavigatorService>()
+      ? NavigationSvc.key.currentState?.overlay?.context
+      : null;
+  if (navOverlayCtx != null &&
+      navOverlayCtx.mounted &&
+      Navigator.maybeOf(navOverlayCtx, rootNavigator: true) != null) {
+    return navOverlayCtx;
+  }
+  try {
+    final getOverlayCtx = Get.overlayContext;
+    if (getOverlayCtx != null &&
+        getOverlayCtx.mounted &&
+        Navigator.maybeOf(getOverlayCtx, rootNavigator: true) != null) {
+      return getOverlayCtx;
+    }
+    final getCtx = Get.context;
+    if (getCtx != null && getCtx.mounted) {
+      if (Navigator.maybeOf(getCtx, rootNavigator: true) != null) {
+        return getCtx;
+      }
+      if (getCtx is StatefulElement && getCtx.state is NavigatorState) {
+        final overlayCtx = (getCtx.state as NavigatorState).overlay?.context;
+        if (overlayCtx != null &&
+            overlayCtx.mounted &&
+            Navigator.maybeOf(overlayCtx, rootNavigator: true) != null) {
+          return overlayCtx;
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 /// Opens the full-screen [InAppCallScreen] without duplicating route stacks.
 void openInAppCallScreen({
   BuildContext? context,
@@ -69,7 +127,7 @@ void openInAppCallScreen({
     return;
   }
 
-  final targetContext = context ?? Get.context;
+  final targetContext = resolveFaceTimeNavigatorContext(context);
   if (targetContext == null) return;
 
   final callController = controller ?? ActiveCallController.instance;
@@ -183,30 +241,42 @@ void openIncomingFaceTimeScreen(
   final existingRoute = faceTimeOverlays[callUuid];
   if (existingRoute != null && existingRoute.isActive) return;
 
-  final targetContext = context ?? Get.context;
+  final targetContext = resolveFaceTimeNavigatorContext(context);
   if (targetContext == null) return;
 
   final callController = controller ?? ActiveCallController.instance;
   final state = callController.state;
   final actions = faceTimeIncomingActions[callUuid];
-  final displayCaller = actions?.callerName ??
-      (state.callerName.isNotEmpty ? state.callerName : (state.isTelephony ? 'iPhone Call' : 'FaceTime Call'));
-  final avatarBytes = actions?.avatarBytes ?? state.avatarBytes;
   final isTelephony = actions?.isTelephony ?? state.isTelephony;
   final isAudio = actions?.isAudio ?? (!state.isVideo || isTelephony);
+  final isGroup = actions?.isGroup ?? state.isGroup;
+  final callerAddress = actions?.callerAddress ?? state.callerAddress;
+  final participantDetails = (actions != null && actions.participantDetails.isNotEmpty)
+      ? actions.participantDetails
+      : state.participantDetails;
+  final kindLabel = ActiveCallController.callKindLabelFor(
+    isVideo: !isAudio && !isTelephony,
+    isTelephony: isTelephony,
+    isGroup: isGroup,
+  );
+  final displayCaller = actions?.callerName ?? state.displayCallerName;
+  final avatarBytes = actions?.avatarBytes ?? state.avatarBytes;
   final reducedMotion = facetimeReducedMotionOf(targetContext);
 
   _pushFaceTimeRoute(
     targetContext: targetContext,
     callUuid: callUuid,
-    barrierLabel: isTelephony ? 'Incoming iPhone Call' : 'Incoming FaceTime Call',
+    barrierLabel: 'Incoming $kindLabel',
     transitionDuration: reducedMotion ? Duration.zero : const Duration(milliseconds: 180),
     pageBuilder: (dialogContext, animation, secondaryAnimation) => IncomingFaceTimeScreen(
       callUuid: callUuid,
       callerName: displayCaller,
+      callerAddress: callerAddress,
       avatarBytes: avatarBytes,
       isAudio: isAudio,
       isTelephony: isTelephony,
+      isGroup: isGroup,
+      participantDetails: participantDetails,
       controller: callController,
       onAnswerVideo: actions?.onAnswerVideo ??
           (isTelephony ? null : () => unawaited(callController.answerCall(audioOnly: false, context: dialogContext))),
@@ -246,16 +316,21 @@ Future<void> showFaceTimeOverlay(
   bool isAudio, {
   String? callerAddress,
   bool isTelephony = false,
+  bool? isGroup,
+  List<String>? participants,
+  List<CallParticipant>? participantDetails,
   BuildContext? context,
   ActiveCallController? controller,
 }) async {
   Uint8List? avatarBytes = chatIcon;
   var displayCaller = caller;
+  var effectiveDetails = participantDetails;
   if (GetIt.I.isRegistered<SettingsService>() &&
       SettingsSvc.settings.redactedMode.value &&
       SettingsSvc.settings.hideContactInfo.value) {
     avatarBytes = null;
     displayCaller = faker.person.name();
+    effectiveDetails = const [];
   }
 
   // If we are somehow already showing an overlay for this call, close it first.
@@ -271,13 +346,21 @@ Future<void> showFaceTimeOverlay(
     avatarBytes: avatarBytes,
     isVideo: !isAudio && !isTelephony,
     isTelephony: isTelephony,
+    isGroup: isGroup,
+    participants: participants,
+    participantDetails: effectiveDetails,
   );
 
+  final effectiveState = callController.state;
   faceTimeIncomingActions[callUuid] = FaceTimeIncomingActions(
     callerName: displayCaller,
+    callerAddress: callerAddress ?? effectiveState.callerAddress,
     avatarBytes: avatarBytes,
     isAudio: isAudio || isTelephony,
     isTelephony: isTelephony,
+    isGroup: isGroup ?? effectiveState.isGroup,
+    participants: participants ?? effectiveState.participants,
+    participantDetails: effectiveDetails ?? effectiveState.participantDetails,
     onAnswerVideo: isTelephony
         ? null
         : () {

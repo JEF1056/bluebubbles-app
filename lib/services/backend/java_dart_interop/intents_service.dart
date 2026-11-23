@@ -14,6 +14,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_vie
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 import 'package:get/get.dart';
 import 'package:bluebubbles/models/models.dart' show HandleLookupKey;
 import 'package:path/path.dart';
@@ -77,14 +78,16 @@ class IntentsService {
     Get.until((route) => route.isFirst);
   }
 
-  void handleIntent(Intent? intent, {required bool isInitialIntent}) async {
+  Future<void> handleIntent(Intent? intent, {required bool isInitialIntent}) async {
     if (intent == null) return;
 
     // Every activity launch tells us whether we're running as a bubble. Set it
     // for ALL intents, not just chat-opens — otherwise isBubble stays true after
     // a bubble session when the app is next opened from the launcher or a share
     // sheet, misrouting lifecycle teardown to closeBubble() indefinitely.
-    LifecycleSvc.isBubble = intent.extra?["bubble"] == true;
+    if (GetIt.I.isRegistered<LifecycleService>()) {
+      LifecycleSvc.isBubble = intent.extra?["bubble"] == true;
+    }
 
     switch (intent.action) {
       case "android.intent.action.SEND":
@@ -143,28 +146,117 @@ class IntentsService {
           final guid = intent.extra!["chatGuid"]!;
           await openChat(guid, isInitialIntent: isInitialIntent);
         } else if (intent.extra?["callUuid"] != null) {
-          await StartupTasks.waitForUI();
+          if (!StartupTasks.uiReady.isCompleted) {
+            await StartupTasks.waitForUI();
+          }
+          final callUuid = intent.extra?["callUuid"]?.toString();
+          if (callUuid == null || callUuid.isEmpty) return;
+          final controller = callControllerOverride ?? ActiveCallController.instance;
           final isTelephony = intent.extra?["isTelephony"] == true;
           final isAudio = isTelephony ||
               intent.extra?["audioOnly"] == true ||
               intent.extra?["isAudio"] == true ||
               intent.extra?["isVideo"] == false;
-          if (intent.extra?["answer"] == true) {
+          final rawCaller = intent.extra?["caller"]?.toString().trim();
+          final callerExtra = (rawCaller != null && rawCaller.isNotEmpty) ? rawCaller : null;
+          final stateMatches = controller.state.callUuid == callUuid;
+          final shouldOpenCall = intent.extra?["openCall"] == true ||
+              (stateMatches &&
+                  (controller.state.isOngoing ||
+                      controller.state.isConnecting ||
+                      controller.state.isOutgoingPhase));
+          if (shouldOpenCall) {
+            if (controller.state.phase == ActiveCallPhase.idle ||
+                controller.state.isIncoming ||
+                !stateMatches) {
+              final fallbackLabel = ActiveCallController.callKindLabelFor(
+                isVideo: !isAudio && !isTelephony,
+                isTelephony: isTelephony,
+              );
+              final callerName = callerExtra ??
+                  (stateMatches && !ActiveCallController.isGenericCallLabel(controller.state.callerName)
+                      ? controller.state.callerName
+                      : fallbackLabel);
+              hideFaceTimeOverlay(callUuid, keepCallState: true);
+              controller.startOngoing(
+                callUuid: callUuid,
+                callerName: callerName,
+                callerAddress: stateMatches ? controller.state.callerAddress : null,
+                avatarBytes: stateMatches ? controller.state.avatarBytes : null,
+                isVideo: !isAudio && !isTelephony,
+                isTelecomCall: true,
+                isTelephony: isTelephony,
+                isGroup: stateMatches ? controller.state.isGroup : null,
+                participants: stateMatches ? controller.state.participants : null,
+                participantDetails: stateMatches ? controller.state.participantDetails : null,
+                chatGuid: stateMatches ? controller.state.chatGuid : null,
+                isOutgoing: stateMatches ? controller.state.isOutgoing : false,
+              );
+            }
+            _openInAppCallScreenWithRetry(controller, callUuid);
+          } else if (intent.extra?["answer"] == true) {
             await answerFaceTime(
-              intent.extra?["callUuid"]!,
+              callUuid,
               audioOnly: isAudio,
               isTelephony: isTelephony,
+              caller: callerExtra,
             );
           } else {
-            await showFaceTimeOverlay(
-              intent.extra?["callUuid"],
-              intent.extra?["caller"] ?? (isTelephony ? "iPhone call" : "FaceTime Call"),
-              null,
-              isAudio,
-              isTelephony: isTelephony,
-            );
+            if (!faceTimeOverlays.containsKey(callUuid) || !stateMatches || !controller.state.isIncoming) {
+              final fallbackLabel = ActiveCallController.callKindLabelFor(
+                isVideo: !isAudio && !isTelephony,
+                isTelephony: isTelephony,
+              );
+              await showFaceTimeOverlay(
+                callUuid,
+                callerExtra ?? fallbackLabel,
+                null,
+                isAudio,
+                isTelephony: isTelephony,
+                controller: controller,
+              );
+            }
+            _openIncomingFaceTimeScreenWithRetry(controller, callUuid);
           }
         }
+    }
+  }
+
+  void _openInAppCallScreenWithRetry(ActiveCallController controller, String callUuid) {
+    final target = resolveFaceTimeNavigatorContext(Get.context);
+    if (target != null) {
+      openInAppCallScreen(context: target, controller: controller);
+      return;
+    }
+    try {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (controller.state.phase == ActiveCallPhase.idle || controller.state.callUuid != callUuid) return;
+        final retryTarget = resolveFaceTimeNavigatorContext(Get.context);
+        if (retryTarget != null) {
+          openInAppCallScreen(context: retryTarget, controller: controller);
+        }
+      });
+    } catch (_) {
+      // WidgetsBinding may not be initialized in pure Dart unit tests.
+    }
+  }
+
+  void _openIncomingFaceTimeScreenWithRetry(ActiveCallController controller, String callUuid) {
+    final target = resolveFaceTimeNavigatorContext(Get.context);
+    if (target != null) {
+      openIncomingFaceTimeScreen(callUuid, context: target, controller: controller);
+      return;
+    }
+    try {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (controller.state.phase != ActiveCallPhase.incoming || controller.state.callUuid != callUuid) return;
+        final retryTarget = resolveFaceTimeNavigatorContext(Get.context);
+        if (retryTarget != null) {
+          openIncomingFaceTimeScreen(callUuid, context: retryTarget, controller: controller);
+        }
+      });
+    } catch (_) {
+      // WidgetsBinding may not be initialized in pure Dart unit tests.
     }
   }
 
@@ -172,20 +264,35 @@ class IntentsService {
     String callUuid, {
     bool audioOnly = false,
     bool isTelephony = false,
+    String? caller,
   }) async {
     final controller = callControllerOverride ?? ActiveCallController.instance;
     final prevState = controller.state;
     final matchesPrev = prevState.callUuid == callUuid;
     final effectiveTelephony = isTelephony || (matchesPrev && prevState.isTelephony);
-    final callerName = matchesPrev && prevState.callerName.isNotEmpty
+    final wasVideo = matchesPrev ? prevState.isVideo : !(audioOnly || effectiveTelephony);
+    final isGroup = matchesPrev && prevState.isGroup;
+    final kindLabel = ActiveCallController.callKindLabelFor(
+      isVideo: !audioOnly && !effectiveTelephony && wasVideo,
+      isTelephony: effectiveTelephony,
+      isGroup: isGroup,
+    );
+    final trimmedCaller = caller?.trim();
+    final callerExtra = (trimmedCaller != null && trimmedCaller.isNotEmpty) ? trimmedCaller : null;
+    final callerName = matchesPrev && !ActiveCallController.isGenericCallLabel(prevState.callerName)
         ? prevState.callerName
-        : (effectiveTelephony ? "iPhone Call" : "FaceTime Call");
+        : (callerExtra != null && !ActiveCallController.isGenericCallLabel(callerExtra)
+            ? callerExtra
+            : (matchesPrev && prevState.callerAddress != null && prevState.callerAddress!.isNotEmpty
+                ? prevState.callerAddress!
+                : (callerExtra ?? kindLabel)));
     final callerAddress = matchesPrev ? prevState.callerAddress : null;
     final avatarBytes = matchesPrev ? prevState.avatarBytes : null;
     final chatGuid = matchesPrev ? prevState.chatGuid : null;
-    final wasVideo = matchesPrev ? prevState.isVideo : !(audioOnly || effectiveTelephony);
     final isAudioAnswer = effectiveTelephony || audioOnly || !wasVideo;
     final isAndroid = !kIsWeb && (Platform.isAndroid || defaultTargetPlatform == TargetPlatform.android);
+    final shouldSeedConnecting =
+        !matchesPrev || (callerExtra != null && ActiveCallController.isGenericCallLabel(prevState.callerName));
 
     if (effectiveTelephony && !isAndroid) {
       hideFaceTimeOverlay(callUuid);
@@ -213,7 +320,7 @@ class IntentsService {
         );
         return;
       }
-      if (!matchesPrev) {
+      if (shouldSeedConnecting) {
         controller.setConnecting(
           callUuid: callUuid,
           callerName: callerName,
@@ -228,7 +335,7 @@ class IntentsService {
       return;
     }
 
-    if (!matchesPrev) {
+    if (shouldSeedConnecting) {
       controller.setConnecting(
         callUuid: callUuid,
         callerName: callerName,

@@ -25,7 +25,7 @@ class StopForegroundServiceHandler: MethodCallHandlerImpl() {
             }
             result.success(null)
         } catch (e: Exception) {
-            result.error("STOP_FOREGROUND_SERVICE_ERROR", e.message, e)
+            result.error("STOP_FOREGROUND_SERVICE_ERROR", e.message, e.stackTraceToString())
         }
     }
 }

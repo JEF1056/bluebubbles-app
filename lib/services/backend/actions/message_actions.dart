@@ -64,39 +64,35 @@ class MessageActions {
         throw Exception("Cannot replace on a null existing message!!");
       }
 
-      // We just need to update the timestamps & error
+      if (inputNewMessage.guid == null || inputNewMessage.guid!.isEmpty) {
+        Logger.error(
+          'Refusing to replace message ${existing.guid} with null or empty GUID',
+          tag: 'MessageActions',
+        );
+        return existing.id!;
+      }
+
+      // Guard against a race: another async path (e.g. socket new-message) may
+      // have already inserted inputNewMessage.guid before this transaction ran.
+      // If so, merge into the existing real-GUID row, remove the stale temp row,
+      // and return the real row's ID (matching AttachmentActions.replaceAttachmentAsync).
+      final conflictingQuery = messageBox.query(Message_.guid.equals(inputNewMessage.guid!)).build();
+      conflictingQuery.limit = 1;
+      final conflicting = conflictingQuery.findFirst();
+      conflictingQuery.close();
+
+      if (conflicting != null && conflicting.id != existing.id) {
+        _applyReplacementFields(conflicting, inputNewMessage, preserveDelivered: true);
+        messageBox.put(conflicting, mode: PutMode.update);
+        retireEarlierTurns(conflicting);
+        messageBox.remove(existing.id!);
+        return conflicting.id!;
+      }
+
       if (existing.guid != inputNewMessage.guid) {
         existing.guid = inputNewMessage.guid;
       }
-      // Before the text and edit date: whether formatting is kept depends on whether they changed
-      existing.takeOmittableFieldsFrom(inputNewMessage);
-      if (inputNewMessage.text != null) {
-        existing.text = inputNewMessage.text;
-      }
-
-      existing.dateDelivered = inputNewMessage.dateDelivered ?? existing.dateDelivered;
-      existing.isDelivered = inputNewMessage.isDelivered;
-      existing.dateRead = inputNewMessage.dateRead ?? existing.dateRead;
-      existing.dateEdited = inputNewMessage.dateEdited ?? existing.dateEdited;
-      existing.wasDeliveredQuietly =
-          inputNewMessage.wasDeliveredQuietly ? inputNewMessage.wasDeliveredQuietly : existing.wasDeliveredQuietly;
-      existing.didNotifyRecipient =
-          inputNewMessage.didNotifyRecipient ? inputNewMessage.didNotifyRecipient : existing.didNotifyRecipient;
-      existing.error = inputNewMessage.error;
-      existing.errorMessage = inputNewMessage.errorMessage;
-      // An iMessage app turn is re-linked when a newer turn replaces it (type 2 to 3, or a first turn to itself), and
-      // never back: a stale copy that still says type 2 leaves a replaced turn as it is
-      final type = AppSessionTypes.mergedType(existing.balloonBundleId ?? inputNewMessage.balloonBundleId,
-          existing.associatedMessageType, inputNewMessage.associatedMessageType);
-      if (type == inputNewMessage.associatedMessageType) {
-        existing.associatedMessageGuid = inputNewMessage.associatedMessageGuid ?? existing.associatedMessageGuid;
-      }
-      existing.associatedMessageType = type;
-      existing.metadata = mergeTopLevelDicts(existing.metadata, inputNewMessage.metadata);
-      if (inputNewMessage.metadata?['translation'] != null) {
-        existing.metadata ??= {};
-        existing.metadata!['translation'] = inputNewMessage.metadata!['translation'];
-      }
+      _applyReplacementFields(existing, inputNewMessage);
 
       try {
         messageBox.put(existing, mode: PutMode.update);
@@ -110,6 +106,40 @@ class MessageActions {
       // Return just the ID for efficient transfer across isolates
       return existing.id!;
     });
+  }
+
+  static void _applyReplacementFields(
+    Message target,
+    Message source, {
+    bool preserveDelivered = false,
+  }) {
+    // Before the text and edit date: whether formatting is kept depends on whether they changed
+    target.takeOmittableFieldsFrom(source);
+    if (source.text != null) {
+      target.text = source.text;
+    }
+
+    target.dateDelivered = source.dateDelivered ?? target.dateDelivered;
+    target.isDelivered = preserveDelivered ? (target.isDelivered || source.isDelivered) : source.isDelivered;
+    target.dateRead = source.dateRead ?? target.dateRead;
+    target.dateEdited = source.dateEdited ?? target.dateEdited;
+    target.wasDeliveredQuietly = source.wasDeliveredQuietly ? source.wasDeliveredQuietly : target.wasDeliveredQuietly;
+    target.didNotifyRecipient = source.didNotifyRecipient ? source.didNotifyRecipient : target.didNotifyRecipient;
+    target.error = source.error;
+    target.errorMessage = source.errorMessage;
+    // An iMessage app turn is re-linked when a newer turn replaces it (type 2 to 3, or a first turn to itself), and
+    // never back: a stale copy that still says type 2 leaves a replaced turn as it is
+    final type = AppSessionTypes.mergedType(
+        target.balloonBundleId ?? source.balloonBundleId, target.associatedMessageType, source.associatedMessageType);
+    if (type == source.associatedMessageType) {
+      target.associatedMessageGuid = source.associatedMessageGuid ?? target.associatedMessageGuid;
+    }
+    target.associatedMessageType = type;
+    target.metadata = mergeTopLevelDicts(target.metadata, source.metadata);
+    if (source.metadata?['translation'] != null) {
+      target.metadata ??= {};
+      target.metadata!['translation'] = source.metadata!['translation'];
+    }
   }
 
   static Future<void> deleteMessage(dynamic data) async {

@@ -1,6 +1,7 @@
 package com.bluebubbles.messaging.services.telecom
 
 import android.telecom.Connection
+import android.telecom.PhoneAccount
 import com.bluebubbles.messaging.services.network.HttpService
 import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
 import org.junit.Assert.assertEquals
@@ -55,6 +56,28 @@ class FaceTimeRoutingTest {
             isVideo = true,
             callUuid = "call-video-1",
             phoneAccountEnabled = true
+        )
+        assertEquals(IncomingFaceTimeRoute.NOTIFICATION, route)
+    }
+
+    @Test
+    fun `car mode routes video incoming directly to telecom when phone account is enabled`() {
+        val route = FaceTimeRoutingPolicy.resolveIncomingRoute(
+            isVideo = true,
+            callUuid = "call-car-video-1",
+            phoneAccountEnabled = true,
+            inCar = true
+        )
+        assertEquals(IncomingFaceTimeRoute.TELECOM_DIRECT, route)
+    }
+
+    @Test
+    fun `car mode video incoming falls back to notification when phone account is disabled`() {
+        val route = FaceTimeRoutingPolicy.resolveIncomingRoute(
+            isVideo = true,
+            callUuid = "call-car-video-2",
+            phoneAccountEnabled = false,
+            inCar = true
         )
         assertEquals(IncomingFaceTimeRoute.NOTIFICATION, route)
     }
@@ -300,6 +323,55 @@ class FaceTimeRoutingTest {
     }
 
     @Test
+    fun `phone account uses self-managed capability without call provider flag`() {
+        val caps = FaceTimeConnectionService.phoneAccountCapabilities()
+        assertTrue((caps and PhoneAccount.CAPABILITY_SELF_MANAGED) != 0)
+        assertEquals(0, caps and PhoneAccount.CAPABILITY_CALL_PROVIDER)
+    }
+
+    @Test
+    fun `watch audio matcher selects wear node or bonded watch bluetooth device`() {
+        val buds = FaceTimeConnection.Companion.WatchAudioCandidate("buds", name = "Pixel Buds Pro", address = "11:22:33:44:55:66")
+        val watch = FaceTimeConnection.Companion.WatchAudioCandidate("watch5", name = "Google Pixel Watch 5", address = "AA:BB:CC:DD:EE:FF")
+        val speaker = FaceTimeConnection.Companion.WatchAudioCandidate("spk", name = "Speaker", address = null, isBluetooth = false)
+
+        // Matches Wear node display name
+        assertEquals(
+            "watch5",
+            FaceTimeConnection.selectWatchAudioCandidate(
+                candidates = listOf(buds, watch, speaker),
+                watchNodeNames = setOf("Google Pixel Watch 5")
+            )
+        )
+
+        // Matches bonded watch BT address when endpoint/device name differs
+        val unnamedWatch = FaceTimeConnection.Companion.WatchAudioCandidate("watch-addr", name = "BT Headset", address = "aa:bb:cc:dd:ee:ff")
+        assertEquals(
+            "watch-addr",
+            FaceTimeConnection.selectWatchAudioCandidate(
+                candidates = listOf(buds, unnamedWatch),
+                watchNodeNames = emptySet(),
+                bondedWatchAddresses = setOf("AA:BB:CC:DD:EE:FF")
+            )
+        )
+
+        // Falls back to "watch" name heuristic, ignoring non-watch earbuds
+        assertEquals(
+            "watch5",
+            FaceTimeConnection.selectWatchAudioCandidate(
+                candidates = listOf(buds, watch),
+                watchNodeNames = emptySet()
+            )
+        )
+        assertNull(
+            FaceTimeConnection.selectWatchAudioCandidate(
+                candidates = listOf(buds, speaker),
+                watchNodeNames = emptySet()
+            )
+        )
+    }
+
+    @Test
     fun `webrtc offer payload includes uplinkVideo when wantVideo is true and falls back cleanly when local camera unavailable`() {
         val withUplink = WebRtcAudioClient.buildOfferPayloadMap(
             callUuid = "call-1",
@@ -355,5 +427,31 @@ class FaceTimeRoutingTest {
         assertEquals("get-facetime-local-video-texture", GetFaceTimeLocalVideoTextureHandler.tag)
         assertEquals("set-facetime-camera-enabled", SetFaceTimeCameraEnabledHandler.tag)
         assertEquals("flip-facetime-camera", FlipFaceTimeCameraHandler.tag)
+    }
+
+    @Test
+    fun `emitCallState payload includes is_video and non-blank caller_name`() {
+        val videoPayload = FaceTimeConnection.buildCallStatePayload(
+            phase = "active",
+            uuid = "ft-video-9",
+            isTelephony = false,
+            isVideo = true,
+            callerName = "Dana"
+        )
+        assertEquals("active", videoPayload["phase"])
+        assertEquals("ft-video-9", videoPayload["call_uuid"])
+        assertEquals(false, videoPayload["is_telephony"])
+        assertEquals(true, videoPayload["is_video"])
+        assertEquals("Dana", videoPayload["caller_name"])
+
+        val telephonyPayload = FaceTimeConnection.buildCallStatePayload(
+            phase = "active",
+            uuid = "cell-9",
+            isTelephony = true,
+            isVideo = true,
+            callerName = "   "
+        )
+        assertEquals(false, telephonyPayload["is_video"])
+        assertFalse(telephonyPayload.containsKey("caller_name"))
     }
 }

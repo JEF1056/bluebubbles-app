@@ -5,6 +5,7 @@ import 'package:bluebubbles/app/layouts/findmy/findmy_controller.dart';
 import 'package:bluebubbles/app/wrappers/trackpad_bug_wrapper.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/platform/shims/desktop_window.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
@@ -70,6 +71,45 @@ List<maplibre.Marker> orderFindMyMarkers(
   return [for (final item in indexed) item.marker];
 }
 
+/// Hit-tests back-to-front [orderedMarkers] at [screenPoint] using their
+/// corresponding projected [screenOffsets]. Keeps pointer pass-through intact
+/// on [maplibre.WidgetLayer] (`allowInteraction: false`) so touching a pin
+/// never blocks map pinch-to-zoom or pan gestures.
+String? hitTestFindMyMarkerKey(
+  List<maplibre.Marker> orderedMarkers,
+  List<Offset> screenOffsets,
+  Offset screenPoint,
+) {
+  if (orderedMarkers.isEmpty || orderedMarkers.length != screenOffsets.length) {
+    return null;
+  }
+  for (var i = orderedMarkers.length - 1; i >= 0; i--) {
+    final marker = orderedMarkers[i];
+    final offset = screenOffsets[i];
+    if (!offset.dx.isFinite || !offset.dy.isFinite) continue;
+    final key = marker.child.key;
+    if (key is! ValueKey<String>) continue;
+    final keyStr = key.value;
+
+    final Rect hitRect;
+    if (keyStr.startsWith('friend-') || keyStr.startsWith('device-')) {
+      // Visual medallion (40px) + stem + anchor dot sit centered above offset.
+      hitRect = Rect.fromLTWH(offset.dx - 28.0, offset.dy - 64.0, 56.0, 64.0);
+    } else if (keyStr == 'current') {
+      hitRect = Rect.fromCenter(center: offset, width: 48.0, height: 48.0);
+    } else {
+      final left = offset.dx - marker.size.width * ((marker.alignment.x + 1.0) * 0.5);
+      final top = offset.dy - marker.size.height * ((marker.alignment.y + 1.0) * 0.5);
+      hitRect = Rect.fromLTWH(left, top, marker.size.width, marker.size.height);
+    }
+
+    if (hitRect.contains(screenPoint)) {
+      return keyStr;
+    }
+  }
+  return null;
+}
+
 bool _isMapLibreSupportedPlatform() {
   final bindingName = WidgetsBinding.instance.runtimeType.toString();
   if (bindingName.contains('TestWidgetsFlutterBinding')) {
@@ -103,6 +143,7 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
   final Map<String, AnimationController> _pinAnims = {};
   maplibre.CameraChangeReason _lastCameraChangeReason = maplibre.CameraChangeReason.programmatic;
   bool _pendingPostFrameComplete = false;
+  maplibre.CameraUpdate? _initialMapCamera;
 
   FindMyController get controller => widget.controller;
 
@@ -115,6 +156,18 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
     controller.registerPinInterpolator(_interpolatePin);
     if (_useFallbackMap) {
       _completeFallbackReadyPostFrame();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant FindMyMapWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.controller != oldWidget.controller) {
+      oldWidget.controller.registerCamera3DAnimator(null);
+      oldWidget.controller.registerPinInterpolator(null);
+      widget.controller.registerCamera3DAnimator(_animateCamera);
+      widget.controller.registerPinInterpolator(_interpolatePin);
+      _initialMapCamera = null;
     }
   }
 
@@ -182,6 +235,7 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
       controller.cameraZoom.value = destZoom;
       controller.cameraPitch.value = targetPitch;
       controller.cameraBearing.value = targetBearing;
+      controller.markerOrderBearing.value = targetBearing;
       controller.cameraPadding = targetPadding;
       return;
     }
@@ -221,6 +275,9 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
     });
     anim.addStatusListener((status) {
       if (status == AnimationStatus.completed || status == AnimationStatus.dismissed) {
+        if (mounted && status == AnimationStatus.completed) {
+          controller.markerOrderBearing.value = targetBearing;
+        }
         if (identical(_cameraAnim, anim)) {
           _cameraAnim = null;
         }
@@ -331,14 +388,28 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
     );
   }
 
-  List<maplibre.Marker> _orderedMarkers() {
+  List<maplibre.Marker> _orderedMarkers({required bool interactive, bool liveBearing = false}) {
     final ordered = orderFindMyMarkers(
       controller.markers.values,
       selectedFriendId: controller.selectedFriendId.value,
       selectedDeviceId: controller.selectedDeviceId.value,
-      bearingDegrees: controller.cameraBearing.value,
+      bearingDegrees: liveBearing ? controller.cameraBearing.value : controller.markerOrderBearing.value,
     );
+    if (!interactive) return ordered;
     return [for (final m in ordered) _wrapInteractiveMarker(m)];
+  }
+
+  String? _hitTestMarkerAt(Offset screenPoint, List<maplibre.Marker> orderedMarkers) {
+    final mlController = controller.mapLibreController;
+    if (mlController == null || orderedMarkers.isEmpty) return null;
+    try {
+      final offsets = mlController.toScreenLocations([
+        for (final m in orderedMarkers) m.point,
+      ]);
+      return hitTestFindMyMarkerKey(orderedMarkers, offsets, screenPoint);
+    } catch (_) {
+      return null;
+    }
   }
 
   ({LatLng center, double radiusMeters})? _selectedAccuracyTarget() {
@@ -391,6 +462,122 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
   bool get _isInWidgetTest =>
       WidgetsBinding.instance.runtimeType.toString().contains('TestWidgetsFlutterBinding');
 
+  Widget _buildMapLibreSurface({
+    required Brightness brightness,
+    required Color primaryColor,
+  }) {
+    // Capture initial camera outside Obx so 60-120Hz camera updates do not rebuild MapLibreMap.
+    _initialMapCamera ??= maplibre.CameraUpdate.position(
+      center: toGeographic(controller.cameraCenter.value),
+      zoom: controller.cameraZoom.value,
+      pitch: controller.cameraPitch.value,
+      bearing: controller.cameraBearing.value,
+      padding: controller.cameraPadding,
+    );
+
+    final mapWidget = Obx(() {
+      final style = controller.mapStyle.value;
+      final styleUrl = resolveFindMyStyleUrl(style, brightness);
+      final accuracyTarget = _selectedAccuracyTarget();
+      final accuracyPolygons = accuracyTarget == null
+          ? const <maplibre.Feature<maplibre.Polygon>>[]
+          : <maplibre.Feature<maplibre.Polygon>>[
+              buildFindMyAccuracyFeature(
+                accuracyTarget.center,
+                accuracyTarget.radiusMeters,
+              ),
+            ];
+
+      return maplibre.MapLibreMap(
+        options: maplibre.MapOptions(
+          style: maplibre.MapStyle.url(styleUrl),
+          initCamera: _initialMapCamera!,
+          minZoom: 1.5,
+          maxZoom: 19.0,
+          minPitch: 0.0,
+          maxPitch: 60.0,
+        ),
+        onMapCreated: (mapController) {
+          controller.mapLibreController = mapController;
+          if (!controller.completer.isCompleted) {
+            controller.completer.complete();
+          }
+        },
+        onStyleLoaded: (styleController) {
+          controller.mapStyleController = styleController;
+          controller.sync3DBuildingsLayer(brightness: brightness);
+        },
+        onClick: (event) {
+          final hitKey = _hitTestMarkerAt(event.screenPoint, _orderedMarkers(interactive: false, liveBearing: true));
+          if (hitKey != null) {
+            _handleMarkerTap(hitKey);
+          } else {
+            controller.clearSelection();
+          }
+        },
+        onPointerMove: (event) {
+          final hitKey = _hitTestMarkerAt(event.screenPoint, _orderedMarkers(interactive: false, liveBearing: true));
+          if (controller.hoveredMarkerKey.value != hitKey) {
+            controller.hoveredMarkerKey.value = hitKey;
+          }
+        },
+        onPointerLeave: (_) {
+          if (controller.hoveredMarkerKey.value != null) {
+            controller.hoveredMarkerKey.value = null;
+          }
+        },
+        onCameraMoveStart: (event) {
+          _lastCameraChangeReason = event.reason;
+        },
+        onCameraMove: (event) {
+          controller.onMapCameraChanged(
+            center: fromGeographic(event.camera.center),
+            zoom: event.camera.zoom,
+            pitch: event.camera.pitch,
+            bearing: event.camera.bearing,
+            reason: _lastCameraChangeReason,
+            settled: false,
+          );
+        },
+        onCameraMoveEnd: (event) {
+          controller.onMapCameraChanged(
+            center: fromGeographic(event.camera.center),
+            zoom: event.camera.zoom,
+            pitch: event.camera.pitch,
+            bearing: event.camera.bearing,
+            reason: _lastCameraChangeReason,
+            settled: true,
+          );
+        },
+        layers: [
+          if (accuracyPolygons.isNotEmpty)
+            maplibre.PolygonLayer(
+              polygons: accuracyPolygons,
+              color: maplibre.Expression.literal(primaryColor.withValues(alpha: 0.14)),
+              outlineColor: maplibre.Expression.literal(primaryColor.withValues(alpha: 0.55)),
+            ),
+        ],
+        children: [
+          // Keep markers translucent to pointer hit-testing so pinching
+          // or panning never gets swallowed when a finger starts on a pin.
+          Obx(
+            () => maplibre.WidgetLayer(
+              allowInteraction: false,
+              markers: _orderedMarkers(interactive: false),
+            ),
+          ),
+        ],
+      );
+    });
+
+    return Obx(
+      () => MouseRegion(
+        cursor: controller.hoveredMarkerKey.value != null ? SystemMouseCursors.click : MouseCursor.defer,
+        child: mapWidget,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final desktopTop = _safeDesktopTitleBarHeight();
@@ -408,115 +595,49 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
 
         return TrackpadBugWrapper(
           builder: (context, bugDetected) {
-            return Obx(() {
-              final style = controller.mapStyle.value;
-              final styleUrl = resolveFindMyStyleUrl(style, brightness);
-              final bgColor = resolveFindMyMapBackgroundColor(style, brightness);
-              final orderedMarkers = _orderedMarkers();
-              final accuracyTarget = _selectedAccuracyTarget();
-              final accuracyPolygons = accuracyTarget == null
-                  ? const <maplibre.Feature<maplibre.Polygon>>[]
-                  : <maplibre.Feature<maplibre.Polygon>>[
-                      buildFindMyAccuracyFeature(
-                        accuracyTarget.center,
-                        accuracyTarget.radiusMeters,
-                      ),
-                    ];
-
-              return ColoredBox(
-                color: bgColor,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: _useFallbackMap
-                          ? _ProjectedFallbackMap(
-                              controller: controller,
-                              markers: orderedMarkers,
-                              accuracyTarget: accuracyTarget,
-                              bgColor: bgColor,
-                              style: style,
-                              brightness: brightness,
-                              primaryColor: primaryColor,
-                            )
-                          : maplibre.MapLibreMap(
-                              options: maplibre.MapOptions(
-                                style: maplibre.MapStyle.url(styleUrl),
-                                initCamera: maplibre.CameraUpdate.position(
-                                  center: toGeographic(controller.cameraCenter.value),
-                                  zoom: controller.cameraZoom.value,
-                                  pitch: controller.cameraPitch.value,
-                                  bearing: controller.cameraBearing.value,
-                                  padding: controller.cameraPadding,
-                                ),
-                                minZoom: 1.5,
-                                maxZoom: 19.0,
-                                minPitch: 0.0,
-                                maxPitch: 60.0,
-                              ),
-                              onMapCreated: (mapController) {
-                                controller.mapLibreController = mapController;
-                                if (!controller.completer.isCompleted) {
-                                  controller.completer.complete();
-                                }
-                              },
-                              onStyleLoaded: (styleController) {
-                                controller.mapStyleController = styleController;
-                                controller.sync3DBuildingsLayer(brightness: brightness);
-                              },
-                              onClick: (_) => controller.clearSelection(),
-                              onCameraMoveStart: (event) {
-                                _lastCameraChangeReason = event.reason;
-                              },
-                              onCameraMove: (event) {
-                                controller.onMapCameraChanged(
-                                  center: fromGeographic(event.camera.center),
-                                  zoom: event.camera.zoom,
-                                  pitch: event.camera.pitch,
-                                  bearing: event.camera.bearing,
-                                  reason: _lastCameraChangeReason,
-                                );
-                              },
-                              onCameraMoveEnd: (event) {
-                                controller.onMapCameraChanged(
-                                  center: fromGeographic(event.camera.center),
-                                  zoom: event.camera.zoom,
-                                  pitch: event.camera.pitch,
-                                  bearing: event.camera.bearing,
-                                  reason: _lastCameraChangeReason,
-                                );
-                              },
-                              layers: [
-                                if (accuracyPolygons.isNotEmpty)
-                                  maplibre.PolygonLayer(
-                                    polygons: accuracyPolygons,
-                                    color: maplibre.Expression.literal(primaryColor.withValues(alpha: 0.14)),
-                                    outlineColor: maplibre.Expression.literal(primaryColor.withValues(alpha: 0.55)),
-                                  ),
-                              ],
-                              children: [
-                                maplibre.WidgetLayer(
-                                  allowInteraction: true,
-                                  markers: orderedMarkers,
-                                ),
-                              ],
-                            ),
+            final useFallback = _useFallbackMap;
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: Obx(
+                    () => ColoredBox(
+                      color: resolveFindMyMapBackgroundColor(controller.mapStyle.value, brightness),
                     ),
-                    // Top-right floating map controls (3D/2D, Compass, Zoom, Locate, Fit-All, Style)
-                    Positioned(
-                      top: 12 + MediaQuery.of(context).padding.top + desktopTop,
-                      right: 14,
-                      child: _FloatingMapControls(controller: controller),
-                    ),
-                    // OpenFreeMap + OpenMapTiles + OSM attribution chip
-                    Positioned(
-                      left: 14,
-                      bottom: context.isPhone ? 156 : 12,
-                      child: _AttributionChip(style: style, brightness: brightness),
-                    ),
-                  ],
+                  ),
                 ),
-              );
-            });
+                Positioned.fill(
+                  child: useFallback
+                      ? _ProjectedFallbackMap(
+                          controller: controller,
+                          orderedMarkersBuilder: () => _orderedMarkers(interactive: true, liveBearing: true),
+                          accuracyTargetBuilder: _selectedAccuracyTarget,
+                          brightness: brightness,
+                          primaryColor: primaryColor,
+                        )
+                      : _buildMapLibreSurface(
+                          brightness: brightness,
+                          primaryColor: primaryColor,
+                        ),
+                ),
+                // Top-right floating map controls (3D/2D, Compass, Zoom, Locate, Fit-All, Style)
+                Positioned(
+                  top: 12 + MediaQuery.of(context).padding.top + desktopTop,
+                  right: 14,
+                  child: _FloatingMapControls(controller: controller),
+                ),
+                // OpenFreeMap + OpenMapTiles + OSM attribution chip
+                Positioned(
+                  left: 14,
+                  bottom: context.isPhone ? 156 : 12,
+                  child: Obx(
+                    () => _AttributionChip(
+                      style: controller.mapStyle.value,
+                      brightness: brightness,
+                    ),
+                  ),
+                ),
+              ],
+            );
           },
         );
       },
@@ -527,19 +648,15 @@ class _FindMyMapWidgetState extends State<FindMyMapWidget> with TickerProviderSt
 class _ProjectedFallbackMap extends StatelessWidget {
   const _ProjectedFallbackMap({
     required this.controller,
-    required this.markers,
-    required this.accuracyTarget,
-    required this.bgColor,
-    required this.style,
+    required this.orderedMarkersBuilder,
+    required this.accuracyTargetBuilder,
     required this.brightness,
     required this.primaryColor,
   });
 
   final FindMyController controller;
-  final List<maplibre.Marker> markers;
-  final ({LatLng center, double radiusMeters})? accuracyTarget;
-  final Color bgColor;
-  final FindMyMapStyle style;
+  final List<maplibre.Marker> Function() orderedMarkersBuilder;
+  final ({LatLng center, double radiusMeters})? Function() accuracyTargetBuilder;
   final Brightness brightness;
   final Color primaryColor;
 
@@ -549,6 +666,10 @@ class _ProjectedFallbackMap extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: controller.clearSelection,
       child: Obx(() {
+        final style = controller.mapStyle.value;
+        final bgColor = resolveFindMyMapBackgroundColor(style, brightness);
+        final markers = orderedMarkersBuilder();
+        final accuracyTarget = accuracyTargetBuilder();
         final center = controller.cameraCenter.value;
         final zoom = controller.cameraZoom.value;
         final bearing = controller.cameraBearing.value;
@@ -890,12 +1011,11 @@ class _FloatingMapControls extends StatelessWidget {
     );
     return ClipRRect(
       borderRadius: BorderRadius.circular(22),
-      child: highPerf
-          ? pill
-          : BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-              child: pill,
-            ),
+      child: RouteSettledBackdropFilter(
+        enabled: !highPerf,
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: pill,
+      ),
     );
   }
 }

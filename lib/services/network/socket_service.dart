@@ -573,12 +573,11 @@ class SocketService {
   @visibleForTesting
   void reproveLanOverrideForTest() => _reproveLanOverride();
 
-  // A LAN override is only proven for the network it was probed on.
+  // A LAN override is only proven for the network it was probed on. Re-probe
+  // without pre-clearing originOverride or killing a live socket; detectLocalhost()
+  // updates the override and calls followOrigin() only if the resolved origin moved.
   void _reproveLanOverride() {
-    if (HttpSvc.originOverride == null) return;
-    NetworkTasks.setOriginOverride(null);
-    if (!connectionDesired) return;
-    followOrigin();
+    if (HttpSvc.originOverride == null || !connectionDesired) return;
     unawaited(NetworkTasks.detectLocalhost());
   }
 
@@ -697,9 +696,8 @@ class SocketService {
         // The remote address didn't move, but we're dialing a LAN override that was
         // resolved against a network we may have since left — and a wifi-to-wifi
         // change never fires the connectivity listener that would drop it. Re-probe
-        // instead of trusting it indefinitely. detectLocalhost() clears the override
-        // before probing, so a failed probe falls back to the remote URL rather than
-        // leaving us pinned to a dead local address.
+        // instead of trusting it indefinitely. detectLocalhost() falls back to null
+        // if the probe fails, switching back to the remote URL.
         Logger.info(tag: _tag, "Server URL unchanged — re-probing the local address override");
         await NetworkTasks.detectLocalhost().timeout(_urlDiscoveryTimeout);
       } else {
@@ -742,6 +740,7 @@ class SocketService {
       await HttpSvc.server.ping();
       authFailed.value = false;
       _rejectedPassword = null;
+      _notifySyncStatus();
       NetworkTasks.onConnect();
     } catch (_) {}
   }
@@ -809,11 +808,15 @@ class SocketService {
           if (GetIt.I.isRegistered<SyncService>()) {
             SyncSvc.onNetworkOnlineChanged(true);
           }
+          // Notify sync status before NetworkTasks.onConnect() so _socketConnected
+          // is true and any recovery sync runs before onConnect() checks cooldown.
+          _notifySyncStatus();
           // A rejected password still connects briefly, and the sync would just 401.
           if (!authFailed.value) NetworkTasks.onConnect();
           Logger.info("Socket connected successfully to $serverAddress");
           _startHeartbeat();
           if (authFailed.value) unawaited(_clearAuthFailureIfAccepted());
+          return;
         }
       case SocketState.reconnecting:
         _stopHeartbeat();

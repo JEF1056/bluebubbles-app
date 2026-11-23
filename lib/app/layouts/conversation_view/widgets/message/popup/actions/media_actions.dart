@@ -7,8 +7,6 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:bluebubbles/utils/share.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:get/get.dart';
 import 'package:bluebubbles/platform/shims/native_misc.dart' show OpenFilex, ResultType;
 import 'package:pasteboard/pasteboard.dart';
 import 'package:path/path.dart' hide context;
@@ -126,74 +124,29 @@ Future<void> copyAttachment(MessagePopupActionContext ctx) async {
 }
 
 Future<void> downloadOriginalAttachments(MessagePopupActionContext ctx) async {
-  final RxBool downloadingAttachments = true.obs;
-  final RxnDouble progress = RxnDouble();
-  final Rxn<Attachment> attachmentObs = Rxn<Attachment>();
-  final toDownload = ctx.part.attachments.where((element) =>
-      (element.uti?.contains("heic") ?? false) ||
-      (element.uti?.contains("heif") ?? false) ||
-      (element.uti?.contains("quicktime") ?? false) ||
-      (element.uti?.contains("coreaudio") ?? false) ||
-      (element.uti?.contains("tiff") ?? false));
+  final toDownload = ctx.part.attachments
+      .where((element) =>
+          (element.uti?.contains("heic") ?? false) ||
+          (element.uti?.contains("heif") ?? false) ||
+          (element.uti?.contains("quicktime") ?? false) ||
+          (element.uti?.contains("coreaudio") ?? false) ||
+          (element.uti?.contains("tiff") ?? false))
+      .toList();
   final length = toDownload.length;
+  ctx.popDetails();
+  if (length == 0) return;
 
-  showBBDialog(
-    context: ctx.context,
-    title: "Downloading attachment${length > 1 ? "s" : ""}...",
-    content: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Obx(
-          () => Text(
-            '${progress.value != null && attachmentObs.value != null ? (progress.value! * attachmentObs.value!.totalBytes!).getFriendlySize() : ""} / ${(attachmentObs.value!.totalBytes!.toDouble()).getFriendlySize()} (${((progress.value ?? 0) * 100).floor()}%)',
-            style: Theme.of(ctx.context).textTheme.bodyLarge,
-          ),
-        ),
-        const SizedBox(height: 10.0),
-        Obx(
-          () => ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: LinearProgressIndicator(
-              backgroundColor: Theme.of(ctx.context).colorScheme.outline,
-              valueColor: AlwaysStoppedAnimation<Color>(Theme.of(ctx.context).colorScheme.primary),
-              value: progress.value,
-              minHeight: 5,
-            ),
-          ),
-        ),
-        const SizedBox(height: 15.0),
-        Obx(() => Text(
-              progress.value == 1
-                  ? "Download Complete!"
-                  : "You can close this dialog. The attachment(s) will continue to download in the background.",
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              style: Theme.of(ctx.context).textTheme.bodyLarge,
-            )),
-      ],
-    ),
-    actions: [
-      BBDialogAction(
-        text: "Close",
-        onPressed: () async {
-          Get.closeAllSnackbars();
-          Navigator.of(ctx.context, rootNavigator: true).pop();
-          ctx.popDetails();
-        },
-      ),
-    ],
+  ctx.showSnack(
+    "Downloading",
+    length > 1 ? "Downloading $length original attachments…" : "Downloading original attachment…",
+    type: SnackbarType.info,
   );
 
   try {
-    for (final Attachment? element in toDownload) {
-      attachmentObs.value = element;
+    for (final Attachment element in toDownload) {
       final response = await HttpSvc.attachment.download(
-        element!.guid!,
+        element.guid!,
         original: true,
-        onReceiveProgress: (count, total) {
-          progress.value = kIsWeb ? (count / total) : (count / element.totalBytes!);
-        },
       );
       final file = PlatformFile(
         name: element.transferName!,
@@ -203,8 +156,10 @@ Future<void> downloadOriginalAttachments(MessagePopupActionContext ctx) async {
 
       await AttachmentsSvc.saveToDisk(file, isDocument: element.mimeStart != "image" && element.mimeStart != "video");
     }
-    progress.value = 1;
-    downloadingAttachments.value = false;
+    ctx.showSnack(
+      "Download Complete",
+      length > 1 ? "Saved $length original attachments." : "Saved original attachment.",
+    );
   } catch (ex, trace) {
     Logger.error("Failed to download original attachment!", error: ex, trace: trace);
     ctx.showSnack("Download Error", "Failed to download: $ex", type: SnackbarType.error);
@@ -212,61 +167,20 @@ Future<void> downloadOriginalAttachments(MessagePopupActionContext ctx) async {
 }
 
 Future<void> downloadLivePhoto(MessagePopupActionContext ctx) async {
-  final RxBool downloadingAttachments = true.obs;
-  final RxnInt progress = RxnInt();
-  final Rxn<Attachment> attachmentObs = Rxn<Attachment>();
-  final toDownload = ctx.part.attachments.where((element) => element.hasLivePhoto);
+  final toDownload = ctx.part.attachments.where((element) => element.hasLivePhoto).toList();
   final length = toDownload.length;
+  ctx.popDetails();
+  if (length == 0) return;
 
-  showBBDialog(
-    context: ctx.context,
-    title: "Downloading live photo${length > 1 ? "s" : ""}...",
-    content: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Obx(() =>
-            Text(progress.value?.toDouble().getFriendlySize() ?? "", style: Theme.of(ctx.context).textTheme.bodyLarge)),
-        const SizedBox(height: 10.0),
-        Obx(
-          () => ClipRRect(
-            borderRadius: BorderRadius.circular(20),
-            child: LinearProgressIndicator(
-              backgroundColor: Theme.of(ctx.context).colorScheme.outline,
-              valueColor: AlwaysStoppedAnimation<Color>(Theme.of(ctx.context).colorScheme.primary),
-              value: downloadingAttachments.value ? null : 1,
-              minHeight: 5,
-            ),
-          ),
-        ),
-        const SizedBox(height: 15.0),
-        Obx(() => Text(
-              !downloadingAttachments.value
-                  ? "Download Complete!"
-                  : "You can close this dialog. The live photo(s) will continue to download in the background.",
-              maxLines: 2,
-              textAlign: TextAlign.center,
-              style: Theme.of(ctx.context).textTheme.bodyLarge,
-            )),
-      ],
-    ),
-    actions: [
-      BBDialogAction(
-        text: "Close",
-        onPressed: () async {
-          Get.closeAllSnackbars();
-          Navigator.of(ctx.context, rootNavigator: true).pop();
-          ctx.popDetails();
-        },
-      ),
-    ],
+  ctx.showSnack(
+    "Downloading",
+    length > 1 ? "Downloading $length live photos…" : "Downloading live photo…",
+    type: SnackbarType.info,
   );
 
   try {
-    for (final Attachment? element in toDownload) {
-      attachmentObs.value = element;
-      final response = await HttpSvc.attachment
-          .downloadLivePhoto(element!.guid!, onReceiveProgress: (count, total) => progress.value = count);
+    for (final Attachment element in toDownload) {
+      final response = await HttpSvc.attachment.downloadLivePhoto(element.guid!);
       final nameSplit = element.transferName!.split(".");
       final file = PlatformFile(
         name: "${nameSplit.take(nameSplit.length - 1).join(".")}.mov",
@@ -275,7 +189,10 @@ Future<void> downloadLivePhoto(MessagePopupActionContext ctx) async {
       );
       await AttachmentsSvc.saveToDisk(file, isDocument: true);
     }
-    downloadingAttachments.value = false;
+    ctx.showSnack(
+      "Download Complete",
+      length > 1 ? "Saved $length live photos." : "Saved live photo.",
+    );
   } catch (ex, trace) {
     Logger.error("Failed to download live photo!", error: ex, trace: trace);
     ctx.showSnack("Download Error", "Failed to download: $ex", type: SnackbarType.error);

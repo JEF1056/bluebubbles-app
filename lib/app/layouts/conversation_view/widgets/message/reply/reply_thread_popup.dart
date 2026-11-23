@@ -315,11 +315,12 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
       return widget.initialMessages;
     }
     final service = widget.service!;
-    // Observe reactive update triggers so incoming/outgoing/confirmed replies update live.
+    // Observe per-message update counters so incoming/outgoing/confirmed replies update live
+    // without subscribing to the service-wide messageUpdateTrigger RxMap.
     final guid = widget.originatorGuid!;
-    service.messageUpdateTrigger[guid];
-    service.messageUpdateTrigger.length;
-    service.getMessageStateIfExists(guid)?.threadReplyCount.value;
+    final originatorState = service.getMessageStateIfExists(guid);
+    originatorState?.updateVersion.value;
+    originatorState?.threadReplyCount.value;
 
     final anchor = widget.anchorMessage ??
         service.struct.getThreadOriginator(guid) ??
@@ -329,6 +330,11 @@ class _ReplyThreadViewState extends State<_ReplyThreadView> {
       return widget.initialMessages;
     }
     final resolved = collectThreadMessages(anchor, widget.partIds, service);
+    for (final msg in resolved) {
+      if (msg.guid != null && msg.guid != guid) {
+        service.getMessageStateIfExists(msg.guid!)?.updateVersion.value;
+      }
+    }
     return resolved.isEmpty ? widget.initialMessages : resolved;
   }
 

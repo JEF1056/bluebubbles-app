@@ -35,6 +35,16 @@ interface ChatDao {
     suspend fun markRead(guid: String)
 
     @Query(
+        "UPDATE chats SET hasUnreadMessage = :hasUnread, " +
+            "lastReadMessageTimestamp = CASE WHEN :readAt IS NOT NULL AND :readAt > 0 THEN :readAt ELSE lastReadMessageTimestamp END " +
+            "WHERE guid = :guid"
+    )
+    suspend fun updateReadStatus(guid: String, hasUnread: Boolean, readAt: Long?)
+
+    @Query("SELECT * FROM chats WHERE lastReadMessageTimestamp IS NOT NULL")
+    suspend fun getChatsWithReadTimestamp(): List<ChatEntity>
+
+    @Query(
         "DELETE FROM chats WHERE isPinned = 0 AND guid NOT IN " +
             "(SELECT guid FROM chats WHERE isPinned = 0 ORDER BY lastMessageDate DESC LIMIT 50)"
     )
@@ -63,10 +73,23 @@ interface ChatDao {
 
     @Transaction
     suspend fun replaceAndPrune(chats: List<ChatEntity>, preservePins: Boolean = false) {
-        val finalChats = if (preservePins) {
+        val withPins = if (preservePins) {
             mergePreservingPins(chats, getPinnedChats())
         } else {
             chats
+        }
+        val readTsByGuid = getChatsWithReadTimestamp().associate { it.guid to it.lastReadMessageTimestamp }
+        val finalChats = if (readTsByGuid.isEmpty()) {
+            withPins
+        } else {
+            withPins.map { chat ->
+                if (chat.lastReadMessageTimestamp == null) {
+                    val existingTs = readTsByGuid[chat.guid]
+                    if (existingTs != null) chat.copy(lastReadMessageTimestamp = existingTs) else chat
+                } else {
+                    chat
+                }
+            }
         }
         if (finalChats.isNotEmpty()) {
             deleteNotIn(finalChats.map { it.guid })

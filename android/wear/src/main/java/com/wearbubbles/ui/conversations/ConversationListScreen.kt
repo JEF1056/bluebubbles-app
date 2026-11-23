@@ -368,40 +368,30 @@ private fun ChatRow(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.Center
         ) {
-            BlurFadeContent(
-                targetState = chat.title,
-                contentAlignment = Alignment.CenterStart
-            ) { title ->
+            Text(
+                text = chat.title,
+                style = centeredTextStyle(
+                    fontSize = 15.sp,
+                    lineHeight = 18.sp,
+                    fontWeight = FontWeight.Bold
+                ),
+                color = palette.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (chat.subtitle.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = title,
+                    text = chat.subtitle,
                     style = centeredTextStyle(
-                        fontSize = 15.sp,
-                        lineHeight = 18.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 13.5.sp,
+                        lineHeight = 17.sp,
+                        fontWeight = if (chat.hasUnread) FontWeight.Medium else FontWeight.Normal
                     ),
-                    color = palette.onSurface,
+                    color = if (chat.hasUnread) palette.onSurface else palette.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-            if (chat.subtitle.isNotBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                BlurFadeContent(
-                    targetState = chat.subtitle,
-                    contentAlignment = Alignment.CenterStart
-                ) { subtitle ->
-                    Text(
-                        text = subtitle,
-                        style = centeredTextStyle(
-                            fontSize = 13.5.sp,
-                            lineHeight = 17.sp,
-                            fontWeight = if (chat.hasUnread) FontWeight.Medium else FontWeight.Normal
-                        ),
-                        color = if (chat.hasUnread) palette.onSurface else palette.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
             }
         }
         if (chat.isPinned) {

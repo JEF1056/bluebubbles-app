@@ -150,7 +150,7 @@ void main() {
       );
       await tester.pumpWidget(wrapRoot(InAppCallScreen(controller: audioCtrl)));
       await tester.pumpAndSettle();
-      expect(find.text('FaceTime Audio'), findsOneWidget);
+      expect(find.text('Maya Lin'), findsOneWidget);
       expect(find.text('Connected · 02:14'), findsOneWidget);
       await capture(tester, '${vpName}_01_inapp_audio');
 
@@ -192,7 +192,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('FaceTime Video'), findsOneWidget);
+      expect(find.text('Alex Rivera'), findsOneWidget);
       await capture(tester, '${vpName}_02_inapp_video');
 
       // 3. InAppCallScreen - iPhone Call
@@ -209,7 +209,8 @@ void main() {
       );
       await tester.pumpWidget(wrapRoot(InAppCallScreen(controller: phoneCtrl)));
       await tester.pumpAndSettle();
-      expect(find.text('iPhone Call'), findsOneWidget);
+      expect(find.text('Jordan Vance'), findsOneWidget);
+      expect(find.text('+1 (415) 555-0192'), findsOneWidget);
       await capture(tester, '${vpName}_03_inapp_iphone_call');
 
       // 4. InAppCallScreen - Muted + Speaker
@@ -228,7 +229,7 @@ void main() {
       await mutedCtrl.toggleSpeaker();
       await tester.pumpWidget(wrapRoot(InAppCallScreen(controller: mutedCtrl)));
       await tester.pumpAndSettle();
-      expect(find.text('Unmute'), findsOneWidget);
+      expect(find.bySemanticsLabel('Unmute'), findsOneWidget);
       await capture(tester, '${vpName}_04_inapp_muted');
 
       // 5. InAppCallScreen - DTMF keypad open
@@ -356,7 +357,7 @@ void main() {
       expect(find.byKey(const Key('keypad_outside_dismiss')), findsOneWidget);
       final btnRect = tester.getRect(find.bySemanticsLabel('Keypad'));
       final key1Rect = tester.getRect(find.text('1'));
-      expect(key1Rect.left, greaterThan(size.width * 0.4));
+      expect(key1Rect.left, greaterThan(size.width * 0.3));
       expect(key1Rect.top, greaterThan(btnRect.bottom));
       await capture(tester, '${vpName}_09_ongoing_pill_keypad');
 

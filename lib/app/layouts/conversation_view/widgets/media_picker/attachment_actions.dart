@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:bluebubbles/app/components/subscription_required.dart';
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/timeframe_picker.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/composer_popover.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/emoji_picker_popover.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_dialog.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/media_picker/genmoji_library_popover.dart';
@@ -19,7 +20,6 @@ import 'package:bluebubbles/utils/share.dart';
 import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart' as pf;
 import 'package:file_picker/file_picker.dart' hide PlatformFile;
-import 'package:flex_color_picker/flex_color_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -84,6 +84,7 @@ class AttachmentActions {
     KlipyClient klipy = KlipyClient(apiKey: kIsWeb ? KLIPY_API_KEY : dotenv.get('KLIPY_API_KEY'));
     TextEditingController klipyController = TextEditingController();
     FocusNode focus = FocusNode();
+    // shortcut: klipy_flutter 0.0.3 only exports showAsBottomSheet (sheet/tab providers are internal), upgrade if package exposes an embeddable widget.
     Future<KlipyResultObject?> resultFuture = klipy.showAsBottomSheet(
       maxExtent: 0.8,
       minExtent: 0.5,
@@ -172,116 +173,45 @@ class AttachmentActions {
     }
   }
 
-  /// Picks an ink color, then a square to draw in, and attaches the drawing as a handwritten
-  /// message. Works with a mouse or pen as well as touch.
+  /// Opens a single inline-swatch + canvas handwriting surface (`showComposerPopover` on wide/web,
+  /// M3E modal bottom sheet on mobile) and attaches the drawing as a handwritten message.
   static Future<void> handwritten(BuildContext context, ConversationViewController controller) async {
-    Color selectedColor = context.theme.colorScheme.bubble(context, controller.chat.isIMessage);
-    // A conversation pane on desktop can be a thousand pixels wide; the dialogs are sized for
-    // a phone, so cap them there rather than stretching the canvas to fill it.
-    final availableDialogWidth = MediaQuery.sizeOf(context).width - 32;
-    final dialogWidth = (kIsDesktop || kIsWeb)
-        ? (availableDialogWidth < 420.0 ? availableDialogWidth : 420.0).clamp(240.0, 420.0)
-        : NavigationSvc.width(context) - 70;
+    final initialColor = context.theme.colorScheme.bubble(context, controller.chat.isIMessage);
+    final isWide = MediaQuery.sizeOf(context).width >= 600;
 
-    final result =
-        await ColorPicker(
-          color: selectedColor,
-          onColorChanged: (Color newColor) {
-            selectedColor = newColor;
-          },
-          title: Text("Select Color", style: context.theme.textTheme.titleLarge),
-          width: 40,
-          height: 40,
-          spacing: 0,
-          runSpacing: 0,
-          borderRadius: 0,
-          wheelDiameter: 165,
-          enableOpacity: false,
-          showColorCode: true,
-          colorCodeHasColor: true,
-          pickersEnabled: <ColorPickerType, bool>{ColorPickerType.wheel: true},
-          copyPasteBehavior: const ColorPickerCopyPasteBehavior(parseShortHexCode: true),
-          actionButtons: const ColorPickerActionButtons(dialogActionButtons: true),
-        ).showPickerDialog(
-          context,
-          barrierDismissible: false,
-          backgroundColor: context.theme.colorScheme.surfaceContainerHigh,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-          constraints: BoxConstraints(minHeight: 480, minWidth: dialogWidth, maxWidth: dialogWidth),
-        );
+    if (isWide) {
+      final anchorContext = controller.textFieldKey.currentContext ?? context;
+      await showComposerPopover(
+        anchorContext,
+        controller,
+        width: 380,
+        height: 480,
+        builder: (_) => ComposerPopoverCard(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+            child: _HandwrittenPanel(controller: controller, initialColor: initialColor),
+          ),
+        ),
+      );
+      return;
+    }
 
-    if (!result || !context.mounted) return;
-    final control = HandSignatureControl();
     final scheme = context.theme.colorScheme;
-    final canvasDimension = (dialogWidth - 40).clamp(200.0, 380.0);
-    Widget canvas = Container(
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.55)),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          HandSignature(
-            control: control,
-            color: selectedColor,
-            width: 1.0,
-            maxWidth: 10.0,
-            type: SignatureDrawType.shape,
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton.filledTonal(
-              tooltip: "Clear",
-              icon: const Icon(Icons.refresh_rounded, size: 24),
-              style: IconButton.styleFrom(
-                minimumSize: const Size(48, 48),
-                padding: EdgeInsets.zero,
-              ),
-              onPressed: control.clear,
-            ),
-          ),
-        ],
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      enableDrag: false,
+      showDragHandle: true,
+      useRootNavigator: true,
+      backgroundColor: scheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+          child: _HandwrittenPanel(controller: controller, initialColor: initialColor),
+        ),
       ),
     );
-    canvas = (kIsDesktop || kIsWeb) ? SizedBox.square(dimension: canvasDimension, child: canvas) : AspectRatio(aspectRatio: 1, child: canvas);
-
-    await showBBDialog(
-      context: context,
-      title: "Draw Handwritten Message",
-      icon: Icons.draw_rounded,
-      content: canvas,
-      actions: [
-        BBDialogAction(
-          text: "Cancel",
-          onPressed: () => Navigator.of(context, rootNavigator: true).pop(),
-        ),
-        BBDialogAction(
-          text: "Attach",
-          isDefault: true,
-          onPressed: () async {
-            Navigator.of(context, rootNavigator: true).pop();
-            final bytes = await control.toImage(height: 512, fit: false);
-                if (bytes != null) {
-                  final uint8 = bytes.buffer.asUint8List();
-                  controller.pickedAttachments.add(
-                    PlatformFile(
-                      path: null,
-                      name: "handwriten-${controller.pickedAttachments.length + 1}.png",
-                      bytes: uint8,
-                      size: uint8.lengthInBytes,
-                      balloonBundleId: 'com.apple.Handwriting.HandwritingProvider',
-                    ),
-                  );
-                }
-              },
-            ),
-          ],
-        );
   }
 
   // ---------------------------------------------------------------------------
@@ -443,5 +373,195 @@ class AttachmentActions {
       Logger.error("Failed to delete Genmoji", error: e, trace: s, tag: 'Genmoji');
       showSnackbar("Error", "Couldn't reach your server to delete that Genmoji.", type: SnackbarType.error);
     }
+  }
+}
+
+class _HandwrittenPanel extends StatefulWidget {
+  const _HandwrittenPanel({required this.controller, required this.initialColor});
+
+  final ConversationViewController controller;
+  final Color initialColor;
+
+  @override
+  State<_HandwrittenPanel> createState() => _HandwrittenPanelState();
+}
+
+class _HandwrittenPanelState extends State<_HandwrittenPanel> {
+  final _control = HandSignatureControl();
+  late Color _selectedColor = widget.initialColor;
+  bool _attaching = false;
+
+  @override
+  void dispose() {
+    _control.dispose();
+    super.dispose();
+  }
+
+  List<Color> _swatches(ColorScheme scheme) {
+    final candidates = [
+      widget.initialColor,
+      scheme.onSurface,
+      scheme.primary,
+      scheme.secondary,
+      scheme.tertiary,
+      scheme.error,
+    ];
+    final seen = <int>{};
+    return [for (final c in candidates) if (seen.add(c.toARGB32())) c];
+  }
+
+  Future<void> _attach() async {
+    if (_attaching || !_control.isFilled) return;
+    setState(() => _attaching = true);
+    try {
+      final bytes = await _control.toImage(color: _selectedColor, height: 512, fit: false);
+      if (bytes != null) {
+        final uint8 = bytes.buffer.asUint8List();
+        widget.controller.pickedAttachments.add(
+          PlatformFile(
+            path: null,
+            name: "handwriten-${widget.controller.pickedAttachments.length + 1}.png",
+            bytes: uint8,
+            size: uint8.lengthInBytes,
+            balloonBundleId: 'com.apple.Handwriting.HandwritingProvider',
+          ),
+        );
+      }
+      if (mounted) Navigator.of(context).pop();
+    } finally {
+      if (mounted) setState(() => _attaching = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = context.theme.colorScheme;
+    final swatches = _swatches(scheme);
+    const minSize = Size(64, 48);
+    const shape = StadiumBorder();
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.draw_rounded, size: 22, color: scheme.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                "Draw Handwritten Message",
+                style: context.theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: swatches.map((color) {
+              final selected = color.toARGB32() == _selectedColor.toARGB32();
+              final iconColor = ThemeData.estimateBrightnessForColor(color) == Brightness.dark
+                  ? Colors.white
+                  : Colors.black;
+              return Tooltip(
+                message: "Ink color",
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => setState(() => _selectedColor = color),
+                  child: SizedBox.square(
+                    dimension: 48,
+                    child: Center(
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        width: 30,
+                        height: 30,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: selected ? scheme.primary : scheme.outlineVariant,
+                            width: selected ? 2.5 : 1,
+                          ),
+                        ),
+                        child: selected ? Icon(Icons.check_rounded, size: 16, color: iconColor) : null,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Flexible(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 260, maxHeight: 260),
+              child: AspectRatio(
+                aspectRatio: 1,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.55)),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      HandSignature(
+                        control: _control,
+                        color: _selectedColor,
+                        width: 1.0,
+                        maxWidth: 10.0,
+                        type: SignatureDrawType.shape,
+                      ),
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: ListenableBuilder(
+                          listenable: _control,
+                          builder: (_, _) => IconButton.filledTonal(
+                            tooltip: "Clear",
+                            icon: const Icon(Icons.refresh_rounded, size: 22),
+                            style: IconButton.styleFrom(
+                              minimumSize: const Size(48, 48),
+                              padding: EdgeInsets.zero,
+                            ),
+                            onPressed: _control.isFilled ? _control.clear : null,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: _attaching ? null : () => Navigator.of(context).pop(),
+              style: TextButton.styleFrom(minimumSize: minSize, shape: shape),
+              child: const Text("Cancel"),
+            ),
+            const SizedBox(width: 8),
+            ListenableBuilder(
+              listenable: _control,
+              builder: (_, _) => FilledButton(
+                onPressed: _control.isFilled && !_attaching ? _attach : null,
+                style: FilledButton.styleFrom(minimumSize: minSize, shape: shape),
+                child: const Text("Attach"),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }

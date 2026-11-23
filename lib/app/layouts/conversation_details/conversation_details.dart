@@ -37,10 +37,23 @@ class _ConversationDetailsState extends State<ConversationDetails> with WidgetsB
   late Chat chat = widget.chat;
   final RxList<String> selected = <String>[].obs;
   bool isLoadingAttachments = true;
+  bool _hadActiveFocusOnPush = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final activeChat = ChatsSvc.activeChat;
+    if (activeChat != null) {
+      final activeCvc = cvc(activeChat.chat);
+      _hadActiveFocusOnPush = activeCvc.lastFocusedNode.hasFocus || activeCvc.keyboardOpen;
+    }
+  }
 
   @override
   void dispose() {
-    if (ChatsSvc.activeChat != null) cvc(ChatsSvc.activeChat!.chat).lastFocusedNode.requestFocus();
+    if (_hadActiveFocusOnPush && ChatsSvc.activeChat != null) {
+      cvc(ChatsSvc.activeChat!.chat).lastFocusedNode.requestFocus();
+    }
     super.dispose();
   }
 

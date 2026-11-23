@@ -8,6 +8,7 @@ import 'package:bluebubbles/models/models.dart' show ServerDetails;
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 
 enum IMessageStatsSource { server, local }
 
@@ -112,6 +113,9 @@ class ServerManagementPanelController extends StatefulController {
       helperBundleStatus.value = response.data['data']['helper_connected'] ?? false;
       timeSync.value = response.data['data']['macos_time_sync'];
       hasCheckedStats.value = true;
+      if (GetIt.I.isRegistered<SyncService>() && SyncSvc.status.value.kind == SyncStatusKind.failed) {
+        unawaited(SyncSvc.retryNow());
+      }
     }).catchError((_) {
       hasCheckedStats.value = null;
     });

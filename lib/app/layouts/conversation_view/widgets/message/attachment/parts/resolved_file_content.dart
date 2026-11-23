@@ -3,18 +3,16 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attach
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/collections/media_collection.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/contact_card.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/image_viewer.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/location_card.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/other_file.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/video_player.dart';
-import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/url_preview.dart';
 import 'package:bluebubbles/app/state/attachment_state_scope.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/app/layouts/fullscreen_media/conversation_fullscreen_holder.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:passkit_ui/passkit_ui.dart';
 
 /// Fully resolved attachment: dispatches to the appropriate viewer widget.
@@ -134,18 +132,13 @@ class ResolvedFileContent extends StatelessWidget {
     }
 
     if (attachment.mimeType == "text/x-vlocation" || attachment.uti == 'public.vlocation') {
-      final preview = UrlPreview(
-        data: UrlPreviewData(
-          title: "Location from ${DateFormat.yMd().format(message.dateCreated!)}",
-          siteName: "Tap to open",
-        ),
-        file: file,
-      );
       return Padding(
         padding: showTail ? tailPadding : EdgeInsets.zero,
-        child: kIsWeb
-            ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: preview)
-            : preview,
+        child: LocationCard(
+          file: file,
+          attachment: attachment,
+          messageDate: message.dateCreated,
+        ),
       );
     }
 

@@ -167,16 +167,22 @@ class GlobalIsolate {
       // Wait for the SendPort from the spawned isolate
       await _waitForSendPort();
 
+      // Fire started callbacks (e.g. to re-sync origin override after idle restart)
+      // before completing _startCompleter / setting _isRunning so queued requests
+      // never race ahead of originOverride on the isolate's ReceivePort.
+      for (final cb in List.from(_onStartedCallbacks)) {
+        try {
+          await cb();
+        } catch (e, s) {
+          Logger.error('Error in started callback for $isolateDebugName: $e', trace: s);
+        }
+      }
+
       _isRunning = true;
       _scheduleIdleShutdown();
 
       if (!_startCompleter.isCompleted) {
         _startCompleter.complete();
-      }
-
-      // Fire started callbacks (e.g. to re-sync origin override after idle restart)
-      for (final cb in List.from(_onStartedCallbacks)) {
-        unawaited(cb());
       }
     } catch (e) {
       if (!_startCompleter.isCompleted) {
@@ -364,25 +370,7 @@ class GlobalIsolate {
     final requestId = const Uuid().v4();
     final completer = Completer<T>();
 
-    // Set up timeout if not disabled (zero duration means no timeout)
-    Timer? timer;
-    if ((customTimeout ?? taskTimeout) != Duration.zero) {
-      timer = Timer(customTimeout ?? taskTimeout, () {
-        if (_pendingRequests.containsKey(requestId)) {
-          final requestInfo = _pendingRequests.remove(requestId)!;
-          if (!requestInfo.completer.isCompleted) {
-            requestInfo.completer.completeError('Request timeout after ${customTimeout ?? taskTimeout}');
-          }
-          if (_shutdownPending) {
-            _maybeStopAfterDrain();
-          } else {
-            _scheduleIdleShutdown();
-          }
-        }
-      });
-    }
-
-    _pendingRequests[requestId] = _RequestInfo(completer: completer, timer: timer, type: type);
+    _registerPendingRequest(requestId, completer, type, customTimeout ?? taskTimeout);
 
     // Reset idle shutdown when new work is queued.
     _scheduleIdleShutdown();
@@ -392,8 +380,8 @@ class GlobalIsolate {
 
     final sendPort = _sendPort;
     if (sendPort == null) {
-      _pendingRequests.remove(requestId);
-      timer?.cancel();
+      final removed = _pendingRequests.remove(requestId);
+      removed?.timer?.cancel();
       completer.completeError('Isolate SendPort is unavailable');
       return completer.future;
     }
@@ -402,9 +390,83 @@ class GlobalIsolate {
     return completer.future;
   }
 
+  void _registerPendingRequest<T>(
+    String requestId,
+    Completer<T> completer,
+    IsolateRequestType type,
+    Duration effectiveTimeout,
+  ) {
+    // Set up timeout if not disabled (zero duration means no timeout)
+    final hasTimeout = effectiveTimeout != Duration.zero;
+    final timer = hasTimeout ? _createRequestTimer(requestId, type, effectiveTimeout) : null;
+    _pendingRequests[requestId] = _RequestInfo(
+      completer: completer,
+      timer: timer,
+      type: type,
+      timeoutDuration: hasTimeout ? effectiveTimeout : null,
+    );
+  }
+
+  Timer _createRequestTimer(String requestId, IsolateRequestType type, Duration timeout) {
+    return Timer(timeout, () {
+      if (_pendingRequests.containsKey(requestId)) {
+        final requestInfo = _pendingRequests.remove(requestId)!;
+        if (!requestInfo.completer.isCompleted) {
+          requestInfo.completer.completeError('Request timeout after $timeout');
+        }
+        final initIncomplete = _initCompleter != null && !_initCompleter!.isCompleted;
+        if (isolateDebugName == 'IncrementalSyncIsolate' || initIncomplete) {
+          Logger.warn('$isolateDebugName timed out on ${type.name}; recycling stuck isolate.');
+          stop();
+        } else if (_shutdownPending) {
+          _maybeStopAfterDrain();
+        } else {
+          _scheduleIdleShutdown();
+        }
+      }
+    });
+  }
+
+  void _resetPendingSyncTimeouts() {
+    for (final entry in _pendingRequests.entries) {
+      final info = entry.value;
+      final timeout = info.timeoutDuration;
+      if (info.type != IsolateRequestType.performIncrementalSync ||
+          timeout == null ||
+          timeout == Duration.zero ||
+          info.completer.isCompleted) {
+        continue;
+      }
+      info.timer?.cancel();
+      info.timer = _createRequestTimer(entry.key, info.type, timeout);
+    }
+  }
+
+  @visibleForTesting
+  Future<T> sendWithTimeoutForTest<T>(
+    IsolateRequestType type, {
+    Duration? customTimeout,
+  }) {
+    final requestId = const Uuid().v4();
+    final completer = Completer<T>();
+    _registerPendingRequest(requestId, completer, type, customTimeout ?? taskTimeout);
+    return completer.future;
+  }
+
+  @visibleForTesting
+  void handleMessageForTest(dynamic message) => _handleIsolateMessage(message);
+
   /// Fire-and-forget send (no response expected)
   void broadcast(IsolateRequestType type, dynamic input) {
     if (_shutdownPending) return;
+    // Send synchronously when SendPort is ready (including during _onStartedCallbacks
+    // before _startCompleter completes) so originOverride precedes queued requests.
+    final readyPort = _sendPort;
+    if (readyPort != null && (_isRunning || _isStarting) && _isolate != null) {
+      if (_isRunning) _scheduleIdleShutdown();
+      readyPort.send(IsolateRequest(uuid: '', type: type, data: input).toMap());
+      return;
+    }
     _ensureStarted().then((_) {
       if (_shutdownPending) return;
       final port = _sendPort;
@@ -482,6 +544,10 @@ class GlobalIsolate {
   /// Handle an event from the isolate
   void _handleEvent(IsolateEventMessage eventMessage) {
     Logger.debug('Received event from isolate: ${eventMessage.type.name}');
+
+    if (eventMessage.type == IsolateEvent.incrementalSyncPageComplete) {
+      _resetPendingSyncTimeouts();
+    }
 
     if (_eventListeners.containsKey(eventMessage.type)) {
       final listeners = List.from(_eventListeners[eventMessage.type]!);
@@ -709,10 +775,16 @@ class GlobalIsolate {
 /// Internal class to track pending requests
 class _RequestInfo<T> {
   final Completer<T> completer;
-  final Timer? timer;
+  Timer? timer;
   final IsolateRequestType type;
+  final Duration? timeoutDuration;
 
-  _RequestInfo({required this.completer, this.timer, required this.type});
+  _RequestInfo({
+    required this.completer,
+    this.timer,
+    required this.type,
+    this.timeoutDuration,
+  });
 }
 
 /// Helper class to emit events from within the isolate to the main thread

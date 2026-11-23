@@ -132,8 +132,7 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                       return Obx(() {
                         final rows = controller.pinDrag.withUnpinPreview(_chats);
                         return SliverPadding(
-                          // Bottom padding is 20 to account for the bottom pill bar.
-                          padding: const EdgeInsets.only(top: 10, bottom: 20),
+                          padding: const EdgeInsets.only(top: 10),
                           sliver: SliverList(
                             delegate: SliverChildBuilderDelegate(
                               (context, index) {
@@ -194,7 +193,7 @@ class CupertinoConversationListState extends State<CupertinoConversationList> wi
                       });
                     }),
                     SliverToBoxAdapter(
-                      child: SizedBox(height: MediaQuery.paddingOf(context).bottom + 16),
+                      child: SizedBox(height: MediaQuery.paddingOf(context).bottom),
                     ),
                   ],
                 )),

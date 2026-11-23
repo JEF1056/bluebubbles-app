@@ -76,6 +76,7 @@ class SyncStatusTracker {
   final Duration startupGrace;
   final Duration reconnectGrace;
   final Duration stableConnectDuration;
+  final Duration manualRetryTimeout;
   final void Function(SyncStatusSnapshot) _onChanged;
 
   SyncStatusSnapshot _snapshot = SyncStatusSnapshot.idle;
@@ -84,6 +85,7 @@ class SyncStatusTracker {
   bool _finishedSetup = false;
   bool _socketConnected = false;
   bool _socketRetrying = false;
+  bool _manualRetrying = false;
   bool _socketFailed = false;
   bool _connectionDesired = true;
   bool _networkOnline = true;
@@ -98,6 +100,7 @@ class SyncStatusTracker {
   Timer? _startupGraceTimer;
   Timer? _reconnectGraceTimer;
   Timer? _stableConnectTimer;
+  Timer? _manualRetryTimer;
   bool _debouncedSyncActive = false;
   bool _graceExpired = false;
   bool _inReconnectGrace = false;
@@ -108,6 +111,7 @@ class SyncStatusTracker {
     this.startupGrace = const Duration(seconds: 5),
     this.reconnectGrace = const Duration(seconds: 6),
     this.stableConnectDuration = const Duration(seconds: 10),
+    this.manualRetryTimeout = const Duration(seconds: 15),
   });
 
   void setFinishedSetup(bool finished) {
@@ -143,6 +147,7 @@ class SyncStatusTracker {
       _reconnectGraceTimer = null;
       _inReconnectGrace = false;
       _socketRetrying = false;
+      _clearManualRetry();
       // Intentional background disconnect is not a failure.
       if (!_syncFailedInEpisode && _networkOnline && !_authFailed) {
         _socketFailed = false;
@@ -195,6 +200,7 @@ class SyncStatusTracker {
       final hadSocketFailure = _socketFailed;
       if (!_syncFailedInEpisode && !_authFailed) {
         _socketFailed = false;
+        _clearManualRetry();
         if (_networkOnline) {
           _lastFailureMessage = null;
         }
@@ -270,10 +276,14 @@ class SyncStatusTracker {
     _syncDebounceTimer?.cancel();
     _syncDebounceTimer = null;
     _debouncedSyncActive = false;
+    _clearManualRetry();
 
     if (success) {
       _syncFailedInEpisode = false;
       _socketRetrying = false;
+      if (_lastFailureMessage == 'Sync failed') {
+        _lastFailureMessage = null;
+      }
       if (_socketConnected || !_connectionDesired) {
         _stableConnectTimer?.cancel();
         _stableConnectTimer = null;
@@ -309,8 +319,25 @@ class SyncStatusTracker {
     if (activeKey != null) {
       _dismissedKeys.remove(activeKey);
     }
-    _socketRetrying = true;
+    _manualRetrying = true;
+    _manualRetryTimer?.cancel();
+    _manualRetryTimer = null;
+    if (manualRetryTimeout > Duration.zero) {
+      _manualRetryTimer = Timer(manualRetryTimeout, () {
+        _manualRetryTimer = null;
+        _manualRetrying = false;
+        // Unblock Retry even if socket stayed stalled in connecting/reconnecting.
+        _socketRetrying = false;
+        _recompute();
+      });
+    }
     _recompute();
+  }
+
+  void _clearManualRetry() {
+    _manualRetryTimer?.cancel();
+    _manualRetryTimer = null;
+    _manualRetrying = false;
   }
 
   void _armStartupGraceIfNeeded() {
@@ -346,6 +373,7 @@ class SyncStatusTracker {
     _reconnectGraceTimer = null;
     _stableConnectTimer?.cancel();
     _stableConnectTimer = null;
+    _clearManualRetry();
     _debouncedSyncActive = false;
     _inReconnectGrace = false;
     _syncInProgress = false;
@@ -370,7 +398,7 @@ class SyncStatusTracker {
           : ((!_networkOnline && !_socketConnected)
               ? 'Offline'
               : (_syncFailedInEpisode ? 'Sync failed' : (_lastFailureMessage ?? 'Connection lost')));
-      final retrying = _socketRetrying || _syncInProgress;
+      final retrying = _manualRetrying || _socketRetrying || _syncInProgress;
       final dismissed = _dismissedKeys.contains(issueKey);
       _emit(SyncStatusSnapshot(
         kind: SyncStatusKind.failed,
@@ -408,5 +436,6 @@ class SyncStatusTracker {
     _reconnectGraceTimer = null;
     _stableConnectTimer?.cancel();
     _stableConnectTimer = null;
+    _clearManualRetry();
   }
 }

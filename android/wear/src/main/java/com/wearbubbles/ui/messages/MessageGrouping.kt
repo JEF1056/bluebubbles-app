@@ -92,7 +92,8 @@ fun computeBubbleGrouping(
     hasSenderLabel: (Int) -> Boolean = { false },
     zoneId: ZoneId = ZoneId.systemDefault(),
     maxGroupGapMs: Long = BUBBLE_GROUP_GAP_MS,
-    timestampBreakMs: Long = TIMESTAMP_BREAK_MS
+    timestampBreakMs: Long = TIMESTAMP_BREAK_MS,
+    unreadDividerIndex: Int = -1
 ): List<GroupedMessageMeta> {
     if (items.isEmpty()) return emptyList()
 
@@ -115,6 +116,7 @@ fun computeBubbleGrouping(
     }
 
     fun groupsTogether(prevIdx: Int, currIdx: Int): Boolean {
+        if (currIdx == unreadDividerIndex) return false
         if (showHeader[currIdx]) return false
         val prev = items[prevIdx]
         val curr = items[currIdx]
@@ -155,24 +157,35 @@ fun computeBubbleGrouping(
 data class MessageRowItem(
     val message: MessageUi,
     val meta: GroupedMessageMeta,
-    val prevHadReactions: Boolean
+    val prevHadReactions: Boolean,
+    val showUnreadDivider: Boolean = false
 )
 
 /**
  * Snapshots messages together with their precomputed grouping and previous-row reaction spacing so
  * ScalingLazyColumn item lambdas never index live Compose state delegates across list mutations.
  */
-fun buildMessageRows(messages: List<MessageUi>): List<MessageRowItem> {
+fun buildMessageRows(
+    messages: List<MessageUi>,
+    unreadDividerGuid: String? = null
+): List<MessageRowItem> {
     if (messages.isEmpty()) return emptyList()
+    val unreadIndex = if (!unreadDividerGuid.isNullOrBlank()) {
+        messages.indexOfFirst { it.guid == unreadDividerGuid }
+    } else {
+        -1
+    }
     val grouping = computeBubbleGrouping(
         items = messages.map { it.toBubbleGroupKey() },
-        hasSenderLabel = { idx -> !messages[idx].senderName.isNullOrBlank() }
+        hasSenderLabel = { idx -> !messages[idx].senderName.isNullOrBlank() },
+        unreadDividerIndex = unreadIndex
     )
     return List(messages.size) { index ->
         MessageRowItem(
             message = messages[index],
             meta = grouping[index],
-            prevHadReactions = index > 0 && messages[index - 1].reactions.isNotEmpty()
+            prevHadReactions = index > 0 && messages[index - 1].reactions.isNotEmpty(),
+            showUnreadDivider = index == unreadIndex
         )
     }
 }

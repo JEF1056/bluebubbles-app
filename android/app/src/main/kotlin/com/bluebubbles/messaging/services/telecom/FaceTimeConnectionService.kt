@@ -35,17 +35,24 @@ class FaceTimeConnectionService : ConnectionService() {
         const val EXTRA_AUTO_ANSWER = "autoAnswer"
         const val EXTRA_IS_TELEPHONY = "isTelephony"
         const val EXTRA_IS_VIDEO = "isVideo"
+        const val EXTRA_CALLER_AVATAR = "callerAvatar"
 
         private val connectionLock = Any()
         private val activeConnections = ConcurrentHashMap<String, FaceTimeConnection>()
+        private val pendingOutgoingAvatars = ConcurrentHashMap<String, ByteArray>()
+        private val pendingIncomingAvatars = ConcurrentHashMap<String, ByteArray>()
         private val pendingAnsweredUuids = BoundedUuidSet(32)
         private val pendingEndedUuids = BoundedUuidSet(32)
 
         internal fun registerActiveConnection(callUuid: String, connection: FaceTimeConnection) {
             var shouldDisconnect = false
             var shouldAnswer = false
+            var replacedConnection: FaceTimeConnection? = null
             synchronized(connectionLock) {
-                activeConnections[callUuid] = connection
+                val previous = activeConnections.put(callUuid, connection)
+                if (previous != null && previous !== connection) {
+                    replacedConnection = previous
+                }
                 if (pendingEndedUuids.remove(callUuid)) {
                     pendingAnsweredUuids.remove(callUuid)
                     if (activeConnections.remove(callUuid, connection)) {
@@ -55,6 +62,7 @@ class FaceTimeConnectionService : ConnectionService() {
                     shouldAnswer = true
                 }
             }
+            replacedConnection?.disconnectReplaced()
             if (shouldDisconnect) {
                 connection.onRemoteDisconnect()
             } else if (shouldAnswer) {
@@ -66,6 +74,11 @@ class FaceTimeConnectionService : ConnectionService() {
             synchronized(connectionLock) {
                 activeConnections.remove(callUuid, connection)
             }
+        }
+
+        internal fun getActiveConnection(callUuid: String): FaceTimeConnection? {
+            if (callUuid.isBlank()) return null
+            return activeConnections[callUuid]
         }
 
         fun markCallActive(callUuid: String, recordIfPending: Boolean = false): Boolean {
@@ -93,6 +106,53 @@ class FaceTimeConnectionService : ConnectionService() {
         fun setCallMuted(callUuid: String, muted: Boolean): Boolean {
             val conn = activeConnections[callUuid] ?: return false
             conn.setMutedFromUi(muted)
+            return true
+        }
+
+        fun isCallMuted(callUuid: String?): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return conn?.isMuted() ?: false
+        }
+
+        fun isCallActive(callUuid: String?): Boolean {
+            if (callUuid.isNullOrBlank()) return false
+            val conn = activeConnections[callUuid] ?: return false
+            return !conn.isEnded && (conn.state == Connection.STATE_ACTIVE || conn.state == Connection.STATE_HOLDING)
+        }
+
+        fun hasActiveNonRingingCall(excludeUuid: String? = null): Boolean {
+            synchronized(connectionLock) {
+                return activeConnections.any { (uuid, conn) ->
+                    uuid != excludeUuid &&
+                        !conn.isEnded &&
+                        conn.state != Connection.STATE_RINGING &&
+                        conn.state != Connection.STATE_DISCONNECTED
+                }
+            }
+        }
+
+        internal fun isConnectionRegistered(callUuid: String?): Boolean {
+            if (callUuid.isNullOrBlank()) return false
+            synchronized(connectionLock) {
+                val conn = activeConnections[callUuid] ?: return false
+                return !conn.isEnded && conn.state != Connection.STATE_DISCONNECTED
+            }
+        }
+
+        internal fun findRemainingOngoingConnection(excludeUuid: String?): FaceTimeConnection? {
+            synchronized(connectionLock) {
+                return activeConnections.entries.firstOrNull { (uuid, conn) ->
+                    uuid != excludeUuid &&
+                        !conn.isEnded &&
+                        (conn.state == Connection.STATE_ACTIVE || conn.state == Connection.STATE_HOLDING)
+                }?.value
+            }
+        }
+
+        fun hangUpCall(callUuid: String): Boolean {
+            if (callUuid.isBlank()) return false
+            val conn = activeConnections[callUuid] ?: return false
+            conn.onDisconnect()
             return true
         }
 
@@ -124,6 +184,18 @@ class FaceTimeConnectionService : ConnectionService() {
             return conn?.getLocalVideoTextureId()
         }
 
+        fun getCallVideoTextures(callUuid: String?): Map<String, Any?> {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return mapOf(
+                "remote_texture_id" to conn?.getRemoteVideoTextureId(),
+                "remote_video_width" to conn?.getRemoteVideoWidth(),
+                "remote_video_height" to conn?.getRemoteVideoHeight(),
+                "local_texture_id" to conn?.getLocalVideoTextureId(),
+                "local_video_width" to conn?.getLocalVideoWidth(),
+                "local_video_height" to conn?.getLocalVideoHeight()
+            )
+        }
+
         fun setCallCameraEnabled(callUuid: String?, enabled: Boolean): Boolean {
             val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
             return conn?.setCameraEnabled(enabled) ?: false
@@ -132,6 +204,64 @@ class FaceTimeConnectionService : ConnectionService() {
         fun flipCallCamera(callUuid: String?): Boolean {
             val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
             return conn?.flipCamera() ?: false
+        }
+
+        fun resumeCallVideo(callUuid: String?): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return conn?.resumeVideo() ?: false
+        }
+
+        fun getCallAudioDevices(context: Context, callUuid: String?): Map<String, Any> {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            if (conn != null) return conn.getAudioDevices()
+            return FaceTimeAudioRouteManager(
+                context = context.applicationContext,
+                setTelecomRoute = {},
+                requestTelecomBluetooth = {},
+                getCallAudioState = { null },
+                setPreferredInputDevice = {},
+                onDevicesChanged = {}
+            ).getAudioDevicesPayload()
+        }
+
+        fun setCallAudioOutput(callUuid: String?, deviceId: String): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return conn?.selectAudioOutput(deviceId) ?: false
+        }
+
+        fun setCallAudioInput(callUuid: String?, deviceId: String): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return conn?.selectAudioInput(deviceId) ?: false
+        }
+
+        fun transferCallAudioToWatch(context: Context, callUuid: String?): Boolean {
+            val conn = (if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull())
+                ?: return false
+            return conn.transferAudioToWatch()
+        }
+
+        fun transferCallAudioToPhone(callUuid: String?): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            val uuid = conn?.callUuid ?: callUuid
+            if (!uuid.isNullOrBlank()) {
+                WearSyncManager.clearWatchAnsweredCall(uuid)
+            }
+            return conn?.transferAudioToPhone() ?: false
+        }
+
+        fun setCallVoiceIsolation(callUuid: String?, enabled: Boolean): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return conn?.setVoiceIsolation(enabled) ?: false
+        }
+
+        fun setCallVideoProcessing(
+            callUuid: String?,
+            effect: String?,
+            denoise: Boolean,
+            backgroundPath: String?
+        ): Boolean {
+            val conn = if (!callUuid.isNullOrBlank()) activeConnections[callUuid] else activeConnections.values.firstOrNull()
+            return conn?.setVideoProcessing(effect, denoise, backgroundPath) ?: false
         }
 
         internal fun handleOutgoingCallSuccess(
@@ -220,11 +350,13 @@ class FaceTimeConnectionService : ConnectionService() {
             )
         }
 
+        internal fun phoneAccountCapabilities(): Int = PhoneAccount.CAPABILITY_SELF_MANAGED
+
         fun registerPhoneAccount(context: Context): PhoneAccountHandle {
             val handle = phoneAccountHandle(context)
             val telecomManager = context.getSystemService(TelecomManager::class.java)
             val account = PhoneAccount.builder(handle, "BlueBubbles FaceTime")
-                .setCapabilities(PhoneAccount.CAPABILITY_CALL_PROVIDER)
+                .setCapabilities(phoneAccountCapabilities())
                 .setSupportedUriSchemes(listOf(PhoneAccount.SCHEME_TEL, SCHEME_MAILTO))
                 .setShortDescription("FaceTime Audio & iPhone Continuity")
                 .setHighlightColor(Color.parseColor("#1E88E5"))
@@ -237,7 +369,8 @@ class FaceTimeConnectionService : ConnectionService() {
             return try {
                 val telecomManager = context.getSystemService(TelecomManager::class.java) ?: return false
                 val handle = phoneAccountHandle(context)
-                telecomManager.getPhoneAccount(handle)?.isEnabled == true
+                val account = telecomManager.getPhoneAccount(handle) ?: return false
+                account.isEnabled || (account.capabilities and PhoneAccount.CAPABILITY_SELF_MANAGED) != 0
             } catch (e: SecurityException) {
                 PersistentLog.w(context, TAG, "Missing permission to inspect PhoneAccount state: ${e.message}")
                 false
@@ -263,6 +396,7 @@ class FaceTimeConnectionService : ConnectionService() {
             callUuid: String,
             callerName: String,
             address: String?,
+            callerAvatar: ByteArray? = null,
             autoAnswer: Boolean = false,
             isTelephony: Boolean = false,
             isVideo: Boolean = false
@@ -270,23 +404,29 @@ class FaceTimeConnectionService : ConnectionService() {
             if (callUuid.isBlank()) return false
             val existing = activeConnections[callUuid]
             if (existing != null && existing.state != Connection.STATE_DISCONNECTED) {
+                if (callerAvatar != null && callerAvatar.isNotEmpty()) {
+                    existing.callerAvatar = callerAvatar
+                }
                 if (autoAnswer) {
+                    existing.updateCallerInfo(isVideo = isVideo && !isTelephony, callerAvatar = callerAvatar)
                     existing.answerFromHandoff()
                 }
                 return true
             }
+            if (callerAvatar != null && callerAvatar.isNotEmpty()) {
+                pendingIncomingAvatars[callUuid] = callerAvatar
+            }
             return try {
                 val handle = registerPhoneAccount(context)
-                if (!isPhoneAccountEnabled(context)) {
-                    PersistentLog.d(context, TAG, "PhoneAccount not enabled; falling back to notification for $callUuid")
-                    return false
-                }
                 val uri = buildHandleUri(address, callerName, isTelephony = isTelephony)
                 val extras = Bundle().apply {
                     putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, uri)
                     putString(EXTRA_CALL_UUID, callUuid)
                     putString(EXTRA_CALLER_NAME, callerName)
                     putString(EXTRA_CALLER_ADDRESS, address ?: callerName)
+                    if (callerAvatar != null && callerAvatar.isNotEmpty() && callerAvatar.size <= 256 * 1024) {
+                        putByteArray(EXTRA_CALLER_AVATAR, callerAvatar)
+                    }
                     putBoolean(EXTRA_AUTO_ANSWER, autoAnswer)
                     putBoolean(EXTRA_IS_TELEPHONY, isTelephony)
                     putBoolean(EXTRA_IS_VIDEO, isVideo)
@@ -304,6 +444,7 @@ class FaceTimeConnectionService : ConnectionService() {
             context: Context,
             address: String,
             callerName: String? = null,
+            callerAvatar: ByteArray? = null,
             isTelephony: Boolean = false,
             isVideo: Boolean = false
         ): Boolean {
@@ -317,16 +458,19 @@ class FaceTimeConnectionService : ConnectionService() {
                 return false
             }
 
+            if (callerAvatar != null && callerAvatar.isNotEmpty()) {
+                pendingOutgoingAvatars[address] = callerAvatar
+            }
+
             return try {
                 val handle = registerPhoneAccount(context)
-                if (!isPhoneAccountEnabled(context)) {
-                    PersistentLog.d(context, TAG, "PhoneAccount not enabled for outgoing call")
-                    return false
-                }
                 val uri = buildHandleUri(address, callerName, isTelephony = isTelephony)
                 val outgoingExtras = Bundle().apply {
                     putString(EXTRA_CALLER_NAME, callerName ?: address)
                     putString(EXTRA_CALLER_ADDRESS, address)
+                    if (callerAvatar != null && callerAvatar.isNotEmpty() && callerAvatar.size <= 256 * 1024) {
+                        putByteArray(EXTRA_CALLER_AVATAR, callerAvatar)
+                    }
                     putBoolean(EXTRA_IS_TELEPHONY, isTelephony)
                     putBoolean(EXTRA_IS_VIDEO, isVideo)
                 }
@@ -352,6 +496,8 @@ class FaceTimeConnectionService : ConnectionService() {
         val callUuid = extras.getString(EXTRA_CALL_UUID)
         val callerName = extras.getString(EXTRA_CALLER_NAME) ?: "Unknown Caller"
         val callerAddress = extras.getString(EXTRA_CALLER_ADDRESS)
+        val callerAvatar = extras.getByteArray(EXTRA_CALLER_AVATAR)
+            ?: (if (!callUuid.isNullOrBlank()) pendingIncomingAvatars.remove(callUuid) else null)
         val autoAnswer = extras.getBoolean(EXTRA_AUTO_ANSWER, false)
         val isTelephony = extras.getBoolean(EXTRA_IS_TELEPHONY, false)
         val isVideo = !isTelephony && extras.getBoolean(EXTRA_IS_VIDEO, false)
@@ -369,7 +515,9 @@ class FaceTimeConnectionService : ConnectionService() {
             context = applicationContext,
             callUuid = callUuid,
             isTelephony = isTelephony,
-            isVideo = isVideo
+            isVideo = isVideo,
+            callerAddress = callerAddress,
+            callerAvatar = callerAvatar
         ).apply {
             setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED)
             setCallerDisplayName(callerName, TelecomManager.PRESENTATION_ALLOWED)
@@ -378,15 +526,22 @@ class FaceTimeConnectionService : ConnectionService() {
             connectionCapabilities = Connection.CAPABILITY_MUTE or
                 Connection.CAPABILITY_HOLD or
                 Connection.CAPABILITY_SUPPORT_HOLD
+            connectionProperties = Connection.PROPERTY_SELF_MANAGED
             audioModeIsVoip = true
         }
 
         registerActiveConnection(callUuid, connection)
+        if (connection.isEnded) return connection
 
         if (autoAnswer) {
             connection.answerFromHandoff()
         } else {
             connection.setRinging()
+            CallTonePlayer.startIncomingRing(
+                context = applicationContext,
+                callUuid = callUuid,
+                isCallInProgress = hasActiveNonRingingCall(callUuid)
+            )
             connection.scheduleRingingTimeout()
         }
         return connection
@@ -413,6 +568,8 @@ class FaceTimeConnectionService : ConnectionService() {
             ?: request?.address?.schemeSpecificPart
             ?: ""
         val callerName = extras.getString(EXTRA_CALLER_NAME) ?: address
+        val callerAvatar = extras.getByteArray(EXTRA_CALLER_AVATAR)
+            ?: (if (address.isNotBlank()) pendingOutgoingAvatars.remove(address) else null)
         val isTelephony = extras.getBoolean(EXTRA_IS_TELEPHONY, false)
         val isVideo = !isTelephony && extras.getBoolean(EXTRA_IS_VIDEO, false)
 
@@ -429,7 +586,9 @@ class FaceTimeConnectionService : ConnectionService() {
             context = applicationContext,
             callUuid = null,
             isTelephony = isTelephony,
-            isVideo = isVideo
+            isVideo = isVideo,
+            callerAddress = address,
+            callerAvatar = callerAvatar
         ).apply {
             setAddress(addressUri, TelecomManager.PRESENTATION_ALLOWED)
             setCallerDisplayName(callerName, TelecomManager.PRESENTATION_ALLOWED)
@@ -438,8 +597,10 @@ class FaceTimeConnectionService : ConnectionService() {
             connectionCapabilities = Connection.CAPABILITY_MUTE or
                 Connection.CAPABILITY_HOLD or
                 Connection.CAPABILITY_SUPPORT_HOLD
+            connectionProperties = Connection.PROPERTY_SELF_MANAGED
             audioModeIsVoip = true
             setDialing()
+            startOutgoingRingback()
         }
 
         HttpService(applicationContext).placeFaceTimeCall(

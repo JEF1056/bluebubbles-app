@@ -81,6 +81,11 @@ class ChatState {
   /// so the displayed name stays consistent for the lifetime of this state.
   late final String _cachedFakeName;
 
+  int? _cachedUnreadCount;
+  String? _cachedUnreadLatestGuid;
+  String? _cachedUnreadLastReadGuid;
+  bool _cachedUnreadFlag = false;
+
   ChatState(this.chat)
       : isPinned = (chat.isPinned ?? false).obs,
         pinIndex = RxnInt(chat.pinIndex),
@@ -172,6 +177,7 @@ class ChatState {
   void updateHasUnreadInternal(bool value) {
     if (hasUnreadMessage.value != value) {
       hasUnreadMessage.value = value;
+      _cachedUnreadCount = null;
     }
   }
 
@@ -414,9 +420,57 @@ class ChatState {
     }
   }
 
+  void invalidateUnreadCount() {
+    _cachedUnreadCount = null;
+  }
+
+  static int computeUnreadCount(
+    Chat chat,
+    String? lastReadGuid, {
+    List<Message> Function(Chat chat, {int limit})? fetchMessages,
+  }) {
+    if (chat.id == null) return 1;
+    try {
+      final messages = (fetchMessages ?? (c, {int limit = 25}) => Chat.getMessages(c, limit: limit))(chat, limit: 25);
+      int count = 0;
+      for (final m in messages) {
+        if (lastReadGuid != null && m.guid == lastReadGuid) break;
+        if (m.isFromMe != true && m.associatedMessageGuid == null) {
+          count++;
+        }
+      }
+      return count > 0 ? count : 1;
+    } catch (_) {
+      return 1;
+    }
+  }
+
+  int getUnreadCount({
+    List<Message> Function(Chat chat, {int limit})? fetchMessages,
+  }) {
+    final unread = hasUnreadMessage.value;
+    final muted = muteType.value == "mute";
+    final latestGuid = latestMessage.value?.guid;
+    final lastReadGuid = lastReadMessageGuid.value;
+    if (!unread || muted) return 0;
+    if (_cachedUnreadCount != null &&
+        _cachedUnreadFlag == unread &&
+        _cachedUnreadLatestGuid == latestGuid &&
+        _cachedUnreadLastReadGuid == lastReadGuid) {
+      return _cachedUnreadCount!;
+    }
+    final count = computeUnreadCount(chat, lastReadGuid, fetchMessages: fetchMessages);
+    _cachedUnreadCount = count;
+    _cachedUnreadFlag = unread;
+    _cachedUnreadLatestGuid = latestGuid;
+    _cachedUnreadLastReadGuid = lastReadGuid;
+    return count;
+  }
+
   void updateLatestMessageInternal(Message? value) {
     // Don't GUID-guard
     latestMessage.value = value;
+    _cachedUnreadCount = null;
     // Always update status even when the GUID is unchanged — a delivery or
     // read receipt arrives for the same message object, and the indicator
     // must reflect the new state without a full GUID change.
@@ -497,6 +551,7 @@ class ChatState {
     }
     if (lastReadMessageGuid.value != updatedChat.lastReadMessageGuid) {
       lastReadMessageGuid.value = updatedChat.lastReadMessageGuid;
+      _cachedUnreadCount = null;
     }
 
     // Merge the updated chat properties into the underlying chat object
@@ -518,6 +573,10 @@ class ChatState {
     chat.lockChatName = updatedChat.lockChatName;
     chat.lockChatIcon = updatedChat.lockChatIcon;
     chat.lastReadMessageGuid = updatedChat.lastReadMessageGuid;
+    if (updatedChat.lastReadAt != null &&
+        (chat.lastReadAt == null || updatedChat.lastReadAt! > chat.lastReadAt!)) {
+      chat.lastReadAt = updatedChat.lastReadAt;
+    }
 
     // Re-apply redaction over the fresh values if redacted mode is active.
     if (SettingsSvc.settings.redactedMode.value) {

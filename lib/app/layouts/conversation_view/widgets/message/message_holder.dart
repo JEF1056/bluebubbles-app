@@ -29,6 +29,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/text/text_bubble.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/message_timestamp.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/timestamp_separator.dart';
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/timestamp/unread_separator.dart';
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -202,8 +203,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
           controller.hasError.value,
           controller.parts.length,
           controller.threadReplyCount.value,
-          message.guid != null ? service.messageUpdateTrigger[message.guid!] : null,
-          service.messageUpdateTrigger.length,
+          controller.updateVersion.value,
         );
 
         // Read controller.parts reactively so Obx rebuilds when parts change.
@@ -233,15 +233,34 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
 
         // Use MessageState observables for proper reactivity
         final isFromMe = controller.message.isFromMe!;
+        final showUnreadDivider = !widget.isReplyThread &&
+            message.guid != null &&
+            widget.cvController.unreadDividerGuid.value == message.guid;
+        final hasTimestampBelow = showUnreadDivider &&
+            (SettingsSvc.settings.skin.value == Skins.Samsung
+                ? message.dateCreated?.day != olderMessage?.dateCreated?.day
+                : (olderMessage != null &&
+                    olderMessage!.dateCreated != null &&
+                    message.dateCreated != null &&
+                    olderMessage!.dateCreated!.difference(message.dateCreated!).inMinutes.abs() > 30));
         // Read so a game turn collapses when an update marks it replaced
         controller.associatedMessageType.value;
         if (!widget.isReplyThread && AppSessionTypes.isEarlierTurn(message)) {
           // Hidden, but the next message's time is measured against this one, so it keeps any separator it starts
-          if (isFromMe) return Center(child: TimestampSeparator(olderMessage: olderMessage));
+          if (isFromMe) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showUnreadDivider) UnreadSeparator(hasTimestampBelow: hasTimestampBelow),
+                Center(child: TimestampSeparator(olderMessage: olderMessage)),
+              ],
+            );
+          }
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (showUnreadDivider) UnreadSeparator(hasTimestampBelow: hasTimestampBelow),
               Center(child: TimestampSeparator(olderMessage: olderMessage)),
               Padding(
                 padding: EdgeInsets.only(left: showAvatar || alwaysShowAvatars ? avatarIndent + 15 : 15),
@@ -266,6 +285,7 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (showUnreadDivider) UnreadSeparator(hasTimestampBelow: hasTimestampBelow),
               // large timestamp between messages
               TimestampSeparator(olderMessage: olderMessage),
               // use stack so avatar can be placed at bottom

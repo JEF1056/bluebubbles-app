@@ -1,14 +1,19 @@
 import 'dart:math';
 
+import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/app/state/message_state.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/models/models.dart' show StickerPlacement;
+import 'package:bluebubbles/services/network/api/sticker_api.dart';
 import 'package:bluebubbles/services/services.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:get_it/get_it.dart';
 import 'package:universal_io/io.dart';
 
 /// A placed sticker as [StickerHolder.space] lays it out: where its sender put it, and its image's size in pixels
@@ -72,7 +77,10 @@ class StickerHolder extends StatefulWidget {
   }
 
   /// The placement scale that draws a sticker image whose longest side is [pixels] at [points] on its longest side
-  static double scaleForPoints(double points, double pixels) => points * _stickerPixelRatio / max(1.0, pixels);
+  static double scaleForPoints(double points, double pixels) {
+    final safePixels = (pixels.isFinite && pixels > 0) ? pixels : fallbackPixels;
+    return points * _stickerPixelRatio / safePixels;
+  }
 
   /// The inverse of [placedCenter]: the placement that centers an unrotated sticker at [center] in [bubble]
   static StickerPlacement placementAt(Offset center, Size bubble, bool isFromMe, bool tailGutter) {
@@ -171,9 +179,33 @@ class StickerHolder extends StatefulWidget {
   State<StickerHolder> createState() => _StickerHolderState();
 }
 
+class _ActiveStickerDrag {
+  _ActiveStickerDrag({
+    required this.initial,
+    required this.current,
+    required this.startFocalPoint,
+    required this.initialCenter,
+  });
+
+  final StickerPlacement initial;
+  StickerPlacement current;
+  final Offset startFocalPoint;
+  final Offset initialCenter;
+  bool changed = false;
+}
+
 class _StickerHolderState extends State<StickerHolder> {
   /// This holder's sticker attachments, in the order their messages were sent, so later stickers draw on top
   List<Attachment> _stickers = const [];
+
+  /// Owning sticker [Message] per attachment [_keyOf], for ownership/GUID checks and DB persistence
+  final Map<Object, Message> _messageByKey = {};
+
+  /// Live placements while an own placed sticker is being dragged/scaled/rotated or awaiting the server reply
+  final Map<Object, StickerPlacement> _dragging = {};
+
+  /// Active scale-gesture tracking state keyed by [_keyOf]
+  final Map<Object, _ActiveStickerDrag> _activeDrags = {};
 
   /// Keys ([_keyOf]) of the stickers whose image is on disk (or in memory on web), ready to draw
   final Set<Object> _ready = {};
@@ -225,15 +257,23 @@ class _StickerHolderState extends State<StickerHolder> {
       });
     // Rebuilt from the current messages each time, so a sticker that left (unsent) stops drawing here.
     // One per attachment row, in case two copies of a message link the same one; each key draws one widget.
-    _stickers = <Object, Attachment>{
-      for (final message in messages)
-        for (final attachment in message.dbAttachments)
-          if (attachment.guid != null) _keyOf(attachment): attachment,
-    }.values.toList();
+    final byKey = <Object, Attachment>{};
+    _messageByKey.clear();
+    for (final message in messages) {
+      for (final attachment in message.dbAttachments) {
+        if (attachment.guid == null) continue;
+        final key = _keyOf(attachment);
+        byKey[key] = attachment;
+        _messageByKey[key] = message;
+      }
+    }
+    _stickers = byKey.values.toList();
     _rehydrateMissingPlacements(messages);
     final keys = _stickers.map(_keyOf).toSet();
     _ready.retainAll(keys);
     _bytes.removeWhere((k, _) => !keys.contains(k));
+    _dragging.removeWhere((k, _) => !keys.contains(k));
+    _activeDrags.removeWhere((k, _) => !keys.contains(k));
 
     bool awaited = false;
     for (final attachment in List.of(_stickers)) {
@@ -343,15 +383,16 @@ class _StickerHolderState extends State<StickerHolder> {
     stream.addListener(listener);
   }
 
-  // Stickers never take input, so they can't block interaction with the message under them
-  Widget _shrinkable(Widget child) => IgnorePointer(
-        child: AnimatedScale(
-          scale: widget.hidden ? 0 : 1,
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOutBack,
-          child: child,
-        ),
-      );
+  // Stickers ignore input unless they are own placed stickers being repositioned
+  Widget _shrinkable(Widget child, {bool ignorePointer = true}) {
+    final scaled = AnimatedScale(
+      scale: widget.hidden ? 0 : 1,
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOutBack,
+      child: child,
+    );
+    return ignorePointer ? IgnorePointer(child: scaled) : scaled;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -364,7 +405,7 @@ class _StickerHolderState extends State<StickerHolder> {
 
   // The position is a fraction of the parent's size, so it's scaled by ours. `scale` applies to the sticker's own size.
   Widget _buildPlaced(List<Attachment> ready) {
-    return LayoutBuilder(builder: (context, constraints) {
+    return LayoutBuilder(builder: (stackContext, constraints) {
       final bubble = constraints.biggest;
       if (!bubble.isFinite || bubble.width <= 0 || bubble.height <= 0) {
         return const SizedBox.shrink();
@@ -377,57 +418,192 @@ class _StickerHolderState extends State<StickerHolder> {
               attachment,
               StickerPlacement.tryParse(attachment.stickerPlacement) ?? StickerPlacement.centeredDefault,
               bubble,
+              stackContext,
             ),
         ],
       );
     });
   }
 
-  Widget _placed(Attachment attachment, StickerPlacement p, Size bubble) {
-    final scale = StickerHolder.drawScale(p, bubble);
+  Widget _placed(Attachment attachment, StickerPlacement p, Size bubble, BuildContext stackContext) {
+    final key = _keyOf(attachment);
+    final effective = _dragging[key] ?? p;
+    final scale = StickerHolder.drawScale(effective, bubble);
     if (!scale.isFinite || scale <= 0) return const SizedBox.shrink();
-    final center = StickerHolder.placedCenter(p, bubble, widget.isFromMe, widget.tailGutter);
+    final center = StickerHolder.placedCenter(effective, bubble, widget.isFromMe, widget.tailGutter);
     if (!center.dx.isFinite || !center.dy.isFinite) return const SizedBox.shrink();
     final maxConstraint = StickerHolder.maxPoints / max(0.01, scale);
     if (!maxConstraint.isFinite || maxConstraint <= 0) return const SizedBox.shrink();
-    final isTemp = attachment.guid?.startsWith("temp") ?? false;
-    return Positioned(
-      key: ValueKey(_keyOf(attachment)),
-      left: center.dx,
-      top: center.dy,
-      child: FractionalTranslation(
-        translation: const Offset(-0.5, -0.5),
-        child: Transform.rotate(
-          angle: p.rotation,
-          child: _shrinkable(
-            Transform.scale(
-              scale: scale,
-              // Before the scale, so the cap is what draws
-              child: ConstrainedBox(
-                constraints: BoxConstraints.loose(Size.square(maxConstraint)),
-                // Only a sticker still sending is new here: the one just dropped. It sticks rather than popping in.
-                child: _StickIn(
-                  play: isTemp && !_shown.contains(_keyOf(attachment)),
-                  child: _image(
-                    attachment,
-                    FilterQuality.medium,
-                    StickerHolder._stickerPixelRatio,
-                    !isTemp,
-                  ),
-                ),
+    final message = _messageByKey[key];
+    final msgGuid = message?.guid;
+    final chat = widget.controller?.chat ?? ChatStateScope.maybeChatOf(context) ?? message?.chat.target;
+    final isAttachmentTemp = attachment.guid?.startsWith("temp") ?? false;
+    final isTemp = isAttachmentTemp ||
+        msgGuid == null ||
+        msgGuid.isEmpty ||
+        msgGuid.startsWith("temp") ||
+        msgGuid.startsWith("error");
+    final canReposition = !widget.hidden &&
+        !isTemp &&
+        (message?.isFromMe ?? false) &&
+        (chat?.isIMessage ?? false) &&
+        (chat?.guid.isNotEmpty ?? false);
+
+    final content = Transform.rotate(
+      angle: effective.rotation,
+      child: _shrinkable(
+        Transform.scale(
+          scale: scale,
+          // Before the scale, so the cap is what draws
+          child: ConstrainedBox(
+            constraints: BoxConstraints.loose(Size.square(maxConstraint)),
+            // Only a sticker still sending is new here: the one just dropped. It sticks rather than popping in.
+            child: _StickIn(
+              play: isAttachmentTemp && !_shown.contains(key),
+              child: _image(
+                attachment,
+                FilterQuality.medium,
+                StickerHolder._stickerPixelRatio,
+                !isAttachmentTemp,
               ),
             ),
           ),
         ),
+        ignorePointer: !canReposition,
       ),
     );
+
+    return Positioned(
+      key: ValueKey(key),
+      left: center.dx,
+      top: center.dy,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -0.5),
+        child: canReposition
+            ? GestureDetector(
+                onScaleStart: (details) =>
+                    _onRepositionStart(key, effective, details.focalPoint, bubble, stackContext),
+                onScaleUpdate: (details) => _onRepositionUpdate(key, details, bubble, stackContext),
+                onScaleEnd: (_) => _onRepositionEnd(
+                  key: key,
+                  message: message!,
+                  attachment: attachment,
+                  chatGuid: chat!.guid,
+                ),
+                child: content,
+              )
+            : content,
+      ),
+    );
+  }
+
+  Offset _focalInBubble(BuildContext stackContext, Offset globalFocalPoint) {
+    final box = stackContext.findRenderObject();
+    return box is RenderBox ? box.globalToLocal(globalFocalPoint) : globalFocalPoint;
+  }
+
+  void _onRepositionStart(
+    Object key,
+    StickerPlacement placement,
+    Offset globalFocalPoint,
+    Size bubble,
+    BuildContext stackContext,
+  ) {
+    _activeDrags[key] = _ActiveStickerDrag(
+      initial: placement,
+      current: placement,
+      startFocalPoint: _focalInBubble(stackContext, globalFocalPoint),
+      initialCenter: StickerHolder.placedCenter(placement, bubble, widget.isFromMe, widget.tailGutter),
+    );
+  }
+
+  void _onRepositionUpdate(Object key, ScaleUpdateDetails details, Size bubble, BuildContext stackContext) {
+    final drag = _activeDrags[key];
+    if (drag == null) return;
+    // Measure focal delta in the stationary Stack coordinate frame so moving Positioned doesn't shift the frame
+    final nextCenter = drag.initialCenter + (_focalInBubble(stackContext, details.focalPoint) - drag.startFocalPoint);
+    final at = StickerHolder.placementAt(nextCenter, bubble, widget.isFromMe, widget.tailGutter);
+    final nextScale = (drag.initial.scale * details.scale).clamp(0.25, 4.0).toDouble();
+    final nextRotation = drag.initial.rotation + details.rotation;
+    final parentPreviewWidth = drag.initial.parentPreviewWidth > 0 ? drag.initial.parentPreviewWidth : bubble.width;
+    final next = StickerPlacement(
+      xScalar: at.xScalar,
+      yScalar: at.yScalar,
+      scale: nextScale,
+      rotation: nextRotation,
+      parentPreviewWidth: parentPreviewWidth,
+    );
+    if (!next.isValid) return;
+    drag.current = next;
+    drag.changed = drag.changed || next != drag.initial;
+    setState(() => _dragging[key] = next);
+  }
+
+  Future<void> _onRepositionEnd({
+    required Object key,
+    required Message message,
+    required Attachment attachment,
+    required String chatGuid,
+  }) async {
+    final drag = _activeDrags.remove(key);
+    if (drag == null || !drag.changed || drag.current == drag.initial) {
+      if (_dragging.containsKey(key) && mounted) {
+        setState(() => _dragging.remove(key));
+      }
+      return;
+    }
+    final next = drag.current;
+    final messageGuid = message.guid;
+    if (messageGuid == null || messageGuid.isEmpty || !GetIt.I.isRegistered<HttpService>()) {
+      if (mounted && !_activeDrags.containsKey(key) && _dragging[key] == next) {
+        setState(() => _dragging.remove(key));
+      }
+      return;
+    }
+    try {
+      await HttpSvc.sticker.reposition(
+        chatGuid: chatGuid,
+        messageGuid: messageGuid,
+        placement: next,
+      );
+      final map = next.toMap();
+      attachment.stickerPlacement = map;
+      Message updatedMsg = message;
+      if (Database.boxesOpened) {
+        Database.runInTransaction(TxMode.write, () {
+          final current = message.id != null ? Database.messages.get(message.id!) : null;
+          final target = current?.dbAttachments.firstWhereOrNull((a) => a.guid == attachment.guid) ??
+              (attachment.id != null ? Database.attachments.get(attachment.id!) : null) ??
+              attachment;
+          target.stickerPlacement = map;
+          Database.attachments.put(target);
+          if (current != null) updatedMsg = current;
+        });
+      }
+      final parentGuid = updatedMsg.associatedMessageGuid;
+      final svcState = parentGuid != null ? maybeFindMessagesSvc(chatGuid)?.getMessageStateIfExists(parentGuid) : null;
+      (svcState ?? _state)?.addAssociatedMessageInternal(updatedMsg);
+      if (mounted && !_activeDrags.containsKey(key) && _dragging[key] == next) {
+        setState(() => _dragging.remove(key));
+      }
+    } catch (e, s) {
+      Logger.warn("Failed to reposition sticker", error: e, trace: s, tag: "StickerHolder");
+      if (mounted && !_activeDrags.containsKey(key) && _dragging[key] == next) {
+        setState(() => _dragging.remove(key));
+      }
+      showSnackbar("Error", stickerRefusal(e).message ?? "Couldn't reposition the sticker", type: SnackbarType.error);
+    }
   }
 
   // shortcut: refetches once per session for stickers the server can't supply placement for; persist a "checked" marker if this shows up in network logs
   static final Set<String> _rehydratedGuids = {};
 
   static void _rehydrateMissingPlacements(Iterable<Message> messages) {
-    if (!Get.isRegistered<HttpService>() || !SettingsSvc.serverDetails.isV2Server) return;
+    if (!GetIt.I.isRegistered<HttpService>() ||
+        !GetIt.I.isRegistered<SettingsService>() ||
+        !SettingsSvc.serverDetails.isV2Server) {
+      return;
+    }
     for (final m in messages) {
       final guid = m.guid;
       if (guid == null || guid.startsWith("temp") || guid.startsWith("error")) continue;

@@ -11,6 +11,13 @@ import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:dio/dio.dart' as dio;
 import 'package:flutter/foundation.dart';
 
+class SyncCancelledException implements Exception {
+  const SyncCancelledException();
+
+  @override
+  String toString() => 'Incremental sync cancelled (superseded)';
+}
+
 class IncrementalSyncManager extends SyncManager {
   final tag = 'IncrementalSyncManager';
   final _messageDeduplicator = MessageSyncDeduplicator();
@@ -71,6 +78,20 @@ class IncrementalSyncManager extends SyncManager {
   // A callback to call when the sync is complete
   Function? onComplete;
 
+  /// Optional cancellation predicate checked before each page fetch and before saving markers.
+  final bool Function()? shouldCancel;
+
+  /// Optional Dio CancelToken to abort in-flight HTTP queries when superseded.
+  final dio.CancelToken? cancelToken;
+
+  bool get _isCancelled => (shouldCancel?.call() ?? false) || (cancelToken?.isCancelled ?? false);
+
+  void _throwIfCancelled() {
+    if (_isCancelled) {
+      throw const SyncCancelledException();
+    }
+  }
+
   // The default extra fields to fetch with the messages
   List<String> defaultWithQuery = [
     "chats",
@@ -94,6 +115,8 @@ class IncrementalSyncManager extends SyncManager {
     this.changeMessageGuids,
     this.onProgress,
     this.onComplete,
+    this.shouldCancel,
+    this.cancelToken,
     bool saveLogs = false,
   }) : super("Incremental", saveLogs: saveLogs) {
     if (startRowId == null && startTimestamp == null) {
@@ -152,6 +175,7 @@ class IncrementalSyncManager extends SyncManager {
         await startPre_1_2_0();
       }
 
+      _throwIfCancelled();
       await complete();
     } catch (ex) {
       completeWithError(ex.toString());
@@ -170,6 +194,7 @@ class IncrementalSyncManager extends SyncManager {
     final after = startTimestamp ?? SettingsSvc.settings.lastIncrementalSync.value;
 
     if (includeNewMessages) {
+      _throwIfCancelled();
       await syncV2MessagePages(after: (startRowId ?? 0) > 0 ? null : after, useRowId: (startRowId ?? 0) > 0);
     }
     final guids = changeMessageGuids;
@@ -178,6 +203,7 @@ class IncrementalSyncManager extends SyncManager {
       // also dropped attributes on those. Message.merge applies every kind of change from the same rows.
       final size = batchSize.clamp(1, 1000);
       for (var offset = 0; offset < guids.length; offset += size) {
+        _throwIfCancelled();
         final end = (offset + size).clamp(0, guids.length);
         await syncV2MessagePages(
           after: null,
@@ -193,6 +219,7 @@ class IncrementalSyncManager extends SyncManager {
     // `updated` is the union of delivered/read dates. Edits and unsends have
     // their own modes. The server does not accept a played-date mode.
     for (final (index, field) in ['updated', 'edited', 'retracted'].indexed) {
+      _throwIfCancelled();
       await syncV2MessagePages(after: after, dateField: field, progressStart: index / 3, progressSpan: 1 / 3);
     }
   }
@@ -212,6 +239,7 @@ class IncrementalSyncManager extends SyncManager {
     int? total;
     final previouslySynced = messagesSynced;
     do {
+      _throwIfCancelled();
       final response = await HttpSvc.message.query(
         after: after,
         before: useRowId ? null : _v2EndTimestamp,
@@ -225,7 +253,9 @@ class IncrementalSyncManager extends SyncManager {
         offset: offset,
         limit: limit,
         withQuery: defaultWithQuery,
+        cancelToken: cancelToken,
       );
+      _throwIfCancelled();
       total ??= response.data['metadata']['total'] as int;
       final messages = response.data['data'] as List;
       addToOutput('Fetched ${messages.length} ${dateField ?? "created"} message(s) at offset $offset');
@@ -252,12 +282,15 @@ class IncrementalSyncManager extends SyncManager {
     // Query the API for messages.
     // This endpoint will return the total messages that match the query in v1.6.0+
     addToOutput('Fetching messages...');
+    _throwIfCancelled();
     dio.Response<dynamic> messagesRes = await HttpSvc.message.query(
       where: buildRowIdWhereArgs(startRowId!, endRowId),
       limit: batchSize,
       offset: 0,
       withQuery: defaultWithQuery,
+      cancelToken: cancelToken,
     );
+    _throwIfCancelled();
 
     // If no new updated messages, complete the sync
     int total = messagesRes.data['metadata']['total'];
@@ -331,6 +364,7 @@ class IncrementalSyncManager extends SyncManager {
 
     // If there are new messages, fetch them by page
     for (var i = startPage; i < pages; i++) {
+      _throwIfCancelled();
       addToOutput('Fetching page ${i + 1} of $pages...');
       dio.Response<dynamic> messagesResponse;
 
@@ -341,6 +375,7 @@ class IncrementalSyncManager extends SyncManager {
           offset: i * batchSize,
           limit: batchSize,
           withQuery: defaultWithQuery,
+          cancelToken: cancelToken,
         );
       } else {
         messagesResponse = await HttpSvc.message.query(
@@ -349,8 +384,10 @@ class IncrementalSyncManager extends SyncManager {
           offset: i * batchSize,
           limit: batchSize,
           withQuery: defaultWithQuery,
+          cancelToken: cancelToken,
         );
       }
+      _throwIfCancelled();
 
       int messageCount = messagesResponse.data['data'].length;
       addToOutput('Page ${i + 1} returned $messageCount message(s)...', level: LogLevel.DEBUG);
@@ -584,6 +621,7 @@ class IncrementalSyncManager extends SyncManager {
 
   @override
   Future<void> complete() async {
+    _throwIfCancelled();
     // Once we have added everything, save the last sync date
     if (saveMarker) {
       addToOutput("Saving last sync markers...");

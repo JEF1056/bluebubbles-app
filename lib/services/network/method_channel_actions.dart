@@ -216,12 +216,17 @@ class MethodChannelActions {
   Future<bool> placeFaceTimeCall({
     required String address,
     String? callerName,
+    Uint8List? callerAvatar,
     bool isTelephony = false,
+    bool isVideo = false,
   }) async {
     final res = await service.invokeMethod('place-facetime-call', {
       'address': address,
-      'caller_name': callerName,
+      if (callerName != null && callerName.isNotEmpty) 'caller_name': callerName,
+      if (callerAvatar != null && callerAvatar.isNotEmpty && callerAvatar.length <= 256 * 1024)
+        'caller_avatar': callerAvatar,
       'is_telephony': isTelephony,
+      'is_video': isVideo,
     });
     return res == true;
   }
@@ -291,11 +296,25 @@ class MethodChannelActions {
   Future<bool> markFaceTimeCallActive({
     required String callUuid,
     bool isOutgoing = false,
+    String? callerName,
+    String? callerAddress,
+    Uint8List? callerAvatar,
+    bool? isVideo,
+    bool? isGroup,
+    bool? isTelephony,
   }) async {
-    final res = await service.invokeMethod('mark-facetime-call-active', {
+    final args = <String, dynamic>{
       'call_uuid': callUuid,
       'is_outgoing': isOutgoing,
-    });
+      if (callerName != null && callerName.isNotEmpty) 'callerName': callerName,
+      if (callerAddress != null && callerAddress.isNotEmpty) 'callerAddress': callerAddress,
+      if (callerAvatar != null && callerAvatar.isNotEmpty && callerAvatar.length <= 256 * 1024)
+        'callerAvatar': callerAvatar,
+      if (isVideo != null) 'isVideo': isVideo,
+      if (isGroup != null) 'isGroup': isGroup,
+      if (isTelephony != null) 'isTelephony': isTelephony,
+    };
+    final res = await service.invokeMethod('mark-facetime-call-active', args);
     return res == true;
   }
 
@@ -308,5 +327,15 @@ class MethodChannelActions {
       'muted': muted,
     });
     return res == true;
+  }
+
+  Future<void> setCallTone({
+    required String action,
+    String? callUuid,
+  }) async {
+    await service.invokeMethod('set-call-tone', {
+      'action': action,
+      'call_uuid': ?callUuid,
+    });
   }
 }

@@ -727,7 +727,7 @@ private fun DialpadKeypadRow(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(34.dp)
+                        .height(48.dp)
                         .clip(RoundedCornerShape(50))
                         .background(palette.surfaceContainerHigh)
                         .combinedClickable(
@@ -747,7 +747,7 @@ private fun DialpadKeypadRow(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(34.dp)
+                        .height(48.dp)
                         .clip(RoundedCornerShape(50))
                         .background(palette.surfaceContainer)
                         .clickable(role = Role.Button) { onAppend(key) },

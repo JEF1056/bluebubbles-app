@@ -76,6 +76,9 @@ class Message {
   bool didNotifyRecipient;
   bool isBookmarked;
 
+  @Transient()
+  bool? isRead;
+
   final RxInt _error = RxInt(0);
   int get error => _error.value;
   set error(int i) => _error.value = i;
@@ -227,6 +230,7 @@ class Message {
     this.wasDeliveredQuietly = false,
     this.didNotifyRecipient = false,
     this.isBookmarked = false,
+    this.isRead,
   }) {
     if (error != null) _error.value = error;
     if (dateRead != null) _dateRead.value = dateRead;
@@ -302,6 +306,13 @@ class Message {
       ]);
     }
 
+    final rawAssocGuid = json["associatedMessageGuid"]?.toString().replaceAll("bp:", "");
+    final parsedAssocGuid = rawAssocGuid?.split("/").last;
+    final parsedAssocPart = (json["associatedMessagePart"] is int
+            ? json["associatedMessagePart"] as int
+            : int.tryParse(json["associatedMessagePart"]?.toString() ?? "")) ??
+        int.tryParse(rawAssocGuid?.replaceAll("p:", "").split("/").first ?? "");
+
     return Message(
       id: json["ROWID"] ?? json['id'],
       originalROWID: json["originalROWID"],
@@ -324,11 +335,13 @@ class Message {
       groupTitle: json["groupTitle"],
       groupActionType: json["groupActionType"] ?? 0,
       balloonBundleId: json["balloonBundleId"],
-      associatedMessageGuid: json["associatedMessageGuid"]?.toString().replaceAll("bp:", "").split("/").last,
-      associatedMessagePart: (json["associatedMessagePart"] is int
-              ? json["associatedMessagePart"] as int
-              : int.tryParse(json["associatedMessagePart"]?.toString() ?? "")) ??
-          int.tryParse(json["associatedMessageGuid"]?.toString().replaceAll("bp:", "").replaceAll("p:", "").split("/").first ?? ""),
+      associatedMessageGuid: parsedAssocGuid,
+      associatedMessagePart: parsedAssocPart ??
+          (parsedAssocGuid != null &&
+                  parsedAssocGuid.isNotEmpty &&
+                  json["associatedMessageType"] != ReactionTypes.PLACED_STICKER
+              ? 0
+              : null),
       associatedMessageType: json["associatedMessageType"],
       associatedMessageEmoji: json["associatedMessageEmoji"],
       expressiveSendStyleId: json["expressiveSendStyleId"],
@@ -348,6 +361,9 @@ class Message {
       wasDeliveredQuietly: json['wasDeliveredQuietly'] ?? false,
       didNotifyRecipient: json['didNotifyRecipient'] ?? false,
       isBookmarked: json['isBookmarked'] ?? false,
+      isRead: json["isRead"] is bool
+          ? json["isRead"] as bool
+          : (json["isRead"] is num ? json["isRead"] != 0 : null),
     );
   }
 
@@ -495,7 +511,7 @@ class Message {
   }
 
   static Message? findOne({String? guid, String? associatedMessageGuid}) {
-    if (kIsWeb) return null;
+    if (kIsWeb || !Database.boxesOpened) return null;
     if (guid != null) {
       final query = Database.messages.query(Message_.guid.equals(guid)).build();
       query.limit = 1;
@@ -1040,7 +1056,28 @@ class Message {
     existing.threadOriginatorPart ??= newMessage.threadOriginatorPart;
     existing.country ??= newMessage.country;
 
+    final mergedAssocType = AppSessionTypes.mergedType(
+      existing.balloonBundleId ?? newMessage.balloonBundleId,
+      existing.associatedMessageType,
+      newMessage.associatedMessageType,
+    );
+    if (mergedAssocType == newMessage.associatedMessageType && newMessage.associatedMessageGuid != null) {
+      existing.associatedMessageGuid = newMessage.associatedMessageGuid;
+    } else {
+      existing.associatedMessageGuid ??= newMessage.associatedMessageGuid;
+    }
+    existing.associatedMessageType = mergedAssocType;
+    if (newMessage.associatedMessagePart != null &&
+        mergedAssocType == newMessage.associatedMessageType &&
+        newMessage.associatedMessageGuid != null) {
+      existing.associatedMessagePart = newMessage.associatedMessagePart;
+    } else {
+      existing.associatedMessagePart ??= newMessage.associatedMessagePart;
+    }
     existing.associatedMessageEmoji ??= newMessage.associatedMessageEmoji;
+    if (newMessage.isRead != null) {
+      existing.isRead = newMessage.isRead;
+    }
     existing.service ??= newMessage.service;
 
     if (!existing.wasDeliveredQuietly && newMessage.wasDeliveredQuietly) {
@@ -1131,6 +1168,7 @@ class Message {
     threadOriginatorPart = incoming.threadOriginatorPart ?? threadOriginatorPart;
     associatedMessageEmoji = incoming.associatedMessageEmoji ?? associatedMessageEmoji;
     associatedMessagePart = incoming.associatedMessagePart ?? associatedMessagePart;
+    isRead = incoming.isRead ?? isRead;
     service = incoming.service ?? service;
     datePlayed = incoming.datePlayed ?? datePlayed;
     country = incoming.country ?? country;
@@ -1145,6 +1183,9 @@ class Message {
       (payloadData.hasAppSession && !stored.payloadData.hasAppSession) ||
       (threadOriginatorGuid != null && stored.threadOriginatorGuid == null) ||
       (threadOriginatorPart != null && stored.threadOriginatorPart == null) ||
+      (associatedMessageGuid != null && associatedMessageGuid != stored.associatedMessageGuid) ||
+      (associatedMessageType != null && associatedMessageType != stored.associatedMessageType) ||
+      (associatedMessagePart != null && stored.associatedMessagePart == null) ||
       (associatedMessageEmoji != null && stored.associatedMessageEmoji == null) ||
       (service != null && stored.service == null) ||
       (datePlayed != null && stored.datePlayed == null) ||
@@ -1197,6 +1238,7 @@ class Message {
       "wasDeliveredQuietly": wasDeliveredQuietly,
       "didNotifyRecipient": didNotifyRecipient,
       "isBookmarked": isBookmarked,
+      "isRead": isRead,
       "attributedBody": attributedBody.map((e) => e.toMap()).toList(),
       "messageSummaryInfo": messageSummaryInfo.map((e) => e.toJson()).toList(),
       "payloadData": payloadData?.toJson(),

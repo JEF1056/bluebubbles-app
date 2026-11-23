@@ -36,7 +36,19 @@ class DataLayerListenerService : WearableListenerService() {
         val callerName: String,
         val callerAddress: String,
         val isVideo: Boolean,
-        val isTelephony: Boolean
+        val isTelephony: Boolean,
+        val isGroup: Boolean = false
+    )
+
+    internal data class CallActivePayload(
+        val callUuid: String,
+        val startedAtMs: Long,
+        val muted: Boolean,
+        val callerName: String? = null,
+        val callerAddress: String? = null,
+        val isVideo: Boolean = false,
+        val isTelephony: Boolean = false,
+        val isGroup: Boolean = false
     )
 
     companion object {
@@ -67,15 +79,69 @@ class DataLayerListenerService : WearableListenerService() {
             } catch (_: Exception) {
                 false
             } && !isTelephony
-            val callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString
-                ?: if (isTelephony) "iPhone Call" else "FaceTime"
+            val isGroup = try {
+                obj.get("isGroup")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            } && !isTelephony
             val callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull }?.asString ?: ""
+            val callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }
+                ?: callerAddress.takeIf { it.isNotBlank() }
+                ?: CallNotificationHelper.callKindLabel(isVideo = isVideo, isTelephony = isTelephony, isGroup = isGroup)
             return IncomingCallPayload(
                 callUuid = callUuid,
                 callerName = callerName,
                 callerAddress = callerAddress,
                 isVideo = isVideo,
-                isTelephony = isTelephony
+                isTelephony = isTelephony,
+                isGroup = isGroup
+            )
+        }
+
+        internal fun parseCallActivePayload(json: String): CallActivePayload? {
+            val obj = try {
+                JsonParser.parseString(json).asJsonObject
+            } catch (_: Exception) {
+                null
+            } ?: return null
+            val callUuid = obj.get("callUuid")?.takeIf { !it.isJsonNull }?.asString ?: return null
+            if (callUuid.isBlank()) return null
+            val startedAtMs = try {
+                obj.get("startedAtMs")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asLong ?: 0L
+            } catch (_: Exception) {
+                0L
+            }
+            val muted = try {
+                obj.get("muted")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            }
+            val callerName = obj.get("callerName")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
+            val callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() }
+            val isTelephony = try {
+                obj.get("isTelephony")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            }
+            val isVideo = try {
+                obj.get("isVideo")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            } && !isTelephony
+            val isGroup = try {
+                obj.get("isGroup")?.takeIf { !it.isJsonNull && it.isJsonPrimitive }?.asBoolean ?: false
+            } catch (_: Exception) {
+                false
+            } && !isTelephony
+            return CallActivePayload(
+                callUuid = callUuid,
+                startedAtMs = startedAtMs,
+                muted = muted,
+                callerName = callerName,
+                callerAddress = callerAddress,
+                isVideo = isVideo,
+                isTelephony = isTelephony,
+                isGroup = isGroup
             )
         }
 
@@ -313,6 +379,7 @@ class DataLayerListenerService : WearableListenerService() {
             PhoneRelayClient.PATH_MARK_READ -> {
                 parseJsonObject(dataStr)?.stringOrNull("chatGuid")?.takeIf { it.isNotBlank() }?.let { chatGuid ->
                     NotificationHelper.cancelNotification(applicationContext, chatGuid)
+                    relay.notifyChatMarkedRead(chatGuid)
                     scope.launch { AppDatabase.getInstance(applicationContext).chatDao().markRead(chatGuid) }
                 }
             }
@@ -325,13 +392,28 @@ class DataLayerListenerService : WearableListenerService() {
                     callerAddress = call.callerAddress,
                     isVideo = call.isVideo,
                     fromPhoneRelay = true,
-                    isTelephony = call.isTelephony
+                    isTelephony = call.isTelephony,
+                    isGroup = call.isGroup
                 )
             }
             PhoneRelayClient.PATH_CALL_ENDED -> {
                 parseJsonObject(dataStr)?.stringOrNull("callUuid")?.takeIf { it.isNotBlank() }?.let {
                     CallNotificationHelper.endCall(applicationContext, it)
                 }
+            }
+            PhoneRelayClient.PATH_CALL_ACTIVE -> {
+                val active = parseCallActivePayload(dataStr) ?: return
+                CallNotificationHelper.markOngoingFromPhone(
+                    context = applicationContext,
+                    callUuid = active.callUuid,
+                    startedAtMs = active.startedAtMs,
+                    muted = active.muted,
+                    callerName = active.callerName,
+                    callerAddress = active.callerAddress,
+                    isVideo = active.isVideo,
+                    isTelephony = active.isTelephony,
+                    isGroup = active.isGroup
+                )
             }
 
             // Legacy WearBubbles setup/status compatibility
@@ -381,7 +463,9 @@ class DataLayerListenerService : WearableListenerService() {
         scope.launch {
             try {
                 val app = applicationContext as WearBubblesApp
-                app.socketManager.disconnect()
+                app.foregroundSocketSession.stop()
+                app.socketManager.disconnect(clearCredentials = true)
+                CallNotificationHelper.endCall(applicationContext)
                 MessageSyncWorker.cancel(applicationContext)
                 NotificationHelper.cancelAll(applicationContext)
                 ApiClient.reset()

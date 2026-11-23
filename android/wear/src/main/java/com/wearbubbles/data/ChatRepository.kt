@@ -92,6 +92,14 @@ class ChatRepository(
         }
     }
 
+    suspend fun handleReadStatusChanged(chatGuid: String, read: Boolean, readAt: Long?) {
+        chatDao.updateReadStatus(
+            guid = chatGuid,
+            hasUnread = !read,
+            readAt = readAt?.takeIf { it > 0L }
+        )
+    }
+
     suspend fun updatePinnedOrder(pinnedGuids: List<String>) {
         chatDao.updatePinnedOrder(pinnedGuids)
     }
@@ -128,7 +136,8 @@ class ChatRepository(
             lastMessageAttachmentGuid = firstAttachment?.guid,
             lastMessageAttachmentMimeType = firstAttachment?.mimeType,
             isPinned = isPinned,
-            pinIndex = pinIndex
+            pinIndex = pinIndex,
+            lastReadMessageTimestamp = lastReadMessageTimestamp?.takeIf { it > 0L }
         )
     }
 }

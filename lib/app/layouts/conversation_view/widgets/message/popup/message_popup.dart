@@ -504,17 +504,14 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
     return ClipShadowPath(
       shadow: _tapbackPanelShadow(context),
       clipper: const _CircleClipper(),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Material(
-          color: _tapbackPanelColor(context),
-          child: InkWell(
-            onTap: _pickEmojiTapback,
-            child: SizedBox.square(
-              dimension: _addEmojiCircleSize,
-              child: Icon(iOS ? cupertino.CupertinoIcons.add : Icons.add,
-                  size: 24, color: context.theme.colorScheme.outline),
-            ),
+      child: Material(
+        color: _tapbackPanelColor(context),
+        child: InkWell(
+          onTap: _pickEmojiTapback,
+          child: SizedBox.square(
+            dimension: _addEmojiCircleSize,
+            child: Icon(iOS ? cupertino.CupertinoIcons.add : Icons.add,
+                size: 24, color: context.theme.colorScheme.outline),
           ),
         ),
       ),
@@ -670,18 +667,20 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                     child: iOS
                         ? (SettingsSvc.settings.highPerfMode.value
                             ? Container(color: context.theme.colorScheme.surface.withValues(alpha: 0.5))
-                            : BackdropFilter(
-                                filter: ImageFilter.blur(
-                                    sigmaX:
-                                        kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-                                            ? 10
-                                            : 30,
-                                    sigmaY:
-                                        kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
-                                            ? 10
-                                            : 30),
-                                child: Container(
-                                  color: Colors.transparent.withValues(alpha: 0.1),
+                            : RepaintBoundary(
+                                child: BackdropFilter(
+                                  filter: ImageFilter.blur(
+                                      sigmaX:
+                                          kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+                                              ? 10
+                                              : 18,
+                                      sigmaY:
+                                          kIsDesktop && SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
+                                              ? 10
+                                              : 18),
+                                  child: Container(
+                                    color: Colors.transparent.withValues(alpha: 0.1),
+                                  ),
                                 ),
                               ))
                         : FadeTransition(
@@ -765,17 +764,15 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                                     messageSize: widget.size,
                                     isFromMe: message.isFromMe!,
                                   ),
-                                  child: BackdropFilter(
-                                    filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(5).add(const EdgeInsets.only(bottom: 15)),
-                                      color: _tapbackPanelColor(context),
-                                      child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          crossAxisAlignment:
-                                              message.isFromMe! ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                          children: [
-                                            ...List.generate(narrowScreen ? 2 : 1, (index) {
+                                  child: Container(
+                                    padding: const EdgeInsets.all(5).add(const EdgeInsets.only(bottom: 15)),
+                                    color: _tapbackPanelColor(context),
+                                    child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            message.isFromMe! ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                        children: [
+                                          ...List.generate(narrowScreen ? 2 : 1, (index) {
                                             final row = Row(
                                               mainAxisSize: MainAxisSize.min,
                                               mainAxisAlignment: MainAxisAlignment.start,
@@ -856,7 +853,7 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
                                           ]),
                                     ),
                                   ),
-                                )),
+                                ),
                       ),
                     ),
                   if (showTapbacks && !iOS)
@@ -1161,35 +1158,32 @@ class _MessagePopupState extends State<MessagePopup> with TickerProviderStateMix
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          color: context.theme.colorScheme.surfaceContainerHighest.withAlpha(150),
-          width: maxMenuWidth,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: allActions.cast<CustomDetailsMenuActionWidget>().sublist(0, numberToShow - 1)
-              ..add(
-                CustomDetailsMenuActionWidget(
-                  onTap: () async {
-                    Widget content = Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: allActions.sublist(numberToShow - 1),
-                    );
-                    showBBDialog(
-                      useRootNavigator: false,
-                      context: context,
-                      content: content,
-                    );
-                  },
-                  title: 'More...',
-                  iosIcon: cupertino.CupertinoIcons.ellipsis,
-                  nonIosIcon: Icons.more_vert,
-                ),
+      child: Container(
+        color: context.theme.colorScheme.surfaceContainerHighest.withAlpha(150),
+        width: maxMenuWidth,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: allActions.cast<CustomDetailsMenuActionWidget>().sublist(0, numberToShow - 1)
+            ..add(
+              CustomDetailsMenuActionWidget(
+                onTap: () async {
+                  Widget content = Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: allActions.sublist(numberToShow - 1),
+                  );
+                  showBBDialog(
+                    useRootNavigator: false,
+                    context: context,
+                    content: content,
+                  );
+                },
+                title: 'More...',
+                iosIcon: cupertino.CupertinoIcons.ellipsis,
+                nonIosIcon: Icons.more_vert,
               ),
-          ),
+            ),
         ),
       ),
     );

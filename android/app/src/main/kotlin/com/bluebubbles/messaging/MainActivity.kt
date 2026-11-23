@@ -8,6 +8,9 @@ import android.content.LocusId
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
@@ -19,6 +22,9 @@ import com.bluebubbles.messaging.services.camera.GmsgCameraHost
 import com.bluebubbles.messaging.services.extensions.OpenPigeonHost
 import com.bluebubbles.messaging.services.findmy.FindMyBleHost
 import com.bluebubbles.messaging.services.foreground.ForegroundServiceBroadcastReceiver
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
+import com.bluebubbles.messaging.services.telecom.CallTonePlayer
+import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -26,17 +32,108 @@ import io.flutter.embedding.android.FlutterFragment
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.lang.ref.WeakReference
+
+internal object LockScreenCallPolicy {
+    const val EXTRA_INCOMING_FACETIME = "incomingFaceTime"
+
+    fun shouldShowOverLockScreenForIncomingCall(
+        intentType: String?,
+        hasIncomingFaceTimeExtra: Boolean,
+        incomingFaceTimeExtra: Boolean,
+        callUuid: String?,
+        answerExtra: Boolean,
+        launchedFromHistory: Boolean,
+        isCallPendingEnded: Boolean = !callUuid.isNullOrBlank() &&
+            FaceTimeConnectionService.isCallPendingEnded(callUuid)
+    ): Boolean {
+        if (launchedFromHistory) return false
+        val isFaceTimeLaunch = if (hasIncomingFaceTimeExtra) {
+            incomingFaceTimeExtra
+        } else {
+            val hasUuid = !callUuid.isNullOrBlank()
+            when (intentType) {
+                "AnswerFaceTime" -> hasUuid || answerExtra
+                "OpenSummary" -> hasUuid
+                else -> false
+            }
+        }
+        return isFaceTimeLaunch && !isCallPendingEnded
+    }
+
+    @Suppress("DEPRECATION")
+    fun applyLockScreenFlags(
+        sdkInt: Int,
+        enabled: Boolean,
+        setShowWhenLocked: (Boolean) -> Unit,
+        setTurnScreenOn: (Boolean) -> Unit,
+        addWindowFlags: (Int) -> Unit,
+        clearWindowFlags: (Int) -> Unit
+    ) {
+        val legacyFlags = WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+        if (enabled) {
+            if (sdkInt >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+            } else {
+                addWindowFlags(legacyFlags)
+            }
+        } else {
+            if (sdkInt >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(false)
+                setTurnScreenOn(false)
+            }
+            clearWindowFlags(legacyFlags)
+        }
+    }
+
+    fun dismissIncomingFaceTimeNotification(
+        intentType: String?,
+        answerExtra: Boolean,
+        callUuid: String?,
+        notificationId: Int,
+        stopRing: (String?) -> Unit,
+        cancelByCallUuid: (String) -> Unit,
+        cancelByNotificationId: (Int) -> Unit
+    ) {
+        if (intentType != "AnswerFaceTime" || !answerExtra) return
+        stopRing(callUuid)
+        if (!callUuid.isNullOrBlank()) {
+            cancelByCallUuid(callUuid)
+        }
+        if (notificationId != 0) {
+            cancelByNotificationId(notificationId)
+        }
+    }
+}
 
 class MainActivity : FlutterFragmentActivity() {
     companion object {
+        internal const val EXTRA_INCOMING_FACETIME = LockScreenCallPolicy.EXTRA_INCOMING_FACETIME
         private val engineLock = Any()
         @Volatile private var _engine: FlutterEngine? = null
+        @Volatile private var activeInstance: WeakReference<MainActivity>? = null
 
         // Whether the Dart side of [_engine] has finished registering its method-call
         // handler (signaled via the "ready" method call — see MethodCallHandler).
         // Always reset to false alongside [_engine] itself so a stale "ready" from a
         // previous engine can never be mistaken for the current one's readiness.
         @Volatile private var _dartReady = false
+
+        fun clearCallLockScreenFlags() {
+            val clearRunnable = Runnable {
+                val activity = activeInstance?.get() ?: return@Runnable
+                if (activity.isDestroyed) return@Runnable
+                activity.intent?.putExtra(EXTRA_INCOMING_FACETIME, false)
+                activity.applyLockScreenFlags(false)
+            }
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                clearRunnable.run()
+            } else {
+                Handler(Looper.getMainLooper()).post(clearRunnable)
+            }
+        }
 
         fun getEngine(): FlutterEngine? {
             synchronized(engineLock) {
@@ -76,7 +173,9 @@ class MainActivity : FlutterFragmentActivity() {
     // Remove once https://github.com/flutter/flutter/pull/191453 lands in our Flutter version.
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        activeInstance = WeakReference(this)
         configureEdgeToEdge()
+        updateLockScreenFlagsForIntent(intent)
         dismissIncomingFaceTimeNotificationIfAnswering(intent)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
@@ -118,17 +217,61 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        updateLockScreenFlagsForIntent(intent)
         dismissIncomingFaceTimeNotificationIfAnswering(intent)
         updateLocusContext(intent.getStringExtra("chatGuid"))
     }
 
+    private fun updateLockScreenFlagsForIntent(intent: Intent?) {
+        val shouldShow = LockScreenCallPolicy.shouldShowOverLockScreenForIncomingCall(
+            intentType = intent?.type,
+            hasIncomingFaceTimeExtra = intent?.hasExtra(EXTRA_INCOMING_FACETIME) == true,
+            incomingFaceTimeExtra = intent?.getBooleanExtra(EXTRA_INCOMING_FACETIME, false) == true,
+            callUuid = intent?.getStringExtra("callUuid"),
+            answerExtra = intent?.getBooleanExtra("answer", false) == true,
+            launchedFromHistory = ((intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        )
+        applyLockScreenFlags(shouldShow)
+    }
+
+    internal fun applyLockScreenFlags(enabled: Boolean) {
+        LockScreenCallPolicy.applyLockScreenFlags(
+            sdkInt = Build.VERSION.SDK_INT,
+            enabled = enabled,
+            setShowWhenLocked = { show ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) setShowWhenLocked(show)
+            },
+            setTurnScreenOn = { turnOn ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) setTurnScreenOn(turnOn)
+            },
+            addWindowFlags = { flags -> window.addFlags(flags) },
+            clearWindowFlags = { flags -> window.clearFlags(flags) }
+        )
+    }
+
     private fun dismissIncomingFaceTimeNotificationIfAnswering(intent: Intent?) {
-        if (intent?.type != "AnswerFaceTime" || !intent.getBooleanExtra("answer", false)) return
-        val notificationId = intent.getIntExtra("notificationId", 0)
-        if (notificationId != 0) {
-            getSystemService(NotificationManager::class.java)
-                ?.cancel(Constants.newFaceTimeNotificationTag, notificationId)
+        LockScreenCallPolicy.dismissIncomingFaceTimeNotification(
+            intentType = intent?.type,
+            answerExtra = intent?.getBooleanExtra("answer", false) == true,
+            callUuid = intent?.getStringExtra("callUuid"),
+            notificationId = intent?.getIntExtra("notificationId", 0) ?: 0,
+            stopRing = { CallTonePlayer.stopIncomingRing(it) },
+            cancelByCallUuid = { CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(this, it) },
+            cancelByNotificationId = {
+                getSystemService(NotificationManager::class.java)
+                    ?.cancel(Constants.newFaceTimeNotificationTag, it)
+            }
+        )
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if ((keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) &&
+            CallTonePlayer.isIncomingRinging()
+        ) {
+            CallTonePlayer.stopIncomingRing()
+            return true
         }
+        return super.onKeyDown(keyCode, event)
     }
 
     fun updateLocusContext(chatGuid: String?) {
@@ -197,6 +340,9 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onDestroy() {
         PersistentLog.d(this, Constants.logTag, "BlueBubbles MainActivity is being destroyed")
+        if (activeInstance?.get() === this) {
+            activeInstance = null
+        }
         MethodCallHandler.clearNotificationListenerResult()
         setEngine(null, this)
 

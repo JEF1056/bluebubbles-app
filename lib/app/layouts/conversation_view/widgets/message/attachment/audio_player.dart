@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:universal_io/io.dart';
 
@@ -14,11 +15,63 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:get/get.dart';
 
+@visibleForTesting
+const List<double> audioPlaybackSpeeds = [1.0, 1.5, 2.0];
+
+@visibleForTesting
+double nextAudioPlaybackSpeed(double current) {
+  final idx = audioPlaybackSpeeds.indexOf(current);
+  return audioPlaybackSpeeds[(idx + 1) % audioPlaybackSpeeds.length];
+}
+
+@visibleForTesting
+String formatAudioPlaybackSpeed(double rate) {
+  return rate == rate.roundToDouble() ? '${rate.toInt()}x' : '${rate}x';
+}
+
+class AudioSpeedChip extends StatelessWidget {
+  const AudioSpeedChip({
+    super.key,
+    required this.rate,
+    required this.onTap,
+  });
+
+  final double rate;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.theme.colorScheme;
+    final label = formatAudioPlaybackSpeed(rate);
+    return ActionChip(
+      key: const Key('audio-speed-chip'),
+      tooltip: 'Playback speed $label',
+      onPressed: onTap,
+      label: Text(
+        label,
+        style: context.theme.textTheme.labelSmall?.copyWith(
+          color: colors.onSecondaryContainer,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      backgroundColor: colors.secondaryContainer,
+      side: BorderSide.none,
+      shape: const StadiumBorder(),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 4),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.padded,
+    );
+  }
+}
+
 class AudioPlayer extends StatefulWidget {
   final PlatformFile file;
   final Attachment? attachment;
   final String? transcript;
   final ConversationViewController? controller;
+  final bool compact;
+  final Listenable? playPauseSignal;
 
   const AudioPlayer({
     super.key,
@@ -26,6 +79,8 @@ class AudioPlayer extends StatefulWidget {
     required this.attachment,
     this.transcript,
     this.controller,
+    this.compact = false,
+    this.playPauseSignal,
   });
 
   @override
@@ -50,21 +105,38 @@ class _AudioPlayerState extends State<AudioPlayer> with AutomaticKeepAliveClient
       vsync: this, duration: const Duration(milliseconds: 400), animationBehavior: AnimationBehavior.preserve);
   final playerState = Rx<PlayerState?>(null);
   final maxDuration = 0.obs;
+  final currentPosition = 0.obs;
+  final playbackRate = 1.0.obs;
+  final hasError = false.obs;
   StreamSubscription<PlayerState>? _playerStateSub;
+  StreamSubscription<int>? _currentDurationSub;
   VoidCallback? _controllerListener;
   bool _ownsController = false;
 
   @override
   void initState() {
     super.initState();
+    widget.playPauseSignal?.addListener(_handlePlayPauseSignal);
     if (attachment?.guid != null) controller = cvController?.audioPlayers[attachment!.guid];
     initBytes();
   }
 
   @override
+  void didUpdateWidget(covariant AudioPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playPauseSignal != widget.playPauseSignal) {
+      oldWidget.playPauseSignal?.removeListener(_handlePlayPauseSignal);
+      widget.playPauseSignal?.addListener(_handlePlayPauseSignal);
+    }
+  }
+
+  @override
   void dispose() {
+    widget.playPauseSignal?.removeListener(_handlePlayPauseSignal);
     _playerStateSub?.cancel();
     _playerStateSub = null;
+    _currentDurationSub?.cancel();
+    _currentDurationSub = null;
     if (_controllerListener != null) {
       controller?.removeListener(_controllerListener!);
       _controllerListener = null;
@@ -76,104 +148,180 @@ class _AudioPlayerState extends State<AudioPlayer> with AutomaticKeepAliveClient
     super.dispose();
   }
 
+  void _handlePlayPauseSignal() {
+    unawaited(_togglePlayPause());
+  }
+
+  Future<void> _togglePlayPause() async {
+    if (controller == null) return;
+    if (playerState.value == PlayerState.playing) {
+      animController.reverse();
+      await controller!.pausePlayer();
+    } else {
+      animController.forward();
+      controller!.setFinishMode(finishMode: FinishMode.pause);
+      await controller!.startPlayer();
+    }
+  }
+
+  Future<void> _cycleSpeed() async {
+    final next = nextAudioPlaybackSpeed(playbackRate.value);
+    playbackRate.value = next;
+    if (controller != null && !kIsWeb) {
+      try {
+        await (controller as dynamic).setRate(next);
+      } catch (_) {}
+    }
+  }
+
   void initBytes() async {
     if (attachment?.guid != null) controller = cvController?.audioPlayers[attachment!.guid];
     if (controller == null) {
       final created = PlayerController();
-      void listener() {
-        maxDuration.value = created.maxDuration;
-      }
-      created.addListener(listener);
-      final sub = created.onPlayerStateChanged.listen((event) {
-        if ((created.playerState == PlayerState.paused || created.playerState == PlayerState.stopped) &&
-            animController.value > 0) {
-          animController.reverse();
-        }
-        playerState.value = created.playerState;
-      });
       try {
+        if (file.path == null || file.path!.isEmpty) {
+          throw StateError('Audio file path is missing');
+        }
         await created.preparePlayer(path: file.path!);
       } catch (_) {
-        await sub.cancel();
-        created.removeListener(listener);
         created.dispose();
-        rethrow;
+        if (mounted) hasError.value = true;
+        return;
       }
       final cached = cvController != null && attachment?.guid != null;
       if (!mounted) {
-        await sub.cancel();
-        created.removeListener(listener);
         created.dispose();
         return;
       }
-      _controllerListener = listener;
-      _playerStateSub = sub;
       controller = created;
       _ownsController = !cached;
       if (cached) cvController!.audioPlayers[attachment!.guid!] = created;
     }
-    playerState.value = controller?.playerState;
-    maxDuration.value = controller?.maxDuration ?? 0;
+    final active = controller;
+    if (active == null || !mounted) return;
+    void listener() {
+      if (!mounted) return;
+      maxDuration.value = active.maxDuration;
+    }
+    active.addListener(listener);
+    _controllerListener = listener;
+    _playerStateSub = active.onPlayerStateChanged.listen((event) {
+      if (!mounted) return;
+      if ((active.playerState == PlayerState.paused || active.playerState == PlayerState.stopped) &&
+          animController.value > 0) {
+        animController.reverse();
+      } else if (active.playerState == PlayerState.playing && animController.value < 1) {
+        animController.forward();
+      }
+      playerState.value = active.playerState;
+    });
+    _currentDurationSub = active.onCurrentDurationChanged.listen((ms) {
+      if (!mounted) return;
+      currentPosition.value = ms;
+    });
+    playerState.value = active.playerState;
+    maxDuration.value = active.maxDuration;
+    animController.value = active.playerState == PlayerState.playing ? 1 : 0;
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-        padding: const EdgeInsets.all(5),
-        child: Column(
+    final colors = context.theme.colorScheme;
+    return Obx(() {
+      if (hasError.value) {
+        return Padding(
+          padding: widget.compact ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
             mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  IconButton(
-                    onPressed: () async {
-                      if (controller == null) return;
-                      if (playerState.value == PlayerState.playing) {
-                        animController.reverse();
-                        await controller!.pausePlayer();
-                      } else {
-                        animController.forward();
-                        controller!.setFinishMode(finishMode: FinishMode.pause);
-                        await controller!.startPlayer();
-                      }
-                    },
-                    icon: AnimatedIcon(
-                      icon: AnimatedIcons.play_pause,
-                      progress: animController,
+              Icon(Icons.error_outline, size: 20, color: colors.error),
+              const SizedBox(width: 8),
+              Text('Audio unavailable', style: context.theme.textTheme.bodyMedium?.copyWith(color: colors.error)),
+            ],
+          ),
+        );
+      }
+
+      final isPlaying = playerState.value == PlayerState.playing;
+      final remainingMs = math.max(0, maxDuration.value - currentPosition.value);
+      final remaining = Duration(milliseconds: remainingMs);
+      final active = playerState.value == PlayerState.playing || playerState.value == PlayerState.paused;
+
+      final waveform = LayoutBuilder(
+        builder: (context, waveConstraints) {
+          final maxW = waveConstraints.maxWidth.isFinite
+              ? waveConstraints.maxWidth
+              : NavigationSvc.width(context) * 0.22;
+          final targetW = widget.compact
+              ? maxW.clamp(40.0, 160.0)
+              : math.min(maxW, NavigationSvc.width(context) * 0.22).clamp(40.0, 220.0);
+          if (maxDuration.value == 0 || controller == null) {
+            return SizedBox(width: targetW, height: 36);
+          }
+          return AudioFileWaveforms(
+            size: Size(targetW, 36),
+            playerController: controller!,
+            padding: EdgeInsets.zero,
+            playerWaveStyle: PlayerWaveStyle(
+                fixedWaveColor: colors.surfaceContainerHighest.oppositeLightenOrDarken(20),
+                liveWaveColor: colors.primary,
+                waveCap: StrokeCap.square,
+                waveThickness: 2,
+                seekLineThickness: 2,
+                showSeekLine: false),
+          );
+        },
+      );
+
+      return Padding(
+          padding: widget.compact ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisSize: widget.compact ? MainAxisSize.max : MainAxisSize.min,
+                  children: [
+                    IconButton.filledTonal(
+                      key: const Key('audio-play-pause-button'),
+                      tooltip: isPlaying ? 'Pause' : 'Play',
+                      onPressed: _togglePlayPause,
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(40, 40),
+                        minimumSize: const Size(40, 40),
+                        padding: EdgeInsets.zero,
+                        tapTargetSize: MaterialTapTargetSize.padded,
+                      ),
+                      icon: AnimatedIcon(
+                        icon: AnimatedIcons.play_pause,
+                        progress: animController,
+                      ),
+                      color: colors.onSecondaryContainer,
                     ),
-                    color: context.theme.colorScheme.onSurfaceVariant,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  Obx(() => maxDuration.value == 0
-                      ? SizedBox(width: NavigationSvc.width(context) * 0.25)
-                      : AudioFileWaveforms(
-                          size: Size(NavigationSvc.width(context) * 0.20, 40),
-                          playerController: controller!,
-                          padding: EdgeInsets.zero,
-                          playerWaveStyle: PlayerWaveStyle(
-                              fixedWaveColor:
-                                  context.theme.colorScheme.surfaceContainerHighest.oppositeLightenOrDarken(20),
-                              liveWaveColor: context.theme.colorScheme.onSurfaceVariant,
-                              waveCap: StrokeCap.square,
-                              waveThickness: 2,
-                              seekLineThickness: 2,
-                              showSeekLine: false),
-                        )),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Center(
-                      heightFactor: 1,
-                      child: Obx(() => Text(prettyDuration(Duration(milliseconds: maxDuration.value)),
-                          style: context.theme.textTheme.labelLarge!)),
+                    const SizedBox(width: 6),
+                    if (widget.compact) Expanded(child: waveform) else Flexible(child: waveform),
+                    const SizedBox(width: 6),
+                    Text(
+                      prettyDuration(remaining),
+                      style: context.theme.textTheme.labelMedium?.copyWith(
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              if (widget.transcript != null) _Transcript(widget.transcript!),
-            ]));
+                    if (!widget.compact && active)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 6),
+                        child: AudioSpeedChip(
+                          rate: playbackRate.value,
+                          onTap: _cycleSpeed,
+                        ),
+                      ),
+                  ],
+                ),
+                if (widget.transcript != null && !widget.compact) _Transcript(widget.transcript!),
+              ]));
+    });
   }
 
   @override
@@ -192,8 +340,11 @@ class _DesktopAudioPlayerState extends State<AudioPlayer>
   late final animController = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 400), animationBehavior: AnimationBehavior.preserve);
   final isPlaying = false.obs;
+  final hasStarted = false.obs;
+  final hasError = false.obs;
   final position = Duration.zero.obs;
   final duration = Duration.zero.obs;
+  final playbackRate = 1.0.obs;
   StreamSubscription<Duration>? _positionSub;
   StreamSubscription<Duration>? _durationSub;
   StreamSubscription<bool>? _playingSub;
@@ -203,12 +354,23 @@ class _DesktopAudioPlayerState extends State<AudioPlayer>
   @override
   void initState() {
     super.initState();
+    widget.playPauseSignal?.addListener(_handlePlayPauseSignal);
     if (attachment?.guid != null) controller = cvController?.audioPlayersDesktop[attachment!.guid];
     initBytes();
   }
 
   @override
+  void didUpdateWidget(covariant AudioPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playPauseSignal != widget.playPauseSignal) {
+      oldWidget.playPauseSignal?.removeListener(_handlePlayPauseSignal);
+      widget.playPauseSignal?.addListener(_handlePlayPauseSignal);
+    }
+  }
+
+  @override
   void dispose() {
+    widget.playPauseSignal?.removeListener(_handlePlayPauseSignal);
     _positionSub?.cancel();
     _positionSub = null;
     _durationSub?.cancel();
@@ -224,102 +386,176 @@ class _DesktopAudioPlayerState extends State<AudioPlayer>
     super.dispose();
   }
 
+  void _handlePlayPauseSignal() {
+    unawaited(_togglePlayPause());
+  }
+
+  Future<void> _togglePlayPause() async {
+    if (controller == null) return;
+    if (isPlaying.value) {
+      animController.reverse();
+      await controller!.pause();
+    } else {
+      hasStarted.value = true;
+      animController.forward();
+      await controller!.play();
+    }
+  }
+
+  Future<void> _cycleSpeed() async {
+    final next = nextAudioPlaybackSpeed(playbackRate.value);
+    playbackRate.value = next;
+    try {
+      await controller?.setRate(next);
+    } catch (_) {}
+  }
+
   void initBytes() async {
     if (attachment?.guid != null) controller = cvController?.audioPlayersDesktop[attachment!.guid];
     if (controller == null) {
-      final created = Player();
-      final posSub = created.stream.position.listen((pos) => position.value = pos);
-      final durSub = created.stream.duration.listen((dur) => duration.value = dur);
-      final playSub = created.stream.playing.listen((playing) => isPlaying.value = playing);
-      final compSub = created.stream.completed.listen((bool completed) async {
-        if (completed) {
-          await created.seek(Duration.zero);
-          if (Platform.isLinux) {
-            await created.pause();
-          }
-          animController.reverse();
-        }
-      });
-      Future<void> cleanupCreated() async {
-        await posSub.cancel();
-        await durSub.cancel();
-        await playSub.cancel();
-        await compSub.cancel();
-        await created.dispose();
+      final Player created;
+      try {
+        created = Player();
+      } catch (_) {
+        if (mounted) hasError.value = true;
+        return;
       }
       try {
+        if (file.path == null || file.path!.isEmpty) {
+          throw StateError('Audio file path is missing');
+        }
         await created.setPlaylistMode(PlaylistMode.none);
         await created.open(Media(file.path!), play: false);
       } catch (_) {
-        await cleanupCreated();
-        rethrow;
+        await created.dispose();
+        if (mounted) hasError.value = true;
+        return;
       }
       final cached = cvController != null && attachment?.guid != null;
       if (!mounted) {
-        await cleanupCreated();
+        await created.dispose();
         return;
       }
-      _positionSub = posSub;
-      _durationSub = durSub;
-      _playingSub = playSub;
-      _completedSub = compSub;
       controller = created;
       _ownsController = !cached;
       if (cached) cvController!.audioPlayersDesktop[attachment!.guid!] = created;
     }
-    isPlaying.value = controller?.state.playing ?? false;
-    position.value = controller?.state.position ?? Duration.zero;
-    duration.value = controller?.state.duration ?? Duration.zero;
+    final active = controller;
+    if (active == null || !mounted) return;
+    _positionSub = active.stream.position.listen((pos) {
+      if (!mounted) return;
+      position.value = pos;
+    });
+    _durationSub = active.stream.duration.listen((dur) {
+      if (!mounted) return;
+      duration.value = dur;
+    });
+    _playingSub = active.stream.playing.listen((playing) {
+      if (!mounted) return;
+      isPlaying.value = playing;
+      if (playing) {
+        hasStarted.value = true;
+        if (animController.value < 1) animController.forward();
+      } else if (animController.value > 0) {
+        animController.reverse();
+      }
+    });
+    _completedSub = active.stream.completed.listen((bool completed) async {
+      if (completed) {
+        if (mounted) hasStarted.value = false;
+        await active.seek(Duration.zero);
+        if (Platform.isLinux) {
+          await active.pause();
+        }
+        if (!mounted) return;
+        animController.reverse();
+      }
+    });
+    isPlaying.value = active.state.playing;
+    position.value = active.state.position;
+    duration.value = active.state.duration;
+    animController.value = active.state.playing ? 1 : 0;
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Padding(
-        padding: const EdgeInsets.all(5),
-        child: IntrinsicWidth(
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    onPressed: () async {
-                      if (controller == null) return;
-                      if (isPlaying.value) {
-                        animController.reverse();
-                        await controller!.pause();
-                      } else {
-                        animController.forward();
-                        await controller!.play();
-                      }
-                    },
-                    icon: AnimatedIcon(
-                      icon: AnimatedIcons.play_pause,
-                      progress: animController,
-                    ),
-                    color: context.theme.colorScheme.onSurfaceVariant,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  if (controller != null)
-                    Obx(() => SizedBox(
-                          height: 30,
-                          child: Slider(
-                            value: position.value.inSeconds.toDouble(),
-                            onChanged: (double value) {
-                              controller!.seek(Duration(seconds: value.toInt()));
-                            },
-                            min: 0,
-                            max: duration.value.inSeconds.toDouble(),
-                          ),
-                        )),
-                  Obx(() => Padding(
-                        padding: const EdgeInsets.only(left: 10, right: 16),
-                        child: Text("${prettyDuration(position.value)} / ${prettyDuration(duration.value)}"),
-                      ))
-                ],
+    final colors = context.theme.colorScheme;
+    final row = Row(
+      mainAxisSize: widget.compact ? MainAxisSize.max : MainAxisSize.min,
+      children: [
+        Obx(() => IconButton.filledTonal(
+              key: const Key('audio-play-pause-button'),
+              tooltip: isPlaying.value ? 'Pause' : 'Play',
+              onPressed: _togglePlayPause,
+              style: IconButton.styleFrom(
+                fixedSize: const Size(40, 40),
+                minimumSize: const Size(40, 40),
+                padding: EdgeInsets.zero,
+                tapTargetSize: MaterialTapTargetSize.padded,
               ),
-              if (widget.transcript != null) _NoIntrinsicWidth(child: _Transcript(widget.transcript!)),
-            ])));
+              icon: AnimatedIcon(
+                icon: AnimatedIcons.play_pause,
+                progress: animController,
+              ),
+              color: colors.onSecondaryContainer,
+            )),
+        const SizedBox(width: 4),
+        Flexible(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: widget.compact ? double.infinity : 160),
+            child: Obx(() {
+              final maxSec = duration.value.inSeconds.toDouble();
+              final posSec = position.value.inSeconds.toDouble().clamp(0.0, maxSec > 0 ? maxSec : 0.0);
+              return SizedBox(
+                height: 30,
+                child: Slider(
+                  value: posSec,
+                  onChanged: controller != null && maxSec > 0
+                      ? (double value) => controller!.seek(Duration(seconds: value.toInt()))
+                      : null,
+                  min: 0,
+                  max: maxSec > 0 ? maxSec : 1.0,
+                ),
+              );
+            }),
+          ),
+        ),
+        Obx(() {
+          final remainingMs = math.max(0, duration.value.inMilliseconds - position.value.inMilliseconds);
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Text(
+              prettyDuration(Duration(milliseconds: remainingMs)),
+              style: context.theme.textTheme.labelMedium?.copyWith(
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          );
+        }),
+        if (!widget.compact)
+          Obx(() {
+            if (!isPlaying.value && !hasStarted.value) return const SizedBox.shrink();
+            return AudioSpeedChip(
+              rate: playbackRate.value,
+              onTap: _cycleSpeed,
+            );
+          }),
+      ],
+    );
+
+    return Padding(
+        padding: widget.compact ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: widget.compact
+            ? row
+            : IntrinsicWidth(
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      row,
+                      if (widget.transcript != null) _NoIntrinsicWidth(child: _Transcript(widget.transcript!)),
+                    ])));
   }
 
   @override
@@ -331,16 +567,36 @@ class _WebAudioPlayerState extends State<AudioPlayer>
   late final WebAudioController _controller;
   late final animController = AnimationController(
       vsync: this, duration: const Duration(milliseconds: 400), animationBehavior: AnimationBehavior.preserve);
+  bool _hasStarted = false;
 
   @override
   void initState() {
     super.initState();
+    widget.playPauseSignal?.addListener(_handlePlayPauseSignal);
     _controller = WebAudioController(file: widget.file, attachment: widget.attachment)
       ..addListener(_onControllerUpdate);
   }
 
+  @override
+  void didUpdateWidget(covariant AudioPlayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.playPauseSignal != widget.playPauseSignal) {
+      oldWidget.playPauseSignal?.removeListener(_handlePlayPauseSignal);
+      widget.playPauseSignal?.addListener(_handlePlayPauseSignal);
+    }
+  }
+
+  void _handlePlayPauseSignal() {
+    unawaited(_controller.togglePlayPause());
+  }
+
   void _onControllerUpdate() {
     if (!mounted) return;
+    if (_controller.isPlaying) {
+      _hasStarted = true;
+    } else if (_controller.position == Duration.zero) {
+      _hasStarted = false;
+    }
     if (!_controller.isPlaying && animController.value > 0) {
       animController.reverse();
     } else if (_controller.isPlaying && animController.value == 0) {
@@ -351,22 +607,16 @@ class _WebAudioPlayerState extends State<AudioPlayer>
 
   @override
   void dispose() {
+    widget.playPauseSignal?.removeListener(_handlePlayPauseSignal);
     _controller.removeListener(_onControllerUpdate);
     _controller.dispose();
     animController.dispose();
     super.dispose();
   }
 
-  static const _speeds = [1.0, 1.5, 2.0];
-
   void _cycleSpeed() {
-    final idx = _speeds.indexOf(_controller.playbackRate);
-    final next = _speeds[(idx + 1) % _speeds.length];
+    final next = nextAudioPlaybackSpeed(_controller.playbackRate);
     _controller.setPlaybackRate(next);
-  }
-
-  String _speedLabel(double rate) {
-    return rate == rate.roundToDouble() ? '${rate.toInt()}x' : '${rate}x';
   }
 
   @override
@@ -375,7 +625,7 @@ class _WebAudioPlayerState extends State<AudioPlayer>
     final colors = context.theme.colorScheme;
     if (_controller.hasError) {
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: widget.compact ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -389,33 +639,37 @@ class _WebAudioPlayerState extends State<AudioPlayer>
 
     final maxSec = _controller.duration.inSeconds.toDouble();
     final posSec = _controller.position.inSeconds.toDouble().clamp(0.0, maxSec > 0 ? maxSec : 0.0);
+    final remainingMs = math.max(0, _controller.duration.inMilliseconds - _controller.position.inMilliseconds);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: widget.compact ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: widget.compact ? MainAxisSize.max : MainAxisSize.min,
             children: [
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: IconButton.filledTonal(
-                  onPressed: _controller.togglePlayPause,
+              IconButton.filledTonal(
+                key: const Key('audio-play-pause-button'),
+                tooltip: _controller.isPlaying ? 'Pause' : 'Play',
+                onPressed: _controller.togglePlayPause,
+                style: IconButton.styleFrom(
+                  fixedSize: const Size(40, 40),
+                  minimumSize: const Size(40, 40),
                   padding: EdgeInsets.zero,
-                  icon: AnimatedIcon(
-                    icon: AnimatedIcons.play_pause,
-                    progress: animController,
-                  ),
-                  color: colors.onSecondaryContainer,
+                  tapTargetSize: MaterialTapTargetSize.padded,
                 ),
+                icon: AnimatedIcon(
+                  icon: AnimatedIcons.play_pause,
+                  progress: animController,
+                ),
+                color: colors.onSecondaryContainer,
               ),
               const SizedBox(width: 4),
               Flexible(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 160),
+                  constraints: BoxConstraints(maxWidth: widget.compact ? double.infinity : 160),
                   child: SizedBox(
                     height: 30,
                     child: Slider(
@@ -430,30 +684,22 @@ class _WebAudioPlayerState extends State<AudioPlayer>
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
                 child: Text(
-                  "${prettyDuration(_controller.position)} / ${prettyDuration(_controller.duration)}",
-                  style: context.theme.textTheme.labelMedium,
-                ),
-              ),
-              Material(
-                color: colors.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  onTap: _cycleSpeed,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    child: Text(
-                      _speedLabel(_controller.playbackRate),
-                      style: context.theme.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
-                    ),
+                  prettyDuration(Duration(milliseconds: remainingMs)),
+                  style: context.theme.textTheme.labelMedium?.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
               ),
+              if (!widget.compact && (_controller.isPlaying || _hasStarted))
+                AudioSpeedChip(
+                  rate: _controller.playbackRate,
+                  onTap: _cycleSpeed,
+                ),
             ],
           ),
-          if (widget.transcript != null) _Transcript(widget.transcript!),
+          if (widget.transcript != null && !widget.compact) _Transcript(widget.transcript!),
         ],
       ),
     );

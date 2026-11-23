@@ -268,6 +268,45 @@ void main() {
 
       expect(tracker.snapshot, SyncStatusSnapshot.idle);
     });
+
+    test('prepareManualRetry times out after 15s on stall and clears cleanly on finish or reset', () {
+      fakeAsync((async) {
+        final tracker = SyncStatusTracker(
+          onChanged: (_) {},
+          startupGrace: Duration.zero,
+          manualRetryTimeout: const Duration(seconds: 15),
+        );
+        addTearDown(tracker.dispose);
+
+        tracker.setFinishedSetup(true);
+        tracker.onSocketState(connected: false, retrying: false, failed: true, errorMessage: 'Connection lost');
+        expect(tracker.snapshot.showFailed, isTrue);
+        expect(tracker.snapshot.retrying, isFalse);
+
+        // Stalled retry: unblocks automatically at 15s.
+        tracker.prepareManualRetry();
+        expect(tracker.snapshot.retrying, isTrue);
+        async.elapse(const Duration(seconds: 14));
+        expect(tracker.snapshot.retrying, isTrue);
+        async.elapse(const Duration(seconds: 1));
+        expect(tracker.snapshot.retrying, isFalse);
+
+        // Finished sync (failure or success) clears manual retry immediately and cancels timer.
+        tracker.prepareManualRetry();
+        expect(tracker.snapshot.retrying, isTrue);
+        tracker.onSyncStarted();
+        tracker.onSyncFinished(success: false);
+        expect(tracker.snapshot.retrying, isFalse);
+
+        // Reset via setFinishedSetup(false) cancels active manual retry timer cleanly.
+        tracker.prepareManualRetry();
+        expect(tracker.snapshot.retrying, isTrue);
+        tracker.setFinishedSetup(false);
+        expect(tracker.snapshot, SyncStatusSnapshot.idle);
+        async.elapse(const Duration(seconds: 20));
+        expect(tracker.snapshot, SyncStatusSnapshot.idle);
+      });
+    });
   });
 
   group('SyncService reactive status integration', () {

@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -20,11 +21,35 @@ class AttachmentsLoader extends StatefulWidget {
 
 class _AttachmentsLoaderState extends State<AttachmentsLoader> {
   bool isLoading = true;
+  VoidCallback? _cancelTransitionCommit;
 
   @override
   void initState() {
     super.initState();
     _fetchAttachments();
+  }
+
+  @override
+  void dispose() {
+    _cancelTransitionCommit?.call();
+    _cancelTransitionCommit = null;
+    super.dispose();
+  }
+
+  void _commitLoaded(
+    List<Attachment> media,
+    List<Attachment> docs,
+    List<Attachment> locations,
+  ) {
+    if (!mounted) return;
+    _cancelTransitionCommit?.call();
+    _cancelTransitionCommit = runAfterRouteTransition(context, () {
+      if (!mounted) return;
+      setState(() {
+        isLoading = false;
+      });
+      widget.onAttachmentsLoaded(media, docs, locations);
+    });
   }
 
   Future<void> _fetchAttachments() async {
@@ -81,18 +106,9 @@ class _AttachmentsLoaderState extends State<AttachmentsLoader> {
       final locations = allAttachments.where((e) => (e.mimeType ?? "").contains("location")).toList()
         ..sort((a, b) => dateFor(b).compareTo(dateFor(a)));
 
-      setState(() {
-        isLoading = false;
-      });
-
-      widget.onAttachmentsLoaded(media, docs, locations);
+      _commitLoaded(media, docs, locations);
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          isLoading = false;
-        });
-        widget.onAttachmentsLoaded(const [], const [], const []);
-      }
+      _commitLoaded(const [], const [], const []);
     }
   }
 

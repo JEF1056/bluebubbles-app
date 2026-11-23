@@ -1,3 +1,4 @@
+import 'package:bluebubbles/app/layouts/call_history/call_history_page.dart';
 import 'package:bluebubbles/app/layouts/findmy/findmy_page.dart';
 import 'package:bluebubbles/app/layouts/settings/settings_page.dart';
 import 'package:bluebubbles/app/wrappers/titlebar_wrapper.dart';
@@ -7,21 +8,30 @@ import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
 // ignore: non_constant_identifier_names
 NavigatorService get NavigationSvc =>
     Get.isRegistered<NavigatorService>() ? Get.find<NavigatorService>() : Get.put(NavigatorService());
 
-enum AppSection { settings, findMy }
+enum AppSection { settings, findMy, calls }
 
 /// The chat list's split is nested navigators 1 (left) and 2 (right). Settings and Find My open over it full-window
 /// with splits of their own, Settings' right pane being navigator 3. The phone layout keeps each split's navigators,
 /// stacking the right pane over the left while it has a page.
 class NavigatorService {
   NavigatorService() {
+    PaneObserver.registerCovered(chatPaneOpen, chatPaneCovered);
+    PaneObserver.registerCovered(settingsPaneOpen, settingsPaneCovered);
     ever(settingsPaneOpen, (bool open) {
-      if (!open) activeSettingsPage.value = null;
+      if (!open) {
+        settingsPaneCovered.value = false;
+        activeSettingsPage.value = null;
+      }
+    });
+    ever(chatPaneOpen, (bool open) {
+      if (!open) chatPaneCovered.value = false;
     });
     ever(openSection, (AppSection? section) {
       isSettingsOpen.value = section == AppSection.settings;
@@ -31,11 +41,13 @@ class NavigatorService {
   final GlobalKey<NavigatorState> key = GlobalKey<NavigatorState>();
   final Rxn listener = Rxn();
 
-  /// In the phone layout the right pane covers the left only while this is true
+  /// In the phone layout the right pane covers the left while open (for hit testing) and hides it once covered
   final RxBool chatPaneOpen = false.obs;
-  late final PaneObserver chatPaneObserver = PaneObserver(chatPaneOpen);
+  final RxBool chatPaneCovered = false.obs;
+  late final PaneObserver chatPaneObserver = PaneObserver(chatPaneOpen, covered: chatPaneCovered);
 
   final RxBool settingsPaneOpen = false.obs;
+  final RxBool settingsPaneCovered = false.obs;
 
   /// Dialogs and see-through popups, like a message's, don't count as covering
   final RouteObserver<ModalRoute> paneRouteObserver = _OpaqueRouteObserver();
@@ -163,6 +175,11 @@ class NavigatorService {
     _openSection(AppSection.findMy, const FindMyPage());
   }
 
+  void openCallHistory() {
+    if (openSection.value == AppSection.calls) return;
+    _openSection(AppSection.calls, const CallHistoryPage());
+  }
+
   void closeSections() {
     final root = _root;
     if (root == null) return;
@@ -248,6 +265,7 @@ class NavigatorService {
         }
         return true;
       case AppSection.findMy:
+      case AppSection.calls:
         _root?.maybePop();
         return true;
       case null:
@@ -291,39 +309,120 @@ class _OpaqueRouteObserver extends RouteObserver<ModalRoute> {
 }
 
 class PaneObserver extends NavigatorObserver {
-  PaneObserver(this.open);
+  PaneObserver(this.open, {RxBool? covered})
+      : covered = covered ?? (_coveredByOpen[open] ??= false.obs) {
+    _coveredByOpen[open] = this.covered;
+  }
+
+  static final Expando<RxBool> _coveredByOpen = Expando<RxBool>('PaneObserver.covered');
+
+  static void registerCovered(RxBool open, RxBool covered) {
+    _coveredByOpen[open] = covered;
+  }
+
+  static RxBool? coveredFor(RxBool open) => _coveredByOpen[open];
 
   final RxBool open;
+  final RxBool covered;
 
   final List<Route> routes = [];
+  TransitionRoute? _observedRoute;
+  Animation<double>? _observedAnimation;
+  bool _userGestureInProgress = false;
 
   /// For a navigator that went away without popping its pages, like a chat list Reset replaced
   void reset() {
     routes.clear();
+    _userGestureInProgress = false;
+    _detachStatusListener();
     if (open.value) WidgetsBinding.instance.addPostFrameCallback((_) => open.value = routes.isNotEmpty);
+    _setCovered(false);
   }
 
   bool _tracked(Route? route) => route != null && route.settings is! Page;
 
+  TransitionRoute? get _topOpaqueRoute {
+    for (int i = routes.length - 1; i >= 0; i--) {
+      final route = routes[i];
+      if (route is TransitionRoute && route.opaque) return route;
+    }
+    return null;
+  }
+
   // Navigator callbacks run mid-transition, often during a build
   void _update() => WidgetsBinding.instance.addPostFrameCallback((_) => open.value = routes.isNotEmpty);
+
+  void _setCovered(bool next) {
+    if (covered.value == next) return;
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (covered.value != next && _computeCovered() == next) {
+          covered.value = next;
+        }
+      });
+      return;
+    }
+    covered.value = next;
+  }
+
+  bool _computeCovered() {
+    if (_userGestureInProgress) return false;
+    if (navigator?.userGestureInProgress ?? false) return false;
+    final topOpaque = _topOpaqueRoute;
+    if (topOpaque == null) return false;
+    return topOpaque.animation?.status == AnimationStatus.completed;
+  }
+
+  void _onAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.reverse) {
+      _setCovered(false);
+      return;
+    }
+    _setCovered(_computeCovered());
+  }
+
+  void _detachStatusListener() {
+    _observedAnimation?.removeStatusListener(_onAnimationStatus);
+    _observedAnimation = null;
+    _observedRoute = null;
+  }
+
+  void _syncObservedRoute() {
+    final topOpaque = _topOpaqueRoute;
+    final nextAnimation = topOpaque?.animation;
+    if (identical(topOpaque, _observedRoute) && identical(nextAnimation, _observedAnimation)) {
+      return;
+    }
+    _detachStatusListener();
+    if (topOpaque != null && nextAnimation != null) {
+      _observedRoute = topOpaque;
+      _observedAnimation = nextAnimation;
+      nextAnimation.addStatusListener(_onAnimationStatus);
+    }
+  }
 
   @override
   void didPush(Route route, Route? previousRoute) {
     if (_tracked(route)) routes.add(route);
     _update();
+    _syncObservedRoute();
+    _setCovered(_computeCovered());
   }
 
   @override
   void didPop(Route route, Route? previousRoute) {
     routes.remove(route);
     _update();
+    _syncObservedRoute();
+    _setCovered(_computeCovered());
   }
 
   @override
   void didRemove(Route route, Route? previousRoute) {
     routes.remove(route);
     _update();
+    _syncObservedRoute();
+    _setCovered(_computeCovered());
   }
 
   @override
@@ -332,6 +431,20 @@ class PaneObserver extends NavigatorObserver {
     if (index != -1) routes.removeAt(index);
     if (_tracked(newRoute)) routes.insert(index == -1 ? routes.length : index, newRoute!);
     _update();
+    _syncObservedRoute();
+    _setCovered(_computeCovered());
+  }
+
+  @override
+  void didStartUserGesture(Route route, Route? previousRoute) {
+    _userGestureInProgress = true;
+    _setCovered(false);
+  }
+
+  @override
+  void didStopUserGesture() {
+    _userGestureInProgress = false;
+    _setCovered(_computeCovered());
   }
 }
 

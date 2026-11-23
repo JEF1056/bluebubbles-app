@@ -80,12 +80,16 @@ class SyncService {
     );
     if (!connectionDesired || authFailed) {
       _cancelFailureRetry();
+      _cancelManualRetryHttpFallback();
       _catchUpTimer?.cancel();
       _catchUpTimer = null;
       return;
     }
-    if (_socketConnected && _needsRecoverySync && (!wasConnected || _failureRetryTimer == null)) {
-      _triggerRecoverySync();
+    if (_socketConnected) {
+      _cancelManualRetryHttpFallback();
+      if (_needsRecoverySync && (!wasConnected || _failureRetryTimer == null)) {
+        _triggerRecoverySync();
+      }
     }
   }
 
@@ -96,12 +100,14 @@ class SyncService {
     _statusTracker.setNetworkOnline(online);
     if (!online) {
       _cancelFailureRetry();
+      _cancelManualRetryHttpFallback();
     } else if (wasOffline && _needsRecoverySync && !_authFailed && _connectionDesired) {
       _triggerRecoverySync();
     }
   }
 
   void onResumeReconnectGrace() {
+    _failureRetryAttempt = 0;
     _syncSetupGate();
     _statusTracker.beginReconnectGrace();
   }
@@ -120,6 +126,7 @@ class SyncService {
     _lastIncrementalSyncTimestamp = null;
     _failureRetryAttempt = 0;
     _cancelFailureRetry();
+    _cancelManualRetryHttpFallback();
     _catchUpTimer?.cancel();
     _catchUpTimer = null;
     if (GetIt.I.isRegistered<SocketService>() && SocketSvc.state.value != SocketState.connected) {
@@ -127,8 +134,10 @@ class SyncService {
       if (isIncrementalSyncing.value) {
         _retryImmediatelyAfterInFlight = true;
       }
-      SocketSvc.resumeConnection();
       SocketSvc.restartSocket();
+      if (!_socketConnected && SocketSvc.state.value != SocketState.connected) {
+        _scheduleManualRetryHttpFallback();
+      }
       return;
     }
     if (isIncrementalSyncing.value) {
@@ -146,6 +155,7 @@ class SyncService {
     _catchUpTimer?.cancel();
     _catchUpTimer = null;
     _cancelFailureRetry();
+    _cancelManualRetryHttpFallback();
     _needsRecoverySync = false;
     _retryImmediatelyAfterInFlight = false;
     _pendingUseGlobalIsolate = false;
@@ -158,6 +168,9 @@ class SyncService {
   }
 
   static const Duration _incrementalSyncCooldown = Duration(seconds: 30);
+  static const Duration _manualRetryHttpFallbackDelay = Duration(seconds: 5);
+  static const Duration _maxFailureRetryDelay = Duration(seconds: 60);
+  static const int _maxFailureRetryAttempts = 10;
   static const List<Duration> _failureRetryDelays = [
     Duration(seconds: 2),
     Duration(seconds: 5),
@@ -167,6 +180,7 @@ class SyncService {
   static const int _dispatchChunkSize = 50;
   DateTime? _lastIncrementalSyncTimestamp;
   Timer? _failureRetryTimer;
+  Timer? _manualRetryHttpFallbackTimer;
   int _failureRetryAttempt = 0;
   bool _needsRecoverySync = false;
   bool _retryImmediatelyAfterInFlight = false;
@@ -239,6 +253,7 @@ class SyncService {
     }
     _catchUpTimer?.cancel();
     _catchUpTimer = null;
+    _cancelManualRetryHttpFallback();
 
     _lastIncrementalSyncTimestamp = now;
     _inManagedIncrementalSync = true;
@@ -469,9 +484,26 @@ class SyncService {
     _failureRetryTimer = null;
   }
 
+  void _cancelManualRetryHttpFallback() {
+    _manualRetryHttpFallbackTimer?.cancel();
+    _manualRetryHttpFallbackTimer = null;
+  }
+
+  void _scheduleManualRetryHttpFallback() {
+    _cancelManualRetryHttpFallback();
+    _manualRetryHttpFallbackTimer = Timer(_manualRetryHttpFallbackDelay, () {
+      _manualRetryHttpFallbackTimer = null;
+      if (_socketConnected || !_connectionDesired || _authFailed) return;
+      if (GetIt.I.isRegistered<SocketService>() && SocketSvc.state.value == SocketState.connected) return;
+      _lastIncrementalSyncTimestamp = null;
+      unawaited(startIncrementalSync(catchUp: true));
+    });
+  }
+
   void _triggerRecoverySync() {
     _failureRetryAttempt = 0;
     _cancelFailureRetry();
+    _cancelManualRetryHttpFallback();
     if (isIncrementalSyncing.value) {
       _retryImmediatelyAfterInFlight = true;
       return;
@@ -492,8 +524,11 @@ class SyncService {
   void _scheduleFailureRetry({bool useGlobalIsolate = false}) {
     if (!_needsRecoverySync || !_networkOnline || !_connectionDesired || _authFailed) return;
     if (_failureRetryTimer?.isActive ?? false) return;
-    if (_failureRetryAttempt >= _failureRetryDelays.length) return;
-    final delay = _failureRetryDelays[_failureRetryAttempt++];
+    if (_failureRetryAttempt >= _maxFailureRetryAttempts) return;
+    final delay = _failureRetryAttempt < _failureRetryDelays.length
+        ? _failureRetryDelays[_failureRetryAttempt]
+        : _maxFailureRetryDelay;
+    _failureRetryAttempt++;
     _failureRetryTimer = Timer(delay, () {
       _failureRetryTimer = null;
       if (!_needsRecoverySync || !_networkOnline || !_connectionDesired || _authFailed) return;

@@ -31,12 +31,14 @@ import com.google.gson.JsonParser
 import io.socket.client.IO
 import io.socket.client.Socket
 import io.socket.emitter.Emitter
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -99,17 +101,21 @@ object WearSyncManager {
     const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
     const val PATH_WATCH_ACTIVE = "/bb/watch-active"
     const val PATH_INCOMING_CALL = "/bb/incoming-call"
+    const val PATH_CALL_ACTIVE = "/bb/call-active"
+    const val PATH_SET_CALL_MUTED = "/bb/set-call-muted"
     const val PATH_CALL_ENDED = "/bb/call-ended"
     const val PATH_ANSWER_CALL_AUDIO = "/bb/answer-call-audio"
+    const val PATH_TRANSFER_CALL_AUDIO = "/bb/transfer-call-audio"
     const val PATH_DECLINE_CALL = "/bb/decline-call"
     const val PATH_OPEN_CHAT = "/bb/open-chat"
     const val PATH_TRANSLATE_MESSAGE = "/bb/translate-message"
 
-    private data class IncomingCallMeta(
+    internal data class IncomingCallMeta(
         val callerName: String,
         val callerAddress: String?,
         val isVideo: Boolean,
-        val isTelephony: Boolean = false
+        val isTelephony: Boolean = false,
+        val isGroup: Boolean = false
     )
 
     internal const val WATCH_IMAGE_MAX_DIM = 512
@@ -127,11 +133,37 @@ object WearSyncManager {
 
     private val incomingCalls = ConcurrentHashMap<String, IncomingCallMeta>()
     private val watchAnsweredCalls = ConcurrentHashMap.newKeySet<String>()
+    @Volatile
+    private var cachedWatchNodeNames: Set<String> = emptySet()
+    @Volatile
+    private var cachedHasConnectedWatch: Boolean = false
     private val endedCalls = ConcurrentHashMap<String, Long>()
     private val inFlightAttachments = ConcurrentHashMap.newKeySet<String>()
     private val attachmentSemaphore = Semaphore(2)
 
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    internal class CallLifecycleSendQueue(
+        scope: CoroutineScope,
+        dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1)
+    ) {
+        private val queue = Channel<suspend () -> Unit>(Channel.UNLIMITED)
+
+        init {
+            scope.launch(dispatcher) {
+                for (task in queue) {
+                    try {
+                        task()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+
+        fun enqueue(task: suspend () -> Unit): Boolean = queue.trySend(task).isSuccess
+    }
+
+    private val callLifecycleSendQueue = CallLifecycleSendQueue(scope)
     private val gson = Gson()
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
@@ -152,6 +184,10 @@ object WearSyncManager {
 
     @JvmStatic
     fun updateWatchConnectedCache(context: Context, connected: Boolean) {
+        cachedHasConnectedWatch = connected
+        if (!connected) {
+            cachedWatchNodeNames = emptySet()
+        }
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_WATCH_CONNECTED, connected)
@@ -178,6 +214,7 @@ object WearSyncManager {
             }
             addProperty("isVideo", meta.isVideo)
             addProperty("isTelephony", meta.isTelephony)
+            addProperty("isGroup", meta.isGroup)
             addProperty("savedAtMs", now)
         }.toString()
         val editor = prefs.edit().putString(KEY_CALL_META_PREFIX + callUuid, json)
@@ -216,7 +253,8 @@ object WearSyncManager {
                         callerName = obj.get("callerName")?.takeIf { !it.isJsonNull }?.asString ?: "Unknown Caller",
                         callerAddress = obj.get("callerAddress")?.takeIf { !it.isJsonNull }?.asString,
                         isVideo = obj.get("isVideo")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
-                        isTelephony = obj.get("isTelephony")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+                        isTelephony = obj.get("isTelephony")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+                        isGroup = obj.get("isGroup")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
                     )
                 }
             } catch (_: Exception) {
@@ -241,14 +279,15 @@ object WearSyncManager {
         callerName: String,
         callerAddress: String?,
         isVideo: Boolean,
-        isTelephony: Boolean = false
+        isTelephony: Boolean = false,
+        isGroup: Boolean = false
     ) {
         if (callUuid.isBlank()) return
         endedCalls.remove(callUuid)
-        val meta = IncomingCallMeta(callerName, callerAddress, isVideo, isTelephony)
+        val meta = IncomingCallMeta(callerName, callerAddress, isVideo, isTelephony, isGroup)
         incomingCalls[callUuid] = meta
         persistIncomingCallMeta(context, callUuid, meta)
-        scope.launch {
+        callLifecycleSendQueue.enqueue {
             val payload = JsonObject().apply {
                 addProperty("callUuid", callUuid)
                 addProperty("callerName", callerName)
@@ -257,8 +296,76 @@ object WearSyncManager {
                 }
                 addProperty("isVideo", isVideo)
                 addProperty("isTelephony", isTelephony)
+                addProperty("isGroup", isGroup)
             }.toString()
             sendMessageToWatchNodes(context, PATH_INCOMING_CALL, payload.toByteArray())
+        }
+    }
+
+    internal fun clearCallEnded(callUuid: String) {
+        if (callUuid.isNotBlank()) endedCalls.remove(callUuid)
+    }
+
+    internal fun recordCallEndedIfNew(callUuid: String, now: Long = System.currentTimeMillis()): Boolean {
+        if (callUuid.isBlank()) return false
+        endedCalls.entries.removeIf { now - it.value > CALL_META_TTL_MS }
+        return endedCalls.putIfAbsent(callUuid, now) == null
+    }
+
+    internal fun buildCallActivePayload(
+        callUuid: String,
+        startedAtMs: Long,
+        muted: Boolean,
+        callerName: String? = null,
+        callerAddress: String? = null,
+        isVideo: Boolean? = null,
+        isTelephony: Boolean? = null,
+        isGroup: Boolean? = null,
+        meta: IncomingCallMeta? = incomingCalls[callUuid]
+    ): String {
+        val resolvedName = callerName?.takeIf { it.isNotBlank() } ?: meta?.callerName
+        val resolvedAddress = callerAddress?.takeIf { it.isNotBlank() } ?: meta?.callerAddress
+        val resolvedTelephony = isTelephony ?: meta?.isTelephony ?: false
+        val resolvedVideo = (isVideo ?: meta?.isVideo ?: false) && !resolvedTelephony
+        val resolvedGroup = isGroup ?: meta?.isGroup ?: false
+        return JsonObject().apply {
+            addProperty("callUuid", callUuid)
+            addProperty("startedAtMs", startedAtMs)
+            addProperty("muted", muted)
+            if (!resolvedName.isNullOrBlank()) addProperty("callerName", resolvedName)
+            if (!resolvedAddress.isNullOrBlank()) addProperty("callerAddress", resolvedAddress)
+            addProperty("isVideo", resolvedVideo)
+            addProperty("isTelephony", resolvedTelephony)
+            addProperty("isGroup", resolvedGroup)
+        }.toString()
+    }
+
+    @JvmStatic
+    fun notifyCallActive(
+        context: Context,
+        callUuid: String,
+        startedAtMs: Long,
+        muted: Boolean,
+        callerName: String? = null,
+        callerAddress: String? = null,
+        isVideo: Boolean? = null,
+        isTelephony: Boolean? = null,
+        isGroup: Boolean? = null
+    ) {
+        if (callUuid.isBlank()) return
+        clearCallEnded(callUuid)
+        val payload = buildCallActivePayload(
+            callUuid = callUuid,
+            startedAtMs = startedAtMs,
+            muted = muted,
+            callerName = callerName,
+            callerAddress = callerAddress,
+            isVideo = isVideo,
+            isTelephony = isTelephony,
+            isGroup = isGroup
+        )
+        callLifecycleSendQueue.enqueue {
+            sendMessageToWatchNodes(context, PATH_CALL_ACTIVE, payload.toByteArray())
         }
     }
 
@@ -268,12 +375,76 @@ object WearSyncManager {
         incomingCalls.remove(callUuid)
         watchAnsweredCalls.remove(callUuid)
         takePersistedIncomingCallMeta(context, callUuid)
-        val now = System.currentTimeMillis()
-        endedCalls.entries.removeIf { now - it.value > CALL_META_TTL_MS }
-        if (endedCalls.putIfAbsent(callUuid, now) != null) return
-        scope.launch {
+        if (!recordCallEndedIfNew(callUuid)) return
+        callLifecycleSendQueue.enqueue {
             val payload = JsonObject().apply { addProperty("callUuid", callUuid) }.toString()
             sendMessageToWatchNodes(context, PATH_CALL_ENDED, payload.toByteArray())
+        }
+    }
+
+    @JvmStatic
+    fun isWatchAnsweredCall(callUuid: String?): Boolean =
+        !callUuid.isNullOrBlank() && watchAnsweredCalls.contains(callUuid)
+
+    @JvmStatic
+    fun markWatchAnsweredCall(callUuid: String?) {
+        if (!callUuid.isNullOrBlank()) {
+            watchAnsweredCalls.add(callUuid)
+        }
+    }
+
+    @JvmStatic
+    fun clearWatchAnsweredCall(callUuid: String?) {
+        if (!callUuid.isNullOrBlank()) {
+            watchAnsweredCalls.remove(callUuid)
+        }
+    }
+
+    @JvmStatic
+    fun getCachedWatchNodeNames(): Set<String> = cachedWatchNodeNames
+
+    @JvmStatic
+    fun hasConnectedWatch(): Boolean = cachedHasConnectedWatch || cachedWatchNodeNames.isNotEmpty()
+
+    @JvmStatic
+    fun refreshWatchNodeNamesAsync(context: Context) {
+        val appContext = context.applicationContext ?: context
+        scope.launch {
+            try {
+                val nodes = Wearable.getNodeClient(appContext).connectedNodes.await()
+                val connected = nodes.isNotEmpty()
+                cachedHasConnectedWatch = connected
+                updateWatchConnectedCache(appContext, connected)
+                val names = nodes.mapNotNull { it.displayName?.takeIf { name -> name.isNotBlank() } }.toSet()
+                if (names.isNotEmpty()) {
+                    cachedWatchNodeNames = names
+                } else if (!connected) {
+                    cachedWatchNodeNames = emptySet()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    @JvmStatic
+    fun isWatchConnected(context: Context, callback: (Boolean) -> Unit) {
+        val appContext = context.applicationContext ?: context
+        scope.launch {
+            val connected = try {
+                val nodes = Wearable.getNodeClient(appContext).connectedNodes.await()
+                val hasNodes = nodes.isNotEmpty()
+                cachedHasConnectedWatch = hasNodes
+                updateWatchConnectedCache(appContext, hasNodes)
+                val names = nodes.mapNotNull { it.displayName?.takeIf { name -> name.isNotBlank() } }.toSet()
+                if (names.isNotEmpty()) {
+                    cachedWatchNodeNames = names
+                } else if (!hasNodes) {
+                    cachedWatchNodeNames = emptySet()
+                }
+                hasNodes
+            } catch (_: Exception) {
+                hasConnectedWatch()
+            }
+            callback(connected)
         }
     }
 
@@ -315,6 +486,7 @@ object WearSyncManager {
                 putExtra("audioOnly", true)
                 putExtra("isTelephony", isTelephony)
                 putExtra("caller", callerName)
+                putExtra(com.bluebubbles.messaging.MainActivity.EXTRA_INCOMING_FACETIME, true)
                 type = "AnswerFaceTime"
             }
             launchActivityOrNotify(
@@ -336,6 +508,7 @@ object WearSyncManager {
         cancelCallNotifications(context, callUuid)
         com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.endCall(callUuid)
         notifyCallEnded(context, callUuid)
+        com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
         if (com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid)) {
             com.bluebubbles.messaging.services.network.HttpService(context).declineFaceTimeCall(
                 callUuid = callUuid,
@@ -1805,6 +1978,10 @@ object WearSyncManager {
                 .getCapability(WATCH_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
                 .await()
                 .nodes
+            val names = nodes.mapNotNull { it.displayName?.takeIf { name -> name.isNotBlank() } }.toSet()
+            if (names.isNotEmpty()) {
+                cachedWatchNodeNames = names
+            }
             val msgClient = Wearable.getMessageClient(context)
             for (node in nodes) {
                 try {

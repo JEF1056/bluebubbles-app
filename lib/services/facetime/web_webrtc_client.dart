@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:bluebubbles/services/facetime/facetime_media_models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/widgets.dart';
@@ -290,6 +291,39 @@ abstract class WebRtcPeerAdapter {
   Future<void> close();
 }
 
+/// Extended peer adapter capabilities for audio/video processing, device selection,
+/// and quality telemetry. Separated from [WebRtcPeerAdapter] so existing unit test
+/// fakes implementing [WebRtcPeerAdapter] stay compatible.
+abstract class WebRtcMediaPeerAdapter implements WebRtcPeerAdapter {
+  bool get canSelectAudioOutput;
+  Future<void> setVoiceIsolation(bool enabled);
+  Future<void> setVideoProcessing({
+    required FaceTimeVideoEffectType effect,
+    required bool denoise,
+    String? backgroundId,
+    String? backgroundPath,
+  });
+  Future<
+      ({
+        List<FaceTimeAudioDevice> outputs,
+        List<FaceTimeAudioDevice> inputs,
+        String? activeOutputId,
+        String? activeInputId,
+      })> enumerateAudioDevices();
+  Future<bool> selectAudioOutput(String deviceId);
+  Future<bool> selectAudioInput(String deviceId);
+  void setOnAudioDevicesChanged(
+    void Function(
+      List<FaceTimeAudioDevice> outputs,
+      List<FaceTimeAudioDevice> inputs,
+      String? activeOutputId,
+      String? activeInputId,
+    )? callback,
+  );
+  void setOnQualityStats(void Function(FaceTimeCallQualityStats stats)? callback);
+  void setOnIceStateChanged(void Function(String state)? callback);
+}
+
 /// Manages Web browser WebRTC audio/video bridging with the BlueBubbles Mac server
 /// over `ft-bridge-*` Socket.IO signaling.
 class WebWebRtcClient {
@@ -309,17 +343,42 @@ class WebWebRtcClient {
   final ValueNotifier<bool> cameraEnabled = ValueNotifier<bool>(false);
   final ValueNotifier<bool> frontCamera = ValueNotifier<bool>(true);
   final ValueNotifier<bool> canFlipCamera = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> voiceIsolationEnabled = ValueNotifier<bool>(true);
+  final ValueNotifier<bool> videoDenoiseEnabled = ValueNotifier<bool>(false);
+  final ValueNotifier<FaceTimeVideoEffectType> videoEffect =
+      ValueNotifier<FaceTimeVideoEffectType>(FaceTimeVideoEffectType.none);
+  final ValueNotifier<List<FaceTimeAudioDevice>> audioOutputs =
+      ValueNotifier<List<FaceTimeAudioDevice>>(const <FaceTimeAudioDevice>[]);
+  final ValueNotifier<List<FaceTimeAudioDevice>> audioInputs =
+      ValueNotifier<List<FaceTimeAudioDevice>>(const <FaceTimeAudioDevice>[]);
+  final ValueNotifier<String?> activeAudioOutputId = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> activeAudioInputId = ValueNotifier<String?>(null);
+  final ValueNotifier<bool> canSelectAudioOutput = ValueNotifier<bool>(false);
+  final ValueNotifier<FaceTimeCallQualityStats?> callQualityStats = ValueNotifier<FaceTimeCallQualityStats?>(null);
+  final ValueNotifier<String> iceConnectionState = ValueNotifier<String>('new');
+
   void Function(Widget? widget)? onRemoteVideoChanged;
   void Function(Widget? widget)? onLocalVideoChanged;
   void Function(bool enabled)? onCameraEnabledChanged;
   void Function(bool canFlip)? onCanFlipCameraChanged;
   void Function(bool isFront)? onFrontCameraChanged;
   void Function(String state)? onConnectionStateChanged;
+  void Function(
+    List<FaceTimeAudioDevice> outputs,
+    List<FaceTimeAudioDevice> inputs,
+    String? activeOutputId,
+    String? activeInputId,
+  )? onAudioDevicesChanged;
+  void Function(FaceTimeCallQualityStats stats)? onQualityStatsChanged;
+  void Function(String state)? onIceStateChanged;
 
   WebRtcBridgeConfig? _cachedConfig;
   WebRtcBridgeConfig? get cachedConfig => _cachedConfig;
 
   WebRtcPeerAdapter? _adapter;
+  WebRtcMediaPeerAdapter? get _mediaAdapter =>
+      _adapter is WebRtcMediaPeerAdapter ? _adapter as WebRtcMediaPeerAdapter : null;
+
   String? _activeCallUuid;
   String? get activeCallUuid => _activeCallUuid;
   bool get isActive => _activeCallUuid != null;
@@ -329,6 +388,9 @@ class WebWebRtcClient {
 
   bool _uplinkAccepted = false;
   bool get uplinkAccepted => _uplinkAccepted;
+
+  String? _backgroundId;
+  String? _backgroundPath;
 
   bool _remoteDescriptionSet = false;
   final List<WebRtcIceCandidate> _pendingRemoteIce = <WebRtcIceCandidate>[];
@@ -383,7 +445,7 @@ class WebWebRtcClient {
     }
 
     adapter.setOnIceCandidate((candidate) {
-      if (_activeCallUuid != callUuid) return;
+      if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
       _transport.emitIceCandidate(
         callUuid: callUuid,
         candidate: candidate.candidate,
@@ -392,32 +454,52 @@ class WebWebRtcClient {
       );
     });
     adapter.setOnRemoteVideoWidget((widget) {
-      if (_activeCallUuid != callUuid) return;
+      if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
       _updateRemoteVideo(widget);
     });
     adapter.setOnLocalVideoWidget((widget) {
-      if (_activeCallUuid != callUuid) return;
+      if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
       _updateLocalVideo(widget);
     });
     adapter.setOnConnectionStateChanged((state) {
-      if (_activeCallUuid != callUuid) return;
+      if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
       onConnectionStateChanged?.call(state);
     });
 
+    final mediaAdapter = _mediaAdapter;
+    if (mediaAdapter != null) {
+      canSelectAudioOutput.value = mediaAdapter.canSelectAudioOutput;
+      mediaAdapter.setOnAudioDevicesChanged((outputs, inputs, activeOut, activeIn) {
+        if (_activeCallUuid != callUuid || !identical(_adapter, mediaAdapter)) return;
+        _updateAudioDevices(outputs, inputs, activeOut, activeIn);
+      });
+      mediaAdapter.setOnQualityStats((stats) {
+        if (_activeCallUuid != callUuid || !identical(_adapter, mediaAdapter)) return;
+        callQualityStats.value = stats;
+        onQualityStatsChanged?.call(stats);
+      });
+      mediaAdapter.setOnIceStateChanged((state) {
+        if (_activeCallUuid != callUuid || !identical(_adapter, mediaAdapter)) return;
+        iceConnectionState.value = state;
+        onIceStateChanged?.call(state);
+      });
+    }
+
     _transport.onAnswer((data) async {
-      if (_activeCallUuid != callUuid) return;
+      if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
       if (data['callUuid']?.toString() != callUuid) return;
       final sdp = data['sdp']?.toString();
       if (sdp == null || sdp.isEmpty) return;
       final type = data['type']?.toString() ?? 'answer';
       try {
         await adapter.setRemoteAnswer(sdp, type);
-        if (_activeCallUuid != callUuid) return;
+        if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
         _uplinkAccepted = data['uplinkVideo'] == true;
         _remoteDescriptionSet = true;
         final queued = List<WebRtcIceCandidate>.from(_pendingRemoteIce);
         _pendingRemoteIce.clear();
         for (final c in queued) {
+          if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
           await adapter.addIceCandidate(c);
         }
         if (!answerCompleter.isCompleted) answerCompleter.complete();
@@ -427,7 +509,7 @@ class WebWebRtcClient {
     });
 
     _transport.onIceCandidate((data) async {
-      if (_activeCallUuid != callUuid) return;
+      if (_activeCallUuid != callUuid || !identical(_adapter, adapter)) return;
       if (data['callUuid']?.toString() != callUuid) return;
       final candidateStr = data['candidate']?.toString();
       if (candidateStr == null || candidateStr.isEmpty) return;
@@ -457,6 +539,21 @@ class WebWebRtcClient {
       _updateFrontCamera(adapter.isFrontCamera);
       _updateCanFlipCamera(hasLocalVideo && adapter.canFlipCamera);
 
+      if (mediaAdapter != null) {
+        if (!voiceIsolationEnabled.value) {
+          await mediaAdapter.setVoiceIsolation(false);
+        }
+        if (hasLocalVideo && (videoEffect.value != FaceTimeVideoEffectType.none || videoDenoiseEnabled.value)) {
+          await mediaAdapter.setVideoProcessing(
+            effect: videoEffect.value,
+            denoise: videoDenoiseEnabled.value,
+            backgroundId: _backgroundId,
+            backgroundPath: _backgroundPath,
+          );
+        }
+        await refreshAudioDevices();
+      }
+
       if (initialMuted) {
         adapter.setMicMuted(true);
       }
@@ -480,7 +577,7 @@ class WebWebRtcClient {
 
       await answerCompleter.future.timeout(answerTimeout);
     } catch (e) {
-      if (_activeCallUuid == callUuid) {
+      if (_activeCallUuid == callUuid && identical(_adapter, adapter)) {
         await hangup(emitSignal: false);
       }
       rethrow;
@@ -491,6 +588,9 @@ class WebWebRtcClient {
     _isMuted = muted;
     _adapter?.setMicMuted(muted);
     final uuid = _activeCallUuid;
+    if (GetIt.I.isRegistered<BaseLogger>()) {
+      Logger.info('WebRTC setMuted($muted) for call $uuid', tag: 'WebWebRtc');
+    }
     if (uuid != null) {
       _transport.emitMute(callUuid: uuid, muted: muted);
     }
@@ -517,6 +617,63 @@ class WebWebRtcClient {
     }
     await adapter.flipCamera();
     _updateFrontCamera(adapter.isFrontCamera);
+  }
+
+  Future<bool> setVoiceIsolation(bool enabled) async {
+    voiceIsolationEnabled.value = enabled;
+    final media = _mediaAdapter;
+    if (media == null) return true;
+    await media.setVoiceIsolation(enabled);
+    return true;
+  }
+
+  Future<bool> setVideoProcessing({
+    required FaceTimeVideoEffectType effect,
+    required bool denoise,
+    String? backgroundId,
+    String? backgroundPath,
+  }) async {
+    videoEffect.value = effect;
+    videoDenoiseEnabled.value = denoise;
+    _backgroundId = backgroundId;
+    _backgroundPath = backgroundPath;
+    final media = _mediaAdapter;
+    if (media == null) return true;
+    await media.setVideoProcessing(
+      effect: effect,
+      denoise: denoise,
+      backgroundId: backgroundId,
+      backgroundPath: backgroundPath,
+    );
+    return true;
+  }
+
+  Future<void> refreshAudioDevices() async {
+    final media = _mediaAdapter;
+    if (media == null) return;
+    final result = await media.enumerateAudioDevices();
+    if (!identical(_adapter, media)) return;
+    _updateAudioDevices(result.outputs, result.inputs, result.activeOutputId, result.activeInputId);
+  }
+
+  Future<bool> selectAudioOutput(String deviceId) async {
+    final media = _mediaAdapter;
+    if (media == null) return false;
+    final ok = await media.selectAudioOutput(deviceId);
+    if (ok) {
+      await refreshAudioDevices();
+    }
+    return ok;
+  }
+
+  Future<bool> selectAudioInput(String deviceId) async {
+    final media = _mediaAdapter;
+    if (media == null) return false;
+    final ok = await media.selectAudioInput(deviceId);
+    if (ok) {
+      await refreshAudioDevices();
+    }
+    return ok;
   }
 
   Future<void> sendDtmf(String digit) async {
@@ -558,6 +715,10 @@ class WebWebRtcClient {
     _updateCameraEnabled(false);
     _updateFrontCamera(true);
     _updateCanFlipCamera(false);
+    canSelectAudioOutput.value = false;
+    callQualityStats.value = null;
+    iceConnectionState.value = 'new';
+    _updateAudioDevices(const <FaceTimeAudioDevice>[], const <FaceTimeAudioDevice>[], null, null);
     if (adapter != null) {
       try {
         await adapter.close();
@@ -600,6 +761,19 @@ class WebWebRtcClient {
     onCanFlipCameraChanged?.call(canFlip);
   }
 
+  void _updateAudioDevices(
+    List<FaceTimeAudioDevice> outputs,
+    List<FaceTimeAudioDevice> inputs,
+    String? activeOut,
+    String? activeIn,
+  ) {
+    audioOutputs.value = List<FaceTimeAudioDevice>.unmodifiable(outputs);
+    audioInputs.value = List<FaceTimeAudioDevice>.unmodifiable(inputs);
+    activeAudioOutputId.value = activeOut;
+    activeAudioInputId.value = activeIn;
+    onAudioDevicesChanged?.call(outputs, inputs, activeOut, activeIn);
+  }
+
   void dispose() {
     unawaited(hangup(emitSignal: false));
     remoteVideo.dispose();
@@ -607,5 +781,15 @@ class WebWebRtcClient {
     cameraEnabled.dispose();
     frontCamera.dispose();
     canFlipCamera.dispose();
+    voiceIsolationEnabled.dispose();
+    videoDenoiseEnabled.dispose();
+    videoEffect.dispose();
+    audioOutputs.dispose();
+    audioInputs.dispose();
+    activeAudioOutputId.dispose();
+    activeAudioInputId.dispose();
+    canSelectAudioOutput.dispose();
+    callQualityStats.dispose();
+    iceConnectionState.dispose();
   }
 }

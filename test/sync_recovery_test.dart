@@ -35,11 +35,18 @@ class _TestSettingsService extends SettingsService {
 }
 
 class _TestSocketService extends SocketService {
-  @override
-  void resumeConnection() {}
+  int resumeCalls = 0;
+  int restartCalls = 0;
 
   @override
-  void restartSocket() {}
+  void resumeConnection() {
+    resumeCalls++;
+  }
+
+  @override
+  void restartSocket() {
+    restartCalls++;
+  }
 }
 
 class _FakeGlobalIsolate extends GlobalIsolate {
@@ -134,6 +141,42 @@ void main() {
       expect(latest.kind, SyncStatusKind.idle);
       expect(latest.retrying, isFalse);
     });
+
+    test('clears manual retrying on failed sync while socket is disconnected and auto-unblocks on stall timeout', () {
+      fakeAsync((async) {
+        SyncStatusSnapshot latest = SyncStatusSnapshot.idle;
+        final tracker = SyncStatusTracker(
+          onChanged: (next) => latest = next,
+          startupGrace: Duration.zero,
+          syncDebounce: Duration.zero,
+          manualRetryTimeout: const Duration(seconds: 15),
+        );
+        addTearDown(tracker.dispose);
+
+        tracker.setFinishedSetup(true);
+        tracker.onSocketState(connected: false, retrying: false, failed: true, errorMessage: 'Connection lost');
+        expect(latest.kind, SyncStatusKind.failed);
+        expect(latest.retrying, isFalse);
+
+        // Manual retry followed by failed HTTP fallback sync while socket stays disconnected must unblock Retry.
+        tracker.prepareManualRetry();
+        expect(latest.retrying, isTrue);
+        tracker.onSyncStarted();
+        tracker.onSyncFinished(success: false);
+        expect(latest.kind, SyncStatusKind.failed);
+        expect(latest.retrying, isFalse);
+
+        // If socket/isolate stalls without calling onSyncFinished, bounded timeout auto-unblocks Retry.
+        tracker.prepareManualRetry();
+        tracker.onSocketState(connected: false, retrying: true, failed: false);
+        expect(latest.retrying, isTrue);
+        async.elapse(const Duration(seconds: 14));
+        expect(latest.retrying, isTrue);
+        async.elapse(const Duration(seconds: 1));
+        expect(latest.kind, SyncStatusKind.failed);
+        expect(latest.retrying, isFalse);
+      });
+    });
   });
 
   group('SyncService automatic and manual recovery', () {
@@ -163,25 +206,148 @@ void main() {
       });
     });
 
-    test('caps automatic retries at 4 attempts when server remains unreachable', () {
+    test('continues periodic retries with 60s capped backoff past attempt 4 and recovers when server returns', () {
       fakeAsync((async) {
         var attempts = 0;
+        var shouldFail = true;
         sync.incrementalSyncRunner = ({bool useGlobalIsolate = false}) async {
           attempts++;
-          throw Exception('still down');
+          if (shouldFail) {
+            throw Exception('still down');
+          }
+          return <Message>[];
         };
 
         unawaited(sync.startIncrementalSync());
         async.flushMicrotasks();
         expect(attempts, 1);
 
-        // 2s + 5s + 15s + 30s = 52s for the 4 bounded retry attempts
-        async.elapse(const Duration(seconds: 120));
+        // 2s + 5s + 15s + 30s = 52s for the first 4 retries (5 attempts total).
+        async.elapse(const Duration(seconds: 52));
         async.flushMicrotasks();
-
         expect(attempts, 5);
         expect(sync.status.value.kind, SyncStatusKind.failed);
         expect(sync.status.value.retrying, isFalse);
+
+        // Attempt 6 runs after 60s capped backoff (at 112s), attempt 7 at 172s.
+        async.elapse(const Duration(seconds: 60));
+        async.flushMicrotasks();
+        expect(attempts, 6);
+
+        async.elapse(const Duration(seconds: 60));
+        async.flushMicrotasks();
+        expect(attempts, 7);
+        expect(sync.status.value.kind, SyncStatusKind.failed);
+
+        // Server recovers before attempt 8 -> clears Sync failed and stops periodic retries.
+        shouldFail = false;
+        async.elapse(const Duration(seconds: 60));
+        async.flushMicrotasks();
+        expect(attempts, 8);
+        expect(sync.status.value.kind, SyncStatusKind.idle);
+        expect(sync.status.value.retrying, isFalse);
+
+        async.elapse(const Duration(seconds: 120));
+        async.flushMicrotasks();
+        expect(attempts, 8);
+      });
+    });
+
+    test('retryNow restarts socket once (not resumeConnection) and falls back to HTTP sync after 5s when disconnected',
+        () {
+      fakeAsync((async) {
+        var attempts = 0;
+        var shouldFail = true;
+        sync.incrementalSyncRunner = ({bool useGlobalIsolate = false}) async {
+          attempts++;
+          if (shouldFail) throw Exception('server unavailable');
+          return <Message>[];
+        };
+
+        // Initial sync fails, then socket disconnects.
+        unawaited(sync.startIncrementalSync());
+        async.flushMicrotasks();
+        expect(attempts, 1);
+        expect(sync.status.value.kind, SyncStatusKind.failed);
+
+        socket.state.value = SocketState.disconnected;
+        sync.onSocketStatusChanged(
+          state: SocketState.disconnected,
+          connectionDesired: true,
+          authFailed: false,
+        );
+
+        // Manual retry while disconnected: single restartSocket(), no resumeConnection(), HTTP fallback at 5s.
+        unawaited(sync.retryNow());
+        async.flushMicrotasks();
+        expect(socket.restartCalls, 1);
+        expect(socket.resumeCalls, 0);
+        expect(sync.status.value.retrying, isTrue);
+        expect(attempts, 1);
+
+        async.elapse(const Duration(seconds: 4));
+        async.flushMicrotasks();
+        expect(attempts, 1);
+
+        // HTTP fallback fires at 5s; if it fails, retrying unblocks so user can retry again.
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
+        expect(attempts, 2);
+        expect(sync.status.value.kind, SyncStatusKind.failed);
+        expect(sync.status.value.message, 'Sync failed');
+        expect(sync.status.value.retrying, isFalse);
+
+        // Second manual retry succeeds via 5s HTTP fallback while socket remains disconnected.
+        shouldFail = false;
+        unawaited(sync.retryNow());
+        async.flushMicrotasks();
+        expect(socket.restartCalls, 2);
+        expect(socket.resumeCalls, 0);
+        expect(sync.status.value.retrying, isTrue);
+
+        async.elapse(const Duration(seconds: 5));
+        async.flushMicrotasks();
+        expect(attempts, 3);
+        expect(sync.status.value.retrying, isFalse);
+        expect(sync.status.value.message, isNot('Sync failed'));
+      });
+    });
+
+    test('retryNow cancels 5s HTTP fallback if socket connects within window', () {
+      fakeAsync((async) {
+        var attempts = 0;
+        sync.incrementalSyncRunner = ({bool useGlobalIsolate = false}) async {
+          attempts++;
+          return <Message>[];
+        };
+
+        socket.state.value = SocketState.disconnected;
+        sync.onSocketStatusChanged(
+          state: SocketState.disconnected,
+          connectionDesired: true,
+          authFailed: false,
+        );
+
+        unawaited(sync.retryNow());
+        async.flushMicrotasks();
+        expect(socket.restartCalls, 1);
+        expect(attempts, 0);
+
+        // Socket connects at 2s -> triggers immediate recovery sync and cancels 5s fallback.
+        async.elapse(const Duration(seconds: 2));
+        socket.state.value = SocketState.connected;
+        sync.onSocketStatusChanged(
+          state: SocketState.connected,
+          connectionDesired: true,
+          authFailed: false,
+        );
+        async.flushMicrotasks();
+        expect(attempts, 1);
+        expect(sync.status.value, SyncStatusSnapshot.idle);
+
+        async.elapse(const Duration(seconds: 5));
+        async.flushMicrotasks();
+        expect(attempts, 1);
       });
     });
 

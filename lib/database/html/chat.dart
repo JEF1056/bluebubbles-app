@@ -46,6 +46,7 @@ class Chat {
   bool lockChatName;
   bool lockChatIcon;
   String? lastReadMessageGuid;
+  int? lastReadAt;
   String? customThemeLight;
   String? customThemeDark;
 
@@ -121,6 +122,7 @@ class Chat {
     this.lockChatName = false,
     this.lockChatIcon = false,
     this.lastReadMessageGuid,
+    this.lastReadAt,
     this.customThemeLight,
     this.customThemeDark,
     this.wallpaperType,
@@ -174,6 +176,13 @@ class Chat {
     return null;
   }
 
+  static int? _parsePositiveEpochMs(dynamic raw) {
+    final int? value = raw is num
+        ? raw.toInt()
+        : (raw is String ? num.tryParse(raw.trim())?.toInt() : null);
+    return (value != null && value > 0) ? value : null;
+  }
+
   factory Chat.fromMap(Map<String, dynamic> json) {
     final message = json['lastMessage'] != null ? Message.fromMap(json['lastMessage']!.cast<String, dynamic>()) : null;
     final pinned = json["isPinned"] == true;
@@ -204,6 +213,7 @@ class Chat {
       lockChatName: json["lockChatName"] ?? false,
       lockChatIcon: json["lockChatIcon"] ?? false,
       lastReadMessageGuid: json["lastReadMessageGuid"],
+      lastReadAt: _parsePositiveEpochMs(json["lastReadMessageTimestamp"]),
       customThemeLight: json["customThemeLight"],
       customThemeDark: json["customThemeDark"],
       wallpaperType: json["wallpaperType"],
@@ -360,6 +370,13 @@ class Chat {
       {bool force = false, bool clearLocalNotifications = true, bool privateMark = true, int? readBefore}) async {
     if (hasUnreadMessage == hasUnread && !force) return this;
     hasUnreadMessage = hasUnread;
+    final willSendRead = !hasUnread &&
+        privateMark &&
+        SettingsSvc.settings.enablePrivateAPI.value &&
+        (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value);
+    if (willSendRead && Get.isRegistered<ConversationViewController>(tag: guid)) {
+      Get.find<ConversationViewController>(tag: guid).clearUnreadDivider();
+    }
     await saveAsync(updateHasUnreadMessage: true);
 
     try {
@@ -772,6 +789,9 @@ class Chat {
     dynamicWallpaperId ??= other.dynamicWallpaperId;
     dynamicWallpaperConfig ??= other.dynamicWallpaperConfig;
     knownGroupPhotoGuid ??= other.knownGroupPhotoGuid;
+    if (other.lastReadAt != null && (lastReadAt == null || other.lastReadAt! > lastReadAt!)) {
+      lastReadAt = other.lastReadAt;
+    }
     if (other.serviceName != null) serviceName = other.serviceName;
     return this;
   }
@@ -930,6 +950,7 @@ class Chat {
       "lockChatName": lockChatName,
       "lockChatIcon": lockChatIcon,
       "lastReadMessageGuid": lastReadMessageGuid,
+      "lastReadMessageTimestamp": lastReadAt,
       "customThemeLight": customThemeLight,
       "customThemeDark": customThemeDark,
       "wallpaperType": wallpaperType,

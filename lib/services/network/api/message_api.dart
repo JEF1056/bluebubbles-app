@@ -80,6 +80,7 @@ class MessageApi {
           "limit": limit,
           "convertAttachments": convertAttachments,
         },
+        options: Options(extra: {'idempotent': true}),
         cancelToken: cancelToken,
       );
       return _svc.returnSuccessOrError(response);

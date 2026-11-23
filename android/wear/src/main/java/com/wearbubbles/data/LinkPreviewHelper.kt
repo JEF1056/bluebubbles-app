@@ -110,7 +110,10 @@ object LinkPreviewHelper {
             dateEdited = dto.dateEdited,
             attachmentsJson = serializeAttachments(attachments),
             balloonBundleId = dto.balloonBundleId?.takeIf { it.isNotBlank() },
-            linkPreviewJson = serializeLinkPreview(linkPreview)
+            linkPreviewJson = serializeLinkPreview(linkPreview),
+            isRead = dto.isRead,
+            groupActionType = dto.groupActionType,
+            itemType = dto.itemType
         )
     }
 
@@ -144,7 +147,10 @@ object LinkPreviewHelper {
             dateEdited = dto.dateEdited,
             attachmentsJson = serializeAttachments(attachments),
             balloonBundleId = dto.balloonBundleId?.takeIf { it.isNotBlank() },
-            linkPreviewJson = serializeLinkPreview(linkPreview)
+            linkPreviewJson = serializeLinkPreview(linkPreview),
+            isRead = dto.isRead,
+            groupActionType = dto.groupActionType,
+            itemType = dto.itemType
         )
     }
 

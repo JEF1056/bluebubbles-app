@@ -30,13 +30,14 @@ class _ReplyHolderState extends State<ReplyHolder> with ThemeHelpers {
       final rawMessage = widget.controller.replyToMessage?.message;
       final rawPartIndex = widget.controller.replyToMessage?.partIndex ?? 0;
       final attachmentGuid = widget.controller.replyToMessage?.attachmentGuid;
-      final chatGuid =
-          rawMessage?.chat.target?.guid ?? ChatStateScope.maybeChatOf(context)?.guid ?? widget.controller.chat.guid;
+      final chat = ChatStateScope.maybeChatOf(context) ?? widget.controller.chat;
+      final chatGuid = rawMessage?.chat.target?.guid ?? chat.guid;
+      final isRcs = (rawMessage?.chat.target ?? chat).isRCS;
       final svc = maybeFindMessagesSvc(chatGuid);
 
       Message? message = rawMessage;
       int partIndex = rawPartIndex;
-      if (rawMessage != null && rawMessage.threadOriginatorGuid != null) {
+      if (!isRcs && rawMessage != null && rawMessage.threadOriginatorGuid != null) {
         final root = resolveRootReplyTarget(rawMessage, rawPartIndex, service: svc);
         if (root.message != null && (root.message!.guid != rawMessage.guid || root.part != rawPartIndex)) {
           message = root.message!;

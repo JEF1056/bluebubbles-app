@@ -9,8 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-class SettingsScaffold extends StatelessWidget {
-  final ScrollController controller = ScrollController();
+class SettingsScaffold extends StatefulWidget {
   final String title;
   final String? initialHeader;
   final TextStyle? iosSubtitle;
@@ -25,7 +24,7 @@ class SettingsScaffold extends StatelessWidget {
   final Widget? leading;
   final bool minimalAppBar;
 
-  SettingsScaffold({
+  const SettingsScaffold({
     super.key,
     required this.title,
     required this.initialHeader,
@@ -42,15 +41,28 @@ class SettingsScaffold extends StatelessWidget {
     this.minimalAppBar = false,
   });
 
+  @override
+  State<SettingsScaffold> createState() => _SettingsScaffoldState();
+}
+
+class _SettingsScaffoldState extends State<SettingsScaffold> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
   bool get _expressiveMaterial => SettingsSvc.settings.skin.value == Skins.Material;
 
   /// Expressive Material with no title bar at all — just a bare back button above the
   /// content, mirroring Android Contacts' profile page rather than a titled `SliverAppBar`.
-  bool get _minimalMaterial => _expressiveMaterial && minimalAppBar;
+  bool get _minimalMaterial => _expressiveMaterial && widget.minimalAppBar;
 
   bool get _expressiveSamsung => SettingsSvc.settings.skin.value == Skins.Samsung;
 
-  bool get extend => actions.isNotEmpty && kIsDesktop;
+  bool get extend => widget.actions.isNotEmpty && kIsDesktop;
 
   @override
   Widget build(BuildContext context) {
@@ -59,49 +71,54 @@ class SettingsScaffold extends StatelessWidget {
 
     final widgetTree = BBScaffold(
       backgroundColor: SettingsSvc.settings.skin.value == Skins.Material
-          ? (_expressiveMaterial ? headerColor : tileColor)
-          : headerColor,
+          ? (_expressiveMaterial ? widget.headerColor : widget.tileColor)
+          : widget.headerColor,
       appBar: SettingsSvc.settings.skin.value == Skins.Samsung || _expressiveMaterial
           ? null
           : BBAppBar(
-              titleText: title,
-              leading: leading ?? buildBackButton(context),
-              backgroundColor: headerColor,
+              titleText: widget.title,
+              leading: widget.leading ?? buildBackButton(context),
+              backgroundColor: widget.headerColor,
               toolbarHeight: extend ? 80 : 50,
-              actions: actions,
+              actions: widget.actions,
             ),
-      floatingActionButton: fab,
+      floatingActionButton: widget.fab,
       extendBodyBehindAppBar: false,
       safeAreaTop: _minimalMaterial,
       body: NotificationListener<ScrollEndNotification>(
         onNotification: (_) {
-          if (SettingsSvc.settings.skin.value != Skins.Samsung || kIsWeb || kIsDesktop) return false;
+          if (SettingsSvc.settings.skin.value != Skins.Samsung || kIsWeb || kIsDesktop || !_controller.hasClients) {
+            return false;
+          }
           final scrollDistance = context.height / 3 - 57;
-          if (controller.offset > 0 &&
-              controller.offset < scrollDistance &&
-              controller.offset != controller.position.maxScrollExtent) {
-            final double snapOffset = controller.offset / scrollDistance > 0.5 ? scrollDistance : 0;
+          if (_controller.offset > 0 &&
+              _controller.offset < scrollDistance &&
+              _controller.offset != _controller.position.maxScrollExtent) {
+            final double snapOffset = _controller.offset / scrollDistance > 0.5 ? scrollDistance : 0;
 
-            Future.microtask(() => controller.animateTo(
+            Future.microtask(() {
+              if (!mounted || !_controller.hasClients) return;
+              _controller.animateTo(
                 snapOffset,
                 duration: _expressiveSamsung ? M3EMotion.spatialDefault.duration : const Duration(milliseconds: 200),
-                curve: _expressiveSamsung ? M3EMotion.spatialDefault.curve : Curves.linear));
+                curve: _expressiveSamsung ? M3EMotion.spatialDefault.curve : Curves.linear,
+              );
+            });
           }
           return false;
         },
         child: ScrollbarWrapper(
           showScrollbar: kIsDesktop || kIsWeb,
-          controller: controller,
+          controller: _controller,
           child: Column(
             children: [
-              stickyPrefix ?? const SizedBox.shrink(),
+              widget.stickyPrefix ?? const SizedBox.shrink(),
               Expanded(
                 child: Obx(
                   () {
                     final listSw = Stopwatch()..start();
                     final view = CustomScrollView(
-                      controller: controller,
-                      shrinkWrap: true,
+                      controller: _controller,
                       physics: ThemeSwitcher.getScrollPhysics(),
                       slivers: <Widget>[
                         if (_minimalMaterial)
@@ -110,19 +127,19 @@ class SettingsScaffold extends StatelessWidget {
                               padding: const EdgeInsets.only(left: 4, top: 4),
                               child: Align(
                                 alignment: Alignment.centerLeft,
-                                child: leading ?? buildBackButton(context),
+                                child: widget.leading ?? buildBackButton(context),
                               ),
                             ),
                           ),
-                        if (_expressiveMaterial && !minimalAppBar)
+                        if (_expressiveMaterial && !widget.minimalAppBar)
                           SliverAppBar.large(
                             title: Text(
-                              title,
+                              widget.title,
                               style: context.theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
                             ),
-                            leading: leading ?? buildBackButton(context),
-                            actions: actions,
-                            backgroundColor: headerColor,
+                            leading: widget.leading ?? buildBackButton(context),
+                            actions: widget.actions,
+                            backgroundColor: widget.headerColor,
                             surfaceTintColor: context.theme.colorScheme.surfaceTint,
                             scrolledUnderElevation: 3,
                             pinned: true,
@@ -130,7 +147,7 @@ class SettingsScaffold extends StatelessWidget {
                           ),
                         if (SettingsSvc.settings.skin.value == Skins.Samsung)
                           SliverAppBar(
-                            backgroundColor: headerColor,
+                            backgroundColor: widget.headerColor,
                             pinned: true,
                             stretch: true,
                             expandedHeight: context.height / 3,
@@ -138,7 +155,8 @@ class SettingsScaffold extends StatelessWidget {
                             automaticallyImplyLeading: false,
                             flexibleSpace: LayoutBuilder(
                               builder: (context, _) {
-                                var expandRatio = 1 - (controller.offset) / (context.height / 3 - 50);
+                                final offset = _controller.hasClients ? _controller.offset : 0.0;
+                                var expandRatio = 1 - offset / (context.height / 3 - 50);
                                 if (expandRatio > 1.0) expandRatio = 1.0;
                                 if (expandRatio < 0.1) expandRatio = 0.0;
                                 final animation = AlwaysStoppedAnimation<double>(expandRatio);
@@ -153,7 +171,7 @@ class SettingsScaffold extends StatelessWidget {
                                             curve: _expressiveSamsung ? M3EMotion.spatialDefault.curve : Curves.easeIn),
                                       )),
                                       child: Center(
-                                          child: Text(title,
+                                          child: Text(widget.title,
                                               style: context.theme.textTheme.displaySmall!.copyWith(
                                                   color: context.theme.colorScheme.onSurface,
                                                   fontWeight: _expressiveSamsung ? FontWeight.w700 : null),
@@ -174,7 +192,7 @@ class SettingsScaffold extends StatelessWidget {
                                           child: Align(
                                             alignment: Alignment.centerLeft,
                                             child: Text(
-                                              title,
+                                              widget.title,
                                               style: context.theme.textTheme.titleLarge,
                                             ),
                                           ),
@@ -189,7 +207,7 @@ class SettingsScaffold extends StatelessWidget {
                                           height: 50,
                                           child: Align(
                                             alignment: Alignment.centerLeft,
-                                            child: leading ?? buildBackButton(context),
+                                            child: widget.leading ?? buildBackButton(context),
                                           ),
                                         ),
                                       ),
@@ -202,7 +220,7 @@ class SettingsScaffold extends StatelessWidget {
                                           alignment: Alignment.centerRight,
                                           child: Row(
                                             mainAxisSize: MainAxisSize.min,
-                                            children: actions,
+                                            children: widget.actions,
                                           ),
                                         ),
                                       ),
@@ -212,24 +230,24 @@ class SettingsScaffold extends StatelessWidget {
                               },
                             ),
                           ),
-                        if (SettingsSvc.settings.skin.value != Skins.Samsung && initialHeader != null)
+                        if (SettingsSvc.settings.skin.value != Skins.Samsung && widget.initialHeader != null)
                           SliverToBoxAdapter(
                             child: Container(
                                 height: 50,
                                 alignment: Alignment.bottomLeft,
                                 color: SettingsSvc.settings.skin.value == Skins.iOS || _expressiveMaterial
-                                    ? headerColor
-                                    : tileColor,
+                                    ? widget.headerColor
+                                    : widget.tileColor,
                                 child: Padding(
                                   padding: EdgeInsets.only(
                                       bottom: 8.0, left: SettingsSvc.settings.skin.value == Skins.iOS ? 30 : 15),
-                                  child: Text(initialHeader!.psCapitalize,
+                                  child: Text(widget.initialHeader!.psCapitalize,
                                       style: SettingsSvc.settings.skin.value == Skins.iOS
-                                          ? iosSubtitle
-                                          : materialSubtitle),
+                                          ? widget.iosSubtitle
+                                          : widget.materialSubtitle),
                                 )),
                           ),
-                        if (SettingsSvc.settings.skin.value != Skins.Samsung) ...bodySlivers,
+                        if (SettingsSvc.settings.skin.value != Skins.Samsung) ...widget.bodySlivers,
                         if (SettingsSvc.settings.skin.value == Skins.Samsung)
                           SliverToBoxAdapter(
                             child: ConstrainedBox(
@@ -241,7 +259,7 @@ class SettingsScaffold extends StatelessWidget {
                               child: CustomScrollView(
                                 physics: const NeverScrollableScrollPhysics(),
                                 shrinkWrap: true,
-                                slivers: bodySlivers,
+                                slivers: widget.bodySlivers,
                               ),
                             ),
                           ),
@@ -257,7 +275,7 @@ class SettingsScaffold extends StatelessWidget {
                   },
                 ),
               ),
-              stickySuffix ?? const SizedBox.shrink(),
+              widget.stickySuffix ?? const SizedBox.shrink(),
             ],
           ),
         ),

@@ -8,6 +8,7 @@ import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/helpers/helpers.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_it/get_it.dart';
@@ -166,31 +167,34 @@ class ContactAvatarGroupWidget extends StatelessWidget {
 
                         // indicate more users than shown
                         if (index == maxAvatars - 1 && participants.length > maxAvatars) {
+                          final overflowBadge = Container(
+                            width: tileSize,
+                            height: tileSize,
+                            decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.8),
+                                border: Border.all(
+                                    color: context.theme.colorScheme.surface, width: avatarSize * 0.01)),
+                            child: Icon(
+                              skin == Skins.iOS ? CupertinoIcons.group_solid : Icons.people,
+                              size: tileSize * 0.65,
+                              color: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+                            ),
+                          );
                           return Positioned(
                             top: top,
                             right: right,
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(tileSize),
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(
-                                  sigmaX: 2,
-                                  sigmaY: 2,
-                                ),
-                                child: Container(
-                                  width: tileSize,
-                                  height: tileSize,
-                                  decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: context.theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.8),
-                                      border: Border.all(
-                                          color: context.theme.colorScheme.surface, width: avatarSize * 0.01)),
-                                  child: Icon(
-                                    skin == Skins.iOS ? CupertinoIcons.group_solid : Icons.people,
-                                    size: tileSize * 0.65,
-                                    color: context.theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
-                                  ),
-                                ),
-                              ),
+                              child: (kIsWeb || SettingsSvc.settings.highPerfMode.value)
+                                  ? overflowBadge
+                                  : BackdropFilter(
+                                      filter: ImageFilter.blur(
+                                        sigmaX: 2,
+                                        sigmaY: 2,
+                                      ),
+                                      child: overflowBadge,
+                                    ),
                             ),
                           );
                         }

@@ -43,18 +43,28 @@ import com.bluebubbles.messaging.services.foreground.StopForegroundServiceHandle
 import com.bluebubbles.messaging.services.telecom.AnswerFaceTimeAudioHandler
 import com.bluebubbles.messaging.services.telecom.EndFaceTimeCallHandler
 import com.bluebubbles.messaging.services.telecom.FlipFaceTimeCameraHandler
+import com.bluebubbles.messaging.services.telecom.ResumeFaceTimeVideoHandler
+import com.bluebubbles.messaging.services.telecom.GetFaceTimeAudioDevicesHandler
 import com.bluebubbles.messaging.services.telecom.GetFaceTimeLocalVideoTextureHandler
 import com.bluebubbles.messaging.services.telecom.GetFaceTimeVideoTextureHandler
+import com.bluebubbles.messaging.services.telecom.GetFaceTimeVideoTexturesHandler
 import com.bluebubbles.messaging.services.telecom.IsFaceTimeSpeakerOnHandler
 import com.bluebubbles.messaging.services.telecom.IsTelecomEnabledHandler
+import com.bluebubbles.messaging.services.telecom.IsWearWatchConnectedHandler
 import com.bluebubbles.messaging.services.telecom.MarkFaceTimeCallActiveHandler
 import com.bluebubbles.messaging.services.telecom.OpenCallingAccountsHandler
 import com.bluebubbles.messaging.services.telecom.PlaceFaceTimeCallHandler
 import com.bluebubbles.messaging.services.telecom.RegisterPhoneAccountHandler
+import com.bluebubbles.messaging.services.telecom.SetCallToneHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeAudioInputHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeAudioOutputHandler
 import com.bluebubbles.messaging.services.telecom.SetFaceTimeCameraEnabledHandler
 import com.bluebubbles.messaging.services.telecom.SetFaceTimeMutedHandler
 import com.bluebubbles.messaging.services.telecom.SetFaceTimeSpeakerHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeVideoProcessingHandler
+import com.bluebubbles.messaging.services.telecom.SetFaceTimeVoiceIsolationHandler
 import com.bluebubbles.messaging.services.telecom.ToggleFaceTimeSpeakerHandler
+import com.bluebubbles.messaging.services.telecom.TransferCallToWatchHandler
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -184,8 +194,18 @@ class MethodCallHandler {
             IsFaceTimeSpeakerOnHandler.tag -> IsFaceTimeSpeakerOnHandler().handleMethodCall(call, result, context)
             GetFaceTimeVideoTextureHandler.tag -> GetFaceTimeVideoTextureHandler().handleMethodCall(call, result, context)
             GetFaceTimeLocalVideoTextureHandler.tag -> GetFaceTimeLocalVideoTextureHandler().handleMethodCall(call, result, context)
+            GetFaceTimeVideoTexturesHandler.tag -> GetFaceTimeVideoTexturesHandler().handleMethodCall(call, result, context)
             SetFaceTimeCameraEnabledHandler.tag -> SetFaceTimeCameraEnabledHandler().handleMethodCall(call, result, context)
             FlipFaceTimeCameraHandler.tag -> FlipFaceTimeCameraHandler().handleMethodCall(call, result, context)
+            ResumeFaceTimeVideoHandler.tag -> ResumeFaceTimeVideoHandler().handleMethodCall(call, result, context)
+            GetFaceTimeAudioDevicesHandler.tag -> GetFaceTimeAudioDevicesHandler().handleMethodCall(call, result, context)
+            SetFaceTimeAudioOutputHandler.tag -> SetFaceTimeAudioOutputHandler().handleMethodCall(call, result, context)
+            SetFaceTimeAudioInputHandler.tag -> SetFaceTimeAudioInputHandler().handleMethodCall(call, result, context)
+            SetFaceTimeVoiceIsolationHandler.tag -> SetFaceTimeVoiceIsolationHandler().handleMethodCall(call, result, context)
+            SetFaceTimeVideoProcessingHandler.tag -> SetFaceTimeVideoProcessingHandler().handleMethodCall(call, result, context)
+            IsWearWatchConnectedHandler.tag -> IsWearWatchConnectedHandler().handleMethodCall(call, result, context)
+            TransferCallToWatchHandler.tag -> TransferCallToWatchHandler().handleMethodCall(call, result, context)
+            SetCallToneHandler.tag -> SetCallToneHandler().handleMethodCall(call, result, context)
             AppSoundPlayer.tag -> AppSoundPlayer.handleMethodCall(call, result, context)
             "set-locus-context" -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && context is Activity) {

@@ -26,9 +26,10 @@ object FaceTimeRoutingPolicy {
         isVideo: Boolean,
         callUuid: String?,
         phoneAccountEnabled: Boolean,
-        isTelephony: Boolean = false
+        isTelephony: Boolean = false,
+        inCar: Boolean = false
     ): IncomingFaceTimeRoute {
-        if (!isVideo && !callUuid.isNullOrBlank()) {
+        if ((!isVideo || inCar) && !callUuid.isNullOrBlank()) {
             return when {
                 phoneAccountEnabled -> IncomingFaceTimeRoute.TELECOM_DIRECT
                 isTelephony -> IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT
@@ -42,9 +43,10 @@ object FaceTimeRoutingPolicy {
         isVideo: Boolean,
         callUuid: String?,
         phoneAccountEnabled: Boolean,
-        isTelephony: Boolean = false
+        isTelephony: Boolean = false,
+        inCar: Boolean = false
     ): List<IncomingNotificationAction> {
-        val route = resolveIncomingRoute(isVideo, callUuid, phoneAccountEnabled, isTelephony)
+        val route = resolveIncomingRoute(isVideo, callUuid, phoneAccountEnabled, isTelephony, inCar)
         if (route == IncomingFaceTimeRoute.NOTIFICATION_ENABLE_ACCOUNT) {
             return listOf(IncomingNotificationAction.ENABLE_CALLING, IncomingNotificationAction.DECLINE)
         }

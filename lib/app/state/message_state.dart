@@ -111,6 +111,14 @@ class MessageState extends StatefulController {
   /// and bumps this key - each widget owns how it re-fetches its own content.
   final RxInt previewRefreshKey = 0.obs;
 
+  /// Per-message update counter observed by [MessageHolder] so updates to one
+  /// message (receipts, tapbacks, edits) never rebuild unrelated kept-alive rows.
+  final RxInt updateVersion = 0.obs;
+
+  void markUpdated() {
+    updateVersion.value++;
+  }
+
   // ========== Widget Controller Fields (merged from MessageWidgetController) ==========
 
   /// Whether to show previous edits for this message

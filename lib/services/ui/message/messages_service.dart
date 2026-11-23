@@ -896,18 +896,40 @@ class MessagesService extends GetxController {
     }
   }
 
-  void updateMessage(Message updated, {String? oldGuid}) {
-    if (updated.isReaction && updated.associatedMessageGuid != null) {
-      messageStates[updated.associatedMessageGuid!]?.updateAssociatedMessageInternal(updated, tempGuid: oldGuid);
+  void _attachReactionToParent(Message reaction, {String? tempGuid}) {
+    final parentGuid = reaction.associatedMessageGuid;
+    if (parentGuid == null) return;
+    final parentMsg = struct.getMessage(parentGuid);
+    if (parentMsg != null && reaction.guid != null) {
+      final idx = parentMsg.associatedMessages.indexWhere((m) => m.guid == reaction.guid);
+      if (idx >= 0) {
+        final next = List<Message>.of(parentMsg.associatedMessages);
+        next[idx] = reaction;
+        parentMsg.associatedMessages = next;
+      } else {
+        parentMsg.associatedMessages = [...parentMsg.associatedMessages, reaction];
+      }
     }
+    messageStates[parentGuid]?.addAssociatedMessageInternal(reaction, tempGuid: tempGuid);
+    triggerMessageUpdate(parentGuid);
+  }
+
+  void updateMessage(Message updated, {String? oldGuid}) {
     // Try to find the message - check oldGuid first, then fallback to updated.guid
     // This handles race conditions where the GUID was already replaced
     Message? toUpdate;
     if (oldGuid != null) {
       toUpdate = struct.getMessage(oldGuid);
     }
-    toUpdate ??= struct.getMessage(updated.guid!);
-    if (toUpdate == null) return;
+    toUpdate ??= updated.guid != null ? struct.getMessage(updated.guid!) : null;
+    if (toUpdate == null) {
+      if (updated.isReaction && updated.associatedMessageGuid != null) {
+        _attachReactionToParent(updated, tempGuid: oldGuid);
+      }
+      return;
+    }
+
+    final wasReaction = toUpdate.isReaction;
 
     // Capture the previous edit date BEFORE the merge/updateFromMessage below.
     // toUpdate is the *same* Message instance held by messageState.message, so
@@ -930,17 +952,71 @@ class MessagesService extends GetxController {
     final incomingAttributedBody = updated.attributedBody;
     final incomingSummaryInfo = updated.messageSummaryInfo;
     final incomingPayloadData = updated.payloadData;
+    final incomingAssocGuid = updated.associatedMessageGuid;
+    final incomingAssocType = updated.associatedMessageType;
+    final incomingAssocPart = updated.associatedMessagePart;
+    final incomingAssocEmoji = updated.associatedMessageEmoji;
+    final staleAssocGuid = toUpdate.associatedMessageGuid;
+    final staleAssocType = toUpdate.associatedMessageType;
+    final staleAssocPart = toUpdate.associatedMessagePart;
     updated = updated.mergeWith(toUpdate);
     updated.error = incomingError;
     updated.errorMessage = incomingErrorMessage;
     if (incomingAttributedBody.isNotEmpty) updated.attributedBody = incomingAttributedBody;
     if (incomingSummaryInfo.isNotEmpty) updated.messageSummaryInfo = incomingSummaryInfo;
     if (incomingPayloadData != null) updated.payloadData = incomingPayloadData;
-    struct.removeMessage(oldGuid ?? updated.guid!);
-    struct.removeAttachments(toUpdate.dbAttachments.map((e) => e.guid!));
+    final mergedAssocType = AppSessionTypes.mergedType(
+      updated.balloonBundleId ?? toUpdate.balloonBundleId,
+      staleAssocType,
+      incomingAssocType,
+    );
+    updated.associatedMessageType = mergedAssocType;
+    if (mergedAssocType == incomingAssocType && incomingAssocGuid != null) {
+      updated.associatedMessageGuid = incomingAssocGuid;
+    } else if (mergedAssocType == staleAssocType && staleAssocGuid != null) {
+      updated.associatedMessageGuid = staleAssocGuid;
+    }
+    if (incomingAssocPart != null &&
+        mergedAssocType == incomingAssocType &&
+        incomingAssocGuid != null) {
+      updated.associatedMessagePart = incomingAssocPart;
+    } else if (staleAssocPart != null && mergedAssocType == staleAssocType) {
+      updated.associatedMessagePart = staleAssocPart;
+    }
+    if (incomingAssocEmoji != null) {
+      updated.associatedMessageEmoji = incomingAssocEmoji;
+    }
+    struct.removeMessage(toUpdate.guid ?? oldGuid ?? updated.guid!);
+    struct.removeAttachments(toUpdate.dbAttachments.map((e) => e.guid).whereType<String>());
     struct.addMessages([updated]);
     // Our own turn arrives here, as the swap from its temp GUID, rather than as a new message
     _retireEarlierTurns(updated);
+
+    // When a standalone plain message (e.g. an RCS fallback emoji) transitions into
+    // a reaction/tapback, remove its standalone bubble from the timeline and attach
+    // it to the target message's reactions instead.
+    if (!wasReaction && updated.isReaction) {
+      _attachReactionToParent(updated, tempGuid: oldGuid);
+      if (toUpdate.guid != null) {
+        messageStates.remove(toUpdate.guid!)?.onClose();
+        messageUpdateTrigger.remove(toUpdate.guid!);
+      }
+      if (oldGuid != null) {
+        messageStates.remove(oldGuid)?.onClose();
+        messageUpdateTrigger.remove(oldGuid);
+      }
+      if (updated.guid != null) {
+        messageStates.remove(updated.guid!)?.onClose();
+        messageUpdateTrigger.remove(updated.guid!);
+      }
+      _recomputeDeliveredIndicators();
+      removeFunc.call(toUpdate);
+      return;
+    }
+
+    if (updated.isReaction && updated.associatedMessageGuid != null) {
+      messageStates[updated.associatedMessageGuid!]?.updateAssociatedMessageInternal(updated, tempGuid: oldGuid);
+    }
 
     // Update MessageState - try oldGuid first, then fallback to updated.guid
     MessageState? messageState;
@@ -986,7 +1062,10 @@ class MessagesService extends GetxController {
     }
 
     // Trigger granular update for this specific message
-    messageUpdateTrigger[updated.guid!] = DateTime.now().millisecondsSinceEpoch;
+    if (updated.guid != null) {
+      messageStates[updated.guid!]?.markUpdated();
+      messageUpdateTrigger[updated.guid!] = DateTime.now().millisecondsSinceEpoch;
+    }
 
     // If the update introduced or updated a reply relationship, hydrate any missing
     // originator and refresh the originator's thread count / UI trigger.
@@ -1031,6 +1110,7 @@ class MessagesService extends GetxController {
 
   /// Trigger an update for a specific message (useful for reactions, read receipts, etc.)
   void triggerMessageUpdate(String guid) {
+    messageStates[guid]?.markUpdated();
     messageUpdateTrigger[guid] = DateTime.now().millisecondsSinceEpoch;
   }
 
@@ -1398,8 +1478,10 @@ class MessagesService extends GetxController {
       // at the new guid-based path.  This lets _restoreInFlightAttachmentStates
       // populate uploadPreviewFile even before prepAttachments runs.
       if (!kIsWeb) {
-        final oldDir = Directory("${Attachment.baseDirectory}/$oldAttGuid");
-        final newDir = Directory("${Attachment.baseDirectory}/$newAttGuid");
+        final safeOldAttGuid = FilesystemService.sanitizeGuid(oldAttGuid);
+        final safeNewAttGuid = FilesystemService.sanitizeGuid(newAttGuid);
+        final oldDir = Directory("${Attachment.baseDirectory}/$safeOldAttGuid");
+        final newDir = Directory("${Attachment.baseDirectory}/$safeNewAttGuid");
         if (oldDir.existsSync() && !newDir.existsSync()) {
           oldDir.renameSync(newDir.path);
         }

@@ -150,17 +150,18 @@ class NotificationHelperTest {
             isTelephony = telephony.isTelephony
         )
         assertTrue(state.isTelephony)
-        assertEquals("iPhone Call", ringingCallSubtitle(isVideo = state.isVideo, isTelephony = state.isTelephony))
-        assertEquals("Incoming iPhone Call", CallNotificationHelper.incomingFallbackNotificationText(isVideo = false, isTelephony = true))
-        assertEquals("iPhone Call • Ongoing", CallNotificationHelper.ongoingNotificationText(isTelephony = true))
+        assertEquals("Phone Call", ringingCallSubtitle(isVideo = state.isVideo, isTelephony = state.isTelephony))
+        assertEquals("Incoming Phone Call", CallNotificationHelper.incomingFallbackNotificationText(isVideo = false, isTelephony = true))
+        assertEquals("Phone Call • Ongoing", CallNotificationHelper.ongoingNotificationText(isTelephony = true))
 
         val facetimeVideo = DataLayerListenerService.parseIncomingCallPayload(
             """{"callUuid":"ft-1","callerName":"Alice","isVideo":true}"""
         )!!
         assertFalse(facetimeVideo.isTelephony)
         assertTrue(facetimeVideo.isVideo)
-        assertEquals("FaceTime Video • Audio only", ringingCallSubtitle(isVideo = true, isTelephony = false))
+        assertEquals("FaceTime Video", ringingCallSubtitle(isVideo = true, isTelephony = false))
         assertEquals("FaceTime Audio", ringingCallSubtitle(isVideo = false, isTelephony = false))
+        assertEquals("Group FaceTime Video", ringingCallSubtitle(isVideo = true, isTelephony = false, isGroup = true))
         assertEquals("FaceTime Audio • Ongoing", CallNotificationHelper.ongoingNotificationText(isTelephony = false))
     }
 

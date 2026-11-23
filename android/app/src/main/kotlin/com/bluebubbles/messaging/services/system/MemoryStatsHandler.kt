@@ -17,7 +17,7 @@ class MemoryStatsHandler : MethodCallHandlerImpl() {
         try {
             result.success(MemoryStats.snapshot())
         } catch (e: Exception) {
-            result.error("MEMORY_STATS_ERROR", e.message, e)
+            result.error("MEMORY_STATS_ERROR", e.message, e.stackTraceToString())
         }
     }
 }

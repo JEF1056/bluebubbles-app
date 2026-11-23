@@ -48,7 +48,7 @@ class NotificationsService {
   static const String NEW_MESSAGE_CHANNEL = "com.bluebubbles.new_messages";
   static const String ERROR_CHANNEL = "com.bluebubbles.errors";
   static const String REMINDER_CHANNEL = "com.bluebubbles.reminders";
-  static const String FACETIME_CHANNEL = "com.bluebubbles.incoming_facetimes";
+  static const String FACETIME_CHANNEL = "com.bluebubbles.incoming_facetimes_v2";
   static const String MISSED_FACETIME_CHANNEL = "com.bluebubbles.missed_facetimes";
   static const String FOREGROUND_SERVICE_CHANNEL = "com.bluebubbles.foreground_service";
 

@@ -270,6 +270,12 @@ class MaterialAvatarMenu extends StatelessWidget {
                 label: 'Find My',
                 onTap: () => hideMenu().then((_) => goToFindMy(overlayContext)),
               ),
+            if (SettingsSvc.getServerDetails().supportsFaceTimeCalls)
+              MenuItemRow(
+                icon: Icons.history,
+                label: 'Calls',
+                onTap: () => hideMenu().then((_) => goToCallHistory(overlayContext)),
+              ),
             if (extraItems)
               MenuItemRow(
                 icon: Icons.search,
@@ -387,6 +393,13 @@ class CupertinoOverflowMenu extends StatelessWidget {
             icon: CupertinoIcons.location,
             onTap: () => goToFindMy(context),
           ),
+        if (SettingsSvc.getServerDetails().supportsFaceTimeCalls)
+          PullDownMenuItem(
+            itemTheme: itemTheme,
+            title: 'Calls',
+            icon: CupertinoIcons.phone,
+            onTap: () => goToCallHistory(context),
+          ),
         if (extraItems)
           PullDownMenuItem(
             itemTheme: itemTheme,
@@ -447,6 +460,8 @@ Future<void> goToSearch(BuildContext context) async {
 }
 
 void goToFindMy(BuildContext context) => NavigationSvc.openFindMy();
+
+void goToCallHistory(BuildContext context) => NavigationSvc.openCallHistory();
 
 void logout(BuildContext context) {
   showBBDialog(

@@ -21,8 +21,11 @@ import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.MainActivity
 import com.bluebubbles.messaging.services.backend_ui_interop.DartWorkManager
 import com.bluebubbles.messaging.services.network.HttpService
+import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
 import com.bluebubbles.messaging.services.notifications.CreateIncomingMessageNotification
 import com.bluebubbles.messaging.services.notifications.DeleteNotificationHandler
+import com.bluebubbles.messaging.services.telecom.CallTonePlayer
+import com.bluebubbles.messaging.services.telecom.FaceTimeCallForegroundService
 import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy
 import com.bluebubbles.messaging.services.wear.WearSyncManager
@@ -58,11 +61,13 @@ class InternalIntentReceiver: BroadcastReceiver() {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val tag: String? = intent.getStringExtra("tag")
                 val callUuid: String? = intent.getStringExtra("callUuid")
+                CallTonePlayer.stopIncomingRing(callUuid)
                 DeleteNotificationHandler().deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
                 if (!callUuid.isNullOrBlank()) {
                     FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
                     WearSyncManager.notifyCallEnded(context, callUuid)
                 }
+                com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
                 if (FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid) && callUuid != null) {
                     val pendingResult = goAsync()
                     HttpService(context).declineFaceTimeCall(
@@ -72,14 +77,53 @@ class InternalIntentReceiver: BroadcastReceiver() {
                     )
                 }
             }
+            "HangUpFaceTime" -> {
+                val callUuid: String? = intent.getStringExtra("callUuid")
+                CallTonePlayer.stopIncomingRing(callUuid)
+                com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+                if (!callUuid.isNullOrBlank()) {
+                    if (!FaceTimeConnectionService.hangUpCall(callUuid)) {
+                        FaceTimeCallForegroundService.stop(context, callUuid)
+                        WearSyncManager.notifyCallEnded(context, callUuid)
+                        if (FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid)) {
+                            val pendingResult = goAsync()
+                            HttpService(context).leaveFaceTimeCall(
+                                callUuid = callUuid,
+                                onSuccess = { pendingResult.finish() },
+                                onError = { pendingResult.finish() }
+                            )
+                        }
+                    }
+                } else {
+                    FaceTimeCallForegroundService.stop(context, null)
+                }
+            }
+            "ToggleFaceTimeMute" -> {
+                val callUuid: String? = intent.getStringExtra("callUuid")
+                if (!callUuid.isNullOrBlank()) {
+                    val currentMuted = FaceTimeConnectionService.isCallMuted(callUuid)
+                    FaceTimeConnectionService.setCallMuted(callUuid, !currentMuted)
+                }
+            }
+            "ToggleFaceTimeSpeaker" -> {
+                val callUuid: String? = intent.getStringExtra("callUuid")
+                val currentSpeaker = FaceTimeConnectionService.isCallSpeakerphoneOn(context, callUuid)
+                FaceTimeConnectionService.setCallSpeakerphone(context, callUuid, !currentSpeaker)
+            }
             "AnswerFaceTimeAudio" -> {
                 val notificationId: Int = intent.getIntExtra("notificationId", 0)
                 val tag: String? = intent.getStringExtra("tag")
                 val callUuid: String? = intent.getStringExtra("callUuid")
+                CallTonePlayer.stopIncomingRing(callUuid)
                 val callerName: String = intent.getStringExtra("callerName") ?: "Unknown Caller"
                 val callerAddress: String? = intent.getStringExtra("callerAddress")
                 val isTelephony: Boolean = intent.getBooleanExtra("isTelephony", false)
-                DeleteNotificationHandler().deleteNotification(context, notificationId, tag, callUuidFallback = callUuid)
+                if (!callUuid.isNullOrBlank()) {
+                    CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(context, callUuid)
+                } else if (notificationId != 0) {
+                    val nm = context.getSystemService(NotificationManager::class.java)
+                    if (tag != null) nm?.cancel(tag, notificationId) else nm?.cancel(notificationId)
+                }
                 if (!callUuid.isNullOrBlank()) {
                     val routed = FaceTimeConnectionService.addIncomingCall(
                         context = context,
@@ -89,18 +133,19 @@ class InternalIntentReceiver: BroadcastReceiver() {
                         autoAnswer = true,
                         isTelephony = isTelephony
                     )
-                    if (!routed) {
-                        val launch = Intent(context, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            putExtra("callUuid", callUuid)
-                            putExtra("answer", true)
-                            putExtra("audioOnly", true)
-                            putExtra("isTelephony", isTelephony)
-                            putExtra("caller", callerName)
-                            type = "AnswerFaceTime"
-                        }
-                        context.startActivity(launch)
+                    val launch = Intent(context, MainActivity::class.java).apply {
+                        applyAnswerFaceTimeAudioLaunch(
+                            routed = routed,
+                            callUuid = callUuid,
+                            isTelephony = isTelephony,
+                            callerName = callerName,
+                            addFlags = ::addFlags,
+                            putBoolean = ::putExtra,
+                            putString = ::putExtra,
+                            setType = ::setType
+                        )
                     }
+                    context.startActivity(launch)
                 }
             }
             "OpenCallingAccounts" -> {
@@ -471,6 +516,32 @@ class InternalIntentReceiver: BroadcastReceiver() {
     }
 
     companion object {
+        internal fun applyAnswerFaceTimeAudioLaunch(
+            routed: Boolean,
+            callUuid: String,
+            isTelephony: Boolean,
+            callerName: String,
+            addFlags: (Int) -> Unit,
+            putBoolean: (String, Boolean) -> Unit,
+            putString: (String, String) -> Unit,
+            setType: (String) -> Unit
+        ) {
+            if (routed) {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putBoolean("openCall", true)
+                setType("OpenCall")
+            } else {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putBoolean("answer", true)
+                setType("AnswerFaceTime")
+            }
+            putString("callUuid", callUuid)
+            putBoolean("audioOnly", true)
+            putBoolean("isTelephony", isTelephony)
+            putString("caller", callerName)
+            putBoolean(MainActivity.EXTRA_INCOMING_FACETIME, true)
+        }
+
         internal fun extensionForMime(mimeType: String): String =
             com.bluebubbles.messaging.services.intents.extensionForMime(mimeType)
 

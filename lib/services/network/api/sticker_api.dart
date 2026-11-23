@@ -134,6 +134,35 @@ class StickerApi {
       return _svc.returnSuccessOrError(response);
     });
   }
+
+  /// `POST message/sticker/:guid/reposition`: moves, scales, or rotates an already-sent sticker
+  /// [messageGuid] in [chatGuid] to [placement]. Needs the Private API; throws when the server refuses
+  /// ([stickerRefusal] reads why).
+  Future<Response> reposition({
+    required String chatGuid,
+    required String messageGuid,
+    required StickerPlacement placement,
+    CancelToken? cancelToken,
+  }) async {
+    if (messageGuid.isEmpty) {
+      throw ArgumentError.value(messageGuid, 'messageGuid', 'Invalid sticker message GUID');
+    }
+    if (!placement.isValid) {
+      throw ArgumentError.value(placement, 'placement', 'Invalid sticker placement');
+    }
+    return _svc.runApiGuarded(() async {
+      final response = await _svc.dio.post(
+        "${_svc.apiRootV2}/message/sticker/${Uri.encodeComponent(messageGuid)}/reposition",
+        queryParameters: _svc.buildQueryParams(),
+        data: {
+          'chatGuid': chatGuid,
+          ...placement.toMap(),
+        },
+        cancelToken: cancelToken,
+      );
+      return _svc.returnSuccessOrError(response);
+    });
+  }
 }
 
 /// What the server said when it refused a sticker request: its sentence for the user and, for a `402` (the server

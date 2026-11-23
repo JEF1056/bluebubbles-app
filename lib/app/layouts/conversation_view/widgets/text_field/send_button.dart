@@ -74,6 +74,12 @@ class SendButtonState extends State<SendButton> with SingleTickerProviderStateMi
   }
 
   @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     _iosBaseColor = context.theme.colorScheme.primary;

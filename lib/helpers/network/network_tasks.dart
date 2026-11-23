@@ -82,7 +82,7 @@ class NetworkTasks {
     // Deduplicate: if already running, all callers share the same future.
     _detectLocalhostFuture ??= _detectLocalhostImpl(createSnackbar: createSnackbar).whenComplete(() {
       _detectLocalhostFuture = null;
-      // Not in setOriginOverride(): the probe clears the override midway.
+      // Rebuild the socket only once the probe settles on a resolved origin.
       if (GetIt.I.isRegistered<SocketService>()) SocketSvc.followOrigin();
       if (HttpSvc.originOverride != null &&
           GetIt.I.isRegistered<SettingsService>() &&
@@ -106,10 +106,9 @@ class NetworkTasks {
       return;
     }
 
-    // Reset any stale local override so serverInfo() queries the remote server
-    // for fresh local IPs, and so the port-scan fallback isn't skipped if the
-    // serverInfo call fails.
-    setOriginOverride(null);
+    // Keep any existing originOverride intact while probing so in-flight
+    // isolate requests aren't disrupted mid-sync; apply the outcome once settled.
+    String? detected;
 
     // Phase 1: try the known local IPs reported by the server.
     try {
@@ -131,12 +130,13 @@ class NetworkTasks {
         ...localIpv4s,
       ];
 
-      setOriginOverride(await _probeAddresses(candidates, port));
+      detected = await _probeAddresses(candidates, port);
     } catch (e) {
       Logger.warn('Could not fetch server info for localhost detection: $e', tag: 'NetworkTasks');
     }
 
-    if (HttpSvc.originOverride != null) {
+    if (detected != null) {
+      setOriginOverride(detected);
       Logger.debug('Localhost detected at ${HttpSvc.originOverride}', tag: 'NetworkTasks');
       if (createSnackbar) {
         showToast('Connected to ${HttpSvc.originOverride}');
@@ -157,6 +157,7 @@ class NetworkTasks {
         'Skipping subnet scan — last scan was ${now.difference(_lastSubnetScanTime!).inSeconds}s ago (throttle: ${_subnetScanThrottle.inMinutes}m)',
         tag: 'NetworkTasks',
       );
+      setOriginOverride(null);
       return;
     }
     _lastSubnetScanTime = now;
@@ -207,6 +208,7 @@ class NetworkTasks {
 
   /// Sets [HttpSvc.originOverride] and syncs the new value to registered isolates.
   static void setOriginOverride(String? originOverride) {
+    if (HttpSvc.originOverride == originOverride) return;
     HttpSvc.originOverride = originOverride;
     syncOriginOverrideToIsolate();
   }

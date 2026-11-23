@@ -90,6 +90,15 @@ fun WearApp(
             if (configured && !initialChatGuid.isNullOrBlank()) {
                 val encoded = encodeGuid(initialChatGuid)
                 onInitialChatHandled()
+                val hasConversations = runCatching {
+                    navController.getBackStackEntry("conversations")
+                }.isSuccess
+                if (!hasConversations) {
+                    navController.navigate("conversations") {
+                        popUpTo("setup") { inclusive = true }
+                        launchSingleTop = true
+                    }
+                }
                 navController.navigate("messages/$encoded") {
                     popUpTo("conversations") { inclusive = false }
                     launchSingleTop = true

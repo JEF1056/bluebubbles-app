@@ -43,6 +43,19 @@ class ConversationViewController extends StatefulController with GetSingleTicker
 
   ConversationViewController(this.chat, {String? tag_}) {
     tag = tag_ ?? chat.guid;
+    _hadUnreadOnOpen = _computeCurrentUnread();
+  }
+
+  bool _computeCurrentUnread() =>
+      chat.hasUnreadMessage == true ||
+      (GetIt.I.isRegistered<ChatsService>() &&
+          (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
+
+  /// Snapshots whether the chat is unread right when [ConversationView] opens,
+  /// before [ChatsService.setActiveChatSync] clears the local badge.
+  void snapshotUnreadOnOpen() {
+    if (_unreadDividerComputed || _readSent) return;
+    _hadUnreadOnOpen = _computeCurrentUnread();
   }
 
   // caching items
@@ -76,6 +89,97 @@ class ConversationViewController extends StatefulController with GetSingleTicker
     }
   }
   final RxBool showScrollDown = false.obs;
+  final RxnString unreadDividerGuid = RxnString();
+  bool _unreadDividerComputed = false;
+  bool _hadUnreadOnOpen = false;
+  bool _readSent = false;
+
+  void clearUnreadDivider() {
+    _readSent = true;
+    if (unreadDividerGuid.value != null) {
+      unreadDividerGuid.value = null;
+    }
+  }
+
+  void initUnreadDivider(List<Message> messages) {
+    if (_unreadDividerComputed || _readSent) return;
+    _unreadDividerComputed = true;
+    final hasUnread = _hadUnreadOnOpen ||
+        chat.hasUnreadMessage == true ||
+        (GetIt.I.isRegistered<ChatsService>() &&
+            (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
+    if (!hasUnread) return;
+    final stateLastReadAt = GetIt.I.isRegistered<ChatsService>()
+        ? ChatsSvc.getChatState(chat.guid)?.chat.lastReadAt
+        : null;
+    final int? effectiveLastReadAt;
+    if (chat.lastReadAt != null && stateLastReadAt != null) {
+      effectiveLastReadAt = chat.lastReadAt! > stateLastReadAt ? chat.lastReadAt : stateLastReadAt;
+    } else {
+      effectiveLastReadAt = chat.lastReadAt ?? stateLastReadAt;
+    }
+    int? lastReadMsgDateMs;
+    if (chat.lastReadMessageGuid != null) {
+      lastReadMsgDateMs = messages
+          .firstWhereOrNull((m) => m.guid == chat.lastReadMessageGuid)
+          ?.dateCreated
+          ?.millisecondsSinceEpoch;
+      lastReadMsgDateMs ??= Message.findOne(guid: chat.lastReadMessageGuid!)?.dateCreated?.millisecondsSinceEpoch;
+    }
+    unreadDividerGuid.value = computeUnreadDividerGuid(
+      messages: messages,
+      hasUnread: hasUnread,
+      lastReadAt: effectiveLastReadAt,
+      lastReadMessageDateMs: lastReadMsgDateMs,
+    );
+  }
+
+  static String? computeUnreadDividerGuid({
+    required List<Message> messages,
+    required bool hasUnread,
+    int? lastReadAt,
+    int? lastReadMessageDateMs,
+  }) {
+    if (!hasUnread || messages.isEmpty) return null;
+
+    final int? boundaryMs;
+    if (lastReadAt != null && lastReadMessageDateMs != null) {
+      boundaryMs = lastReadAt > lastReadMessageDateMs ? lastReadAt : lastReadMessageDateMs;
+    } else {
+      boundaryMs = lastReadAt ?? lastReadMessageDateMs;
+    }
+
+    // Ensure newest-first order regardless of caller list order.
+    final sorted = List<Message>.of(messages)..sort(Message.sort);
+
+    bool isEligible(Message m) =>
+        m.guid != null && m.isFromMe != true && !m.isReaction && !m.isGroupEvent;
+
+    if (boundaryMs != null) {
+      // Oldest eligible unread incoming message strictly after boundaryMs.
+      for (int i = sorted.length - 1; i >= 0; i--) {
+        final m = sorted[i];
+        if (!isEligible(m)) continue;
+        if (m.isRead == true || m.dateRead != null) continue;
+        final createdMs = m.dateCreated?.millisecondsSinceEpoch;
+        if (createdMs != null && createdMs > boundaryMs) {
+          return m.guid;
+        }
+      }
+    }
+
+    // Fallback: contiguous incoming run after the latest isFromMe message.
+    String? oldestInRun;
+    for (final m in sorted) {
+      if (m.isFromMe == true && !m.isReaction && !m.isGroupEvent) {
+        break;
+      }
+      if (isEligible(m)) {
+        oldestInRun = m.guid;
+      }
+    }
+    return oldestInRun;
+  }
   final RxDouble timestampOffset = 0.0.obs;
   final RxBool inSelectMode = false.obs;
   final RxList<Message> selected = <Message>[].obs;
@@ -141,6 +245,11 @@ class ConversationViewController extends StatefulController with GetSingleTicker
             (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
     if (!hasUnread) return;
 
+    final willSendRead = SettingsSvc.settings.enablePrivateAPI.value &&
+        (chat.autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value);
+    if (willSendRead) {
+      clearUnreadDivider();
+    }
     if (GetIt.I.isRegistered<ChatsService>()) {
       unawaited(ChatsSvc.setChatHasUnread(chat, false, privateMark: true));
     } else {
@@ -380,6 +489,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   }
 
   Future<void> send(SendData data) async {
+    clearUnreadDivider();
     await sendFunc?.call(data);
   }
 

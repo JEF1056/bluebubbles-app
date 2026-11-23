@@ -36,7 +36,7 @@ class ServerUrlRequestHandler: MethodCallHandlerImpl() {
         try {
             firebaseApp = FirebaseApp.getInstance()
         } catch (e: Exception) {
-            result.error("500", "No Firebase app found!", e)
+            result.error("500", "No Firebase app found!", e.stackTraceToString())
             return
         }
 

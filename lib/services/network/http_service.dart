@@ -118,9 +118,9 @@ class HttpService implements BaseApi {
       final method = requestOptions?.method.toUpperCase();
       final isIdempotent =
           method == 'GET' || method == 'HEAD' || method == 'OPTIONS' || requestOptions?.extra['idempotent'] == true;
-      if ((statusCode == 502 || statusCode == 503) &&
-          isIdempotent &&
-          (apiRoot.contains("trycloudflare") || apiRoot.startsWith("https://"))) {
+      final isCloudflareRetry = (statusCode == 502 || statusCode == 503) &&
+          (apiRoot.contains("trycloudflare") || apiRoot.startsWith("https://"));
+      if (isIdempotent && (isCloudflareRetry || _isTransientConnectionReset(e))) {
         try {
           return await func();
         } catch (e, s) {
@@ -129,6 +129,31 @@ class HttpService implements BaseApi {
       }
       return Future.error(e, s);
     }
+  }
+
+  static bool _isTransientConnectionReset(Object e) {
+    if (e is! DioException || e.response != null) return false;
+    if (e.type == DioExceptionType.cancel ||
+        e.type == DioExceptionType.badCertificate ||
+        e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.sendTimeout ||
+        e.type == DioExceptionType.receiveTimeout) {
+      return false;
+    }
+    final err = e.error;
+    if (err is HttpException) return true;
+    if (err is SocketException) {
+      final msg = err.message.toLowerCase();
+      return msg.contains('reset') ||
+          msg.contains('broken pipe') ||
+          msg.contains('closed') ||
+          msg.contains('abort');
+    }
+    final msg = '${err ?? ''} ${e.message ?? ''}'.toLowerCase();
+    return msg.contains('connection closed') ||
+        msg.contains('connection reset') ||
+        msg.contains('broken pipe') ||
+        msg.contains('connection abort');
   }
 
   /// Return the future with either a value or error, depending on response from API
@@ -321,10 +346,15 @@ class HttpService implements BaseApi {
 
 /// Intercepts API requests, responses, and errors and logs them to console
 class ApiInterceptor extends Interceptor {
+  @visibleForTesting
+  static bool isOwnHttpServerUri(Uri uri, String origin) {
+    final hasHttpOrigin = uri.isScheme('http') || uri.isScheme('https');
+    return hasHttpOrigin && origin.isNotEmpty && uri.origin == origin;
+  }
+
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    final hasHttpOrigin = options.uri.isScheme('http') || options.uri.isScheme('https');
-    final ownServer = hasHttpOrigin && HttpSvc.origin.isNotEmpty && options.uri.origin == HttpSvc.origin;
+    final ownServer = isOwnHttpServerUri(options.uri, HttpSvc.origin);
     // Custom headers can hold tunnel credentials: never hand them to other hosts.
     if (!ownServer) {
       final sensitiveKeys = HttpSvc.headers.keys.map((k) => k.toLowerCase()).toSet();
@@ -348,8 +378,7 @@ class ApiInterceptor extends Interceptor {
   void onError(DioException err, ErrorInterceptorHandler handler) {
     if (kIsWeb &&
         err.response == null &&
-        HttpSvc.origin.isNotEmpty &&
-        err.requestOptions.uri.origin == HttpSvc.origin) {
+        isOwnHttpServerUri(err.requestOptions.uri, HttpSvc.origin)) {
       unawaited(ensureCloudflareAccessSession(HttpSvc.origin));
     }
     // Get params without sensitive info

@@ -4,6 +4,7 @@ import 'package:bluebubbles/app/components/facetime/active_call_controller.dart'
 import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/facetime.dart';
+import 'package:bluebubbles/services/facetime/facetime_media_models.dart';
 import 'package:bluebubbles/services/facetime/web_webrtc_client.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -268,6 +269,68 @@ class _FakePeerAdapter implements WebRtcPeerAdapter {
   }
 }
 
+class _FakeMediaPeerAdapter extends _FakePeerAdapter implements WebRtcMediaPeerAdapter {
+  bool voiceIsolation = true;
+  FaceTimeVideoEffectType videoEffect = FaceTimeVideoEffectType.none;
+  bool videoDenoise = false;
+  String? bgId;
+  String? bgPath;
+
+  @override
+  bool get canSelectAudioOutput => true;
+
+  @override
+  Future<void> setVoiceIsolation(bool enabled) async {
+    voiceIsolation = enabled;
+  }
+
+  @override
+  Future<void> setVideoProcessing({
+    required FaceTimeVideoEffectType effect,
+    required bool denoise,
+    String? backgroundId,
+    String? backgroundPath,
+  }) async {
+    videoEffect = effect;
+    videoDenoise = denoise;
+    bgId = backgroundId;
+    bgPath = backgroundPath;
+  }
+
+  @override
+  Future<({List<FaceTimeAudioDevice> outputs, List<FaceTimeAudioDevice> inputs, String? activeOutputId, String? activeInputId})>
+      enumerateAudioDevices() async {
+    return (
+      outputs: <FaceTimeAudioDevice>[],
+      inputs: <FaceTimeAudioDevice>[],
+      activeOutputId: null,
+      activeInputId: null,
+    );
+  }
+
+  @override
+  Future<bool> selectAudioOutput(String deviceId) async => true;
+
+  @override
+  Future<bool> selectAudioInput(String deviceId) async => true;
+
+  @override
+  void setOnAudioDevicesChanged(
+    void Function(
+      List<FaceTimeAudioDevice> outputs,
+      List<FaceTimeAudioDevice> inputs,
+      String? activeOutputId,
+      String? activeInputId,
+    )? callback,
+  ) {}
+
+  @override
+  void setOnQualityStats(void Function(FaceTimeCallQualityStats stats)? callback) {}
+
+  @override
+  void setOnIceStateChanged(void Function(String state)? callback) {}
+}
+
 void main() {
   group('WebRtcBridgeConfig parsing', () {
     test('parses STUN/TURN servers and videoSupported flag', () {
@@ -479,7 +542,7 @@ void main() {
           launchedLinks.add(link);
           return true;
         },
-        onAnswerServerCall: (uuid, {bool audioOnly = false, String? displayName, String? chatGuid}) async {
+        onAnswerServerCall: (uuid, {bool audioOnly = false, String? mode, String? displayName, String? chatGuid}) async {
           answerCalls.add(audioOnly);
           return null;
         },
@@ -573,7 +636,7 @@ void main() {
           adapterFactory: () => _FakePeerAdapter(),
         ),
         onOpenPendingTab: () => fallbackTab,
-        onAnswerServerCall: (uuid, {bool audioOnly = false, String? displayName, String? chatGuid}) async {
+        onAnswerServerCall: (uuid, {bool audioOnly = false, String? mode, String? displayName, String? chatGuid}) async {
           return PlacedFaceTimeCall(
             call: FaceTimeCall(callUuid: uuid),
             link: 'https://facetime.apple.com/join#abc',
@@ -711,6 +774,135 @@ void main() {
       expect(controller.remoteVideoWidget.value, isNull);
     });
 
+    testWidgets('wraps local-video-texture and video-texture in FittedBox(cover) + SizedBox when width/height > 0',
+        (tester) async {
+      final controller = ActiveCallController();
+      addTearDown(controller.dispose);
+
+      controller.startOngoing(
+        callUuid: 'and-vid-aspect',
+        callerName: 'Casey',
+        isVideo: true,
+        isTelecomCall: true,
+      );
+
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'local-video-texture',
+        'call_uuid': 'and-vid-aspect',
+        'texture_id': 21,
+        'width': 720,
+        'height': 1280,
+      });
+
+      final localWidget = controller.localVideoWidget.value;
+      expect(localWidget, isA<FittedBox>());
+      final fitted = localWidget! as FittedBox;
+      expect(fitted.fit, BoxFit.cover);
+      expect(fitted.clipBehavior, Clip.hardEdge);
+      expect(fitted.child, isA<SizedBox>());
+      final sized = fitted.child! as SizedBox;
+      expect(sized.width, 720);
+      expect(sized.height, 1280);
+      expect(sized.child, isA<Texture>());
+      expect((sized.child! as Texture).textureId, 21);
+
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: SizedBox(
+              width: 108,
+              height: 144,
+              child: localWidget,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(FittedBox), findsOneWidget);
+      expect(tester.getSize(find.byType(SizedBox).last), const Size(720, 1280));
+      expect((tester.widget<Texture>(find.byType(Texture))).textureId, 21);
+
+      // Remote video-texture also wraps when positive dimensions are provided
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'video-texture',
+        'call_uuid': 'and-vid-aspect',
+        'texture_id': 22,
+        'width': 1280,
+        'height': 720,
+      });
+      expect(controller.remoteVideoWidget.value, isA<FittedBox>());
+      final remoteSized = (controller.remoteVideoWidget.value! as FittedBox).child! as SizedBox;
+      expect(remoteSized.width, 1280);
+      expect(remoteSized.height, 720);
+      expect((remoteSized.child! as Texture).textureId, 22);
+
+      // Zero/missing dimensions fall back to bare Texture
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'local-video-texture',
+        'call_uuid': 'and-vid-aspect',
+        'texture_id': 21,
+        'width': 0,
+        'height': 1280,
+      });
+      expect(controller.localVideoWidget.value, isA<Texture>());
+    });
+
+    test('syncNativeVideoTextures preserves FittedBox for cached texture dimensions and clears on reset', () async {
+      final controller = ActiveCallController(
+        onFetchNativeVideoTextureIds: (_) async => (remoteId: 32, localId: 31),
+      );
+      addTearDown(controller.dispose);
+
+      controller.startOngoing(
+        callUuid: 'and-sync-aspect',
+        callerName: 'Casey',
+        isVideo: true,
+        isTelecomCall: true,
+      );
+
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'local-video-texture',
+        'call_uuid': 'and-sync-aspect',
+        'texture_id': 31,
+        'width': 720,
+        'height': 1280,
+      });
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'video-texture',
+        'call_uuid': 'and-sync-aspect',
+        'texture_id': 32,
+        'width': 1280,
+        'height': 720,
+      });
+
+      await controller.syncNativeVideoTextures(callUuid: 'and-sync-aspect');
+
+      expect(controller.localVideoWidget.value, isA<FittedBox>());
+      final syncedLocalSized = (controller.localVideoWidget.value! as FittedBox).child! as SizedBox;
+      expect(syncedLocalSized.width, 720);
+      expect(syncedLocalSized.height, 1280);
+      expect((syncedLocalSized.child! as Texture).textureId, 31);
+
+      expect(controller.remoteVideoWidget.value, isA<FittedBox>());
+      final syncedRemoteSized = (controller.remoteVideoWidget.value! as FittedBox).child! as SizedBox;
+      expect(syncedRemoteSized.width, 1280);
+      expect(syncedRemoteSized.height, 720);
+      expect((syncedRemoteSized.child! as Texture).textureId, 32);
+
+      // Clearing call resets cached dimensions so a fresh sync falls back to bare Texture
+      controller.clear();
+      controller.startOngoing(
+        callUuid: 'and-sync-aspect-2',
+        callerName: 'Casey',
+        isVideo: true,
+        isTelecomCall: true,
+      );
+      await controller.syncNativeVideoTextures(callUuid: 'and-sync-aspect-2');
+      expect(controller.localVideoWidget.value, isA<Texture>());
+      expect(controller.remoteVideoWidget.value, isA<Texture>());
+    });
+
     test('hangup() aborts in-flight start() with StateError and cancelled answerCall() stays idle', () async {
       final transport = _FakeSignalingTransport()..autoRespondAnswer = false;
       final adapter = _FakePeerAdapter();
@@ -776,7 +968,7 @@ void main() {
           launchedLinks.add(link);
           return true;
         },
-        onAnswerServerCall: (uuid, {bool audioOnly = false, String? displayName, String? chatGuid}) async {
+        onAnswerServerCall: (uuid, {bool audioOnly = false, String? mode, String? displayName, String? chatGuid}) async {
           return PlacedFaceTimeCall(
             link: 'https://facetime.apple.com/join#fallback',
             call: FaceTimeCall(callUuid: uuid),
@@ -848,6 +1040,104 @@ void main() {
         ),
         isFalse,
       );
+    });
+  });
+
+  group('WebWebRtcClient stale adapter guard', () {
+    test('ignores stale adapter callbacks after hangup', () async {
+      final transport = _FakeSignalingTransport();
+      final adapter = _FakePeerAdapter();
+      final client = WebWebRtcClient(
+        transport: transport,
+        adapterFactory: () => adapter,
+      );
+      addTearDown(client.dispose);
+
+      await client.start(callUuid: 'stale-1', wantVideo: true, answerCall: false);
+      expect(client.activeCallUuid, 'stale-1');
+
+      await client.hangup(emitSignal: false);
+      expect(client.activeCallUuid, isNull);
+
+      adapter.simulateLocalIce('candidate:late');
+      adapter.simulateRemoteVideo(const SizedBox(key: Key('late-remote')));
+      adapter.simulateLocalVideo(const SizedBox(key: Key('late-local')));
+
+      expect(transport.iceCandidates, isEmpty);
+      expect(client.remoteVideo.value, isNull);
+      expect(client.localVideo.value, isNull);
+    });
+
+    test('reconnects WebRtcBridge on AppLifecycleState.resumed when call is ongoing and held here', () async {
+      final transport = _FakeSignalingTransport();
+      final adapter = _FakePeerAdapter();
+      final client = WebWebRtcClient(
+        transport: transport,
+        adapterFactory: () => adapter,
+      );
+      final controller = ActiveCallController(
+        isWebOverride: true,
+        webRtcClient: client,
+        deviceId: 'web-1',
+        deviceName: 'Chrome',
+        onOpenPendingTab: () => _FakePendingTab(),
+      );
+      addTearDown(controller.dispose);
+
+      controller.startIncoming(
+        callUuid: 'reconnect-uuid-1',
+        callerName: 'Alice',
+        isVideo: true,
+        isTelephony: false,
+      );
+      await controller.answerCall();
+      expect(controller.state.phase, ActiveCallPhase.ongoing);
+      expect(client.isActive, isTrue);
+
+      // Simulate lock / disconnect of WebRTC client while ongoing call remains held
+      await client.hangup(emitSignal: false);
+      expect(client.isActive, isFalse);
+      expect(controller.state.phase, ActiveCallPhase.ongoing);
+      expect(controller.state.isHeldHere, isTrue);
+
+      // Lifecycle resumed
+      controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(client.isActive, isTrue);
+      expect(client.activeCallUuid, 'reconnect-uuid-1');
+    });
+
+    test('toggles voice isolation and sets video processing on media adapter', () async {
+      final transport = _FakeSignalingTransport();
+      final adapter = _FakeMediaPeerAdapter();
+      final client = WebWebRtcClient(
+        transport: transport,
+        adapterFactory: () => adapter,
+      );
+      addTearDown(client.dispose);
+
+      await client.start(callUuid: 'media-call-1', wantVideo: true, answerCall: false);
+      expect(client.voiceIsolationEnabled.value, isTrue);
+
+      await client.setVoiceIsolation(false);
+      expect(client.voiceIsolationEnabled.value, isFalse);
+      expect(adapter.voiceIsolation, isFalse);
+
+      await client.setVoiceIsolation(true);
+      expect(client.voiceIsolationEnabled.value, isTrue);
+      expect(adapter.voiceIsolation, isTrue);
+
+      await client.setVideoProcessing(
+        effect: FaceTimeVideoEffectType.blurStrong,
+        denoise: true,
+        backgroundId: 'studio_warm',
+      );
+      expect(client.videoEffect.value, FaceTimeVideoEffectType.blurStrong);
+      expect(client.videoDenoiseEnabled.value, isTrue);
+      expect(adapter.videoEffect, FaceTimeVideoEffectType.blurStrong);
+      expect(adapter.videoDenoise, isTrue);
+      expect(adapter.bgId, 'studio_warm');
     });
   });
 }

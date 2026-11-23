@@ -208,11 +208,13 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
                     onTap: () {
                       Navigator.of(context).pop();
                     },
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                      child: Container(
-                        color:
-                            context.theme.colorScheme.surfaceContainerHighest.darkenPercent(30).withValues(alpha: 0.2),
+                    child: RepaintBoundary(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                        child: Container(
+                          color:
+                              context.theme.colorScheme.surfaceContainerHighest.darkenPercent(30).withValues(alpha: 0.2),
+                        ),
                       ),
                     ),
                   ),
@@ -501,17 +503,14 @@ class _ConversationPeekViewState extends State<ConversationPeekView>
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(10.0),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-        child: Container(
-          color: (ThemeSvc.inDarkMode(context)
-                  ? context.theme.colorScheme.surfaceContainerHighest
-                  : context.theme.colorScheme.surface)
-              .withAlpha(150),
-          width: maxMenuWidth,
-          child:
-              Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: allActions),
-        ),
+      child: Container(
+        color: (ThemeSvc.inDarkMode(context)
+                ? context.theme.colorScheme.surfaceContainerHighest
+                : context.theme.colorScheme.surface)
+            .withAlpha(150),
+        width: maxMenuWidth,
+        child:
+            Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: allActions),
       ),
     );
   }

@@ -333,6 +333,19 @@ class NotificationReplyAndSyncTest {
             }
         }
 
+        override suspend fun updateReadStatus(guid: String, hasUnread: Boolean, readAt: Long?) {
+            chats[guid]?.let {
+                chats[guid] = it.copy(
+                    hasUnreadMessage = hasUnread,
+                    lastReadMessageTimestamp = readAt?.takeIf { ts -> ts > 0L } ?: it.lastReadMessageTimestamp
+                )
+                publish()
+            }
+        }
+
+        override suspend fun getChatsWithReadTimestamp(): List<ChatEntity> =
+            chats.values.filter { it.lastReadMessageTimestamp != null }
+
         override suspend fun pruneOld() = Unit
 
         override suspend fun deleteNotIn(keepGuids: List<String>) {

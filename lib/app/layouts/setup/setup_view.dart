@@ -53,12 +53,13 @@ class SetupView extends StatefulWidget {
 
 class _SetupViewState extends State<SetupView> {
   final controller = Get.put(SetupViewController(), permanent: true);
+  Worker? _socketWorker;
 
   @override
   void initState() {
     super.initState();
 
-    ever(SocketSvc.state, (event) {
+    _socketWorker = ever(SocketSvc.state, (event) {
       if (event == SocketState.error &&
           !SettingsSvc.settings.finishedSetup.value &&
           controller.pageController.hasClients &&
@@ -79,9 +80,27 @@ class _SetupViewState extends State<SetupView> {
   }
 
   @override
+  void dispose() {
+    _socketWorker?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        final page = controller.pageController.hasClients
+            ? (controller.pageController.page?.round() ?? controller.currentPage - 1)
+            : 0;
+        if (page > 0 && page < controller.pageOfNoReturn) {
+          controller.pageController.previousPage(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+          );
+        }
+      },
       child: Scaffold(
         backgroundColor: SettingsSvc.settings.windowEffect.value != WindowEffect.disabled
             ? Colors.transparent

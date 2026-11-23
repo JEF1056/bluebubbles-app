@@ -644,7 +644,7 @@ class StartupTasks {
       }
 
       SocketSvc.restartSocket();
-    } else if (kIsDesktop && GetIt.I.isRegistered<SocketService>()) {
+    } else if (!kIsWeb && (kIsDesktop || Platform.isIOS) && GetIt.I.isRegistered<SocketService>()) {
       SocketSvc.checkConnection();
     }
 
@@ -662,14 +662,14 @@ class StartupTasks {
     // On app resume, use the global isolate so it's ready for other tasks.
     if (GetIt.I.isRegistered<SyncService>()) {
       if (kIsWeb || !Platform.isAndroid) {
-        unawaited(SyncSvc.startIncrementalSync(useGlobalIsolate: true));
+        unawaited(SyncSvc.startIncrementalSync(useGlobalIsolate: true, catchUp: true));
       } else if (lifecycle == null ||
           !lifecycle.hasResumed ||
           // wasBackgrounded (paused/detached, NOT hidden): sync only when the user
           // actually left the app — not when resuming from an in-app overlay like
           // the share sheet, which hides the activity without leaving the app.
           (lifecycle.currentState == AppLifecycleState.resumed && lifecycle.wasBackgrounded)) {
-        unawaited(SyncSvc.startIncrementalSync(useGlobalIsolate: true));
+        unawaited(SyncSvc.startIncrementalSync(useGlobalIsolate: true, catchUp: true));
       }
     }
 

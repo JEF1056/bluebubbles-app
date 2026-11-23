@@ -87,15 +87,10 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
           actions: {
             GoBackIntent: GoBackAction(context),
           },
-          child: kIsDesktop
-              ? Obx(() => Container(
-                    color: context.theme.colorScheme.surface.themeOpacity(context),
-                    child: _buildSplitSettings(context),
-                  ))
-              : Container(
-                  color: context.theme.colorScheme.surface,
-                  child: _buildSplitSettings(context),
-                )),
+          child: Obx(() => Container(
+                color: context.theme.colorScheme.surface.themeOpacity(context),
+                child: _buildSplitSettings(context),
+              ))),
     );
   }
 
@@ -147,9 +142,11 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
 
                                 // If it's a header and we're searching, check if the next section has matches
                                 bool shouldShowHeader = true;
-                                if (isHeader && searchQuery.isNotEmpty && i + 1 < settingsItemList.length) {
-                                  final nextItem = settingsItemList[i + 1];
-                                  if (nextItem is SettingsSection && nextItem.searchableSettingsItems != null) {
+                                if (isHeader && searchQuery.isNotEmpty) {
+                                  if (i + 1 < settingsItemList.length &&
+                                      settingsItemList[i + 1] is SettingsSection &&
+                                      (settingsItemList[i + 1] as SettingsSection).searchableSettingsItems != null) {
+                                    final nextItem = settingsItemList[i + 1] as SettingsSection;
                                     // Only show header if the section has matching items
                                     shouldShowHeader = nextItem.searchableSettingsItems!.any((childItem) {
                                       final childTitleMatches = childItem.title.toLowerCase().contains(lowerQuery);
@@ -158,6 +155,8 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                                       );
                                       return childTitleMatches || childTagMatches;
                                     });
+                                  } else {
+                                    shouldShowHeader = false;
                                   }
                                 }
 
@@ -233,8 +232,7 @@ class _SettingsPageState extends State<SettingsPage> with ThemeHelpers {
                             }
 
                             // If searching and no results → show EmptySearchResult
-                            final visibleWidgetsCount = widgets.length;
-                            if (searchQuery.isNotEmpty && visibleWidgetsCount <= 1) {
+                            if (searchQuery.isNotEmpty && widgets.isEmpty) {
                               return [EmptySearchResult(searchQuery: searchQuery)];
                             }
 

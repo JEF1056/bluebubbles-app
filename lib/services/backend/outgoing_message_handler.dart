@@ -1211,7 +1211,9 @@ class OutgoingMessageHandler {
             // The state key is intentionally left at the temp attachment GUID
             // so the Obx can still find it; _syncAttachmentStates promotes it
             // to the real key when updateMessage delivers the updated struct.
-            if (Get.isRegistered<MessagesService>(tag: c.guid)) {
+            if (newMessage.guid != null &&
+                newMessage.guid!.isNotEmpty &&
+                Get.isRegistered<MessagesService>(tag: c.guid)) {
               MessagesSvc(c.guid).notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempGuid, a);
               MessagesSvc(c.guid).updateMessage(newMessage);
             }
@@ -1280,7 +1282,9 @@ class OutgoingMessageHandler {
         for (final a in responseAttachments) {
           try {
             await _matchAttachmentWithExisting(c, tempGuid, a);
-            if (Get.isRegistered<MessagesService>(tag: c.guid)) {
+            if (newMessage.guid != null &&
+                newMessage.guid!.isNotEmpty &&
+                Get.isRegistered<MessagesService>(tag: c.guid)) {
               MessagesSvc(c.guid).notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempGuid, a);
             }
           } catch (e, st) {
@@ -1420,7 +1424,9 @@ class OutgoingMessageHandler {
           final tempAttachmentGuid = temp.guid!;
           try {
             await _matchAttachmentWithExisting(c, tempAttachmentGuid, a);
-            if (Get.isRegistered<MessagesService>(tag: c.guid)) {
+            if (newMessage.guid != null &&
+                newMessage.guid!.isNotEmpty &&
+                Get.isRegistered<MessagesService>(tag: c.guid)) {
               MessagesSvc(c.guid).notifyAttachmentSendComplete(tempGuid, newMessage.guid!, tempAttachmentGuid, a);
             }
           } catch (e, st) {
@@ -1469,6 +1475,14 @@ class OutgoingMessageHandler {
   /// Note: [sendAttachment] success is intentionally handled inline because
   /// attachment GUID swaps must complete *before* the message GUID swap — an
   /// ordering constraint that doesn't fit the [onExtra] model.
+  @visibleForTesting
+  Future<void> finalizeOutgoingSuccessForTest(Chat c, String tempGuid, Map<String, dynamic> data) =>
+      _finalizeOutgoingSuccess(c, tempGuid, data);
+
+  @visibleForTesting
+  Future<void> matchMessageWithExistingForTest(Chat chat, String existingGuid, Message replacement) =>
+      _matchMessageWithExisting(chat, existingGuid, replacement);
+
   Future<void> _finalizeOutgoingSuccess(
     Chat c,
     String tempGuid,
@@ -1476,6 +1490,13 @@ class OutgoingMessageHandler {
     Future<void> Function(Message confirmed)? onExtra,
   }) async {
     final serverMessage = Message.fromMap(data['data']);
+    if (serverMessage.guid == null || serverMessage.guid!.isEmpty) {
+      Logger.error(
+        'Server response missing message GUID for temp=$tempGuid — leaving temp row intact for socket reconciliation',
+        tag: _tag,
+      );
+      return;
+    }
     await _matchMessageWithExisting(c, tempGuid, serverMessage);
     await onExtra?.call(serverMessage);
   }
@@ -1548,6 +1569,13 @@ class OutgoingMessageHandler {
     String existingGuid,
     Message replacement,
   ) async {
+    if (replacement.guid == null || replacement.guid!.isEmpty) {
+      Logger.error(
+        'Refusing to replace $existingGuid with null or empty replacement GUID',
+        tag: _tag,
+      );
+      return;
+    }
     final alreadyPresent = Message.findOne(guid: replacement.guid);
 
     // Track the DB-hydrated confirmed message so we can update ChatState after the swap.
@@ -1555,10 +1583,11 @@ class OutgoingMessageHandler {
 
     if (alreadyPresent != null) {
       // Socket event won the race — real GUID is already in the DB.
+      _confirmedMessage = alreadyPresent;
       final isNewer = replacement.isNewerThan(alreadyPresent);
       if (isNewer) {
         try {
-          await Message.replaceMessage(replacement.guid, replacement);
+          _confirmedMessage = await Message.replaceMessage(replacement.guid, replacement);
         } catch (ex, st) {
           Logger.warn(
               'Unable to replace message with GUID, "${replacement.guid}". The socket likely confirmed the message first.',
@@ -1567,8 +1596,6 @@ class OutgoingMessageHandler {
               tag: _tag);
         }
       }
-      // alreadyPresent was fetched from the DB and has a valid id.
-      _confirmedMessage = alreadyPresent;
 
       // Clean up the stale temp record if it's distinct from the real one.
       if (existingGuid != replacement.guid) {
@@ -1579,7 +1606,7 @@ class OutgoingMessageHandler {
             // The socket's copy is already on screen under the real GUID, so the placeholder is removed rather than
             // renamed into a second bubble
             MessagesSvc(chat.guid).removeMessage(stale);
-            MessagesSvc(chat.guid).updateMessage(replacement);
+            MessagesSvc(chat.guid).updateMessage(_confirmedMessage);
           }
         }
       } else {}
@@ -1605,6 +1632,7 @@ class OutgoingMessageHandler {
 
         // Instead of trying to replace, just save the replacement and update the UI to use it.
         // This handles the case where the temp message was never saved to the main thread's store.
+        replacement.chat.target = chat;
         replacement.save(); // sets replacement.id via Database.messages.put()
         _confirmedMessage = replacement;
         if (Get.isRegistered<MessagesService>(tag: chat.guid)) {
@@ -1695,7 +1723,8 @@ class OutgoingMessageHandler {
     // getContent finds the local file immediately without triggering a server download.
     if (!kIsWeb && existingGuid != replacement.guid && existingGuid.startsWith('temp')) {
       try {
-        final oldDir = Directory('${Attachment.baseDirectory}/$existingGuid');
+        final safeOldGuid = FilesystemService.sanitizeGuid(existingGuid);
+        final oldDir = Directory('${Attachment.baseDirectory}/$safeOldGuid');
         final newDir = Directory(replacement.directory);
         if (oldDir.existsSync() && !newDir.existsSync()) {
           oldDir.renameSync(newDir.path);

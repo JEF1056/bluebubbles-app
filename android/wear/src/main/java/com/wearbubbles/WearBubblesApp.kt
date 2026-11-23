@@ -83,6 +83,12 @@ class WearBubblesApp : Application(), ImageLoaderFactory {
                         is SocketEvent.PinnedChatsUpdated -> {
                             chatRepo.updatePinnedOrder(event.pinnedChatGuids)
                         }
+                        is SocketEvent.ChatReadStatusChanged -> {
+                            chatRepo.handleReadStatusChanged(event.chatGuid, event.read, event.readAt)
+                            if (event.read) {
+                                NotificationHelper.cancelNotification(this@WearBubblesApp, event.chatGuid)
+                            }
+                        }
                         else -> {}
                     }
                 } catch (e: Exception) {

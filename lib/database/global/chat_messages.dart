@@ -1,4 +1,5 @@
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/utils/logger/logger.dart';
 
 class ChatMessages {
   final Map<String, Message> _messages = {};
@@ -34,23 +35,31 @@ class ChatMessages {
 
   void addMessages(List<Message> __messages) {
     for (Message m in __messages) {
+      final guid = m.guid;
+      if (guid == null || guid.isEmpty) {
+        Logger.warn('Skipping message id=${m.id} with null or empty guid in ChatMessages.addMessages',
+            tag: 'ChatMessages');
+        continue;
+      }
       if (m.isReaction) {
         // add reactions
-        _reactions[m.guid!] = m;
+        _reactions[guid] = m;
       } else {
         // add regular texts
-        _messages[m.guid!] = m;
+        _messages[guid] = m;
       }
-      if (m.threadOriginatorGuid != null && !m.guid!.startsWith("temp") && !m.isReaction) {
+      if (m.threadOriginatorGuid != null && !guid.startsWith("temp") && !m.isReaction) {
         // add threaded messages
         _threads[m.threadOriginatorGuid!] ??= {};
-        _threads[m.threadOriginatorGuid]![m.guid!] = m;
+        _threads[m.threadOriginatorGuid]![guid] = m;
       }
-      if (_threads.keys.contains(m.guid)) {
+      if (_threads.keys.contains(guid)) {
         // add thread 'originator'
-        _threads[m.guid]![m.guid!] = m;
+        _threads[guid]![guid] = m;
       }
-      _attachments.addEntries(m.dbAttachments.map((e) => MapEntry(e.guid!, e)));
+      _attachments.addEntries(
+        m.dbAttachments.where((e) => e.guid != null && e.guid!.isNotEmpty).map((e) => MapEntry(e.guid!, e)),
+      );
     }
   }
 

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:bluebubbles/app/components/m3e/m3e.dart';
+import 'package:bluebubbles/app/layouts/conversation_details/dialogs/facetime_call.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/interactive/url_preview_controller.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/reply/reply_bubble.dart';
 import 'package:bluebubbles/app/state/message_state_scope.dart';
@@ -56,6 +57,13 @@ class ExpressiveUrlPreview extends StatelessWidget {
       final message = MessageStateScope.maybeMessageOf(context);
       final inReply = ReplyScope.maybeOf(context) != null;
       final data = controller.effectiveData;
+      final rawLink = controller.linkText;
+      final host = _faceTimeHostFor(rawLink);
+
+      if (host != null && rawLink != null) {
+        final faceTimeCard = _buildFaceTimeCard(context, link: rawLink, host: host, inReply: inReply);
+        return kIsWeb ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 320), child: faceTimeCard) : faceTimeCard;
+      }
 
       final Widget body;
       switch (controller.layout) {
@@ -449,6 +457,82 @@ class ExpressiveUrlPreview extends StatelessWidget {
       child: ScaleTransition(
         scale: CurvedAnimation(parent: controller.iconAnimation, curve: M3EMotion.spatialFast.curve),
         child: icon,
+      ),
+    );
+  }
+
+  /// Compact card for `facetime.apple.com` links with a direct Join action.
+  String? _faceTimeHostFor(String? rawUrl) {
+    if (rawUrl == null || rawUrl.trim().isEmpty) return null;
+    final trimmed = rawUrl.trim();
+    final uri = Uri.tryParse(trimmed.contains('://') ? trimmed : 'https://$trimmed');
+    final host = uri?.host.toLowerCase();
+    return host == 'facetime.apple.com' ? host : null;
+  }
+
+  Widget _buildFaceTimeCard(
+    BuildContext context, {
+    required String link,
+    required String host,
+    required bool inReply,
+  }) {
+    final colors = context.theme.colorScheme;
+    final textTheme = context.theme.textTheme;
+    return InkWell(
+      onTap: () => openFaceTimeJoinLink(link, context: context),
+      child: Padding(
+        padding: inReply
+            ? const EdgeInsets.all(M3ESpacing.md)
+            : const EdgeInsets.symmetric(horizontal: M3ESpacing.lg, vertical: M3ESpacing.md),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: colors.secondaryContainer,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.videocam_rounded, size: 20, color: colors.onSecondaryContainer),
+            ),
+            const SizedBox(width: M3ESpacing.md),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'FaceTime link',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.titleSmall?.copyWith(
+                      color: colors.onSurface,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    host,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: M3ESpacing.sm),
+            FilledButton.tonal(
+              onPressed: () => openFaceTimeJoinLink(link, context: context),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(0, 40),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                tapTargetSize: MaterialTapTargetSize.padded,
+              ),
+              child: const Text('Join'),
+            ),
+          ],
+        ),
       ),
     );
   }

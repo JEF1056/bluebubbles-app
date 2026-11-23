@@ -29,5 +29,8 @@ data class MessageEntity(
     val dateEdited: Long? = null,
     val attachmentsJson: String? = null,
     val balloonBundleId: String? = null,
-    val linkPreviewJson: String? = null
+    val linkPreviewJson: String? = null,
+    val isRead: Boolean? = null,
+    val groupActionType: Int? = null,
+    val itemType: Int? = null
 )

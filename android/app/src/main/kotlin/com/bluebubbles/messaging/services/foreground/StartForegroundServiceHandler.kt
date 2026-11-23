@@ -30,7 +30,7 @@ class StartForegroundServiceHandler: MethodCallHandlerImpl() {
             }
             result.success(null)
         } catch (e: Exception) {
-            result.error("START_FOREGROUND_SERVICE_ERROR", e.message, e)
+            result.error("START_FOREGROUND_SERVICE_ERROR", e.message, e.stackTraceToString())
         }
     }
 }

@@ -6,9 +6,12 @@ import 'package:bluebubbles/services/backend/actions/contact_v2_actions.dart';
 import 'package:bluebubbles/services/backend/actions/message_actions.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
+import 'package:dio/dio.dart' as dio;
 import 'package:flutter/foundation.dart';
 
 class SyncActions {
+  static int _incrementalSyncGeneration = 0;
+  static dio.CancelToken? _activeIncrementalSyncCancelToken;
   // ---------------------------------------------------------------------------
   // Unified sync entrypoint
   // ---------------------------------------------------------------------------
@@ -452,18 +455,35 @@ class SyncActions {
 
   /// Performs an incremental sync of chats
   static Future<List<int>> performIncrementalSync(dynamic data) async {
+    final generation = ++_incrementalSyncGeneration;
+    _activeIncrementalSyncCancelToken?.cancel('Superseded by newer incremental sync');
+    final cancelToken = dio.CancelToken();
+    _activeIncrementalSyncCancelToken = cancelToken;
+
     try {
       int syncStart = SettingsSvc.settings.lastIncrementalSync.value;
       int startRowId = SettingsSvc.settings.lastIncrementalSyncRowId.value;
 
-      final incrementalSyncManager =
-          IncrementalSyncManager(startTimestamp: syncStart, startRowId: startRowId, saveMarker: true);
+      final incrementalSyncManager = IncrementalSyncManager(
+        startTimestamp: syncStart,
+        startRowId: startRowId,
+        saveMarker: true,
+        shouldCancel: () => generation != _incrementalSyncGeneration,
+        cancelToken: cancelToken,
+      );
 
       await incrementalSyncManager.start();
+      if (generation != _incrementalSyncGeneration) {
+        throw const SyncCancelledException();
+      }
       return incrementalSyncManager.latestMessageIdPerChat.values.toList();
     } catch (ex, s) {
       Logger.error('Incremental sync failed!', error: ex, trace: s);
       rethrow;
+    } finally {
+      if (identical(_activeIncrementalSyncCancelToken, cancelToken)) {
+        _activeIncrementalSyncCancelToken = null;
+      }
     }
   }
 }

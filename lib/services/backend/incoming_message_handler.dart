@@ -576,6 +576,7 @@ class IncomingMessageHandler {
     }
 
     // 5. Persist the GUID swap / field update.
+    final wasReaction = existing.isReaction;
     final existingGuid = tempGuid ?? existing.guid!;
     final written = await _replaceMessage(c, existingGuid, existing, m);
     // A full copy that adds nothing to the stored one leaves it as complete as written
@@ -588,13 +589,36 @@ class IncomingMessageHandler {
 
     // 7. Drive UI reactivity, if not in a background isolate.
     if (!isIsolate) {
-      _dispatchUpdatedMessage(c, m, oldGuid: tempGuid);
+      final persisted = (written && m.guid != null ? Message.findOne(guid: m.guid) : null) ?? m;
+      if (c.dbLatestMessage.target?.guid == persisted.guid) {
+        c.setLatestMessage(persisted);
+      }
+      _dispatchUpdatedMessage(c, persisted, oldGuid: tempGuid);
 
       // 8. Refresh chat-list ordering and subtitle (only if this message is the latest).
-      ChatsSvc.updateChat(c, override: true);
-      final chatState = ChatsSvc.getChatState(c.guid);
-      if (chatState != null && chatState.latestMessage.value?.guid == m.guid) {
-        ChatsSvc.updateChatLatestMessage(c.guid, m);
+      refreshLatestMessageOnUpdate(c, persisted, wasReaction: wasReaction, tempGuid: tempGuid);
+    }
+  }
+
+  @visibleForTesting
+  void refreshLatestMessageOnUpdate(
+    Chat c,
+    Message persisted, {
+    required bool wasReaction,
+    String? tempGuid,
+  }) {
+    if (c.dbLatestMessage.target?.guid == persisted.guid) {
+      c.setLatestMessage(persisted);
+    }
+    ChatsSvc.updateChat(c, override: true);
+    final chatState = ChatsSvc.getChatState(c.guid);
+    final latestGuid = chatState?.latestMessage.value?.guid ?? c.dbLatestMessage.target?.guid;
+    if (latestGuid != null && (latestGuid == persisted.guid || latestGuid == tempGuid)) {
+      if (!wasReaction && persisted.isReaction) {
+        c.setLatestMessage(persisted);
+        ChatsSvc.updateChatLatestMessage(c.guid, persisted, allowOlder: true);
+      } else if (chatState != null) {
+        ChatsSvc.updateChatLatestMessage(c.guid, persisted);
       }
     }
   }

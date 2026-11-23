@@ -59,7 +59,7 @@ class _StickerDropTargetState extends State<StickerDropTarget> {
     super.dispose();
   }
 
-  bool get _accepts => !(widget.message.guid?.startsWith("temp") ?? true);
+  bool get _accepts => widget.chat.isIMessage && !(widget.message.guid?.startsWith("temp") ?? true);
 
   void _attachKeyHandler() {
     if (_keyHandlerRegistered) return;

@@ -1,5 +1,6 @@
 package com.bluebubbles.messaging.services.wear
 
+import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.ChannelClient
@@ -18,6 +19,26 @@ import java.net.URLDecoder
 class WearBridgeService : WearableListenerService() {
     companion object {
         private const val TAG = "WearBridgeService"
+
+        internal data class TransferCallAudioPayload(
+            val callUuid: String,
+            val target: String
+        )
+
+        internal fun parseTransferCallAudioPayload(raw: String): TransferCallAudioPayload? {
+            val obj = try {
+                JsonParser.parseString(raw).asJsonObject
+            } catch (_: Exception) {
+                return null
+            }
+            val callUuid = obj.get("callUuid")?.takeIf { !it.isJsonNull }?.asString?.trim()
+                ?: return null
+            if (callUuid.isEmpty()) return null
+            val target = obj.get("target")?.takeIf { !it.isJsonNull }?.asString?.trim()?.lowercase()
+                ?: "phone"
+            if (target != "phone" && target != "watch") return null
+            return TransferCallAudioPayload(callUuid = callUuid, target = target)
+        }
     }
 
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
@@ -100,9 +121,22 @@ class WearBridgeService : WearableListenerService() {
                     isTelephonyArg = obj.bool("isTelephony")
                 )
             }
+            WearSyncManager.PATH_TRANSFER_CALL_AUDIO -> {
+                val payload = parseTransferCallAudioPayload(dataStr) ?: return
+                when (payload.target) {
+                    "phone" -> FaceTimeConnectionService.transferCallAudioToPhone(payload.callUuid)
+                    "watch" -> FaceTimeConnectionService.transferCallAudioToWatch(applicationContext, payload.callUuid)
+                }
+            }
             WearSyncManager.PATH_DECLINE_CALL -> {
                 val callUuid = parseJson(dataStr)?.str("callUuid") ?: return
                 WearSyncManager.handleDeclineCallFromWatch(applicationContext, callUuid)
+            }
+            WearSyncManager.PATH_SET_CALL_MUTED -> {
+                val obj = parseJson(dataStr) ?: return
+                val callUuid = obj.str("callUuid") ?: return
+                val muted = obj.bool("muted") ?: return
+                FaceTimeConnectionService.setCallMuted(callUuid, muted)
             }
             WearSyncManager.PATH_OPEN_CHAT -> {
                 val chatGuid = parseJson(dataStr)?.str("chatGuid") ?: return

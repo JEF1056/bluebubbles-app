@@ -63,6 +63,26 @@ class FaceTimeApi {
         .toList(growable: false);
   }
 
+  /// Lists Mac-synced FaceTime/Phone call history entries from the server.
+  Future<Response> getCallHistory({
+    int limit = 50,
+    int offset = 0,
+    bool missedOnly = false,
+    CancelToken? cancelToken,
+  }) {
+    return _svc.runApiGuarded(() {
+      return _svc.dio.get(
+        "${_svc.apiRoot}/facetime/history",
+        queryParameters: _svc.buildQueryParams({
+          'limit': limit,
+          'offset': offset,
+          if (missedOnly) 'missedOnly': true,
+        }),
+        cancelToken: cancelToken,
+      );
+    });
+  }
+
   /// Creates a standalone FaceTime link session tracked by the server.
   Future<PlacedFaceTimeCall> createFaceTimeSession({
     String? displayName,
@@ -113,6 +133,7 @@ class FaceTimeApi {
   Future<PlacedFaceTimeCall> answerFaceTime(
     String callUuid, {
     bool audioOnly = false,
+    String? mode,
     String? displayName,
     String? chatGuid,
     CancelToken? cancelToken,
@@ -123,6 +144,7 @@ class FaceTimeApi {
             queryParameters: _svc.buildQueryParams(),
             data: {
               'audioOnly': audioOnly,
+              if (mode != null && mode.isNotEmpty) 'mode': mode,
               ..._identityData(displayName: displayName, chatGuid: chatGuid),
             },
             cancelToken: cancelToken,
@@ -155,6 +177,29 @@ class FaceTimeApi {
         }));
     final data = (response.data['data'] as Map).cast<String, dynamic>();
     return _parsePlacedCall(data, fallbackUuid: callUuid);
+  }
+
+  /// Transfer an active call back to the paired iPhone.
+  Future<Map<String, dynamic>?> transferBackFaceTime(
+    String callUuid, {
+    String? displayName,
+    String? chatGuid,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _runWithRefusal(() => _svc.runApiGuarded(() async {
+          final response = await _svc.dio.post(
+            "${_svc.apiRoot}/facetime/session/$callUuid/transfer_back",
+            queryParameters: _svc.buildQueryParams(),
+            data: _identityData(displayName: displayName, chatGuid: chatGuid),
+            cancelToken: cancelToken,
+          );
+          return _svc.returnSuccessOrError(response);
+        }));
+    final body = response.data;
+    if (body is Map && body['data'] is Map && body['data']['session'] is Map) {
+      return (body['data']['session'] as Map).cast<String, dynamic>();
+    }
+    return null;
   }
 
   /// Sync mute state to the server for an active FaceTime call.
@@ -289,6 +334,7 @@ class FaceTimeApi {
     String address, {
     bool video = true,
     bool isTelephony = false,
+    String? mode,
     String? displayName,
     String? chatGuid,
     CancelToken? cancelToken,
@@ -303,6 +349,7 @@ class FaceTimeApi {
             'addresses': [address],
             'video': video,
             if (isTelephony) 'isTelephony': true,
+            if (mode != null && mode.isNotEmpty) 'mode': mode,
             ..._identityData(displayName: displayName, chatGuid: chatGuid),
           },
           // An availability check, a dial (up to 20s) and a link (up to 15s) on the Mac.

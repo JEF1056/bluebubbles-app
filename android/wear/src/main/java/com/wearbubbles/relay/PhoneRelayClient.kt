@@ -71,6 +71,7 @@ sealed class RelayEvent {
     data class UpdatedMessage(val message: MessageEntity) : RelayEvent()
     data class TypingIndicator(val chatGuid: String, val isTyping: Boolean) : RelayEvent()
     data class AttachmentDownloaded(val attachmentGuid: String, val file: File) : RelayEvent()
+    data class ChatMarkedRead(val chatGuid: String) : RelayEvent()
 }
 
 internal class NodeConnectionCache(
@@ -355,10 +356,21 @@ class PhoneRelayClient(private val context: Context) {
         const val PATH_TRANSLATE_MESSAGE = "/bb/translate-message"
         const val PATH_INCOMING_CALL = "/bb/incoming-call"
         const val PATH_CALL_ENDED = "/bb/call-ended"
+        const val PATH_CALL_ACTIVE = "/bb/call-active"
         const val PATH_ANSWER_CALL_AUDIO = "/bb/answer-call-audio"
         const val PATH_DECLINE_CALL = "/bb/decline-call"
+        const val PATH_SET_CALL_MUTED = "/bb/set-call-muted"
+        const val PATH_TRANSFER_CALL_AUDIO = "/bb/transfer-call-audio"
 
         private val gsonStatic = Gson()
+
+        internal fun buildTransferCallAudioPayload(
+            callUuid: String,
+            target: String = "phone"
+        ): ByteArray = JsonObject().apply {
+            addProperty("callUuid", callUuid)
+            addProperty("target", target)
+        }.toString().toByteArray()
 
         internal fun buildAnswerCallAudioPayload(
             callUuid: String,
@@ -390,7 +402,8 @@ class PhoneRelayClient(private val context: Context) {
                     lastMessageAttachmentGuid = dto.lastMessageAttachmentGuid,
                     lastMessageAttachmentMimeType = dto.lastMessageAttachmentMimeType,
                     isPinned = dto.isPinned,
-                    pinIndex = dto.pinIndex
+                    pinIndex = dto.pinIndex,
+                    lastReadMessageTimestamp = dto.lastReadMessageTimestamp?.takeIf { it > 0L }
                 )
             }
             return entities to pinsAuthoritative
@@ -841,6 +854,17 @@ class PhoneRelayClient(private val context: Context) {
     suspend fun sendDeclineCallAwait(callUuid: String): Boolean =
         sendJsonField(PATH_DECLINE_CALL, "callUuid", callUuid)
 
+    suspend fun sendSetCallMutedAwait(callUuid: String, muted: Boolean): Boolean {
+        val payload = JsonObject().apply {
+            addProperty("callUuid", callUuid)
+            addProperty("muted", muted)
+        }.toString().toByteArray()
+        return sendToPhone(PATH_SET_CALL_MUTED, payload)
+    }
+
+    suspend fun sendTransferCallAudioToPhoneAwait(callUuid: String): Boolean =
+        sendToPhone(PATH_TRANSFER_CALL_AUDIO, buildTransferCallAudioPayload(callUuid, target = "phone"))
+
     suspend fun translateMessage(messageGuid: String): SendResultPayload? {
         val requestId = UUID.randomUUID().toString()
         val deferred = CompletableDeferred<SendResultPayload>()
@@ -901,6 +925,10 @@ class PhoneRelayClient(private val context: Context) {
         } catch (e: Exception) {
             Log.e(TAG, "handleCredentialsJson error: ${e.message}")
         }
+    }
+
+    fun notifyChatMarkedRead(chatGuid: String) {
+        _events.tryEmit(RelayEvent.ChatMarkedRead(chatGuid))
     }
 
     suspend fun handleChatsSyncJson(json: String) {

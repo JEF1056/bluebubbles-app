@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
+import 'package:bluebubbles/app/components/facetime/ongoing_call_pill.dart';
 import 'package:bluebubbles/app/components/facetime/outgoing_facetime_sheet.dart';
 import 'package:bluebubbles/helpers/web/web_interop.dart';
 import 'package:bluebubbles/models/facetime.dart';
@@ -10,6 +11,7 @@ import 'package:bluebubbles/services/network/api/base_api.dart';
 import 'package:bluebubbles/services/network/api/facetime_api.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeBaseApi implements BaseApi {
@@ -137,6 +139,8 @@ void main() {
       await api.setFaceTimeMuted('call-1', true, displayName: 'Alice', chatGuid: 'iMessage;-;alice');
       await api.leaveFaceTime('call-1', displayName: 'Alice', chatGuid: 'iMessage;-;alice');
       await api.declineFaceTime('call-1', displayName: 'Alice', chatGuid: 'iMessage;-;alice');
+      final transferredBack = await api.transferBackFaceTime('call-1', displayName: 'Alice', chatGuid: 'iMessage;-;alice');
+      expect(transferredBack?['uuid'], 'call-1');
 
       final sessions = await api.getFaceTimeSessions();
       expect(sessions, hasLength(1));
@@ -151,6 +155,7 @@ void main() {
         'https://server.test/api/v1/facetime/session/call-1/mute',
         'https://server.test/api/v1/facetime/session/call-1/leave',
         'https://server.test/api/v1/facetime/session/call-1/decline',
+        'https://server.test/api/v1/facetime/session/call-1/transfer_back',
       ]);
       for (final req in postRequests) {
         expect(req.data['deviceId'], 'dev-android-1');
@@ -587,7 +592,7 @@ void main() {
       final ctrl = ActiveCallController(
         deviceId: 'web-1',
         deviceName: 'Web',
-        onAnswerServerCall: (uuid, {audioOnly = false, displayName, chatGuid}) async {
+        onAnswerServerCall: (uuid, {audioOnly = false, mode, displayName, chatGuid}) async {
           throw const FaceTimeException('Call already ended', statusCode: 400);
         },
         onHandoffServerCall: (uuid, {mode}) async {
@@ -634,8 +639,8 @@ void main() {
         ),
         deviceId: 'web-1',
         deviceName: 'Chrome',
-        onAnswerServerCall: (uuid, {audioOnly = false, displayName, chatGuid}) async {
-          answerCalls.add({'uuid': uuid, 'audioOnly': audioOnly});
+        onAnswerServerCall: (uuid, {audioOnly = false, mode, displayName, chatGuid}) async {
+          answerCalls.add({'uuid': uuid, 'audioOnly': audioOnly, 'mode': mode});
           return null;
         },
         onHandoffServerCall: (uuid, {mode}) async {
@@ -649,7 +654,7 @@ void main() {
       ctrl.startIncoming(callUuid: 'web-vid-1', callerName: 'Alex', isVideo: true);
       expect(await ctrl.answerCall(), isTrue);
       expect(answerCalls, [
-        {'uuid': 'web-vid-1', 'audioOnly': false},
+        {'uuid': 'web-vid-1', 'audioOnly': false, 'mode': null},
       ]);
       expect(ctrl.state.isVideo, isTrue);
 
@@ -908,11 +913,411 @@ void main() {
       expect(ctrl.state.isVideo, isTrue);
       expect(ctrl.state.isTelecomCall, isTrue);
     });
+
+    testWidgets(
+        'iPhone-hosted session shows On iPhone, transferHere swaps callUuid before bridge/Telecom, and transferBack stops bridge without server leave',
+        (tester) async {
+      final transport = _FakeWebRtcTransport();
+      final callOrder = <String>[];
+      final leftCalls = <String>[];
+      final transferBackCalls = <String>[];
+
+      final webCtrl = ActiveCallController(
+        isWebOverride: true,
+        webRtcClient: WebWebRtcClient(
+          transport: transport,
+          adapterFactory: () => _FakeWebRtcAdapter(),
+        ),
+        deviceId: 'web-1',
+        deviceName: 'Web',
+        onHandoffServerCall: (uuid, {mode}) async {
+          callOrder.add('handoff:$uuid:$mode');
+          return const PlacedFaceTimeCall(
+            call: FaceTimeCall(callUuid: 'pulled-web-2', isVideo: true),
+            session: {
+              'uuid': 'pulled-web-2',
+              'status': 'answered',
+              'status_id': 1,
+              'endpoint_on_mac': true,
+              'from_iphone': true,
+            },
+          );
+        },
+        onTransferBackServerCall: (uuid) async {
+          transferBackCalls.add(uuid);
+          return {
+            'uuid': uuid,
+            'status': 'answered',
+            'status_id': 1,
+            'display_name': 'Sam',
+            'is_video': true,
+            'endpoint_on_mac': false,
+            'from_iphone': true,
+            'active_device_id': null,
+            'active_device_name': 'iPhone',
+          };
+        },
+        onLeaveServerCall: (uuid) async => leftCalls.add(uuid),
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(webCtrl.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: OngoingCallPillOverlay(controller: webCtrl),
+          ),
+        ),
+      );
+
+      webCtrl.applyServerSession({
+        'uuid': 'conv-group-1',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Sam',
+        'is_video': true,
+        'endpoint_on_mac': false,
+        'from_iphone': true,
+      });
+      await tester.pumpAndSettle();
+
+      expect(webCtrl.state.isOnOtherDevice, isTrue);
+      expect(webCtrl.state.endpointOnMac, isFalse);
+      expect(webCtrl.state.fromIphone, isTrue);
+      expect(webCtrl.state.activeDeviceName, 'iPhone');
+      expect(webCtrl.state.statusSubtitle, 'On iPhone');
+      expect(find.textContaining('On iPhone'), findsOneWidget);
+      expect(find.text('Move here'), findsOneWidget);
+      expect(find.bySemanticsLabel('Move to iPhone'), findsNothing);
+
+      final transferred = await webCtrl.transferHere(audioOnly: false);
+      await tester.pumpAndSettle();
+      expect(transferred, isTrue);
+      expect(callOrder, ['handoff:conv-group-1:video_bridge']);
+      expect(transport.emittedOfferUuids, ['pulled-web-2']);
+      expect(webCtrl.state.callUuid, 'pulled-web-2');
+      expect(webCtrl.state.endpointOnMac, isTrue);
+      expect(webCtrl.state.isHeldHere, isTrue);
+      expect(webCtrl.isWebRtcActive, isTrue);
+      expect(find.bySemanticsLabel('Move to iPhone'), findsOneWidget);
+
+      await tester.tap(find.bySemanticsLabel('Move to iPhone'));
+      await tester.pumpAndSettle();
+      expect(transferBackCalls, ['pulled-web-2']);
+      expect(webCtrl.isWebRtcActive, isFalse);
+      expect(transport.hangupUuids, isEmpty);
+      expect(leftCalls, isEmpty);
+      expect(webCtrl.state.endpointOnMac, isFalse);
+      expect(webCtrl.state.isOnOtherDevice, isTrue);
+      expect(webCtrl.state.statusSubtitle, 'On iPhone');
+      expect(find.text('Move here'), findsOneWidget);
+
+      // Android Telecom path also runs handoff before starting Telecom and binds to pulled UUID.
+      final androidOrder = <String>[];
+      final endedNative = <Map<String, dynamic>>[];
+      final androidCtrl = ActiveCallController(
+        deviceId: 'android-1',
+        deviceName: 'Pixel',
+        onHandoffServerCall: (uuid, {mode}) async {
+          androidOrder.add('handoff:$uuid:$mode');
+          return const PlacedFaceTimeCall(
+            call: FaceTimeCall(callUuid: 'pulled-tel-2', isVideo: false),
+          );
+        },
+        onStartTelecomCall: ({
+          required String callUuid,
+          required String callerName,
+          String? callerAddress,
+          bool isTelephony = false,
+          bool isVideo = false,
+        }) async {
+          androidOrder.add('telecom:$callUuid:$isTelephony:$isVideo');
+          return true;
+        },
+        onEndNativeCall: (uuid, {onlyIfRinging = false}) async =>
+            endedNative.add({'uuid': uuid, 'onlyIfRinging': onlyIfRinging}),
+        onTransferBackServerCall: (uuid) async {
+          androidOrder.add('transfer_back:$uuid');
+          return null;
+        },
+        onLeaveServerCall: (uuid) async => leftCalls.add(uuid),
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(androidCtrl.dispose);
+
+      androidCtrl.applyServerSession({
+        'uuid': 'iphone-tel-1',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Taylor',
+        'is_telephony': true,
+        'endpoint_on_mac': false,
+        'from_iphone': true,
+      });
+      expect(androidCtrl.state.statusSubtitle, 'On iPhone');
+      expect(await androidCtrl.transferHere(), isTrue);
+      expect(androidOrder, [
+        'handoff:iphone-tel-1:audio',
+        'telecom:pulled-tel-2:true:false',
+      ]);
+      expect(androidCtrl.state.callUuid, 'pulled-tel-2');
+      expect(androidCtrl.state.isTelecomCall, isTrue);
+      expect(androidCtrl.state.endpointOnMac, isTrue);
+
+      expect(await androidCtrl.transferBack(), isTrue);
+      expect(androidOrder.last, 'transfer_back:pulled-tel-2');
+      expect(endedNative.last, {'uuid': 'pulled-tel-2', 'onlyIfRinging': false});
+      expect(leftCalls, isEmpty);
+      expect(androidCtrl.state.isTelecomCall, isFalse);
+      expect(androidCtrl.state.endpointOnMac, isFalse);
+      expect(androidCtrl.state.statusSubtitle, 'On iPhone');
+    });
+
+    test('transferring back to iPhone (endpoint_on_mac: false) tears down active local WebRTC bridge', () async {
+      final transport = _FakeWebRtcTransport();
+      final webrtc = WebWebRtcClient(
+        transport: transport,
+        adapterFactory: () => _FakeWebRtcAdapter(),
+      );
+      final controller = ActiveCallController(
+        deviceId: 'web-browser-1',
+        deviceName: 'Chrome on Mac',
+        isWebOverride: true,
+        webRtcClient: webrtc,
+      );
+      addTearDown(controller.dispose);
+
+      await webrtc.start(callUuid: 'webrtc-handoff-1', wantVideo: false, answerCall: false);
+      expect(webrtc.activeCallUuid, 'webrtc-handoff-1');
+
+      controller.applyServerSession({
+        'uuid': 'webrtc-handoff-1',
+        'status': 'answered',
+        'status_id': 1,
+        'display_name': 'Taylor',
+        'endpoint_on_mac': false,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(webrtc.activeCallUuid, isNull);
+      expect(transport.hangupUuids, isEmpty);
+      expect(controller.state.endpointOnMac, isFalse);
+    });
+
+    test('ActiveCallState.callKindLabel, statusSubtitle, and displayCallerName fallbacks', () {
+      const incomingVideo = ActiveCallState(
+        phase: ActiveCallPhase.incoming,
+        isVideo: true,
+      );
+      expect(incomingVideo.callKindLabel, 'FaceTime Video');
+      expect(incomingVideo.statusSubtitle, 'Incoming FaceTime Video');
+      expect(incomingVideo.displayCallerName, 'FaceTime Video');
+
+      const incomingGroupAudio = ActiveCallState(
+        phase: ActiveCallPhase.incoming,
+        isVideo: false,
+        isGroup: true,
+        participants: ['+15550001111', '+15550002222'],
+      );
+      expect(incomingGroupAudio.callKindLabel, 'Group FaceTime Audio');
+      expect(incomingGroupAudio.statusSubtitle, 'Incoming Group FaceTime Audio');
+
+      const outgoingGroupVideo = ActiveCallState(
+        phase: ActiveCallPhase.outgoing,
+        isVideo: true,
+        isGroup: true,
+        callerAddress: '+15550001111',
+      );
+      expect(outgoingGroupVideo.callKindLabel, 'Group FaceTime Video');
+      expect(outgoingGroupVideo.statusSubtitle, 'Calling…');
+      expect(outgoingGroupVideo.displayCallerName, '+15550001111');
+
+      const telephony = ActiveCallState(
+        phase: ActiveCallPhase.ongoing,
+        isVideo: true,
+        isGroup: true,
+        isTelephony: true,
+        callerName: 'Alice',
+        callerAddress: '+15551234567',
+      );
+      expect(telephony.callKindLabel, 'Phone Call');
+      expect(telephony.statusSubtitle, 'Phone Call');
+      expect(telephony.displayCallerName, 'Alice');
+      expect(telephony.distinctCallerHandle, '+15551234567');
+
+      const sameHandle = ActiveCallState(
+        phase: ActiveCallPhase.ongoing,
+        callerName: '+15551234567',
+        callerAddress: '+15551234567',
+      );
+      expect(sameHandle.distinctCallerHandle, isNull);
+    });
+
+    test('applyServerSession parses is_group, addresses, self-handle filtering, and contact fallback', () {
+      final ctrl = ActiveCallController(
+        deviceId: 'android-1',
+        deviceName: 'Android',
+      );
+      addTearDown(ctrl.dispose);
+
+      ctrl.applyServerSession({
+        'uuid': 'grp-1',
+        'status': 'answered',
+        'status_id': 1,
+        'is_video': true,
+        'is_group': true,
+        'addresses': ['+15551112222', 'bob@example.com'],
+        'active_device_id': 'android-1',
+      });
+      expect(ctrl.state.isGroup, isTrue);
+      expect(ctrl.state.participants, ['+15551112222', 'bob@example.com']);
+      expect(ctrl.state.callerAddress, '+15551112222');
+      expect(ctrl.state.displayCallerName, '+15551112222, bob@example.com');
+      expect(ctrl.state.callKindLabel, 'Group FaceTime Video');
+
+      // Fallback when neither display_name nor addresses are supplied uses callKindLabel, never 'FaceTime Call'.
+      ctrl.applyServerSession({
+        'uuid': 'anon-1',
+        'status': 'connecting',
+        'status_id': 2,
+        'is_video': false,
+        'is_telephony': false,
+      });
+      expect(ctrl.state.displayCallerName, 'FaceTime Audio');
+      expect(ctrl.state.callerName, 'FaceTime Audio');
+
+      final filtered = ActiveCallController.filterRemoteAddresses(
+        ['me@icloud.com', '+1 (555) 999-0000', 'alice@example.com', 'ALICE@example.com', '+15552223333'],
+        selfAddresses: ['me@icloud.com', '+15559990000'],
+      );
+      expect(filtered, ['alice@example.com', '+15552223333']);
+    });
+
+    test('updateCallerInfo updates state, notifies listeners, and re-syncs Telecom with <=100KB avatar', () async {
+      final ctrl = ActiveCallController(
+        deviceId: 'android-1',
+        deviceName: 'Android',
+      );
+      addTearDown(ctrl.dispose);
+
+      var notifications = 0;
+      ctrl.addListener(() => notifications++);
+
+      ctrl.applyServerSession({
+        'uuid': 'upd-1',
+        'status': 'answered',
+        'status_id': 1,
+        'is_video': false,
+        'addresses': ['+15551112222', '+15553334444'],
+        'active_device_id': 'android-1',
+      });
+      final before = notifications;
+      final smallAvatar = Uint8List.fromList([1, 2, 3, 4]);
+
+      ctrl.updateCallerInfo(
+        'upd-1',
+        callerName: 'Alice, Bob',
+        callerAddress: '+15551112222',
+        avatarBytes: smallAvatar,
+        isGroup: true,
+        participantDetails: const [
+          CallParticipant(address: '+15551112222', displayName: 'Alice'),
+          CallParticipant(address: '+15553334444', displayName: 'Bob'),
+        ],
+      );
+
+      expect(notifications, greaterThan(before));
+      expect(ctrl.state.callerName, 'Alice, Bob');
+      expect(ctrl.state.callerAddress, '+15551112222');
+      expect(ctrl.state.avatarBytes, smallAvatar);
+      expect(ctrl.state.isGroup, isTrue);
+      expect(ctrl.state.participantDetails.map((p) => p.label), ['Alice', 'Bob']);
+    });
+
+    test('FaceTimeApi.call and answerFaceTime omit mode when null and send mode when provided', () async {
+      final dio = Dio(BaseOptions(receiveTimeout: const Duration(seconds: 5)));
+      final adapter = _RecordingAdapter((_) => {
+            'call': {'call_uuid': 'call-mode-1', 'status': 'outgoing', 'is_video': true},
+            'session': {'uuid': 'call-mode-1', 'status': 'answered', 'status_id': 1},
+          });
+      dio.httpClientAdapter = adapter;
+
+      final api = FaceTimeApi(
+        _FakeBaseApi(dio),
+        identityResolver: () => const ClientDeviceIdentity(deviceId: 'dev-1', deviceName: 'Web'),
+      );
+
+      final direct = await api.call('+15551234567', video: true);
+      expect(direct.link, isNull);
+      expect(adapter.requests[0].data.containsKey('mode'), isFalse);
+
+      await api.call('+15551234567', video: true, mode: 'video');
+      expect(adapter.requests[1].data['mode'], 'video');
+
+      await api.answerFaceTime('call-mode-1', audioOnly: false);
+      expect(adapter.requests[2].data.containsKey('mode'), isFalse);
+
+      await api.answerFaceTime('call-mode-1', audioOnly: false, mode: 'video');
+      expect(adapter.requests[3].data['mode'], 'video');
+    });
+
+    test('ActiveCallController.answerCall passes mode: video only on explicit link fallback branch', () async {
+      final answerCalls = <Map<String, dynamic>>[];
+      final transport = _FakeWebRtcTransport();
+      final ctrl = ActiveCallController(
+        isWebOverride: true,
+        webRtcClient: WebWebRtcClient(
+          transport: transport,
+          adapterFactory: () => _FakeWebRtcAdapter(),
+        ),
+        deviceId: 'web-1',
+        deviceName: 'Chrome',
+        onAnswerServerCall: (uuid, {audioOnly = false, mode, displayName, chatGuid}) async {
+          answerCalls.add({'uuid': uuid, 'audioOnly': audioOnly, 'mode': mode});
+          return PlacedFaceTimeCall(
+            link: 'https://facetime.apple.com/join#fallback',
+            call: FaceTimeCall(callUuid: uuid, isVideo: true),
+          );
+        },
+        onLaunchJoinLink: (_) async => true,
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(ctrl.dispose);
+
+      // Force WebRTC config to videoSupported=false via audioOnly=false -> hits explicit link fallback.
+      final nonWebCtrl = ActiveCallController(
+        isWebOverride: false,
+        deviceId: 'linux-1',
+        deviceName: 'Linux',
+        onAnswerServerCall: (uuid, {audioOnly = false, mode, displayName, chatGuid}) async {
+          answerCalls.add({'uuid': uuid, 'audioOnly': audioOnly, 'mode': mode});
+          return PlacedFaceTimeCall(
+            link: 'https://facetime.apple.com/join#fallback',
+            call: FaceTimeCall(callUuid: uuid, isVideo: !audioOnly),
+          );
+        },
+        onLaunchJoinLink: (_) async => true,
+        onDismissOverlay: (_, {keepCallState = false}) {},
+      );
+      addTearDown(nonWebCtrl.dispose);
+
+      nonWebCtrl.startIncoming(callUuid: 'fb-vid', callerName: 'Alex', isVideo: true);
+      expect(await nonWebCtrl.answerCall(audioOnly: false), isTrue);
+      nonWebCtrl.startIncoming(callUuid: 'fb-aud', callerName: 'Alex', isVideo: true);
+      expect(await nonWebCtrl.answerCall(audioOnly: true), isTrue);
+
+      expect(answerCalls, [
+        {'uuid': 'fb-vid', 'audioOnly': false, 'mode': 'video'},
+        {'uuid': 'fb-aud', 'audioOnly': true, 'mode': null},
+      ]);
+    });
   });
 }
 
 class _FakeWebRtcTransport implements WebRtcSignalingTransport {
   void Function(Map<String, dynamic>)? _answerHandler;
+  final List<String> emittedOfferUuids = [];
+  final List<String> hangupUuids = [];
 
   @override
   Future<dynamic> fetchBridgeConfig({Duration timeout = const Duration(seconds: 3)}) async => {
@@ -928,6 +1333,7 @@ class _FakeWebRtcTransport implements WebRtcSignalingTransport {
     bool uplinkVideo = false,
     required bool answerCall,
   }) {
+    emittedOfferUuids.add(callUuid);
     scheduleMicrotask(() {
       _answerHandler?.call({
         'callUuid': callUuid,
@@ -948,7 +1354,9 @@ class _FakeWebRtcTransport implements WebRtcSignalingTransport {
   void emitCamera({required String callUuid, required bool enabled}) {}
 
   @override
-  void emitHangup({required String callUuid}) {}
+  void emitHangup({required String callUuid}) {
+    hangupUuids.add(callUuid);
+  }
 
   @override
   void onAnswer(void Function(Map<String, dynamic> data) handler) => _answerHandler = handler;

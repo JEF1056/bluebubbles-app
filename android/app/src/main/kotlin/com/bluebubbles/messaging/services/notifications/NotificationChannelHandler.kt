@@ -20,7 +20,10 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
     companion object {
         const val tag: String = "create-notification-channel"
         const val NEW_MESSAGES_CHANNEL_ID = "com.bluebubbles.new_messages"
-        const val FACETIME_CHANNEL_ID = "com.bluebubbles.incoming_facetimes"
+        const val FACETIME_CHANNEL_ID = "com.bluebubbles.incoming_facetimes_v2"
+        const val FACETIME_RING_CHANNEL_ID = "com.bluebubbles.incoming_facetimes_ring_v2"
+        const val LEGACY_FACETIME_RING_CHANNEL_ID = "com.bluebubbles.incoming_facetimes_ring_v1"
+        const val LEGACY_FACETIME_CHANNEL_ID = "com.bluebubbles.incoming_facetimes"
         const val FOREGROUND_SERVICE_CHANNEL_ID = "com.bluebubbles.foreground_service"
         const val GROUP_MESSAGES = "com.bluebubbles.group.messages"
         const val GROUP_CALLS = "com.bluebubbles.group.calls"
@@ -30,7 +33,6 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
         private const val KEY_NEW_MESSAGES_VIBRATION_MIGRATED = "new_messages_vibration_migrated"
         private const val KEY_NEW_MESSAGES_DND_MIGRATED = "new_messages_dnd_migrated"
         private const val KEY_NEW_MESSAGES_AUDIO_MIGRATED = "new_messages_audio_migrated"
-        private const val KEY_FACETIME_RINGTONE_MIGRATED = "facetime_ringtone_migrated"
         private const val KEY_FOREGROUND_MIN_MIGRATED = "foreground_min_migrated"
 
         internal fun shouldRecreateNewMessagesChannel(
@@ -48,7 +50,7 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
 
         internal fun groupIdForChannel(channelId: String): String = when (channelId) {
             NEW_MESSAGES_CHANNEL_ID -> GROUP_MESSAGES
-            FACETIME_CHANNEL_ID -> GROUP_CALLS
+            FACETIME_CHANNEL_ID, FACETIME_RING_CHANNEL_ID, LEGACY_FACETIME_RING_CHANNEL_ID, LEGACY_FACETIME_CHANNEL_ID -> GROUP_CALLS
             else -> GROUP_OTHER
         }
 
@@ -74,6 +76,61 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
+
+        fun ensureFaceTimeChannel(context: Context): String {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val manager = context.getSystemService(NotificationManager::class.java)
+                if (manager != null) {
+                    ensureChannelGroups(manager)
+                    if (manager.getNotificationChannel(LEGACY_FACETIME_CHANNEL_ID) != null) {
+                        manager.deleteNotificationChannel(LEGACY_FACETIME_CHANNEL_ID)
+                    }
+                    if (manager.getNotificationChannel(FACETIME_CHANNEL_ID) == null) {
+                        val channel = NotificationChannel(
+                            FACETIME_CHANNEL_ID,
+                            "Incoming FaceTimes",
+                            NotificationManager.IMPORTANCE_HIGH
+                        ).apply {
+                            description = "Notifications for incoming FaceTime calls"
+                            group = GROUP_CALLS
+                            setSound(null, null)
+                            enableVibration(false)
+                        }
+                        manager.createNotificationChannel(channel)
+                    }
+                }
+            }
+            return FACETIME_CHANNEL_ID
+        }
+
+        fun ensureFaceTimeRingChannel(context: Context): String {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val manager = context.getSystemService(NotificationManager::class.java)
+                if (manager != null) {
+                    ensureChannelGroups(manager)
+                    if (manager.getNotificationChannel(LEGACY_FACETIME_RING_CHANNEL_ID) != null) {
+                        manager.deleteNotificationChannel(LEGACY_FACETIME_RING_CHANNEL_ID)
+                    }
+                    if (manager.getNotificationChannel(FACETIME_RING_CHANNEL_ID) == null) {
+                        val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                            ?: Settings.System.DEFAULT_RINGTONE_URI
+                        val channel = NotificationChannel(
+                            FACETIME_RING_CHANNEL_ID,
+                            "Incoming FaceTime Ringtone",
+                            NotificationManager.IMPORTANCE_HIGH
+                        ).apply {
+                            description = "Ringing notifications for incoming FaceTime calls without Telecom"
+                            group = GROUP_CALLS
+                            enableVibration(true)
+                            vibrationPattern = longArrayOf(0, 1000, 1000)
+                            setSound(ringtoneUri, ringtoneAudioAttributes())
+                        }
+                        manager.createNotificationChannel(channel)
+                    }
+                }
+            }
+            return FACETIME_RING_CHANNEL_ID
+        }
 
         fun ensureForegroundServiceChannel(context: Context): String {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -138,6 +195,16 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
                 result.success(null)
                 return
             }
+            if (channelId == FACETIME_CHANNEL_ID || channelId == LEGACY_FACETIME_CHANNEL_ID) {
+                ensureFaceTimeChannel(context)
+                result.success(null)
+                return
+            }
+            if (channelId == FACETIME_RING_CHANNEL_ID || channelId == LEGACY_FACETIME_RING_CHANNEL_ID) {
+                ensureFaceTimeRingChannel(context)
+                result.success(null)
+                return
+            }
 
             val prefs: SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             if (channelId == NEW_MESSAGES_CHANNEL_ID) {
@@ -174,23 +241,6 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
                     result.success(null)
                     return
                 }
-            } else if (channelId == FACETIME_CHANNEL_ID) {
-                val ringtoneMigrated = prefs.getBoolean(KEY_FACETIME_RINGTONE_MIGRATED, false)
-                val existing = notificationManager.getNotificationChannel(channelId)
-                if (existing != null && !ringtoneMigrated &&
-                    existing.audioAttributes?.usage != AudioAttributes.USAGE_NOTIFICATION_RINGTONE
-                ) {
-                    PersistentLog.d(context, Constants.logTag, "Recreating facetime channel for ringtone audio attributes")
-                    notificationManager.deleteNotificationChannel(channelId)
-                    prefs.edit().putBoolean(KEY_FACETIME_RINGTONE_MIGRATED, true).apply()
-                } else if (existing != null) {
-                    if (!ringtoneMigrated) {
-                        prefs.edit().putBoolean(KEY_FACETIME_RINGTONE_MIGRATED, true).apply()
-                    }
-                    PersistentLog.d(context, Constants.logTag, "Notification channel already exists! Ignoring...")
-                    result.success(null)
-                    return
-                }
             } else if (notificationManager.getNotificationChannel(channelId) != null) {
                 PersistentLog.d(context, Constants.logTag, "Notification channel already exists! Ignoring...")
                 result.success(null)
@@ -208,12 +258,6 @@ class NotificationChannelHandler: MethodCallHandlerImpl() {
                 channel.setShowBadge(true)
                 channel.enableVibration(true)
                 channel.setSound(Settings.System.DEFAULT_NOTIFICATION_URI, instantCommunicationAudioAttributes())
-            } else if (channelId == FACETIME_CHANNEL_ID) {
-                channel.enableVibration(true)
-                channel.setSound(
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
-                    ringtoneAudioAttributes()
-                )
             }
             // create the channel
             notificationManager.createNotificationChannel(channel)

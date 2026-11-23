@@ -1,11 +1,36 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/attachment/audio_player.dart';
+import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/platform/shims/native_media.dart';
+import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:record/record.dart';
+
+class VoicePreviewData {
+  const VoicePreviewData({
+    required this.file,
+    required this.path,
+    required this.onDiscard,
+    required this.onSend,
+    required this.onRestart,
+  });
+
+  final PlatformFile file;
+  final String path;
+  final VoidCallback onDiscard;
+  final Future<void> Function() onSend;
+  final Future<void> Function() onRestart;
+}
+
+final Expando<Rxn<VoicePreviewData>> _voicePreviews = Expando<Rxn<VoicePreviewData>>('voicePreviews');
+
+Rxn<VoicePreviewData> voicePreviewFor(ConversationViewController controller) {
+  return _voicePreviews[controller] ??= Rxn<VoicePreviewData>();
+}
 
 class VoiceMessageRecorder extends StatefulWidget {
   const VoiceMessageRecorder({
@@ -16,6 +41,8 @@ class VoiceMessageRecorder extends StatefulWidget {
     required this.samsung,
     this.audioRecorder,
     this.onCancel,
+    this.preview,
+    this.playPauseSignal,
   });
 
   final RecorderController? recorderController;
@@ -30,6 +57,10 @@ class VoiceMessageRecorder extends StatefulWidget {
 
   final VoidCallback? onCancel;
 
+  final VoicePreviewData? preview;
+
+  final Listenable? playPauseSignal;
+
   @override
   State<VoiceMessageRecorder> createState() => _VoiceMessageRecorderState();
 }
@@ -37,8 +68,10 @@ class VoiceMessageRecorder extends StatefulWidget {
 class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
   Stream<Duration>? recordingDurationStream;
   Timer? _webTimer;
-  final DateTime _startTime = DateTime.now();
+  DateTime? _segmentStart = DateTime.now();
+  Duration _accumulated = Duration.zero;
   Duration _elapsed = Duration.zero;
+  bool _isPaused = false;
   final List<double> _amplitudes = <double>[];
   bool _sampling = false;
   double _dragOffset = 0.0;
@@ -48,15 +81,74 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
   @override
   void initState() {
     super.initState();
-    if (kIsWeb) {
-      _webTimer = Timer.periodic(const Duration(milliseconds: 80), (_) => _sampleWebAmplitude());
-    } else {
+    if (kIsWeb && widget.preview == null) {
+      _startWebTimer();
+    } else if (!kIsWeb) {
       recordingDurationStream = widget.recorderController?.onCurrentDuration;
     }
   }
 
+  @override
+  void didUpdateWidget(covariant VoiceMessageRecorder oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.preview == null && widget.preview != null) {
+      _webTimer?.cancel();
+      _webTimer = null;
+    } else if (oldWidget.preview != null && widget.preview == null && kIsWeb && !_isPaused) {
+      _startWebTimer();
+    }
+  }
+
+  void _startWebTimer() {
+    _webTimer?.cancel();
+    _webTimer = Timer.periodic(const Duration(milliseconds: 80), (_) => _sampleWebAmplitude());
+  }
+
+  Future<void> _togglePauseResume() async {
+    final nextPaused = !_isPaused;
+    if (nextPaused) {
+      if (_segmentStart != null) {
+        _accumulated += DateTime.now().difference(_segmentStart!);
+        _segmentStart = null;
+      }
+      _webTimer?.cancel();
+      if (kIsWeb || widget.recorderController == null) {
+        try {
+          await widget.audioRecorder?.pause();
+        } catch (_) {}
+      } else {
+        try {
+          await (widget.recorderController as dynamic).pause();
+        } catch (_) {}
+      }
+    } else {
+      _segmentStart = DateTime.now();
+      if (kIsWeb) {
+        if (widget.preview == null) {
+          _startWebTimer();
+        }
+        try {
+          await widget.audioRecorder?.resume();
+        } catch (_) {}
+      } else if (widget.recorderController != null) {
+        try {
+          await widget.recorderController!.record();
+        } catch (_) {}
+      } else {
+        try {
+          await widget.audioRecorder?.resume();
+        } catch (_) {}
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _isPaused = nextPaused;
+      _elapsed = _accumulated;
+    });
+  }
+
   Future<void> _sampleWebAmplitude() async {
-    if (_sampling) return;
+    if (_sampling || _isPaused || widget.preview != null) return;
     _sampling = true;
     try {
       double normalized = 0.12;
@@ -71,9 +163,9 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
           // Ignore transient amplitude read failures during start/stop transitions.
         }
       }
-      if (!mounted) return;
+      if (!mounted || _isPaused) return;
       setState(() {
-        _elapsed = DateTime.now().difference(_startTime);
+        _elapsed = _accumulated + (_segmentStart != null ? DateTime.now().difference(_segmentStart!) : Duration.zero);
         _amplitudes.add(normalized);
         if (_amplitudes.length > _maxBars) {
           _amplitudes.removeAt(0);
@@ -118,6 +210,73 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
     setState(() => _dragOffset = 0.0);
   }
 
+  Widget _buildPreviewBar(BuildContext context, VoicePreviewData preview, double maxWidth, double barHeight) {
+    final cs = context.theme.colorScheme;
+    final compactButtons = maxWidth < 220;
+    final btnSize = compactButtons ? 32.0 : 40.0;
+    return Container(
+      key: const ValueKey('voice-preview-bar'),
+      padding: EdgeInsetsDirectional.only(
+        start: widget.iOS ? 6 : 8,
+        end: widget.iOS ? 6 : 8,
+      ),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(widget.iOS ? 20 : 28),
+        color: widget.iOS ? Colors.transparent : cs.surfaceContainerHigh,
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            key: const Key('voice-preview-delete-button'),
+            tooltip: 'Delete recording',
+            style: IconButton.styleFrom(
+              padding: EdgeInsets.zero,
+              fixedSize: Size(btnSize, btnSize),
+              minimumSize: Size(btnSize, btnSize),
+              tapTargetSize: MaterialTapTargetSize.padded,
+            ),
+            icon: Icon(Icons.delete_outline, size: compactButtons ? 19 : 22, color: cs.error),
+            onPressed: preview.onDiscard,
+          ),
+          Expanded(
+            child: AudioPlayer(
+              key: Key('AudioMessage-${preview.path}'),
+              file: preview.file,
+              attachment: null,
+              compact: true,
+              playPauseSignal: widget.playPauseSignal,
+            ),
+          ),
+          IconButton(
+            key: const Key('voice-preview-restart-button'),
+            tooltip: 'Restart recording',
+            style: IconButton.styleFrom(
+              padding: EdgeInsets.zero,
+              fixedSize: Size(btnSize, btnSize),
+              minimumSize: Size(btnSize, btnSize),
+              tapTargetSize: MaterialTapTargetSize.padded,
+            ),
+            icon: Icon(Icons.refresh, size: compactButtons ? 19 : 22, color: cs.onSurfaceVariant),
+            onPressed: preview.onRestart,
+          ),
+          const SizedBox(width: 4),
+          IconButton.filled(
+            key: const Key('voice-preview-send-button'),
+            tooltip: 'Send voice message',
+            style: IconButton.styleFrom(
+              padding: EdgeInsets.zero,
+              fixedSize: Size(btnSize, btnSize),
+              minimumSize: Size(btnSize, btnSize),
+              tapTargetSize: MaterialTapTargetSize.padded,
+            ),
+            icon: Icon(Icons.send_rounded, size: compactButtons ? 18 : 20),
+            onPressed: preview.onSend,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = context.theme.colorScheme;
@@ -139,12 +298,21 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
         final double barHeight = maxHeight >= 24.0 ? maxHeight.clamp(24.0, maxBar) : maxHeight;
         final double waveHeight = math.max(18.0, barHeight - 14.0);
 
+        if (widget.preview != null) {
+          return SizedBox(
+            width: maxWidth,
+            height: barHeight,
+            child: _buildPreviewBar(context, widget.preview!, maxWidth, barHeight),
+          );
+        }
+
         final bool showDot = maxWidth >= 140;
         final bool showIndicatorRing = !widget.iOS && maxWidth >= 230 && barHeight >= 38;
         final bool showWaveform = maxWidth >= 105;
         final bool showTimer = (maxWidth >= 72) && (widget.iOS || kIsWeb || !widget.samsung);
         final bool showCancel = widget.onCancel != null;
-        final bool showSlideHint = showCancel && maxWidth >= (156.0 + scaledSlideHint);
+        final bool showPause = maxWidth >= 120;
+        final bool showSlideHint = showCancel && maxWidth >= (196.0 + scaledSlideHint);
 
         final TextStyle timerStyle = TextStyle(
           color: timerColor,
@@ -220,8 +388,25 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
           height: 10,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: cs.error,
+            color: _isPaused ? cs.onSurfaceVariant : cs.error,
           ),
+        );
+
+        final Widget pauseBtn = IconButton(
+          key: const Key('voice-record-pause-button'),
+          tooltip: _isPaused ? 'Resume recording' : 'Pause recording',
+          style: IconButton.styleFrom(
+            padding: EdgeInsets.zero,
+            fixedSize: Size(maxWidth < 200 ? 32 : 40, maxWidth < 200 ? 32 : 40),
+            minimumSize: Size(maxWidth < 200 ? 32 : 40, maxWidth < 200 ? 32 : 40),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          icon: Icon(
+            _isPaused ? Icons.mic_rounded : Icons.pause_rounded,
+            size: maxWidth < 200 ? 19 : 22,
+            color: _isPaused ? cs.primary : cs.onSurfaceVariant,
+          ),
+          onPressed: _togglePauseResume,
         );
 
         final Widget cancelBtn = IconButton(
@@ -252,6 +437,7 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
             child: Transform.translate(
               offset: Offset(_dragOffset, 0),
               child: Container(
+                key: const ValueKey('voice-active-record-bar'),
                 padding: EdgeInsetsDirectional.only(
                   start: maxWidth < 72 ? 4 : (widget.iOS ? 10 : 8),
                   end: maxWidth < 72 ? 4 : (widget.iOS ? 4 : 8),
@@ -273,7 +459,7 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
                                 height: 35,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: cs.error.withValues(alpha: 0.14),
+                                  color: (_isPaused ? cs.onSurfaceVariant : cs.error).withValues(alpha: 0.14),
                                 ),
                                 child: Center(child: dotWidget),
                               )
@@ -322,6 +508,7 @@ class _VoiceMessageRecorderState extends State<VoiceMessageRecorder> {
                               ),
                             ),
                           if (showTimer && showWaveform) Flexible(child: timerWidget),
+                          if (showPause) pauseBtn,
                           if (showCancel) cancelBtn,
                         ],
                       ),

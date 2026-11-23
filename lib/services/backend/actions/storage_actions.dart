@@ -3,6 +3,7 @@ import 'package:universal_io/io.dart';
 import 'package:bluebubbles/database/database.dart';
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/models/models.dart';
+import 'package:bluebubbles/services/backend/filesystem/filesystem_service.dart';
 import 'package:bluebubbles/services/isolates/global_isolate.dart';
 import 'package:bluebubbles/services/isolates/isolate_event.dart';
 import 'package:mime_type/mime_type.dart';
@@ -84,7 +85,7 @@ class StorageActions {
   /// of the "everything shows up as Videos" bug. Mime classification instead
   /// happens per-file, by extension, during the stage-2 walk (see
   /// `_segmentForFile`) — exactly the fallback the plan called for.
-  static Set<String> _indexAttachments({
+  static Map<String, List<String>> _indexAttachments({
     required String? chatGuid,
     required StorageAgeFilter ageFilter,
   }) {
@@ -99,7 +100,14 @@ class StorageActions {
     }
     final q = qb.build();
     try {
-      return q.property(Attachment_.guid).find(replaceNullWith: '').toSet();
+      final bySanitized = <String, List<String>>{};
+      for (final rawGuid in q.property(Attachment_.guid).find(replaceNullWith: '')) {
+        if (rawGuid.isEmpty) continue;
+        final sanitized = FilesystemService.sanitizeGuid(rawGuid);
+        if (sanitized.isEmpty) continue;
+        (bySanitized[sanitized] ??= <String>[]).add(rawGuid);
+      }
+      return bySanitized;
     } finally {
       q.close();
     }
@@ -108,7 +116,7 @@ class StorageActions {
   /// Stage 2 — walk `attachments/<guid>/` folders and classify every file.
   static Future<_WalkResult> _walkFilesystem({
     required String attachmentsPath,
-    required Set<String> guids,
+    required Map<String, List<String>> guids,
     required bool filtered,
     required String runId,
     Map<StorageSegmentType, _DirTotals> seed = const {},
@@ -126,7 +134,7 @@ class StorageActions {
     }
 
     final allFolders = root.listSync().whereType<Directory>().toList();
-    final targetFolders = filtered ? allFolders.where((d) => guids.contains(p.basename(d.path))) : allFolders;
+    final targetFolders = filtered ? allFolders.where((d) => guids.containsKey(p.basename(d.path))) : allFolders;
     final folderList = targetFolders.toList();
     final total = folderList.length;
 
@@ -141,8 +149,8 @@ class StorageActions {
     var bytesSoFar = seed.values.fold(0, (a, t) => a + t.bytes);
 
     for (final folder in folderList) {
-      final guid = p.basename(folder.path);
-      final isOrphan = !guids.contains(guid);
+      final dirName = p.basename(folder.path);
+      final isOrphan = !guids.containsKey(dirName);
 
       final files = folder.listSync().whereType<File>().toList();
       final originals = _findOriginals(files);
@@ -315,7 +323,8 @@ class StorageActions {
       };
     }
 
-    final deleteOrphans = segments.contains(StorageSegmentType.orphaned);
+    final filtered = chatGuid != null || ageFilter != StorageAgeFilter.all;
+    final deleteOrphans = !filtered && segments.contains(StorageSegmentType.orphaned);
     final deleteDerivedOnly = segments.contains(StorageSegmentType.thumbnailsAndConversions);
     // Global segments (orphans, link previews) are handled separately and must
     // not make this true on their own, or a previews-only selection would walk
@@ -324,8 +333,9 @@ class StorageActions {
         segments.any((s) => s != StorageSegmentType.thumbnailsAndConversions && !s.isGlobal);
 
     for (final folder in root.listSync().whereType<Directory>()) {
-      final guid = p.basename(folder.path);
-      final isOrphan = !guids.contains(guid);
+      final dirName = p.basename(folder.path);
+      final rawGuids = guids[dirName];
+      final isOrphan = rawGuids == null;
 
       if (isOrphan) {
         if (!deleteOrphans) continue;
@@ -352,7 +362,7 @@ class StorageActions {
         bytesFreed += _dirSize(folder);
         filesDeleted += folder.listSync().whereType<File>().length;
         await folder.delete(recursive: true);
-        resetGuids.add(guid);
+        resetGuids.addAll(rawGuids);
       } else if (deleteDerivedOnly) {
         // Original stays; only regenerable siblings go.
         final files = folder.listSync().whereType<File>().toList();
@@ -370,21 +380,32 @@ class StorageActions {
 
     if (resetGuids.isNotEmpty) {
       Database.runInTransaction(TxMode.write, () {
-        for (final guid in resetGuids) {
-          final row = Database.attachments.query(Attachment_.guid.equals(guid)).build().findFirst();
-          if (row == null) continue;
-          row.isDownloaded = false;
-          // Must match the keys loadImageProperties actually writes, or the
-          // reset silently fails to force reprocessing on next view.
-          row.metadata
-            ?..remove('_orientation_processed')
-            ..remove('_orientation')
-            ..remove('_raw_width')
-            ..remove('_raw_height');
-          row.height = null;
-          row.width = null;
-          row.exif = null;
-          Database.attachments.put(row);
+        const batchSize = 500;
+        for (var i = 0; i < resetGuids.length; i += batchSize) {
+          final batch = resetGuids.sublist(i, (i + batchSize).clamp(0, resetGuids.length));
+          final query = Database.attachments.query(Attachment_.guid.oneOf(batch)).build();
+          final List<Attachment> rows;
+          try {
+            rows = query.find();
+          } finally {
+            query.close();
+          }
+          for (final row in rows) {
+            row.isDownloaded = false;
+            // Must match the keys loadImageProperties actually writes, or the
+            // reset silently fails to force reprocessing on next view.
+            row.metadata
+              ?..remove('_orientation_processed')
+              ..remove('_orientation')
+              ..remove('_raw_width')
+              ..remove('_raw_height');
+            row.height = null;
+            row.width = null;
+            row.exif = null;
+          }
+          if (rows.isNotEmpty) {
+            Database.attachments.putMany(rows);
+          }
         }
       });
     }

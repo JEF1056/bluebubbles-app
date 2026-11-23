@@ -170,7 +170,7 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
 
             if (notification == null) {
                 PersistentLog.d(context, Constants.logTag, "Notification with ID $notificationId not found!")
-            } else if (keepBubble && hideBubbledNotification(context, notificationManager, notification)) {
+            } else if (shouldHideBubbleOnRead(keepBubble, isCarMode(context)) && hideBubbledNotification(context, notificationManager, notification)) {
                 val chatGuid = resolveDismissedChatGuid(
                     notification.notification.extras.getString("chatGuid"),
                     chatGuidFallback
@@ -201,8 +201,13 @@ class DeleteNotificationHandler: MethodCallHandlerImpl() {
                 notification?.notification?.extras?.getString("callUuid"),
                 callUuidFallback
             )
-            if (callUuid != null) {
+            if (callUuid != null && !com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.isCallActive(callUuid)) {
                 WearSyncManager.notifyCallEnded(context, callUuid)
+                com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+            } else if ((notification?.tag ?: tag) == Constants.newFaceTimeNotificationTag &&
+                !com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.isCallActive(callUuid)
+            ) {
+                com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
             }
 
             val channelTag: String? = notification?.tag ?: tag
