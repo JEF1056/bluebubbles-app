@@ -106,6 +106,53 @@ internal object LockScreenCallPolicy {
             cancelByNotificationId(notificationId)
         }
     }
+
+    fun handleAnswerFaceTime(
+        intentType: String?,
+        answerExtra: Boolean,
+        callUuid: String?,
+        caller: String?,
+        address: String?,
+        isTelephony: Boolean,
+        hasVideoExtra: Boolean,
+        videoExtra: Boolean,
+        audioOnlyExtra: Boolean,
+        addIncomingCall: (callUuid: String, caller: String, address: String?, isTelephony: Boolean, isVideo: Boolean) -> Boolean,
+        rewriteExtras: (openCall: Boolean, answer: Boolean) -> Unit
+    ): Boolean {
+        if (intentType != "AnswerFaceTime" || !answerExtra || callUuid.isNullOrBlank()) {
+            return false
+        }
+        val isVideo = if (hasVideoExtra) videoExtra else !audioOnlyExtra
+        val routed = addIncomingCall(callUuid, caller ?: "", address, isTelephony, isVideo)
+        if (routed) {
+            rewriteExtras(true, false)
+        }
+        return routed
+    }
+
+    fun handleAnswerFaceTimeIntent(
+        intent: Intent?,
+        addIncomingCall: (callUuid: String, caller: String, address: String?, isTelephony: Boolean, isVideo: Boolean) -> Boolean
+    ): Boolean {
+        if (intent == null) return false
+        return handleAnswerFaceTime(
+            intentType = intent.type,
+            answerExtra = intent.getBooleanExtra("answer", false),
+            callUuid = intent.getStringExtra("callUuid"),
+            caller = intent.getStringExtra("caller") ?: intent.getStringExtra("callerName"),
+            address = intent.getStringExtra("callerAddress") ?: intent.getStringExtra("address"),
+            isTelephony = intent.getBooleanExtra("isTelephony", false),
+            hasVideoExtra = intent.hasExtra("isVideo"),
+            videoExtra = intent.getBooleanExtra("isVideo", false),
+            audioOnlyExtra = intent.getBooleanExtra("audioOnly", false),
+            addIncomingCall = addIncomingCall,
+            rewriteExtras = { openCall, answer ->
+                intent.putExtra("openCall", openCall)
+                intent.putExtra("answer", answer)
+            }
+        )
+    }
 }
 
 class MainActivity : FlutterFragmentActivity() {
@@ -122,7 +169,9 @@ class MainActivity : FlutterFragmentActivity() {
         @Volatile private var _dartReady = false
 
         fun clearCallLockScreenFlags() {
+            if (FaceTimeConnectionService.hasActiveCall()) return
             val clearRunnable = Runnable {
+                if (FaceTimeConnectionService.hasActiveCall()) return@Runnable
                 val activity = activeInstance?.get() ?: return@Runnable
                 if (activity.isDestroyed) return@Runnable
                 activity.intent?.putExtra(EXTRA_INCOMING_FACETIME, false)
@@ -177,6 +226,7 @@ class MainActivity : FlutterFragmentActivity() {
         configureEdgeToEdge()
         updateLockScreenFlagsForIntent(intent)
         dismissIncomingFaceTimeNotificationIfAnswering(intent)
+        handleAnswerFaceTimeIntent(intent)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
         updateLocusContext(intent?.getStringExtra("chatGuid"))
@@ -215,11 +265,33 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        updateLockScreenFlagsForIntent(intent)
+        // Rewrite answer extras before super.onNewIntent so receive_intent doesn't forward answer=true to Dart
         dismissIncomingFaceTimeNotificationIfAnswering(intent)
+        handleAnswerFaceTimeIntent(intent)
+        setIntent(intent)
+        super.onNewIntent(intent)
+        updateLockScreenFlagsForIntent(intent)
         updateLocusContext(intent.getStringExtra("chatGuid"))
+    }
+
+    private fun handleAnswerFaceTimeIntent(intent: Intent?) {
+        val callUuid = intent?.getStringExtra("callUuid")
+        val routed = LockScreenCallPolicy.handleAnswerFaceTimeIntent(intent) { uuid, caller, address, isTelephony, isVideo ->
+            FaceTimeConnectionService.addIncomingCall(
+                context = this,
+                callUuid = uuid,
+                callerName = caller,
+                address = address,
+                autoAnswer = true,
+                isTelephony = isTelephony,
+                isVideo = isVideo
+            )
+        }
+        if (!routed && !callUuid.isNullOrBlank()) {
+            CreateIncomingFaceTimeNotification.cancelIncomingCallNotification(this, callUuid)
+            intent?.removeExtra("openCall")
+            intent?.removeExtra("answer")
+        }
     }
 
     private fun updateLockScreenFlagsForIntent(intent: Intent?) {

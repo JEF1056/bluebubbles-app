@@ -213,4 +213,136 @@ class MainActivityLockScreenTest {
         assertEquals("ft-answer-1", cancelledUuid)
         assertEquals(null, cancelledId)
     }
+
+    @Test
+    fun `handleAnswerFaceTime routes AnswerFaceTime and rewrites extras to openCall=true and answer=false`() {
+        var routedCallUuid: String? = null
+        var routedCaller: String? = null
+        var routedAddress: String? = null
+        var routedIsTelephony: Boolean? = null
+        var routedIsVideo: Boolean? = null
+        val rewrittenExtras = mutableMapOf<String, Boolean>()
+
+        val routed = LockScreenCallPolicy.handleAnswerFaceTime(
+            intentType = "AnswerFaceTime",
+            answerExtra = true,
+            callUuid = "ft-test-uuid-1",
+            caller = "Alice",
+            address = "alice@icloud.com",
+            isTelephony = false,
+            hasVideoExtra = true,
+            videoExtra = true,
+            audioOnlyExtra = false,
+            addIncomingCall = { callUuid, caller, address, isTelephony, isVideo ->
+                routedCallUuid = callUuid
+                routedCaller = caller
+                routedAddress = address
+                routedIsTelephony = isTelephony
+                routedIsVideo = isVideo
+                true
+            },
+            rewriteExtras = { openCall, answer ->
+                rewrittenExtras["openCall"] = openCall
+                rewrittenExtras["answer"] = answer
+            }
+        )
+
+        assertTrue(routed)
+        assertEquals("ft-test-uuid-1", routedCallUuid)
+        assertEquals("Alice", routedCaller)
+        assertEquals("alice@icloud.com", routedAddress)
+        assertEquals(false, routedIsTelephony)
+        assertEquals(true, routedIsVideo)
+        assertEquals(true, rewrittenExtras["openCall"])
+        assertEquals(false, rewrittenExtras["answer"])
+    }
+
+    @Test
+    fun `handleAnswerFaceTime resolves isVideo from audioOnly when isVideo extra is absent`() {
+        var routedIsVideo: Boolean? = null
+
+        val routed = LockScreenCallPolicy.handleAnswerFaceTime(
+            intentType = "AnswerFaceTime",
+            answerExtra = true,
+            callUuid = "ft-test-uuid-2",
+            caller = "Bob",
+            address = null,
+            isTelephony = false,
+            hasVideoExtra = false,
+            videoExtra = false,
+            audioOnlyExtra = true,
+            addIncomingCall = { _, _, _, _, isVideo ->
+                routedIsVideo = isVideo
+                true
+            },
+            rewriteExtras = { _, _ -> }
+        )
+
+        assertTrue(routed)
+        assertEquals(false, routedIsVideo)
+    }
+
+    @Test
+    fun `handleAnswerFaceTime does not rewrite extras when routing fails`() {
+        val rewrittenExtras = mutableMapOf<String, Boolean>()
+
+        val routed = LockScreenCallPolicy.handleAnswerFaceTime(
+            intentType = "AnswerFaceTime",
+            answerExtra = true,
+            callUuid = "ft-test-uuid-3",
+            caller = "Charlie",
+            address = null,
+            isTelephony = true,
+            hasVideoExtra = true,
+            videoExtra = false,
+            audioOnlyExtra = true,
+            addIncomingCall = { _, _, _, _, _ -> false },
+            rewriteExtras = { openCall, answer ->
+                rewrittenExtras["openCall"] = openCall
+                rewrittenExtras["answer"] = answer
+            }
+        )
+
+        assertFalse(routed)
+        assertTrue(rewrittenExtras.isEmpty())
+    }
+
+    @Test
+    fun `handleAnswerFaceTime ignores non-AnswerFaceTime or answer=false intents`() {
+        var called = false
+
+        assertFalse(
+            LockScreenCallPolicy.handleAnswerFaceTime(
+                intentType = "OpenSummary",
+                answerExtra = true,
+                callUuid = "ft-test-uuid-4",
+                caller = "Dave",
+                address = null,
+                isTelephony = false,
+                hasVideoExtra = false,
+                videoExtra = false,
+                audioOnlyExtra = false,
+                addIncomingCall = { _, _, _, _, _ -> called = true; true },
+                rewriteExtras = { _, _ -> }
+            )
+        )
+        assertFalse(called)
+
+        assertFalse(
+            LockScreenCallPolicy.handleAnswerFaceTime(
+                intentType = "AnswerFaceTime",
+                answerExtra = false,
+                callUuid = "ft-test-uuid-4",
+                caller = "Dave",
+                address = null,
+                isTelephony = false,
+                hasVideoExtra = false,
+                videoExtra = false,
+                audioOnlyExtra = false,
+                addIncomingCall = { _, _, _, _, _ -> called = true; true },
+                rewriteExtras = { _, _ -> }
+            )
+        )
+        assertFalse(called)
+    }
 }

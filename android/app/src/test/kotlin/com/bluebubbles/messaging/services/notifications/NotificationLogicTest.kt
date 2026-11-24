@@ -517,6 +517,7 @@ class NotificationLogicTest {
 
         assertEquals(4242, ints["notificationId"])
         assertEquals(true, bools["answer"])
+        assertEquals(true, bools["isVideo"])
         assertEquals(false, bools["audioOnly"])
         assertEquals(false, bools["isTelephony"])
         assertEquals("Alice", strings["caller"])
@@ -524,6 +525,23 @@ class NotificationLogicTest {
         assertEquals("AnswerFaceTime", intentType)
         assertTrue(CreateIncomingFaceTimeNotification.ANSWER_ACTION_SHOWS_USER_INTERFACE)
         assertTrue(CreateIncomingFaceTimeNotification.AUDIO_ANSWER_ACTION_SHOWS_USER_INTERFACE)
+
+        // Audio answer intent (isVideo = false)
+        val audioBools = mutableMapOf<String, Boolean>()
+        CreateIncomingFaceTimeNotification.applyAnswerIntentExtras(
+            notificationId = 4243,
+            isVideo = false,
+            isTelephony = false,
+            callerName = "Alice",
+            isOngoing = false,
+            putInt = { _, _ -> },
+            putBoolean = { k, v -> audioBools[k] = v },
+            putString = { _, _ -> },
+            setType = {}
+        )
+        assertEquals(true, audioBools["answer"])
+        assertEquals(false, audioBools["isVideo"])
+        assertEquals(true, audioBools["audioOnly"])
     }
 
     @Test

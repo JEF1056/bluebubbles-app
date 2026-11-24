@@ -82,7 +82,9 @@ class EndFaceTimeCallHandler : MethodCallHandlerImpl() {
         )
         cancelIncomingCallNotifications(context, callUuid, notificationId)
         if (!onlyIfRinging || ended || !FaceTimeConnectionService.isCallActive(callUuid)) {
-            com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+            if (!FaceTimeConnectionService.hasActiveCall()) {
+                com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+            }
         }
         if (onlyIfRinging) {
             if (!FaceTimeConnectionService.isCallActive(callUuid)) {

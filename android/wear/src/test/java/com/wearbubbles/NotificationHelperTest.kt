@@ -241,6 +241,85 @@ class NotificationHelperTest {
     }
 
     @Test
+    fun `tryAnswerCallAudio retries relay once and never falls back to standalone when fromPhoneRelay is true`() = runBlocking {
+        var relayCalls = 0
+        var standaloneCalls = 0
+        // Fails first attempt, succeeds on retry
+        assertTrue(
+            CallNotificationHelper.tryAnswerCallAudio(
+                callUuid = "relay-1",
+                isTelephony = false,
+                fromPhoneRelay = true,
+                relayAnswer = {
+                    relayCalls++
+                    relayCalls == 2
+                },
+                standaloneAnswer = {
+                    standaloneCalls++
+                    true
+                }
+            )
+        )
+        assertEquals(2, relayCalls)
+        assertEquals(0, standaloneCalls)
+
+        // Fails both attempts -> returns false, still never calls standaloneAnswer
+        relayCalls = 0
+        assertFalse(
+            CallNotificationHelper.tryAnswerCallAudio(
+                callUuid = "relay-2",
+                isTelephony = false,
+                fromPhoneRelay = true,
+                relayAnswer = {
+                    relayCalls++
+                    false
+                },
+                standaloneAnswer = {
+                    standaloneCalls++
+                    true
+                }
+            )
+        )
+        assertEquals(2, relayCalls)
+        assertEquals(0, standaloneCalls)
+    }
+
+    @Test
+    fun `answerCallAudio never falls back to standalone when fromPhoneRelay is true`() = runBlocking {
+        val ringing = ActiveCallState(
+            callUuid = "relay-call-1",
+            callerName = "Alice",
+            callerAddress = "+1555",
+            isVideo = false,
+            fromPhoneRelay = true,
+            phase = CallPhase.RINGING
+        )
+        CallNotificationHelper.setActiveCallStateForTest(ringing)
+        try {
+            var relayCalls = 0
+            var standaloneCalls = 0
+            val result = CallNotificationHelper.answerCallAudio(
+                context = null,
+                callUuid = "relay-call-1",
+                relayAnswer = {
+                    relayCalls++
+                    false
+                },
+                standaloneAnswer = {
+                    standaloneCalls++
+                    true
+                }
+            )
+            assertFalse(result)
+            assertEquals(2, relayCalls)
+            assertEquals(0, standaloneCalls)
+            assertEquals(CallPhase.RINGING, CallNotificationHelper.activeCallState.value?.phase)
+        } finally {
+            CallNotificationHelper.setActiveCallStateForTest(null)
+        }
+    }
+
+    @Test
     fun `shouldEndCall respects onlyIfRinging for status_id 1 vs 6`() {
         val ringing = ActiveCallState("call-1", "Alice", "+1555", isVideo = false, fromPhoneRelay = false, phase = CallPhase.RINGING)
         val ongoing = ringing.copy(phase = CallPhase.ONGOING)
@@ -254,5 +333,24 @@ class NotificationHelperTest {
         assertTrue(CallNotificationHelper.shouldEndCall(ringing, "call-1", onlyIfRinging = false))
         assertTrue(CallNotificationHelper.shouldEndCall(ongoing, "call-1", onlyIfRinging = false))
         assertFalse(CallNotificationHelper.shouldEndCall(ongoing, "other-uuid", onlyIfRinging = false))
+    }
+
+    @Test
+    fun `shouldAcceptIncomingCall rejects incoming call when another call is ONGOING`() {
+        val ongoing = ActiveCallState("call-1", "Alice", "+1555", isVideo = false, fromPhoneRelay = false, phase = CallPhase.ONGOING)
+        val ringing = ActiveCallState("call-1", "Alice", "+1555", isVideo = false, fromPhoneRelay = false, phase = CallPhase.RINGING)
+
+        // Ongoing call exists -> reject new call
+        assertFalse(CallNotificationHelper.shouldAcceptIncomingCall(ongoing, "call-2", isRecentlyEnded = false))
+        assertFalse(CallNotificationHelper.shouldAcceptIncomingCall(ongoing, "call-1", isRecentlyEnded = false))
+
+        // Ringing call exists -> can accept/update
+        assertTrue(CallNotificationHelper.shouldAcceptIncomingCall(ringing, "call-2", isRecentlyEnded = false))
+
+        // No active call -> accept
+        assertTrue(CallNotificationHelper.shouldAcceptIncomingCall(null, "call-2", isRecentlyEnded = false))
+
+        // Recently ended -> reject
+        assertFalse(CallNotificationHelper.shouldAcceptIncomingCall(null, "call-2", isRecentlyEnded = true))
     }
 }

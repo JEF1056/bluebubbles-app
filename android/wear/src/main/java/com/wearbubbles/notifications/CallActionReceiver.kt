@@ -3,9 +3,11 @@ package com.wearbubbles.notifications
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 class CallActionReceiver : BroadcastReceiver() {
@@ -19,7 +21,17 @@ class CallActionReceiver : BroadcastReceiver() {
                 withTimeoutOrNull(8_000L) {
                     when (intent.action) {
                         CallNotificationHelper.ACTION_ANSWER_CALL -> {
-                            CallNotificationHelper.answerCallAudio(appContext, callUuid)
+                            val answered = CallNotificationHelper.answerCallAudio(appContext, callUuid)
+                            if (!answered) {
+                                val msg = if (CallNotificationHelper.activeCallState.value?.fromPhoneRelay == true) {
+                                    "Couldn't reach phone"
+                                } else {
+                                    "Couldn't answer call"
+                                }
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(appContext, msg, Toast.LENGTH_SHORT).show()
+                                }
+                            }
                         }
                         CallNotificationHelper.ACTION_DECLINE_CALL,
                         CallNotificationHelper.ACTION_END_CALL -> {

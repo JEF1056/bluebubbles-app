@@ -540,6 +540,8 @@
       [fboTemporal, fboFg, fboBlurA, fboBlurB].forEach((f) => gl.deleteFramebuffer(f));
       [progTemporal, progSpatial, progBgExtract, progKawase, progComposite].forEach((p) => gl.deleteProgram(p));
       gl.deleteBuffer(quad);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      canvas.width = canvas.height = 0;
     }
 
     return { render, uploadMask, uploadBgSource, dispose };

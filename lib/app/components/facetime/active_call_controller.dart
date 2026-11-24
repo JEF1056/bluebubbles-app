@@ -1239,6 +1239,9 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  bool _shouldCoverRemoteVideo(double? width, double? height) =>
+      width != null && height != null && height > width;
+
   Widget _buildTextureWidget(int textureId, {dynamic width, dynamic height, bool cover = true}) {
     final tex = Texture(textureId: textureId);
     final w = _parsePositiveDimension(width);
@@ -1356,6 +1359,7 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
   ActiveCallFailure? _lastFailure;
   ActiveCallFailure? get lastFailure => _lastFailure;
   String? _lastFailureUuid;
+  String? _answeringCallUuid;
 
   PendingCallTab? _pendingCallTab;
 
@@ -1409,6 +1413,17 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
     return '$mm:$ss';
   }
 
+  bool _hasActiveLocalCallForOtherUuid(String uuid) {
+    final p = _state.phase;
+    if (p != ActiveCallPhase.outgoing &&
+        p != ActiveCallPhase.connecting &&
+        p != ActiveCallPhase.ongoing) {
+      return false;
+    }
+    if (_state.isOnOtherDevice) return false;
+    return _state.callUuid != uuid;
+  }
+
   void startIncoming({
     required String callUuid,
     required String callerName,
@@ -1422,6 +1437,7 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
     String? chatGuid,
     DateTime? startedAt,
   }) {
+    if (_hasActiveLocalCallForOtherUuid(callUuid)) return;
     _stopTicker();
     _elapsed = Duration.zero;
     final matches = _state.callUuid == callUuid;
@@ -1851,7 +1867,12 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
       }
       final hasCachedDims = _remoteTextureId == remoteId && _remoteTextureWidth != null && _remoteTextureHeight != null;
       remoteVideoWidget.value = hasCachedDims
-          ? _buildTextureWidget(remoteId, width: _remoteTextureWidth, height: _remoteTextureHeight, cover: false)
+          ? _buildTextureWidget(
+              remoteId,
+              width: _remoteTextureWidth,
+              height: _remoteTextureHeight,
+              cover: _shouldCoverRemoteVideo(_remoteTextureWidth, _remoteTextureHeight),
+            )
           : Texture(textureId: remoteId);
       if (!hasCachedDims) {
         _remoteTextureId = remoteId;
@@ -1930,7 +1951,12 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
             _remoteTextureId = textureId;
             _remoteTextureWidth = w;
             _remoteTextureHeight = h;
-            remoteVideoWidget.value = _buildTextureWidget(textureId, width: w, height: h, cover: false);
+            remoteVideoWidget.value = _buildTextureWidget(
+              textureId,
+              width: w,
+              height: h,
+              cover: _shouldCoverRemoteVideo(w, h),
+            );
           } else if (!hasExplicitDims &&
               _remoteTextureId == textureId &&
               _remoteTextureWidth != null &&
@@ -1939,7 +1965,7 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
               textureId,
               width: _remoteTextureWidth,
               height: _remoteTextureHeight,
-              cover: false,
+              cover: _shouldCoverRemoteVideo(_remoteTextureWidth, _remoteTextureHeight),
             );
           } else {
             _remoteTextureId = textureId;
@@ -2075,6 +2101,9 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
     final prev = _state;
     final uuid = prev.callUuid;
     if (uuid == null || uuid.isEmpty) return false;
+    if (_answeringCallUuid == uuid) return false;
+    _answeringCallUuid = uuid;
+    try {
 
     final effectiveTelephony = prev.isTelephony;
     final effectiveAudioOnly = audioOnly || effectiveTelephony || !prev.isVideo;
@@ -2204,6 +2233,13 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
         isTelephony: effectiveTelephony,
         isVideo: isVideo,
       );
+      if (_state.phase == ActiveCallPhase.idle || _state.callUuid != uuid) {
+        _closePendingCallTab();
+        if (routed) {
+          unawaited(_endNativeCall(uuid, onlyIfRinging: false));
+        }
+        return false;
+      }
       if (routed) {
         _closePendingCallTab();
         _dismissOverlay(uuid, keepCallState: true);
@@ -2308,6 +2344,11 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
       await _launchJoinLink(link, context: (context != null && context.mounted) ? context : null);
     }
     return true;
+    } finally {
+      if (_answeringCallUuid == uuid) {
+        _answeringCallUuid = null;
+      }
+    }
   }
 
   Future<bool> answerIncoming({bool audioOnly = false, BuildContext? context}) =>
@@ -2820,6 +2861,9 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
       _ => null,
     };
     if (nextPhase == null) return;
+    if (nextPhase == ActiveCallPhase.incoming && !matchesPrev && _hasActiveLocalCallForOtherUuid(uuid)) {
+      return;
+    }
 
     final isTelephony = data['is_telephony'] == true || (matchesPrev && prev.isTelephony);
     final bool isVideo;
@@ -3540,8 +3584,9 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
         } catch (e) {
           Logger.debug('resume-facetime-video error: $e', tag: 'ActiveCall');
         }
+        unawaited(syncNativeVideoTextures(callUuid: _state.callUuid));
       }
-      if (!_webRtcClient.isActive && _state.callUuid != null) {
+      if (_isWeb && !_webRtcClient.isActive && _state.callUuid != null) {
         unawaited(_startWebRtcBridge(
           callUuid: _state.callUuid!,
           wantVideo: _state.isVideo,

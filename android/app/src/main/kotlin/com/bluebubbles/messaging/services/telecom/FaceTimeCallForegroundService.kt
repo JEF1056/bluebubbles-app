@@ -528,7 +528,16 @@ class FaceTimeCallForegroundService : Service() {
                 if (isVideo && ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                     fgType = fgType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
                 }
-                startForeground(notifId, notification, fgType)
+                try {
+                    startForeground(notifId, notification, fgType)
+                } catch (e: Exception) {
+                    if (fgType != ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL) {
+                        PersistentLog.w(this, TAG, "startForeground with microphone/camera failed (${e.message}); retrying with PHONE_CALL only")
+                        startForeground(notifId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+                    } else {
+                        throw e
+                    }
+                }
             } else {
                 startForeground(notifId, notification)
             }

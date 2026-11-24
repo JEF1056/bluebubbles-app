@@ -133,6 +133,14 @@ void openInAppCallScreen({
   final callController = controller ?? ActiveCallController.instance;
   if (callController.state.phase == ActiveCallPhase.idle) return;
 
+  final uuid = callController.state.callUuid;
+  if (uuid != null && uuid.isNotEmpty) {
+    final incomingRoute = faceTimeOverlays.remove(uuid);
+    if (incomingRoute != null && incomingRoute.isActive) {
+      incomingRoute.navigator?.removeRoute(incomingRoute);
+    }
+  }
+
   final reducedMotion = facetimeReducedMotionOf(targetContext);
   final navigator = Navigator.of(targetContext, rootNavigator: true);
   final themes = InheritedTheme.capture(
@@ -179,12 +187,20 @@ void openInAppCallScreen({
 
 /// Hides the FaceTime overlay with the given [callUuid].
 /// Also calls [NotificationsService.clearFaceTimeNotification] to clear the notification.
-void hideFaceTimeOverlay(String callUuid, {bool keepCallState = false}) {
+void hideFaceTimeOverlay(
+  String callUuid, {
+  bool keepCallState = false,
+  bool endNative = false,
+}) {
   if (kIsWeb) {
     stopWebFaceTimeRingtone(callUuid: callUuid);
   }
   if (GetIt.I.isRegistered<NotificationsService>()) {
-    NotificationsSvc.clearFaceTimeNotification(callUuid, onlyIfRinging: keepCallState);
+    NotificationsSvc.clearFaceTimeNotification(
+      callUuid,
+      onlyIfRinging: keepCallState,
+      endNative: keepCallState ? false : endNative,
+    );
   }
   if (!keepCallState && ActiveCallController.instance.state.callUuid == callUuid) {
     ActiveCallController.instance.clear();
@@ -238,13 +254,16 @@ void openIncomingFaceTimeScreen(
   BuildContext? context,
   ActiveCallController? controller,
 }) {
+  final callController = controller ?? ActiveCallController.instance;
+  if (callController.state.phase != ActiveCallPhase.incoming) return;
+  if (activeInAppCallRoute != null && activeInAppCallRoute!.isActive) return;
+
   final existingRoute = faceTimeOverlays[callUuid];
   if (existingRoute != null && existingRoute.isActive) return;
 
   final targetContext = resolveFaceTimeNavigatorContext(context);
   if (targetContext == null) return;
 
-  final callController = controller ?? ActiveCallController.instance;
   final state = callController.state;
   final actions = faceTimeIncomingActions[callUuid];
   final isTelephony = actions?.isTelephony ?? state.isTelephony;
@@ -285,12 +304,12 @@ void openIncomingFaceTimeScreen(
       onDecline: actions?.onDecline ??
           () {
             unawaited(callController.declineCall());
-            hideFaceTimeOverlay(callUuid);
+            hideFaceTimeOverlay(callUuid, endNative: true);
           },
       onCancelConnecting: actions?.onCancelConnecting ??
           () {
             unawaited(callController.endCall());
-            hideFaceTimeOverlay(callUuid);
+            hideFaceTimeOverlay(callUuid, endNative: true);
           },
     ),
     transitionBuilder: (context, animation, secondaryAnimation, child) {
@@ -331,11 +350,6 @@ Future<void> showFaceTimeOverlay(
     avatarBytes = null;
     displayCaller = faker.person.name();
     effectiveDetails = const [];
-  }
-
-  // If we are somehow already showing an overlay for this call, close it first.
-  if (faceTimeOverlays.containsKey(callUuid)) {
-    hideFaceTimeOverlay(callUuid);
   }
 
   final callController = controller ?? ActiveCallController.instance;
@@ -379,15 +393,15 @@ Future<void> showFaceTimeOverlay(
     },
     onDecline: () {
       unawaited(callController.declineCall());
-      hideFaceTimeOverlay(callUuid);
+      hideFaceTimeOverlay(callUuid, endNative: true);
     },
     onCancelConnecting: () {
       unawaited(callController.endCall());
-      hideFaceTimeOverlay(callUuid);
+      hideFaceTimeOverlay(callUuid, endNative: true);
     },
   );
-  // Register synchronously without blocking the UI with a modal dialog.
-  faceTimeOverlays[callUuid] = null;
+  // Keep existing route if already tracked; otherwise register banner slot synchronously.
+  faceTimeOverlays.putIfAbsent(callUuid, () => null);
 }
 
 /// Transitions an existing FaceTime call into the connecting state.

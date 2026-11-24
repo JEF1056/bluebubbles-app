@@ -106,20 +106,21 @@ internal class AdaptiveUplinkSupervisor(
 ) {
     companion object {
         val DEFAULT_RUNGS = listOf(
-            AdaptiveUplinkRung(426, 240, 15, 150_000, 300_000),
-            AdaptiveUplinkRung(640, 360, 24, 300_000, 650_000),
-            AdaptiveUplinkRung(960, 540, 30, 650_000, 1_200_000),
+            AdaptiveUplinkRung(640, 360, 24, 400_000, 800_000),
+            AdaptiveUplinkRung(960, 540, 30, 750_000, 1_400_000),
             AdaptiveUplinkRung(1280, 720, 30, 1_200_000, 2_500_000),
             AdaptiveUplinkRung(1920, 1080, 30, 2_000_000, 4_000_000)
         )
+        private const val WARMUP_SAMPLES = 7
         private const val STEP_DOWN_SAMPLES = 2
-        private const val STEP_UP_SAMPLES = 3
-        private const val BASE_COOLDOWN_MS = 8_000L
-        private const val MAX_COOLDOWN_MS = 20_000L
+        private const val STEP_UP_SAMPLES = 2
+        private const val BASE_COOLDOWN_MS = 4_000L
+        private const val MAX_COOLDOWN_MS = 12_000L
     }
 
     var currentIndex: Int = rungs.lastIndex
         private set
+    private var samplesSeen = 0
     private var badSamples = 0
     private var goodSamples = 0
     private var lastDropMs = 0L
@@ -129,6 +130,10 @@ internal class AdaptiveUplinkSupervisor(
         get() = rungs[currentIndex]
 
     fun recordSample(lossFraction: Double, limited: Boolean, nowMs: Long): AdaptiveUplinkRung? {
+        samplesSeen++
+        if (samplesSeen <= WARMUP_SAMPLES) {
+            return null
+        }
         val unhealthy = lossFraction > 0.08 || limited
         if (unhealthy) {
             goodSamples = 0
@@ -530,6 +535,10 @@ class WebRtcAudioClient(
                     var inAudioLevel = 0.0
                     var outAudioBytes = 0L
                     var outAudioPackets = 0L
+                    var outVideoW = 0
+                    var outVideoH = 0
+                    var outVideoFps = 0.0
+                    var outVideoReason = "none"
 
                     for (stat in report.statsMap.values) {
                         when (stat.type) {
@@ -554,9 +563,13 @@ class WebRtcAudioClient(
                                 val kind = stat.members["kind"] as? String
                                 if (kind == "video") {
                                     val reason = stat.members["qualityLimitationReason"] as? String
+                                    if (reason != null) outVideoReason = reason
                                     if (reason == "bandwidth" || reason == "cpu") {
                                         limited = true
                                     }
+                                    outVideoW = (stat.members["frameWidth"] as? Number)?.toInt() ?: outVideoW
+                                    outVideoH = (stat.members["frameHeight"] as? Number)?.toInt() ?: outVideoH
+                                    outVideoFps = (stat.members["framesPerSecond"] as? Number)?.toDouble() ?: outVideoFps
                                 } else if (kind == "audio") {
                                     outAudioBytes = (stat.members["bytesSent"] as? Number)?.toLong() ?: 0L
                                     outAudioPackets = (stat.members["packetsSent"] as? Number)?.toLong() ?: 0L
@@ -573,6 +586,13 @@ class WebRtcAudioClient(
                             Constants.logTag,
                             "[$TAG] Audio stats ($callUuid): inBytes=$inAudioBytes inPkts=$inAudioPackets inLost=$inAudioLost inLevel=${"%.3f".format(inAudioLevel)} outBytes=$outAudioBytes outPkts=$outAudioPackets muted=$muted"
                         )
+                        if (wantVideo) {
+                            PersistentLog.d(
+                                context,
+                                Constants.logTag,
+                                "[$TAG] Video stats ($callUuid): out=${outVideoW}x${outVideoH}@${"%.1f".format(outVideoFps)} qlr=$outVideoReason loss=${"%.3f".format(lossFraction)} rung=${adaptiveSupervisor.currentIndex}"
+                            )
+                        }
                     }
 
                     if (wantVideo) {
@@ -651,6 +671,7 @@ class WebRtcAudioClient(
 
     private var eglBase: EglBase? = null
     private var surfaceTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
+    private var remoteAttachedRegistry: TextureRegistry? = null
     private var videoSurface: Surface? = null
     private var surfaceEglRenderer: SurfaceEglRenderer? = null
     private var remoteVideoTrack: VideoTrack? = null
@@ -663,6 +684,7 @@ class WebRtcAudioClient(
     private var videoProcessor: FaceTimeVideoProcessor? = null
     private var localVideoTrack: VideoTrack? = null
     private var localSurfaceTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
+    private var localAttachedRegistry: TextureRegistry? = null
     private var localVideoSurface: Surface? = null
     private var localSurfaceEglRenderer: SurfaceEglRenderer? = null
     private var localVideoWidth = 0
@@ -979,22 +1001,26 @@ class WebRtcAudioClient(
     fun canFlipCamera(): Boolean = hasLocalVideo && cameraCount >= 2
 
     fun setVoiceIsolation(enabled: Boolean): Boolean {
-        val adm: JavaAudioDeviceModule
+        val adm: JavaAudioDeviceModule?
+        synchronized(lock) {
+            voiceIsolationEnabled = enabled
+            if (stopped) return true
+            adm = audioDeviceModule
+        }
+
+        try {
+            adm?.setNoiseSuppressorEnabled(enabled)
+        } catch (_: Exception) {}
+
         val pcFactory: PeerConnectionFactory
         val sender: RtpSender
         val isMuted: Boolean
         synchronized(lock) {
-            voiceIsolationEnabled = enabled
-            if (stopped) return true
-            adm = audioDeviceModule ?: return true
+            if (stopped) return false
             pcFactory = factory ?: return true
             sender = audioSender ?: return true
             isMuted = muted
         }
-
-        try {
-            adm.setNoiseSuppressorEnabled(enabled)
-        } catch (_: Exception) {}
 
         return try {
             val newSource = pcFactory.createAudioSource(buildAudioConstraints(enabled))
@@ -1190,18 +1216,27 @@ class WebRtcAudioClient(
         }
         emitEvent("ft-bridge-keyframe", JSONObject().apply { put("callUuid", callUuid) })
         mainHandler.post {
-            val track: VideoTrack?
+            val r = MainActivity.getEngine()?.renderer ?: return@post
+            val rTrack: VideoTrack?
+            val lTrack: VideoTrack?
             val egl: EglBase?
             val needsRemoteAttach: Boolean
+            val needsLocalAttach: Boolean
             synchronized(lock) {
                 if (stopped) return@post
-                track = remoteVideoTrack
+                rTrack = remoteVideoTrack
+                lTrack = localVideoTrack
                 egl = eglBase
-                needsRemoteAttach = track != null && surfaceTextureEntry == null && egl != null
+                needsRemoteAttach = rTrack != null && egl != null &&
+                    (surfaceTextureEntry == null || remoteAttachedRegistry !== r)
+                needsLocalAttach = lTrack != null && egl != null &&
+                    (localSurfaceTextureEntry == null || localAttachedRegistry !== r)
             }
-            if (needsRemoteAttach && track != null && egl != null) {
-                val r = MainActivity.getEngine()?.renderer ?: return@post
-                attachRemoteVideoTrackOnMain(track, egl, r)
+            if (needsRemoteAttach && rTrack != null && egl != null) {
+                attachRemoteVideoTrackOnMain(rTrack, egl, r)
+            }
+            if (needsLocalAttach && lTrack != null && egl != null) {
+                attachLocalVideoTrackOnMain(lTrack, egl, r)
             }
         }
         return true
@@ -1338,9 +1373,14 @@ class WebRtcAudioClient(
                 factoryToClean?.dispose()
             } catch (_: Exception) {}
 
-            try {
-                remoteHandles.egl?.release()
-            } catch (_: Exception) {}
+            val eglToRelease = remoteHandles.egl
+            if (eglToRelease != null) {
+                mainHandler.post {
+                    try {
+                        eglToRelease.release()
+                    } catch (_: Exception) {}
+                }
+            }
         } finally {
             try {
                 leaseToRelease?.releaseAll()
@@ -1774,6 +1814,7 @@ class WebRtcAudioClient(
 
     fun getRemoteVideoTextureId(): Long? {
         val existingEntry: TextureRegistry.SurfaceTextureEntry?
+        val existingRegistry: TextureRegistry?
         val existingW: Int
         val existingH: Int
         val track: VideoTrack?
@@ -1781,12 +1822,14 @@ class WebRtcAudioClient(
         synchronized(lock) {
             if (stopped) return null
             existingEntry = surfaceTextureEntry
+            existingRegistry = remoteAttachedRegistry
             existingW = remoteVideoWidth
             existingH = remoteVideoHeight
             track = remoteVideoTrack
             egl = eglBase
         }
-        if (existingEntry != null) {
+        val currentRegistry = MainActivity.getEngine()?.renderer
+        if (existingEntry != null && (currentRegistry == null || existingRegistry === currentRegistry)) {
             val id = existingEntry.id()
             if (existingW > 0 && existingH > 0) {
                 mainHandler.post {
@@ -1828,15 +1871,18 @@ class WebRtcAudioClient(
 
     fun getLocalVideoTextureId(): Long? {
         val existingEntry: TextureRegistry.SurfaceTextureEntry?
+        val existingRegistry: TextureRegistry?
         val track: VideoTrack?
         val egl: EglBase?
         synchronized(lock) {
             if (stopped) return null
             existingEntry = localSurfaceTextureEntry
+            existingRegistry = localAttachedRegistry
             track = localVideoTrack
             egl = eglBase
         }
-        if (existingEntry != null) {
+        val currentRegistry = MainActivity.getEngine()?.renderer
+        if (existingEntry != null && (currentRegistry == null || existingRegistry === currentRegistry)) {
             val id = existingEntry.id()
             mainHandler.post {
                 val w: Int
@@ -1943,42 +1989,50 @@ class WebRtcAudioClient(
         val surfaceTexture = entry.surfaceTexture()
         val surface = Surface(surfaceTexture)
         val renderer = SurfaceEglRenderer("WebRtcLocalVideo-$callUuid")
-        renderer.init(egl.eglBaseContext, object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() {}
-            override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
-                if (videoWidth > 0 && videoHeight > 0) {
-                    val (effectiveWidth, effectiveHeight) = rotatedFrameSize(videoWidth, videoHeight, rotation)
-                    mainHandler.post {
-                        val enabled: Boolean
-                        val canFlip: Boolean
-                        val isFront: Boolean
-                        synchronized(lock) {
-                            if (stopped || localSurfaceTextureEntry !== entry) return@post
-                            localVideoWidth = effectiveWidth
-                            localVideoHeight = effectiveHeight
-                            enabled = cameraEnabled
-                            canFlip = cameraCount >= 2
-                            isFront = frontCamera
-                        }
-                        surfaceTexture.setDefaultBufferSize(effectiveWidth, effectiveHeight)
-                        MethodCallHandler.invokeMethod(
-                            "facetime-call-state",
-                            buildLocalVideoTexturePayload(
-                                callUuid = callUuid,
-                                textureId = entry.id(),
-                                width = effectiveWidth,
-                                height = effectiveHeight,
-                                cameraEnabled = enabled,
-                                canFlipCamera = canFlip,
-                                frontCamera = isFront
+        try {
+            renderer.init(egl.eglBaseContext, object : RendererCommon.RendererEvents {
+                override fun onFirstFrameRendered() {}
+                override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
+                    if (videoWidth > 0 && videoHeight > 0) {
+                        val (effectiveWidth, effectiveHeight) = rotatedFrameSize(videoWidth, videoHeight, rotation)
+                        mainHandler.post {
+                            val enabled: Boolean
+                            val canFlip: Boolean
+                            val isFront: Boolean
+                            synchronized(lock) {
+                                if (stopped || localSurfaceTextureEntry !== entry) return@post
+                                localVideoWidth = effectiveWidth
+                                localVideoHeight = effectiveHeight
+                                enabled = cameraEnabled
+                                canFlip = cameraCount >= 2
+                                isFront = frontCamera
+                            }
+                            surfaceTexture.setDefaultBufferSize(effectiveWidth, effectiveHeight)
+                            MethodCallHandler.invokeMethod(
+                                "facetime-call-state",
+                                buildLocalVideoTexturePayload(
+                                    callUuid = callUuid,
+                                    textureId = entry.id(),
+                                    width = effectiveWidth,
+                                    height = effectiveHeight,
+                                    cameraEnabled = enabled,
+                                    canFlipCamera = canFlip,
+                                    frontCamera = isFront
+                                )
                             )
-                        )
+                        }
                     }
                 }
-            }
-        }, EglBase.CONFIG_PLAIN, GlRectDrawer())
-        renderer.createEglSurface(surface)
-        track.addSink(renderer)
+            }, EglBase.CONFIG_PLAIN, GlRectDrawer())
+            renderer.createEglSurface(surface)
+            track.addSink(renderer)
+        } catch (e: Exception) {
+            PersistentLog.w(context, TAG, "attachLocalVideoTrackOnMain failed for $callUuid: ${e.message}")
+            try { renderer.release() } catch (_: Exception) {}
+            try { surface.release() } catch (_: Exception) {}
+            releaseTextureEntry(entry)
+            return null
+        }
 
         val enabled: Boolean
         val canFlip: Boolean
@@ -1991,6 +2045,7 @@ class WebRtcAudioClient(
                 false
             } else {
                 localSurfaceTextureEntry = entry
+                localAttachedRegistry = registry
                 localVideoSurface = surface
                 localSurfaceEglRenderer = renderer
                 enabled = cameraEnabled
@@ -2103,43 +2158,52 @@ class WebRtcAudioClient(
         val surfaceTexture = entry.surfaceTexture()
         val surface = Surface(surfaceTexture)
         val renderer = SurfaceEglRenderer("WebRtcRemoteVideo-$callUuid")
-        renderer.init(egl.eglBaseContext, object : RendererCommon.RendererEvents {
-            override fun onFirstFrameRendered() {}
-            override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
-                if (videoWidth > 0 && videoHeight > 0) {
-                    val (effectiveWidth, effectiveHeight) = rotatedFrameSize(videoWidth, videoHeight, rotation)
-                    mainHandler.post {
-                        val active = synchronized(lock) {
-                            if (stopped || surfaceTextureEntry !== entry) return@synchronized false
-                            remoteVideoWidth = effectiveWidth
-                            remoteVideoHeight = effectiveHeight
-                            true
-                        }
-                        if (!active) return@post
-                        surfaceTexture.setDefaultBufferSize(effectiveWidth, effectiveHeight)
-                        MethodCallHandler.invokeMethod(
-                            "facetime-call-state",
-                            mapOf(
-                                "phase" to "video-texture",
-                                "call_uuid" to callUuid,
-                                "texture_id" to entry.id(),
-                                "width" to effectiveWidth,
-                                "height" to effectiveHeight
+        try {
+            renderer.init(egl.eglBaseContext, object : RendererCommon.RendererEvents {
+                override fun onFirstFrameRendered() {}
+                override fun onFrameResolutionChanged(videoWidth: Int, videoHeight: Int, rotation: Int) {
+                    if (videoWidth > 0 && videoHeight > 0) {
+                        val (effectiveWidth, effectiveHeight) = rotatedFrameSize(videoWidth, videoHeight, rotation)
+                        mainHandler.post {
+                            val active = synchronized(lock) {
+                                if (stopped || surfaceTextureEntry !== entry) return@synchronized false
+                                remoteVideoWidth = effectiveWidth
+                                remoteVideoHeight = effectiveHeight
+                                true
+                            }
+                            if (!active) return@post
+                            surfaceTexture.setDefaultBufferSize(effectiveWidth, effectiveHeight)
+                            MethodCallHandler.invokeMethod(
+                                "facetime-call-state",
+                                mapOf(
+                                    "phase" to "video-texture",
+                                    "call_uuid" to callUuid,
+                                    "texture_id" to entry.id(),
+                                    "width" to effectiveWidth,
+                                    "height" to effectiveHeight
+                                )
                             )
-                        )
+                        }
                     }
                 }
-            }
-        }, EglBase.CONFIG_PLAIN, GlRectDrawer())
-        renderer.createEglSurface(surface)
-        try { track.setEnabled(true) } catch (_: IllegalStateException) {}
-        track.addSink(renderer)
+            }, EglBase.CONFIG_PLAIN, GlRectDrawer())
+            renderer.createEglSurface(surface)
+            try { track.setEnabled(true) } catch (_: IllegalStateException) {}
+            track.addSink(renderer)
+        } catch (e: Exception) {
+            PersistentLog.w(context, TAG, "attachRemoteVideoTrackOnMain failed for $callUuid: ${e.message}")
+            try { renderer.release() } catch (_: Exception) {}
+            try { surface.release() } catch (_: Exception) {}
+            releaseTextureEntry(entry)
+            return null
+        }
 
         val committed = synchronized(lock) {
             if (stopped || remoteVideoTrack !== track) {
                 false
             } else {
                 surfaceTextureEntry = entry
+                remoteAttachedRegistry = registry
                 videoSurface = surface
                 surfaceEglRenderer = renderer
                 true
@@ -2207,12 +2271,24 @@ class WebRtcAudioClient(
                 h.track?.setEnabled(false)
                 h.track?.dispose()
             } catch (_: Exception) {}
+            val capturer = h.capturer
+            if (capturer != null) {
+                cameraExecutor.execute {
+                    try {
+                        capturer.stopCapture()
+                    } catch (_: Exception) {}
+                    try {
+                        capturer.dispose()
+                    } catch (_: Exception) {}
+                }
+            }
             try {
-                h.capturer?.stopCapture()
+                h.renderer?.release()
             } catch (_: Exception) {}
             try {
-                h.capturer?.dispose()
+                h.surface?.release()
             } catch (_: Exception) {}
+            releaseTextureEntry(h.entry)
             try {
                 h.helper?.dispose()
             } catch (_: Exception) {}
@@ -2225,13 +2301,6 @@ class WebRtcAudioClient(
             try {
                 h.source?.dispose()
             } catch (_: Exception) {}
-            try {
-                h.renderer?.release()
-            } catch (_: Exception) {}
-            try {
-                h.surface?.release()
-            } catch (_: Exception) {}
-            releaseTextureEntry(h.entry)
         }
     }
 
@@ -2334,7 +2403,9 @@ class WebRtcAudioClient(
                     queued = pendingRemoteIce.toList()
                     pendingRemoteIce.clear()
                 }
-                queued.forEach { activePc.addIceCandidate(it) }
+                try {
+                    queued.forEach { activePc.addIceCandidate(it) }
+                } catch (_: Exception) {}
             }
 
             override fun onSetFailure(error: String?) {
@@ -2350,7 +2421,9 @@ class WebRtcAudioClient(
             if (stopped) return
             peerConnection
         }
-        activePc?.setRemoteDescription(observer, answer)
+        try {
+            activePc?.setRemoteDescription(observer, answer)
+        } catch (_: Exception) {}
     }
 
     private fun handleRemoteIce(candidate: IceCandidate) {
@@ -2368,7 +2441,9 @@ class WebRtcAudioClient(
             }
             pc
         }
-        activePc.addIceCandidate(candidate)
+        try {
+            activePc.addIceCandidate(candidate)
+        } catch (_: Exception) {}
     }
 
     private fun emitEvent(event: String, payload: JSONObject) {

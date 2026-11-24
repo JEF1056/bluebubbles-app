@@ -365,6 +365,14 @@ class ActionHandler extends GetxService {
   }) async {
     final String? overlayUuid =
         callUuid ?? (allowFallbackOverlayUuid ? 'ft_${caller.hashCode}' : null);
+    final currentCallState = ActiveCallController.instance.state;
+    // Skip re-showing the incoming overlay for an already-active call with the same UUID
+    // (still allow the initial ft-call-status-changed status_id=4 pass before faceTimeOverlays is populated).
+    final bool skipOverlay = overlayUuid != null &&
+        currentCallState.callUuid == overlayUuid &&
+        currentCallState.phase != ActiveCallPhase.idle &&
+        (currentCallState.phase != ActiveCallPhase.incoming ||
+            faceTimeOverlays.containsKey(overlayUuid));
 
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       final handledByTelecom = await NotificationsSvc.createIncomingFaceTimeNotification(
@@ -376,7 +384,7 @@ class ActionHandler extends GetxService {
         isTelephony: isTelephony,
       );
       if (handledByTelecom) return;
-      if (LifecycleSvc.isForeground && overlayUuid != null) {
+      if (LifecycleSvc.isForeground && overlayUuid != null && !skipOverlay) {
         await showFaceTimeOverlay(
           overlayUuid,
           caller,
@@ -393,7 +401,7 @@ class ActionHandler extends GetxService {
     }
 
     if (!LifecycleSvc.isForeground) {
-      if (kIsDesktop && overlayUuid != null) {
+      if (kIsDesktop && overlayUuid != null && !skipOverlay) {
         await showFaceTimeOverlay(
           overlayUuid,
           caller,
@@ -414,7 +422,7 @@ class ActionHandler extends GetxService {
         callerAddress: callerAddress,
         isTelephony: isTelephony,
       );
-    } else if (overlayUuid != null) {
+    } else if (overlayUuid != null && !skipOverlay) {
       await showFaceTimeOverlay(
         overlayUuid,
         caller,

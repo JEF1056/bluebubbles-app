@@ -235,7 +235,7 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                             val msg = phaseSubtitle.removePrefix("feedback:")
                             Text(
                                 text = msg,
-                                color = if (msg == "Couldn't reach phone") DialerDeclineRed else DialerPrimaryText,
+                                color = if (msg.startsWith("Couldn't")) DialerDeclineRed else DialerPrimaryText,
                                 style = centeredTextStyle(
                                     fontSize = 12.sp,
                                     lineHeight = 16.sp,
@@ -369,11 +369,20 @@ private fun IncomingCallScreen(state: ActiveCallState) {
                                 .clickable(enabled = !actionInFlight, role = Role.Button) {
                                     actionInFlight = true
                                     appScope.launch {
-                                        try {
+                                        val answered = try {
                                             CallNotificationHelper.answerCallAudio(context.applicationContext, state.callUuid)
                                         } finally {
                                             withContext(Dispatchers.Main) {
                                                 actionInFlight = false
+                                            }
+                                        }
+                                        if (!answered) {
+                                            withContext(Dispatchers.Main) {
+                                                transferFeedback = if (state.fromPhoneRelay) {
+                                                    "Couldn't reach phone"
+                                                } else {
+                                                    "Couldn't answer call"
+                                                }
                                             }
                                         }
                                     }

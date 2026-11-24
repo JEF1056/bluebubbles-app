@@ -74,6 +74,7 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
         ) {
             putInt("notificationId", notificationId)
             putBoolean("answer", true)
+            putBoolean("isVideo", isVideo)
             putBoolean("audioOnly", !isVideo)
             putBoolean("isTelephony", isTelephony)
             putString("caller", callerName)
@@ -226,7 +227,9 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                         FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
                         cancelIncomingCallNotification(appContext, callUuid)
                         WearSyncManager.notifyCallEnded(appContext, callUuid)
-                        MainActivity.clearCallLockScreenFlags()
+                        if (!FaceTimeConnectionService.hasActiveCall()) {
+                            MainActivity.clearCallLockScreenFlags()
+                        }
                     }
                 }
             }
@@ -400,38 +403,27 @@ class CreateIncomingFaceTimeNotification: MethodCallHandlerImpl() {
                 .setShowsUserInterface(true)
                 .build()
 
-            // Create intent for handing off video call to Telecom audio-only (autoAnswer=true)
+            // Audio-answer action opens MainActivity directly (isVideo=false) to avoid broadcast trampoline
             val audioAnswerIntent = if (!isOngoing && !callUuid.isNullOrBlank()) {
-                if (phoneAccountEnabled) {
-                    PendingIntent.getBroadcast(
-                        context,
-                        notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
-                        Intent(context, InternalIntentReceiver::class.java)
-                            .putExtra("notificationId", notificationId)
-                            .putExtra("tag", Constants.newFaceTimeNotificationTag)
-                            .putExtra("callUuid", callUuid)
-                            .putExtra("callerName", callerName)
-                            .putExtra("callerAddress", callerAddress)
-                            .putExtra("isTelephony", isTelephony)
-                            .setType("AnswerFaceTimeAudio"),
-                        piFlags
-                    )
-                } else {
-                    PendingIntent.getActivity(
-                        context,
-                        notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
-                        Intent(context, MainActivity::class.java)
-                            .putExtras(extras)
-                            .putExtra("notificationId", notificationId)
-                            .putExtra("answer", true)
-                            .putExtra("audioOnly", true)
-                            .putExtra("isTelephony", isTelephony)
-                            .putExtra("caller", callerName)
-                            .putExtra(MainActivity.EXTRA_INCOMING_FACETIME, !isOngoing)
-                            .setType("AnswerFaceTime"),
-                        piFlags
-                    )
-                }
+                PendingIntent.getActivity(
+                    context,
+                    notificationId + Constants.pendingIntentAnswerFaceTimeAudioOffset,
+                    Intent(context, MainActivity::class.java).apply {
+                        putExtras(extras)
+                        applyAnswerIntentExtras(
+                            notificationId = notificationId,
+                            isVideo = false,
+                            isTelephony = isTelephony,
+                            callerName = callerName,
+                            isOngoing = isOngoing,
+                            putInt = ::putExtra,
+                            putBoolean = ::putExtra,
+                            putString = ::putExtra,
+                            setType = ::setType
+                        )
+                    },
+                    piFlags
+                )
             } else {
                 null
             }

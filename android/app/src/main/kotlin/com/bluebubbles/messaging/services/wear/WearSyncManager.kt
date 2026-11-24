@@ -479,27 +479,41 @@ object WearSyncManager {
             isTelephony = isTelephony
         )
         if (!routed) {
-            val launch = Intent(context, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                putExtra("callUuid", callUuid)
-                putExtra("answer", true)
-                putExtra("audioOnly", true)
-                putExtra("isTelephony", isTelephony)
-                putExtra("caller", callerName)
-                putExtra(com.bluebubbles.messaging.MainActivity.EXTRA_INCOMING_FACETIME, true)
-                type = "AnswerFaceTime"
-            }
-            launchActivityOrNotify(
+            watchAnsweredCalls.remove(callUuid)
+            postIncomingCallFallback(
                 context = context,
-                intent = launch,
-                notificationId = callUuid.hashCode(),
-                title = callerName.ifBlank { "Incoming FaceTime Audio" },
-                body = "Tap to answer call",
-                channelId = NotificationChannelHandler.FACETIME_CHANNEL_ID,
-                tag = Constants.newFaceTimeNotificationTag,
-                highPriority = true
+                callUuid = callUuid,
+                callerName = callerName,
+                callerAddress = callerAddress,
+                isTelephony = isTelephony
             )
         }
+    }
+
+    internal fun postIncomingCallFallback(
+        context: Context,
+        callUuid: String,
+        callerName: String,
+        callerAddress: String?,
+        isTelephony: Boolean
+    ) {
+        val notificationId = com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
+            .computeFaceTimeNotificationId(callUuid)
+        com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification.showIncomingCall(
+            context = context,
+            channelId = NotificationChannelHandler.FACETIME_CHANNEL_ID,
+            notificationId = notificationId,
+            callUuid = callUuid,
+            title = callerName.ifBlank { "Incoming FaceTime Audio" },
+            body = "Tap to answer call",
+            isVideo = false,
+            isTelephony = isTelephony,
+            isOngoing = false,
+            callerAddress = callerAddress,
+            callerName = callerName,
+            callerIcon = null,
+            skipTelecomDirect = true
+        )
     }
 
     fun handleDeclineCallFromWatch(context: Context, callUuid: String) {
@@ -508,7 +522,9 @@ object WearSyncManager {
         cancelCallNotifications(context, callUuid)
         com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.endCall(callUuid)
         notifyCallEnded(context, callUuid)
-        com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+        if (!com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService.hasActiveCall()) {
+            com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+        }
         if (com.bluebubbles.messaging.services.telecom.FaceTimeRoutingPolicy.shouldTriggerServerDecline(callUuid)) {
             com.bluebubbles.messaging.services.network.HttpService(context).declineFaceTimeCall(
                 callUuid = callUuid,

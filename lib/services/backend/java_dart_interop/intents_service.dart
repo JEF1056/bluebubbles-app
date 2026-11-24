@@ -192,6 +192,8 @@ class IntentsService {
                 chatGuid: stateMatches ? controller.state.chatGuid : null,
                 isOutgoing: stateMatches ? controller.state.isOutgoing : false,
               );
+            } else if (faceTimeOverlays.containsKey(callUuid)) {
+              hideFaceTimeOverlay(callUuid, keepCallState: true);
             }
             _openInAppCallScreenWithRetry(controller, callUuid);
           } else if (intent.extra?["answer"] == true) {
@@ -202,7 +204,7 @@ class IntentsService {
               caller: callerExtra,
             );
           } else {
-            if (!faceTimeOverlays.containsKey(callUuid) || !stateMatches || !controller.state.isIncoming) {
+            if (controller.state.phase == ActiveCallPhase.idle || !stateMatches) {
               final fallbackLabel = ActiveCallController.callKindLabelFor(
                 isVideo: !isAudio && !isTelephony,
                 isTelephony: isTelephony,

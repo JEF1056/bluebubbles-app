@@ -548,14 +548,19 @@ class NotificationsService {
     return 1.0;
   }
 
-  Future<void> clearFaceTimeNotification(String callUuid, {bool onlyIfRinging = false}) async {
+  Future<void> clearFaceTimeNotification(
+    String callUuid, {
+    bool onlyIfRinging = false,
+    bool endNative = false,
+  }) async {
     if (kIsWeb) {
       stopWebFaceTimeRingtone(callUuid: callUuid);
       await closeWebNotificationsByTag(callUuid);
     } else if (kIsDesktop) {
       await clearDesktopFaceTimeNotif(callUuid);
     } else {
-      if (Platform.isAndroid) {
+      final isAndroid = Platform.isAndroid || defaultTargetPlatform == TargetPlatform.android;
+      if (isAndroid && endNative) {
         await MethodChannelSvc.actions.endFaceTimeCall(
           callUuid: callUuid,
           onlyIfRinging: onlyIfRinging,
@@ -611,7 +616,7 @@ class NotificationsService {
           ? null
           : () async {
               await ActiveCallController.instance.declineCall();
-              hideFaceTimeOverlay(callUuid);
+              hideFaceTimeOverlay(callUuid, endNative: true);
               await clearDesktopFaceTimeNotif(key);
             },
     );

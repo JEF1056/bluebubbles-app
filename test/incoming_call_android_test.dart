@@ -793,4 +793,106 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     }
   });
+
+  testWidgets('IntentsService.handleIntent dedupes duplicate OpenSummary and replaces incoming screen on openCall',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      if (!StartupTasks.uiReady.isCompleted) StartupTasks.uiReady.complete();
+      GetIt.I.registerSingleton<LifecycleService>(LifecycleService());
+
+      await tester.pumpWidget(
+        GetMaterialApp(
+          key: UniqueKey(),
+          home: const Scaffold(body: SizedBox.shrink()),
+        ),
+      );
+      await tester.pump();
+
+      final ctrl = ActiveCallController();
+      addTearDown(ctrl.dispose);
+      final intents = IntentsService()..callControllerOverride = ctrl;
+
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'dup-summary-1',
+            'answer': false,
+            'audioOnly': false,
+            'caller': 'Elena',
+          },
+        ),
+        isInitialIntent: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.incoming);
+      final firstRoute = faceTimeOverlays['dup-summary-1'];
+      final firstActions = faceTimeIncomingActions['dup-summary-1'];
+      expect(firstRoute, isNotNull);
+      expect(find.byType(IncomingFaceTimeScreen), findsOneWidget);
+
+      // Second OpenSummary for the same uuid keeps state == incoming and does not recreate overlay/route.
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'dup-summary-1',
+            'answer': false,
+            'audioOnly': false,
+            'caller': 'Elena',
+          },
+        ),
+        isInitialIntent: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.incoming);
+      expect(identical(faceTimeOverlays['dup-summary-1'], firstRoute), isTrue);
+      expect(identical(faceTimeIncomingActions['dup-summary-1'], firstActions), isTrue);
+      expect(find.byType(IncomingFaceTimeScreen), findsOneWidget);
+
+      // openCall removes the incoming screen and opens a single InAppCallScreen without stacking.
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'dup-summary-1',
+            'openCall': true,
+            'caller': 'Elena',
+          },
+        ),
+        isInitialIntent: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(ctrl.state.phase, ActiveCallPhase.ongoing);
+      expect(faceTimeOverlays.containsKey('dup-summary-1'), isFalse);
+      expect(find.byType(IncomingFaceTimeScreen), findsNothing);
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+
+      // Repeated openCall does not stack a second InAppCallScreen.
+      await intents.handleIntent(
+        const receive_intent.Intent(
+          isNull: false,
+          extra: {
+            'callUuid': 'dup-summary-1',
+            'openCall': true,
+            'caller': 'Elena',
+          },
+        ),
+        isInitialIntent: false,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(find.byType(InAppCallScreen), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }

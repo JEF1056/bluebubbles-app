@@ -381,6 +381,7 @@ class FaceTimeVideoProcessor(
     private var maskFbo: FboTex? = null
 
     private val outputPool = ArrayBlockingQueue<FboTex>(OUTPUT_POOL_SIZE)
+    private val allocatedFbos = hashSetOf<FboTex>()
     private var poolWidth = 0
     private var poolHeight = 0
 
@@ -454,17 +455,29 @@ class FaceTimeVideoProcessor(
             return
         }
 
-        val handler = ensureGlThread() ?: run {
+        val handler = synchronized(this) {
+            if (released) return@synchronized null
+            ensureGlThreadLocked()
+        } ?: run {
             adapted.release()
             return
         }
         var outputFrame: VideoFrame? = null
-        try {
-            ThreadUtils.invokeAtFrontUninterruptibly(handler) {
-                outputFrame = processFrameOnGl(adapted, buffer, currentEffect, currentDenoise)
+        val processed = synchronized(this) {
+            if (released) return@synchronized false
+            try {
+                ThreadUtils.invokeAtFrontUninterruptibly(handler) {
+                    outputFrame = processFrameOnGl(adapted, buffer, currentEffect, currentDenoise)
+                }
+                true
+            } catch (e: Exception) {
+                PersistentLog.w(context, TAG, "GLES processing failed; falling back to passthrough: ${e.message}")
+                false
             }
-        } catch (e: Exception) {
-            PersistentLog.w(context, TAG, "GLES processing failed; falling back to passthrough: ${e.message}")
+        }
+        if (!processed && released) {
+            adapted.release()
+            return
         }
 
         if (outputFrame == null && adapted.rotation != 0) {
@@ -490,14 +503,14 @@ class FaceTimeVideoProcessor(
             thread = glThread
             glThread = null
             glHandler = null
-        }
-        if (handler != null) {
-            try {
-                ThreadUtils.invokeAtFrontUninterruptibly(handler) {
-                    cleanupGl()
-                }
-            } catch (_: Exception) {}
-            thread?.quitSafely()
+            if (handler != null) {
+                try {
+                    ThreadUtils.invokeAtFrontUninterruptibly(handler) {
+                        cleanupGl()
+                    }
+                } catch (_: Exception) {}
+                thread?.quitSafely()
+            }
         }
         try {
             mlExecutor.execute {
@@ -511,25 +524,27 @@ class FaceTimeVideoProcessor(
     }
 
     private fun ensureGlThread(): Handler? {
+        synchronized(this) {
+            return ensureGlThreadLocked()
+        }
+    }
+
+    private fun ensureGlThreadLocked(): Handler? {
         if (released) return null
         glHandler?.let { return it }
-        synchronized(this) {
-            if (released) return null
-            glHandler?.let { return it }
-            val thread = HandlerThread("bb-video-proc-gl").apply { start() }
-            val handler = Handler(thread.looper)
-            ThreadUtils.invokeAtFrontUninterruptibly(handler) {
-                val egl = EglBase.create(sharedEglContext, EglBase.CONFIG_PLAIN)
-                egl.createDummyPbufferSurface()
-                egl.makeCurrent()
-                eglBase = egl
-                yuvConverter = YuvConverter()
-                initPrograms()
-            }
-            glThread = thread
-            glHandler = handler
-            return handler
+        val thread = HandlerThread("bb-video-proc-gl").apply { start() }
+        val handler = Handler(thread.looper)
+        ThreadUtils.invokeAtFrontUninterruptibly(handler) {
+            val egl = EglBase.create(sharedEglContext, EglBase.CONFIG_PLAIN)
+            egl.createDummyPbufferSurface()
+            egl.makeCurrent()
+            eglBase = egl
+            yuvConverter = YuvConverter()
+            initPrograms()
         }
+        glThread = thread
+        glHandler = handler
+        return handler
     }
 
     private fun initPrograms() {
@@ -945,11 +960,36 @@ class FaceTimeVideoProcessor(
         bmp.recycle()
     }
 
+    private fun decodeSampledBitmap(path: String, maxDim: Int = 1920): Bitmap? {
+        return try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, options)
+            val w = options.outWidth
+            val h = options.outHeight
+            if (w <= 0 || h <= 0) return null
+
+            var inSampleSize = 1
+            var curW = w
+            var curH = h
+            while (curW > maxDim || curH > maxDim) {
+                inSampleSize *= 2
+                curW /= 2
+                curH /= 2
+            }
+            val decodeOptions = BitmapFactory.Options().apply {
+                this.inSampleSize = inSampleSize
+            }
+            BitmapFactory.decodeFile(path, decodeOptions)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun loadBackgroundBitmap(pathOrPreset: String?): Bitmap {
         if (!pathOrPreset.isNullOrBlank()) {
             val file = File(pathOrPreset)
             if (file.exists() && file.isFile) {
-                BitmapFactory.decodeFile(file.absolutePath)?.let { return it }
+                decodeSampledBitmap(file.absolutePath, 1920)?.let { return it }
             }
         }
         // Built-in gradient presets (matches FaceTimeBackgroundPreset ids)
@@ -1046,10 +1086,13 @@ class FaceTimeVideoProcessor(
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbos[0])
         GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, tex, 0)
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
-        return FboTex(fbos[0], tex, w, h)
+        val fbo = FboTex(fbos[0], tex, w, h)
+        allocatedFbos.add(fbo)
+        return fbo
     }
 
     private fun deleteFbo(fboTex: FboTex) {
+        allocatedFbos.remove(fboTex)
         GLES20.glDeleteFramebuffers(1, intArrayOf(fboTex.fbo), 0)
         GLES20.glDeleteTextures(1, intArrayOf(fboTex.tex), 0)
     }
@@ -1118,10 +1161,12 @@ class FaceTimeVideoProcessor(
             blurUp2?.let(::deleteFbo); blurUp2 = null
             blurUp1?.let(::deleteFbo); blurUp1 = null
             maskFbo?.let(::deleteFbo); maskFbo = null
-            while (true) {
-                val slot = outputPool.poll() ?: break
+            outputPool.clear()
+            val remainingFbos = allocatedFbos.toList()
+            for (slot in remainingFbos) {
                 deleteFbo(slot)
             }
+            allocatedFbos.clear()
             if (maskTexId != 0) {
                 GLES20.glDeleteTextures(1, intArrayOf(maskTexId), 0)
                 maskTexId = 0

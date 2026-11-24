@@ -992,6 +992,75 @@ void main() {
       expect(launchedLinks, isEmpty);
       expect(errors, isEmpty);
     });
+
+    test('ignores incoming events for different UUID during active local call and guards answerCall re-entrancy + post-telecom cancellation', () async {
+      final controller = ActiveCallController(
+        isWebOverride: false,
+        deviceId: 'and-1',
+        deviceName: 'Pixel',
+      );
+      addTearDown(controller.dispose);
+
+      // P1 #4: startIncoming & applyServerSession ignore incoming for another UUID while local call is ongoing.
+      controller.startOngoing(
+        callUuid: 'call-a',
+        callerName: 'Alice',
+        isVideo: true,
+        activeDeviceId: 'and-1',
+      );
+      controller.startIncoming(
+        callUuid: 'call-b',
+        callerName: 'Bob',
+        isVideo: false,
+      );
+      expect(controller.state.callUuid, 'call-a');
+      expect(controller.state.phase, ActiveCallPhase.ongoing);
+
+      controller.applyServerSession({
+        'call_uuid': 'call-b',
+        'status': 'incoming',
+        'display_name': 'Bob',
+        'is_video': false,
+      });
+      expect(controller.state.callUuid, 'call-a');
+      expect(controller.state.phase, ActiveCallPhase.ongoing);
+
+      // P1 #7: answerCall re-entrancy guard + post-_startTelecomCall idle/uuid guard.
+      final telecomCompleter = Completer<bool>();
+      var telecomCalls = 0;
+      final telecomController = ActiveCallController(
+        isWebOverride: false,
+        deviceId: 'and-1',
+        deviceName: 'Pixel',
+        onStartTelecomCall: ({
+          required String callUuid,
+          required String callerName,
+          String? callerAddress,
+          bool isTelephony = false,
+          bool isVideo = false,
+        }) {
+          telecomCalls++;
+          return telecomCompleter.future;
+        },
+      );
+      addTearDown(telecomController.dispose);
+
+      telecomController.startIncoming(
+        callUuid: 'call-c',
+        callerName: 'Charlie',
+        isVideo: true,
+      );
+      final firstAnswer = telecomController.answerCall();
+      final secondAnswer = telecomController.answerCall();
+      expect(await secondAnswer, isFalse);
+      expect(telecomCalls, 1);
+
+      // Cancel mid-_startTelecomCall and then complete telecom routing as true.
+      telecomController.clear();
+      telecomCompleter.complete(true);
+      expect(await firstAnswer, isFalse);
+      expect(telecomController.state.phase, ActiveCallPhase.idle);
+    });
   });
 
   group('facetime_call.dart continuity visibility', () {
@@ -1106,6 +1175,55 @@ void main() {
 
       expect(client.isActive, isTrue);
       expect(client.activeCallUuid, 'reconnect-uuid-1');
+    });
+
+    test('does not wipe native video textures or cameraEnabled on non-web lifecycle resume', () async {
+      final controller = ActiveCallController(
+        deviceId: 'android-1',
+        deviceName: 'Pixel 10',
+      );
+      addTearDown(controller.dispose);
+
+      controller.notifyTelecomActive('native-resume-1', isVideo: true);
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'video-texture',
+        'call_uuid': 'native-resume-1',
+        'texture_id': 11,
+        'width': 1080,
+        'height': 1920,
+      });
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'local-video-texture',
+        'call_uuid': 'native-resume-1',
+        'texture_id': 12,
+        'width': 1080,
+        'height': 1920,
+        'camera_enabled': true,
+      });
+
+      expect(controller.remoteVideoWidget.value, isNotNull);
+      expect(controller.localVideoWidget.value, isNotNull);
+      expect(controller.cameraEnabled.value, isTrue);
+
+      final portraitBox = controller.remoteVideoWidget.value as FittedBox;
+      expect(portraitBox.fit, BoxFit.cover);
+
+      controller.handleFacetimeCallState(<String, dynamic>{
+        'phase': 'video-texture',
+        'call_uuid': 'native-resume-1',
+        'texture_id': 11,
+        'width': 1920,
+        'height': 1080,
+      });
+      final landscapeBox = controller.remoteVideoWidget.value as FittedBox;
+      expect(landscapeBox.fit, BoxFit.contain);
+
+      controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.remoteVideoWidget.value, isNotNull);
+      expect(controller.localVideoWidget.value, isNotNull);
+      expect(controller.cameraEnabled.value, isTrue);
     });
 
     test('toggles voice isolation and sets video processing on media adapter', () async {

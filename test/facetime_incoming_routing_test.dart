@@ -90,7 +90,7 @@ class _FakeNotificationsService extends NotificationsService {
   }
 
   @override
-  Future<void> clearFaceTimeNotification(String callUuid, {bool onlyIfRinging = false}) async {
+  Future<void> clearFaceTimeNotification(String callUuid, {bool onlyIfRinging = false, bool endNative = false}) async {
     clearedUuids.add(callUuid);
   }
 
@@ -321,5 +321,36 @@ void main() {
       'handle': {'address': '+15551234567'},
     });
     expect(notifications.missedCalls, hasLength(1));
+  });
+
+  test('duplicate incoming FaceTime event keeps incoming state and does not recreate overlay', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    lifecycle.foregroundValue = true;
+    notifications.telecomResult = false;
+
+    final handler = ActionHandler();
+    await handler.handleIncomingFaceTimeCall({
+      'uuid': 'ft-dup-1',
+      'is_video': true,
+      'handle': {'address': '+15551234567'},
+      'address': '+15551234567',
+    });
+
+    expect(ActiveCallController.instance.state.phase, ActiveCallPhase.incoming);
+    final initialActions = faceTimeIncomingActions['ft-dup-1'];
+    expect(initialActions, isNotNull);
+
+    // Duplicate arrival via ft-call-status-changed (status_id=4) preserves incoming state and existing overlay actions.
+    await handler.handleFaceTimeStatusChange({
+      'uuid': 'ft-dup-1',
+      'status_id': 4,
+      'is_video': true,
+      'handle': {'address': '+15551234567'},
+    });
+
+    expect(ActiveCallController.instance.state.phase, ActiveCallPhase.incoming);
+    expect(ActiveCallController.instance.state.callUuid, 'ft-dup-1');
+    expect(identical(faceTimeIncomingActions['ft-dup-1'], initialActions), isTrue);
+    expect(faceTimeOverlays.containsKey('ft-dup-1'), isTrue);
   });
 }

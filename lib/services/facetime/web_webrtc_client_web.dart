@@ -645,14 +645,20 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
 
     final wantsProcessing = effect != FaceTimeVideoEffectType.none || denoise;
     if (!wantsProcessing) {
-      if (_videoProcessorSession != null) {
-        await sender.replaceTrack(rawVideo).toDart;
-        _updateLocalPreviewTrack(rawVideo);
-        try {
-          _videoProcessorSession!.callMethod<JSAny?>('dispose'.toJS);
-        } catch (_) {}
+      final session = _videoProcessorSession;
+      if (session != null) {
         _videoProcessorSession = null;
         _processedVideoTrack = null;
+        try {
+          await sender.replaceTrack(rawVideo).toDart;
+          if (!_closed) {
+            _updateLocalPreviewTrack(rawVideo);
+          }
+        } finally {
+          try {
+            session.callMethod<JSAny?>('dispose'.toJS);
+          } catch (_) {}
+        }
       }
       return;
     }

@@ -136,10 +136,14 @@ object CallNotificationHelper {
     internal suspend fun tryAnswerCallAudio(
         callUuid: String,
         isTelephony: Boolean,
+        fromPhoneRelay: Boolean = false,
         relayAnswer: suspend () -> Boolean,
         standaloneAnswer: suspend (String) -> Boolean
     ): Boolean {
         if (relayAnswer()) return true
+        if (fromPhoneRelay) {
+            return relayAnswer()
+        }
         if (isTelephony) return false
         return standaloneAnswer(callUuid)
     }
@@ -314,9 +318,7 @@ object CallNotificationHelper {
         val accepted = synchronized(callStateLock) {
             pruneRecentlyEndedLocked(System.currentTimeMillis())
             val current = _activeCallState.value
-            if (recentlyEndedCalls.containsKey(callUuid) ||
-                (current != null && current.callUuid == callUuid && current.phase == CallPhase.ONGOING)
-            ) {
+            if (!shouldAcceptIncomingCall(current, callUuid, recentlyEndedCalls.containsKey(callUuid))) {
                 false
             } else {
                 callEpoch.incrementAndGet()
@@ -429,15 +431,17 @@ object CallNotificationHelper {
         }
         val app = appContext as? WearBubblesApp
         val isTelephony = current?.isTelephony == true
+        val fromPhoneRelay = current?.fromPhoneRelay == true
 
         var answeredViaPhone = false
         val answered = tryAnswerCallAudio(
             callUuid = callUuid,
             isTelephony = isTelephony,
+            fromPhoneRelay = fromPhoneRelay,
             relayAnswer = {
                 val ok = when {
                     relayAnswer != null -> relayAnswer(current)
-                    app != null && (current?.fromPhoneRelay == true || app.phoneRelayClient.refreshPhoneConnected()) ->
+                    app != null && (fromPhoneRelay || app.phoneRelayClient.refreshPhoneConnected()) ->
                         app.phoneRelayClient.sendAnswerCallAudioAwait(
                             callUuid = callUuid,
                             callerName = current?.callerName,
@@ -607,14 +611,19 @@ object CallNotificationHelper {
 
     suspend fun toggleMute(context: Context, callUuid: String): Boolean = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
-        val current = _activeCallState.value ?: return@withContext false
-        if (current.callUuid != callUuid || current.phase != CallPhase.ONGOING) return@withContext false
+        val (current, updated) = synchronized(callStateLock) {
+            val curr = _activeCallState.value ?: return@synchronized null
+            if (curr.callUuid != callUuid || curr.phase != CallPhase.ONGOING) return@synchronized null
 
-        val targetMuted = !current.muted
-        val updated = current.copy(muted = targetMuted)
-        _activeCallState.value = updated
+            val targetMuted = !curr.muted
+            val upd = curr.copy(muted = targetMuted)
+            _activeCallState.value = upd
+            curr to upd
+        } ?: return@withContext false
+
         postOngoingCallNotification(appContext, updated)
 
+        val targetMuted = updated.muted
         val app = appContext as? WearBubblesApp
         val sent = if (app != null && (current.fromPhoneRelay || app.phoneRelayClient.refreshPhoneConnected())) {
             app.phoneRelayClient.sendSetCallMutedAwait(callUuid, targetMuted)
@@ -623,14 +632,31 @@ object CallNotificationHelper {
         }
         if (!sent) {
             Log.w(TAG, "Failed to relay mute=$targetMuted for $callUuid; reverting optimistic state")
-            val latest = _activeCallState.value
-            if (latest != null && latest.callUuid == callUuid && latest.muted == targetMuted) {
-                val reverted = latest.copy(muted = current.muted)
-                _activeCallState.value = reverted
+            val reverted = synchronized(callStateLock) {
+                val latest = _activeCallState.value
+                if (latest != null && latest.callUuid == callUuid && latest.muted == targetMuted) {
+                    val rev = latest.copy(muted = current.muted)
+                    _activeCallState.value = rev
+                    rev
+                } else {
+                    null
+                }
+            }
+            if (reverted != null) {
                 postOngoingCallNotification(appContext, reverted)
             }
         }
         sent
+    }
+
+    internal fun shouldAcceptIncomingCall(
+        current: ActiveCallState?,
+        callUuid: String,
+        isRecentlyEnded: Boolean
+    ): Boolean {
+        if (isRecentlyEnded) return false
+        if (current != null && current.phase == CallPhase.ONGOING) return false
+        return true
     }
 
     internal suspend fun tryTransferCallToPhone(

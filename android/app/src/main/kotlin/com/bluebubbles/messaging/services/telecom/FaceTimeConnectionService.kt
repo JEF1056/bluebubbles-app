@@ -64,6 +64,7 @@ class FaceTimeConnectionService : ConnectionService() {
             }
             replacedConnection?.disconnectReplaced()
             if (shouldDisconnect) {
+                android.util.Log.w(TAG, "registerActiveConnection: disconnecting $callUuid because it was found in pendingEndedUuids")
                 connection.onRemoteDisconnect()
             } else if (shouldAnswer) {
                 connection.onRemoteAnswered()
@@ -79,6 +80,10 @@ class FaceTimeConnectionService : ConnectionService() {
         internal fun getActiveConnection(callUuid: String): FaceTimeConnection? {
             if (callUuid.isBlank()) return null
             return activeConnections[callUuid]
+        }
+
+        fun hasActiveCall(): Boolean {
+            return activeConnections.values.any { it.state != Connection.STATE_DISCONNECTED }
         }
 
         fun markCallActive(callUuid: String, recordIfPending: Boolean = false): Boolean {
@@ -402,6 +407,14 @@ class FaceTimeConnectionService : ConnectionService() {
             isVideo: Boolean = false
         ): Boolean {
             if (callUuid.isBlank()) return false
+            if (isCallPendingEnded(callUuid)) {
+                PersistentLog.w(
+                    context,
+                    TAG,
+                    "addIncomingCall called for $callUuid, but call is already in pendingEndedUuids; ignoring"
+                )
+                return false
+            }
             val existing = activeConnections[callUuid]
             if (existing != null && existing.state != Connection.STATE_DISCONNECTED) {
                 if (callerAvatar != null && callerAvatar.isNotEmpty()) {
@@ -435,6 +448,7 @@ class FaceTimeConnectionService : ConnectionService() {
                 telecomManager.addNewIncomingCall(handle, extras)
                 true
             } catch (e: Exception) {
+                pendingIncomingAvatars.remove(callUuid)
                 PersistentLog.e(context, TAG, "addNewIncomingCall failed for $callUuid", e)
                 false
             }
@@ -482,6 +496,9 @@ class FaceTimeConnectionService : ConnectionService() {
                 telecomManager.placeCall(uri, extras)
                 true
             } catch (e: Exception) {
+                if (!address.isNullOrBlank()) {
+                    pendingOutgoingAvatars.remove(address)
+                }
                 PersistentLog.e(context, TAG, "placeCall failed for $address", e)
                 false
             }
@@ -496,8 +513,8 @@ class FaceTimeConnectionService : ConnectionService() {
         val callUuid = extras.getString(EXTRA_CALL_UUID)
         val callerName = extras.getString(EXTRA_CALLER_NAME) ?: "Unknown Caller"
         val callerAddress = extras.getString(EXTRA_CALLER_ADDRESS)
-        val callerAvatar = extras.getByteArray(EXTRA_CALLER_AVATAR)
-            ?: (if (!callUuid.isNullOrBlank()) pendingIncomingAvatars.remove(callUuid) else null)
+        val pendingAvatar = if (!callUuid.isNullOrBlank()) pendingIncomingAvatars.remove(callUuid) else null
+        val callerAvatar = extras.getByteArray(EXTRA_CALLER_AVATAR) ?: pendingAvatar
         val autoAnswer = extras.getBoolean(EXTRA_AUTO_ANSWER, false)
         val isTelephony = extras.getBoolean(EXTRA_IS_TELEPHONY, false)
         val isVideo = !isTelephony && extras.getBoolean(EXTRA_IS_VIDEO, false)
@@ -552,6 +569,9 @@ class FaceTimeConnectionService : ConnectionService() {
         request: ConnectionRequest?
     ) {
         val callUuid = request?.extras?.getString(EXTRA_CALL_UUID)
+        if (!callUuid.isNullOrBlank()) {
+            pendingIncomingAvatars.remove(callUuid)
+        }
         PersistentLog.e(applicationContext, TAG, "onCreateIncomingConnectionFailed: $callUuid")
         if (!callUuid.isNullOrBlank()) {
             WearSyncManager.notifyCallEnded(applicationContext, callUuid)
@@ -568,8 +588,8 @@ class FaceTimeConnectionService : ConnectionService() {
             ?: request?.address?.schemeSpecificPart
             ?: ""
         val callerName = extras.getString(EXTRA_CALLER_NAME) ?: address
-        val callerAvatar = extras.getByteArray(EXTRA_CALLER_AVATAR)
-            ?: (if (address.isNotBlank()) pendingOutgoingAvatars.remove(address) else null)
+        val pendingAvatar = if (address.isNotBlank()) pendingOutgoingAvatars.remove(address) else null
+        val callerAvatar = extras.getByteArray(EXTRA_CALLER_AVATAR) ?: pendingAvatar
         val isTelephony = extras.getBoolean(EXTRA_IS_TELEPHONY, false)
         val isVideo = !isTelephony && extras.getBoolean(EXTRA_IS_VIDEO, false)
 
@@ -633,6 +653,12 @@ class FaceTimeConnectionService : ConnectionService() {
         connectionManagerPhoneAccount: PhoneAccountHandle?,
         request: ConnectionRequest?
     ) {
+        val rawExtras = request?.extras ?: Bundle()
+        val extras = rawExtras.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS) ?: rawExtras
+        val address = extras.getString(EXTRA_CALLER_ADDRESS) ?: request?.address?.schemeSpecificPart
+        if (!address.isNullOrBlank()) {
+            pendingOutgoingAvatars.remove(address)
+        }
         PersistentLog.e(applicationContext, TAG, "onCreateOutgoingConnectionFailed: ${request?.address}")
     }
 }

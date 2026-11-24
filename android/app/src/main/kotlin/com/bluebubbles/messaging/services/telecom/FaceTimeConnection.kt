@@ -16,6 +16,7 @@ import android.telecom.CallEndpointException
 import android.telecom.Connection
 import android.telecom.DisconnectCause
 import android.telecom.TelecomManager
+import android.telecom.VideoProfile
 import androidx.core.content.ContextCompat
 import com.bluebubbles.messaging.services.network.HttpService
 import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
@@ -149,6 +150,9 @@ class FaceTimeConnection(
     private val audioBridgeLock = Any()
     val isEnded: Boolean
         get() = ended.get()
+
+    val isDisconnected: Boolean
+        get() = ended.get() || state == STATE_DISCONNECTED
 
     @Volatile
     private var webRtcClient: WebRtcAudioClient? = null
@@ -529,8 +533,24 @@ class FaceTimeConnection(
         )
     }
 
+    override fun onAnswer(videoState: Int) {
+        val wasActive = state == STATE_ACTIVE
+        val isVideoUpgrade = wasActive && !isVideo && (
+            videoState == VideoProfile.STATE_BIDIRECTIONAL ||
+            videoState == VideoProfile.STATE_TX_ENABLED ||
+            videoState == VideoProfile.STATE_RX_ENABLED
+        )
+        if (wasActive && !isVideoUpgrade) return
+        if (isDisconnected) return
+        if (isVideoUpgrade) {
+            updateCallerInfo(isVideo = true)
+            return
+        }
+        super.onAnswer(videoState)
+    }
+
     override fun onAnswer() {
-        if (ended.get()) return
+        if (state == STATE_ACTIVE || isDisconnected) return
         mainHandler.removeCallbacks(ringingTimeoutRunnable)
         CallTonePlayer.stopIncomingRing(callUuid)
         PersistentLog.d(context, TAG, "onAnswer for $callUuid")
@@ -859,7 +879,9 @@ class FaceTimeConnection(
             emitCallState("ended", uuid)
             com.bluebubbles.messaging.services.wear.WearSyncManager.notifyCallEnded(context, uuid)
         }
-        com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+        if (!FaceTimeConnectionService.hasActiveCall()) {
+            com.bluebubbles.messaging.MainActivity.clearCallLockScreenFlags()
+        }
         setDisconnected(cause)
         if (onUuid != null && !uuid.isNullOrBlank()) {
             // Keep ConnectionService bound briefly until leave/decline HTTP completes or times out.

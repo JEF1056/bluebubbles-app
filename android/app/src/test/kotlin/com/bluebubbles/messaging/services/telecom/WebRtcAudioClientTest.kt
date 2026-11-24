@@ -265,20 +265,24 @@ class WebRtcAudioClientTest {
         val sup = AdaptiveUplinkSupervisor()
         assertEquals(1920, sup.currentRung.width)
 
-        assertNull(sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 1_000L))
-        val dropped = sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 3_000L)
+        // Warmup (first 7 samples) ignores transient startup BWE ramp
+        for (i in 0 until 7) {
+            assertNull(sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 1_000L + i * 2_000L))
+        }
+
+        // Post-warmup: 2 consecutive loss samples trigger step-down
+        assertNull(sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 15_000L))
+        val dropped = sup.recordSample(lossFraction = 0.12, limited = false, nowMs = 17_000L)
         assertNotNull(dropped)
         assertEquals(1280, dropped!!.width)
 
-        // Cooldown (8s) blocks step-up even with 3 good samples
-        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 5_000L))
-        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 7_000L))
-        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 9_000L))
+        // Cooldown (4s) blocks step-up even with 2 good samples
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 18_000L))
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 20_000L))
 
-        // After 8s cooldown, 3 good samples promote back to 1080p
-        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 12_000L))
-        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 14_000L))
-        val promoted = sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 16_000L)
+        // After 4s cooldown, 2 good samples promote back to 1080p
+        assertNull(sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 22_000L))
+        val promoted = sup.recordSample(lossFraction = 0.0, limited = false, nowMs = 24_000L)
         assertNotNull(promoted)
         assertEquals(1920, promoted!!.width)
     }

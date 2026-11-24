@@ -4,6 +4,7 @@ import android.telecom.Connection
 import android.telecom.PhoneAccount
 import com.bluebubbles.messaging.services.network.HttpService
 import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -453,5 +454,27 @@ class FaceTimeRoutingTest {
         )
         assertEquals(false, telephonyPayload["is_video"])
         assertFalse(telephonyPayload.containsKey("caller_name"))
+    }
+
+    @Test
+    fun `isCallPendingEnded tracks pending ended state correctly`() {
+        val callUuid = "test-pending-ended-routing-uuid"
+        assertFalse(FaceTimeConnectionService.isCallPendingEnded(callUuid))
+        FaceTimeConnectionService.endCall(callUuid, onlyIfRinging = false, recordIfPending = true)
+        assertTrue(FaceTimeConnectionService.isCallPendingEnded(callUuid))
+    }
+
+    @Test
+    fun `hasActiveCall returns false when no active connections`() {
+        assertFalse(FaceTimeConnectionService.hasActiveCall())
+    }
+
+    @Test
+    fun `watchAnsweredCalls tracks and rolls back call registration`() {
+        val uuid = "watch-answer-rollback-uuid"
+        WearSyncManager.markWatchAnsweredCall(uuid)
+        assertTrue(WearSyncManager.isWatchAnsweredCall(uuid))
+        WearSyncManager.clearWatchAnsweredCall(uuid)
+        assertFalse(WearSyncManager.isWatchAnsweredCall(uuid))
     }
 }
