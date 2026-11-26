@@ -79,8 +79,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
   late final MessageAnimationOrchestrator animationOrchestrator;
 
   RxMap<String, Widget> quickActions = <String, Widget>{}.obs;
-  final RxBool latestMessageDeliveredState = false.obs;
-  final RxBool jumpingToOldestUnread = false.obs;
 
   ConversationViewController get controller => widget.controller;
   AutoScrollController get scrollController => controller.scrollController;
@@ -136,10 +134,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     });
 
     () async {
-      if (chat.isIMessage && !chat.isGroup) {
-        getFocusState();
-      }
-
       // Only load if not already initialized from customService
       if (!handlersInitialized) {
         // Get or create the service
@@ -210,20 +204,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
         if (!(_messages.firstOrNull?.isFromMe ?? true)) {
           updateReplies();
         }
-        final jumpTargetGuid = controller.unreadDividerGuid.value ?? chat.lastReadMessageGuid;
-        if (SettingsSvc.settings.scrollToLastUnread.value && jumpTargetGuid != null) {
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (!mounted) return;
-            if (messageService.getMessageStateIfExists(jumpTargetGuid)?.built ?? false) return;
-            quickActions['scroll-last-read'] = _buildQuickAction("Jump to oldest unread", onTap: () async {
-              if (jumpingToOldestUnread.value) return;
-              jumpingToOldestUnread.value = true;
-              await jumpToMessage(jumpTargetGuid);
-              quickActions.remove('scroll-last-read');
-              jumpingToOldestUnread.value = false;
-            });
-          });
-        }
       });
     }();
   }
@@ -291,20 +271,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
 
     if (!mounted) return;
     await jumpToMessage(guid);
-  }
-
-  void getFocusState() {
-    if (!SettingsSvc.serverDetails.isMinMonterey) return;
-    final recipient = chat.handles.firstOrNull;
-    if (recipient != null) {
-      HttpSvc.handle.handleFocusState(recipient.address).then((response) {
-        if (!mounted) return;
-        final status = response.data['data']['status'];
-        controller.recipientNotifsSilenced.value = status != "none";
-      }).catchError((error, stack) async {
-        Logger.error('Failed to get focus state!', error: error, trace: stack);
-      });
-    }
   }
 
   Future<void> jumpToMessage(String guid) async {
@@ -563,9 +529,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
     } else {
       Logger.warn("handleUpdatedMessage: Message ${oldGuid ?? message.guid} not found in list");
     }
-    if (message.wasDeliveredQuietly != latestMessageDeliveredState.value) {
-      latestMessageDeliveredState.value = message.wasDeliveredQuietly;
-    }
   }
 
   /// Deliberately NOT routed through [ConversationViewController.messageListGate].
@@ -648,16 +611,14 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 1.5, left: 13.0, right: 13.0),
-                  child: Obx(() => RichText(
-                        text: TextSpan(
-                          children: MessageHelper.buildEmojiText(
-                            jumpingToOldestUnread.value && text == "Jump to oldest unread"
-                                ? "Jumping to oldest unread..."
-                                : text,
-                            theme.extension<BubbleText>()!.bubbleText,
-                          ),
-                        ),
-                      )),
+                  child: RichText(
+                    text: TextSpan(
+                      children: MessageHelper.buildEmojiText(
+                        text,
+                        theme.extension<BubbleText>()!.bubbleText,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -701,13 +662,6 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
               quickActions: quickActions,
             ),
           ),
-          if (!chat.isGroup && chat.isIMessage)
-            SliverToBoxAdapter(
-              child: NotificationsSilencedBanner(
-                controller: controller,
-                latestMessage: _messages.firstOrNull,
-              ),
-            ),
           SliverToBoxAdapter(
             child: TypingIndicatorRow(
               controller: controller,
@@ -760,12 +714,12 @@ class MessagesViewState extends State<MessagesView> with MessagesServiceMixin, T
                           key: ValueKey("$messageId-scrolling"),
                           index: index,
                           controller: scrollController,
-                          highlightColor: context.theme.colorScheme.surface.withValues(alpha: 0.7),
-                          child: MessageHolder(
+                          builder: (context, highlight) => MessageHolder(
                             cvController: controller,
                             message: message,
                             oldMessage: olderMessage,
                             newMessage: newerMessage,
+                            highlightAnimation: highlight,
                           ),
                         ),
                       ),

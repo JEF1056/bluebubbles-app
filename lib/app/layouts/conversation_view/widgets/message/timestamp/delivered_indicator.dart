@@ -35,6 +35,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
   // but stays true for at least _sendingMinDisplayMs after sending ends so the
   // "Sending..." label outlives the send animation (~650 ms total).
   bool _isSendingDisplayed = false;
+  bool _notifyingAnyway = false;
   Timer? _sendingTimer;
   Worker? _isSendingWorker;
   late final RelativeTimestampTicker _ticker;
@@ -208,6 +209,61 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
     DateTime? timestamp,
   }) _materialStatus(bool hasBackground) => _resolveStatus(material: true, hasBackground: hasBackground);
 
+  bool get _canNotifyAnyway =>
+      !_isGroup &&
+      (message.isFromMe ?? false) &&
+      message.guid != null &&
+      (controller.dateRead.value ?? message.dateRead) == null &&
+      controller.wasDeliveredQuietly.value &&
+      !controller.didNotifyRecipient.value &&
+      (controller.showDeliveredIndicator.value || widget.forceShow);
+
+  Future<void> _onNotifyAnyway() async {
+    final guid = message.guid;
+    if (_notifyingAnyway || guid == null) return;
+    setState(() => _notifyingAnyway = true);
+    try {
+      await HttpSvc.message.notify(guid);
+      controller.updateDidNotifyRecipientInternal(true);
+    } catch (e) {
+      showSnackbar("Error", "Failed to notify recipient: $e", type: SnackbarType.error);
+    } finally {
+      if (mounted) setState(() => _notifyingAnyway = false);
+    }
+  }
+
+  Widget? _buildNotifyAnywayControl({required bool material, required bool hasBackground}) {
+    if (!_canNotifyAnyway) return null;
+    final fallbackColor = material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
+    final baseStyle = WallpaperContrast.unbubbledStyle(
+      material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!,
+      hasWallpaper: hasBackground,
+      fallbackColor: fallbackColor,
+    );
+    return BlurFadeSwitcher(
+      alignment: AlignmentDirectional.centerEnd,
+      animateSize: true,
+      child: _notifyingAnyway
+          ? Text(
+              "Notifying…",
+              key: const ValueKey('notifying_anyway'),
+              style: baseStyle.copyWith(fontWeight: FontWeight.normal),
+            )
+          : MouseRegion(
+              key: const ValueKey('notify_anyway'),
+              cursor: SystemMouseCursors.click,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _onNotifyAnyway,
+                child: Text(
+                  "Notify Anyway",
+                  style: baseStyle.copyWith(fontWeight: material ? FontWeight.w500 : FontWeight.w600),
+                ),
+              ),
+            ),
+    );
+  }
+
   Widget? _buildTranslationControl({required bool material, required bool hasBackground}) {
     if (!_hasTranslationIndicator) return null;
     final fallbackColor = material ? context.theme.colorScheme.onSurfaceVariant : context.theme.colorScheme.outline;
@@ -286,6 +342,8 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         controller.translation.value;
         controller.showOriginalTranslation.value;
         controller.isTranslating.value;
+        controller.wasDeliveredQuietly.value;
+        controller.didNotifyRecipient.value;
         final isRelative = SettingsSvc.settings.skin.value != Skins.iOS;
         if (!shouldShow) {
           _ticker.sync(null, isRelative: false);
@@ -305,6 +363,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         }
 
         final translationWidget = _buildTranslationControl(material: material, hasBackground: hasBackground);
+        final actionWidget = translationWidget ?? _buildNotifyAnywayControl(material: material, hasBackground: hasBackground);
         final sepStyle = WallpaperContrast.unbubbledStyle(
           material ? context.theme.textTheme.bodySmall! : context.theme.textTheme.labelSmall!,
           hasWallpaper: hasBackground,
@@ -312,16 +371,16 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         );
 
         Widget buildFooter(Widget? statusWidget) {
-          if (statusWidget == null) return translationWidget!;
-          if (translationWidget == null) return statusWidget;
+          if (statusWidget == null) return actionWidget!;
+          if (actionWidget == null) return statusWidget;
           if (Theme.of(context).platform == TargetPlatform.android) {
             return Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: (message.isFromMe ?? false) ? CrossAxisAlignment.end : CrossAxisAlignment.start,
               children: [
                 statusWidget,
                 const SizedBox(height: 1),
-                translationWidget,
+                actionWidget,
               ],
             );
           }
@@ -330,7 +389,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
             children: [
               statusWidget,
               Text(" · ", style: sepStyle),
-              translationWidget,
+              actionWidget,
             ],
           );
         }
@@ -340,7 +399,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
           _ticker.sync(status.timestamp, isRelative: isRelative);
           final hasIcon = status.icon != null || status.gmsgKind != null;
           final hasStatus = hasIcon || status.spans.isNotEmpty;
-          if (!hasStatus && translationWidget == null) {
+          if (!hasStatus && actionWidget == null) {
             return const SizedBox.shrink();
           }
           return Padding(
@@ -393,7 +452,7 @@ class _DeliveredIndicatorState extends State<DeliveredIndicator> with ThemeHelpe
         final status = _resolveStatus(material: false, hasBackground: hasBackground);
         _ticker.sync(status.timestamp, isRelative: isRelative);
         final spans = status.spans;
-        if (spans.isEmpty && translationWidget == null) {
+        if (spans.isEmpty && actionWidget == null) {
           return const SizedBox.shrink();
         }
         return Padding(

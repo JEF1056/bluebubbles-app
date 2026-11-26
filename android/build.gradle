@@ -17,6 +17,17 @@ subprojects {
 subprojects {
     project.evaluationDependsOn(':app')
 }
+subprojects {
+    if (project.name != 'app') {
+        afterEvaluate { project ->
+            if (project.hasProperty('android') && project.android.hasProperty('compileSdk')) {
+                if ((project.android.compileSdk ?: 0) < 37) {
+                    project.android.compileSdk = 37
+                }
+            }
+        }
+    }
+}
 
 tasks.register("clean", Delete) {
     delete rootProject.layout.buildDirectory

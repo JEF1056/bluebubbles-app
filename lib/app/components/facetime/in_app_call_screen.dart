@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
-import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
 import 'package:bluebubbles/app/components/facetime/active_call_controller.dart';
 import 'package:bluebubbles/app/components/facetime/call_controls.dart';
 import 'package:bluebubbles/app/components/facetime/facetime_tokens.dart';
@@ -2419,44 +2418,89 @@ class _AudioRouteSheet extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               if (controller.wearWatchConnected) ...[
-                Material(
-                  color: FaceTimePalette.darkElevated,
-                  borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
-                  child: InkWell(
-                    key: const ValueKey('audio-sheet-transfer-watch'),
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      unawaited(controller.transferCallToWatch());
-                    },
-                    borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 48),
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        child: Row(
-                          children: [
-                            WatchTransferIcon(
-                              size: 22,
-                              color: FaceTimePalette.blueDark,
-                            ),
-                            SizedBox(width: 14),
-                            Expanded(
-                              child: Text(
-                                'Transfer to Watch',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: FaceTimePalette.onCanvas,
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          ],
+                ListenableBuilder(
+                  listenable: controller,
+                  builder: (context, _) {
+                    final onWatch = controller.audioOnWatch.value;
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: FaceTimePalette.darkElevated,
+                        borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
+                        border: Border.all(
+                          color: onWatch
+                              ? FaceTimePalette.blueDark.withValues(alpha: 0.7)
+                              : Colors.white.withValues(alpha: 0.08),
+                          width: 1,
                         ),
                       ),
-                    ),
-                  ),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          key: const ValueKey('audio-sheet-transfer-watch'),
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            unawaited(
+                              onWatch
+                                  ? controller.transferCallToPhone()
+                                  : controller.transferCallToWatch(),
+                            );
+                          },
+                          borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 56),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                              child: Row(
+                                children: [
+                                  if (onWatch)
+                                    const PhoneTransferIcon(
+                                      size: 22,
+                                      color: FaceTimePalette.blueDark,
+                                    )
+                                  else
+                                    const WatchTransferIcon(
+                                      size: 22,
+                                      color: FaceTimePalette.blueDark,
+                                    ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          onWatch ? 'Audio on Pixel Watch' : 'Transfer to Watch',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: FaceTimePalette.onCanvas,
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          onWatch
+                                              ? 'Tap to return audio to phone'
+                                              : 'Route call audio & controls to Pixel Watch',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: FaceTimePalette.secondaryText,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
                 const SizedBox(height: 10),
               ],
@@ -2601,109 +2645,148 @@ class _VideoEffectsSheet extends StatelessWidget {
       child: AnimatedBuilder(
         animation: controller,
         builder: (context, _) {
-        final denoise = controller.videoDenoiseEnabled.value;
-        final effect = controller.videoEffect.value;
-        final bgId = controller.virtualBackgroundId.value;
+          final denoise = controller.videoDenoiseEnabled.value;
+          final voiceIsolation = controller.voiceIsolationEnabled.value;
+          final effect = controller.videoEffect.value;
+          final bgId = controller.virtualBackgroundId.value;
 
-        return SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 32,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: FaceTimePalette.secondaryText.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(999),
+          return SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: FaceTimePalette.secondaryText.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Video effects',
-                style: TextStyle(
-                  color: FaceTimePalette.onCanvas,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
+                const SizedBox(height: 16),
+                const Text(
+                  'Video effects',
+                  style: TextStyle(
+                    color: FaceTimePalette.onCanvas,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Material(
-                color: FaceTimePalette.darkElevated,
-                borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
-                child: SwitchListTile(
-                  key: const Key('in_app_call_video_denoise_toggle'),
-                  value: denoise,
-                  onChanged: (v) => unawaited(controller.setVideoDenoise(v)),
-                  secondary: const Icon(Icons.auto_fix_high_rounded, color: FaceTimePalette.onCanvas),
-                  title: const Text(
-                    'Video noise reduction',
-                    style: TextStyle(color: FaceTimePalette.onCanvas, fontSize: 15, fontWeight: FontWeight.w500),
+                const SizedBox(height: 16),
+                const Text(
+                  'Enhancements',
+                  style: TextStyle(
+                    color: FaceTimePalette.secondaryText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
                   ),
-                  subtitle: const Text(
-                    'Improves clarity in low light',
-                    style: TextStyle(color: FaceTimePalette.secondaryText, fontSize: 13),
-                  ),
-                  activeThumbColor: FaceTimePalette.darkCanvas,
-                  activeTrackColor: FaceTimePalette.blueDark,
+                ),
+                const SizedBox(height: 8),
+                Material(
+                  color: FaceTimePalette.darkElevated,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
+                    side: const BorderSide(color: FaceTimePalette.hairline, width: 1),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SwitchListTile(
+                        key: const Key('in_app_call_video_denoise_toggle'),
+                        value: denoise,
+                        onChanged: (v) => unawaited(controller.setVideoDenoise(v)),
+                        secondary: Icon(
+                          Icons.auto_fix_high_rounded,
+                          color: denoise ? FaceTimePalette.blueDark : FaceTimePalette.onCanvas,
+                        ),
+                        title: const Text(
+                          'Studio Video Enhancement',
+                          style: TextStyle(color: FaceTimePalette.onCanvas, fontSize: 15, fontWeight: FontWeight.w500),
+                        ),
+                        subtitle: const Text(
+                          'Denoise, low-light lift & sharpening',
+                          style: TextStyle(color: FaceTimePalette.secondaryText, fontSize: 13),
+                        ),
+                        activeThumbColor: FaceTimePalette.darkCanvas,
+                        activeTrackColor: FaceTimePalette.blueDark,
+                      ),
+                      const Divider(height: 1, thickness: 1, color: FaceTimePalette.hairline),
+                      SwitchListTile(
+                        key: const Key('in_app_call_voice_isolation_toggle'),
+                        value: voiceIsolation,
+                        onChanged: (v) => unawaited(controller.setVoiceIsolation(v)),
+                        secondary: Icon(
+                          Icons.graphic_eq_rounded,
+                          color: voiceIsolation ? FaceTimePalette.blueDark : FaceTimePalette.onCanvas,
+                        ),
+                        title: const Text(
+                          'Voice Isolation',
+                          style: TextStyle(color: FaceTimePalette.onCanvas, fontSize: 15, fontWeight: FontWeight.w500),
+                        ),
+                        subtitle: const Text(
+                          'Neural noise & background suppression',
+                          style: TextStyle(color: FaceTimePalette.secondaryText, fontSize: 13),
+                        ),
+                        activeThumbColor: FaceTimePalette.darkCanvas,
+                        activeTrackColor: FaceTimePalette.blueDark,
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Background',
-                style: TextStyle(
-                  color: FaceTimePalette.secondaryText,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
+                const SizedBox(height: 16),
+                const Text(
+                  'Background',
+                  style: TextStyle(
+                    color: FaceTimePalette.secondaryText,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _EffectChipTile(
-                    icon: Icons.block_rounded,
-                    label: 'None',
-                    selected: effect == FaceTimeVideoEffectType.none,
-                    onTap: () => unawaited(controller.setVideoEffect(FaceTimeVideoEffectType.none)),
-                  ),
-                  _EffectChipTile(
-                    icon: Icons.blur_on_rounded,
-                    label: 'Light blur',
-                    selected: effect == FaceTimeVideoEffectType.blurLight,
-                    onTap: () => unawaited(controller.setVideoEffect(FaceTimeVideoEffectType.blurLight)),
-                  ),
-                  _EffectChipTile(
-                    icon: Icons.blur_circular_rounded,
-                    label: 'Strong blur',
-                    selected: effect == FaceTimeVideoEffectType.blurStrong,
-                    onTap: () => unawaited(controller.setVideoEffect(FaceTimeVideoEffectType.blurStrong)),
-                  ),
-                  for (final preset in FaceTimeBackgroundPreset.presets)
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
                     _EffectChipTile(
-                      icon: Icons.wallpaper_rounded,
-                      label: preset.label,
-                      selected: effect == FaceTimeVideoEffectType.virtualBackground && bgId == preset.id,
-                      onTap: () => unawaited(
-                        controller.setVideoEffect(
-                          FaceTimeVideoEffectType.virtualBackground,
-                          backgroundId: preset.id,
-                          backgroundPath: preset.assetOrPath,
+                      icon: Icons.block_rounded,
+                      label: 'None',
+                      selected: effect == FaceTimeVideoEffectType.none,
+                      onTap: () => unawaited(controller.setVideoEffect(FaceTimeVideoEffectType.none)),
+                    ),
+                    _EffectChipTile(
+                      icon: Icons.blur_on_rounded,
+                      label: 'Light blur',
+                      selected: effect == FaceTimeVideoEffectType.blurLight,
+                      onTap: () => unawaited(controller.setVideoEffect(FaceTimeVideoEffectType.blurLight)),
+                    ),
+                    _EffectChipTile(
+                      icon: Icons.blur_circular_rounded,
+                      label: 'Strong blur',
+                      selected: effect == FaceTimeVideoEffectType.blurStrong,
+                      onTap: () => unawaited(controller.setVideoEffect(FaceTimeVideoEffectType.blurStrong)),
+                    ),
+                    for (final preset in FaceTimeBackgroundPreset.presets)
+                      _EffectChipTile(
+                        previewColors: preset.previewColors,
+                        label: preset.label,
+                        selected: effect == FaceTimeVideoEffectType.virtualBackground && bgId == preset.id,
+                        onTap: () => unawaited(
+                          controller.setVideoEffect(
+                            FaceTimeVideoEffectType.virtualBackground,
+                            backgroundId: preset.id,
+                            backgroundPath: preset.assetOrPath,
+                          ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        );
+                  ],
+                ),
+              ],
+            ),
+          );
         },
       ),
     );
@@ -2712,53 +2795,88 @@ class _VideoEffectsSheet extends StatelessWidget {
 
 class _EffectChipTile extends StatelessWidget {
   const _EffectChipTile({
-    required this.icon,
+    this.icon,
+    this.previewColors,
     required this.label,
     required this.selected,
     required this.onTap,
   });
 
-  final IconData icon;
+  final IconData? icon;
+  final List<int>? previewColors;
   final String label;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: FaceTimePalette.darkElevated,
-      shape: RoundedRectangleBorder(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      curve: Curves.easeOutCubic,
+      decoration: BoxDecoration(
+        color: FaceTimePalette.darkElevated,
         borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
-        side: BorderSide(
+        border: Border.all(
           color: selected ? FaceTimePalette.blueDark : FaceTimePalette.hairline,
           width: selected ? 2 : 1,
         ),
       ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48, minWidth: 96),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  color: selected ? FaceTimePalette.blueDark : FaceTimePalette.onCanvas,
-                  size: 18,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: FaceTimePalette.onCanvas,
-                    fontSize: 13,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(FaceTimeDims.tileRadius),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48, minWidth: 96),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (previewColors != null && previewColors!.isNotEmpty)
+                    Container(
+                      width: 24,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: previewColors!.length == 1
+                              ? [Color(previewColors!.first), Color(previewColors!.first)]
+                              : previewColors!.map(Color.new).toList(),
+                        ),
+                        border: Border.all(
+                          color: FaceTimePalette.hairline,
+                          width: 1,
+                        ),
+                      ),
+                    )
+                  else if (icon != null)
+                    Icon(
+                      icon,
+                      color: selected ? FaceTimePalette.blueDark : FaceTimePalette.onCanvas,
+                      size: 18,
+                    ),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: FaceTimePalette.onCanvas,
+                      fontSize: 13,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
                   ),
-                ),
-              ],
+                  if (selected) ...[
+                    const SizedBox(width: 6),
+                    const Icon(
+                      Icons.check_rounded,
+                      color: FaceTimePalette.blueDark,
+                      size: 16,
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
         ),
@@ -2831,10 +2949,18 @@ class _MoreTraySheet extends StatelessWidget {
             if (controller.wearWatchConnected)
               _MoreTrayTile(
                 icon: Icons.watch_rounded,
-                label: 'Transfer to Watch',
+                iconWidget: controller.audioOnWatch.value
+                    ? const PhoneTransferIcon(size: 22, color: FaceTimePalette.m3OnPrimary)
+                    : const WatchTransferIcon(size: 22, color: FaceTimePalette.m3OnSurface),
+                label: controller.audioOnWatch.value ? 'On Watch' : 'Transfer to Watch',
+                selected: controller.audioOnWatch.value,
                 onTap: () {
                   Navigator.of(context).pop();
-                  unawaited(controller.transferCallToWatch());
+                  unawaited(
+                    controller.audioOnWatch.value
+                        ? controller.transferCallToPhone()
+                        : controller.transferCallToWatch(),
+                  );
                 },
               ),
             if (state.hasJoinLink)
@@ -2893,11 +3019,13 @@ class _MoreTrayTile extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.iconWidget,
     this.onLongPress,
     this.selected = false,
   });
 
   final IconData icon;
+  final Widget? iconWidget;
   final String label;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -2935,7 +3063,7 @@ class _MoreTrayTile extends StatelessWidget {
             ),
             child: Row(
               children: [
-                Icon(icon, color: fgColor, size: 22),
+                iconWidget ?? Icon(icon, color: fgColor, size: 22),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(

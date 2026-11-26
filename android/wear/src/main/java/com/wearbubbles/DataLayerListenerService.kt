@@ -14,6 +14,7 @@ import com.google.android.gms.wearable.WearableListenerService
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.wearbubbles.api.ApiClient
+import com.wearbubbles.data.ContactRepository
 import com.wearbubbles.data.SettingsDataStore
 import com.wearbubbles.db.AppDatabase
 import com.wearbubbles.notifications.CallNotificationHelper
@@ -60,6 +61,15 @@ class DataLayerListenerService : WearableListenerService() {
         private const val PATH_RESET_ACK = "/reset-ack"
         private const val PATH_REQUEST_STATUS = "/request-status"
         private const val PATH_WATCH_STATUS = "/watch-status"
+        internal const val PATH_PHONE_ACTIVE_CHAT = "/wearbubbles/phone_active_chat"
+
+        internal fun parsePhoneActiveChatGuid(json: String): String? =
+            try {
+                JsonParser.parseString(json).asJsonObject
+                    .get("chatGuid")?.takeIf { !it.isJsonNull }?.asString?.takeIf { it.isNotBlank() }
+            } catch (_: Exception) {
+                null
+            }
 
         internal fun parseIncomingCallPayload(json: String): IncomingCallPayload? {
             val obj = try {
@@ -381,6 +391,51 @@ class DataLayerListenerService : WearableListenerService() {
                     NotificationHelper.cancelNotification(applicationContext, chatGuid)
                     relay.notifyChatMarkedRead(chatGuid)
                     scope.launch { AppDatabase.getInstance(applicationContext).chatDao().markRead(chatGuid) }
+                }
+            }
+            PhoneRelayClient.PATH_MESSAGE_NOTIFICATION -> {
+                val obj = parseJsonObject(dataStr) ?: return
+                val chatGuid = obj.stringOrNull("chatGuid")?.takeIf { it.isNotBlank() } ?: return
+                val senderName = obj.stringOrNull("senderName")?.takeIf { it.isNotBlank() } ?: "BlueBubbles"
+                val messageText = obj.stringOrNull("messageText")?.takeIf { it.isNotBlank() } ?: "New message"
+                val isGroup = runCatching { obj.get("isGroup")?.asBoolean }.getOrNull() ?: false
+                val groupTitle = obj.stringOrNull("groupTitle")
+                val timestamp = runCatching { obj.get("timestamp")?.asLong }.getOrNull() ?: System.currentTimeMillis()
+                val isTapback = runCatching { obj.get("isTapback")?.asBoolean }.getOrNull() ?: false
+                val onlyAlertOnce = runCatching { obj.get("onlyAlertOnce")?.asBoolean }.getOrNull() ?: isTapback
+                val senderAddress = obj.stringOrNull("senderAddress")
+                val messageGuid = obj.stringOrNull("messageGuid")
+                val photoThumbB64 = obj.stringOrNull("photoThumbB64")
+                scope.launch {
+                    val settings = SettingsDataStore(applicationContext)
+                    if (settings.isUserDisconnected()) return@launch
+                    val hapticEnabled = settings.hapticEnabled.first()
+                    val senderAvatarPath = senderAddress?.let { addr ->
+                        val db = AppDatabase.getInstance(applicationContext)
+                        ContactRepository(applicationContext, db.contactDao(), settings, relay)
+                            .resolveAvatarPath(addr)
+                    }
+                    NotificationHelper.showMessageNotification(
+                        context = applicationContext,
+                        chatGuid = chatGuid,
+                        senderName = senderName,
+                        messageText = messageText,
+                        isGroup = isGroup,
+                        groupTitle = groupTitle,
+                        hapticEnabled = hapticEnabled,
+                        timestamp = timestamp,
+                        senderAddress = senderAddress,
+                        senderAvatarPath = senderAvatarPath,
+                        isTapback = isTapback,
+                        onlyAlertOnce = onlyAlertOnce,
+                        messageGuid = messageGuid,
+                        photoThumbB64 = photoThumbB64
+                    )
+                }
+            }
+            PATH_PHONE_ACTIVE_CHAT -> {
+                parseJsonObject(dataStr)?.let {
+                    NotificationHelper.setPhoneActiveChat(applicationContext, parsePhoneActiveChatGuid(dataStr))
                 }
             }
             PhoneRelayClient.PATH_INCOMING_CALL -> {

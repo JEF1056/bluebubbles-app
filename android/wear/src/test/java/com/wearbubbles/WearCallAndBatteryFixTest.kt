@@ -379,4 +379,49 @@ class WearCallAndBatteryFixTest {
             )
         )
     }
+
+    @Test
+    fun `OngoingActivity gate allows standalone and phone-relayed FaceTime calls but skips telephony`() {
+        val standaloneFaceTime = ActiveCallState(
+            callUuid = "ft-standalone",
+            callerName = "Alice",
+            callerAddress = "alice@example.com",
+            isVideo = false,
+            fromPhoneRelay = false,
+            phase = CallPhase.ONGOING,
+            isTelephony = false
+        )
+        val relayedFaceTime = standaloneFaceTime.copy(
+            callUuid = "ft-relayed",
+            fromPhoneRelay = true
+        )
+        val relayedTelephony = relayedFaceTime.copy(
+            callUuid = "tel-relayed",
+            isTelephony = true
+        )
+
+        assertTrue(CallNotificationHelper.shouldAttachOngoingActivity(standaloneFaceTime))
+        assertTrue(CallNotificationHelper.shouldAttachOngoingActivity(relayedFaceTime))
+        assertFalse(CallNotificationHelper.shouldAttachOngoingActivity(relayedTelephony))
+
+        assertEquals(
+            androidx.core.app.NotificationCompat.CATEGORY_CALL,
+            CallNotificationHelper.ongoingNotificationCategory(standaloneFaceTime, useCallStyle = true)
+        )
+        assertEquals(
+            androidx.core.app.NotificationCompat.CATEGORY_CALL,
+            CallNotificationHelper.ongoingNotificationCategory(relayedFaceTime, useCallStyle = true)
+        )
+        assertEquals(
+            androidx.core.app.NotificationCompat.CATEGORY_CALL,
+            CallNotificationHelper.ongoingNotificationCategory(relayedFaceTime, useCallStyle = false)
+        )
+        assertEquals(
+            androidx.core.app.NotificationCompat.CATEGORY_SERVICE,
+            CallNotificationHelper.ongoingNotificationCategory(relayedTelephony, useCallStyle = true)
+        )
+
+        assertEquals("On call • #timer#", CallNotificationHelper.ongoingStatusTemplate(muted = false))
+        assertEquals("Muted • #timer#", CallNotificationHelper.ongoingStatusTemplate(muted = true))
+    }
 }

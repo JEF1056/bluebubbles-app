@@ -69,6 +69,10 @@ extension ChatsServiceFork on ChatsService {
     // Clear all other chats to inactive
     setAllInactiveSync(save: false, clearActive: false);
 
+    if (foreground && alive) {
+      _syncLocusContext(chat.guid);
+    }
+
     if (clearNotifications && alive && _isUiInteractive) {
       // Defer the observable update to avoid updating during build phase
       Future.microtask(() {

@@ -97,6 +97,21 @@ class _WatchTransferPainter extends CustomPainter {
       strokePaint,
     );
 
+    // Subtle inner watch dial arc on the right half so the silhouette reads
+    // unmistakably as a Pixel Watch face at small sizes.
+    final dialPaint = Paint()
+      ..color = color.withValues(alpha: 0.45)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = (1.1 * scale).clamp(0.8, 4.0)
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset(cx, cy), radius: r * 0.62),
+      -1.15,
+      2.3,
+      false,
+      dialPaint,
+    );
+
     // Left-to-right handoff arrow entering cleanly through the negative-space cutout.
     final arrowStartX = 2.2 * scale;
     final arrowTipX = 13.8 * scale;
@@ -115,4 +130,85 @@ class _WatchTransferPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _WatchTransferPainter oldDelegate) => oldDelegate.color != color;
+}
+
+/// Bespoke smartphone silhouette with a directional transfer arrow into the phone.
+class PhoneTransferIcon extends StatelessWidget {
+  const PhoneTransferIcon({
+    super.key,
+    this.size = 22.0,
+    this.color = FaceTimePalette.onCanvas,
+  });
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(
+        painter: _PhoneTransferPainter(color: color),
+      ),
+    );
+  }
+}
+
+class _PhoneTransferPainter extends CustomPainter {
+  const _PhoneTransferPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.shortestSide;
+    final scale = s / 24.0;
+    final strokeWidth = (2.0 * scale).clamp(1.3, 8.0);
+
+    final strokePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final left = 9.4 * scale;
+    final top = 2.8 * scale;
+    final right = 20.6 * scale;
+    final bottom = 21.2 * scale;
+    final r = 2.4 * scale;
+
+    final phonePath = Path()
+      ..moveTo(left, 7.6 * scale)
+      ..lineTo(left, top + r)
+      ..quadraticBezierTo(left, top, left + r, top)
+      ..lineTo(right - r, top)
+      ..quadraticBezierTo(right, top, right, top + r)
+      ..lineTo(right, bottom - r)
+      ..quadraticBezierTo(right, bottom, right - r, bottom)
+      ..lineTo(left + r, bottom)
+      ..quadraticBezierTo(left, bottom, left, bottom - r)
+      ..lineTo(left, 16.4 * scale);
+    canvas.drawPath(phonePath, strokePaint);
+
+    canvas.drawLine(
+      Offset(13.3 * scale, 18.0 * scale),
+      Offset(16.7 * scale, 18.0 * scale),
+      strokePaint..strokeWidth = strokeWidth * 0.9,
+    );
+    strokePaint.strokeWidth = strokeWidth;
+
+    final arrowTipX = 13.8 * scale;
+    final cy = 12.0 * scale;
+    canvas.drawLine(Offset(2.2 * scale, cy), Offset(arrowTipX, cy), strokePaint);
+    final headPath = Path()
+      ..moveTo(arrowTipX - 2.6 * scale, cy - 2.5 * scale)
+      ..lineTo(arrowTipX, cy)
+      ..lineTo(arrowTipX - 2.6 * scale, cy + 2.5 * scale);
+    canvas.drawPath(headPath, strokePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PhoneTransferPainter oldDelegate) => oldDelegate.color != color;
 }

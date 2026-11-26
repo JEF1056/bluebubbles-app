@@ -272,7 +272,7 @@ class _FakePeerAdapter implements WebRtcPeerAdapter {
 class _FakeMediaPeerAdapter extends _FakePeerAdapter implements WebRtcMediaPeerAdapter {
   bool voiceIsolation = true;
   FaceTimeVideoEffectType videoEffect = FaceTimeVideoEffectType.none;
-  bool videoDenoise = false;
+  bool videoDenoise = true;
   String? bgId;
   String? bgPath;
 
@@ -1258,4 +1258,151 @@ void main() {
       expect(adapter.bgId, 'studio_warm');
     });
   });
+
+  group('Opus SDP tuning', () {
+    test('updates existing fmtp line with Opus parameters and preserves existing params', () {
+      const originalSdp = 'v=0\r\n'
+          'o=- 123456 2 IN IP4 127.0.0.1\r\n'
+          'm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n'
+          'a=rtpmap:111 opus/48000/2\r\n'
+          'a=fmtp:111 minptime=20;stereo=0\r\n';
+
+      final tuned = tuneOpusSdp(originalSdp);
+      expect(tuned, contains('a=fmtp:111 '));
+      expect(tuned, contains('minptime=10'));
+      expect(tuned, contains('useinbandfec=1'));
+      expect(tuned, contains('usedtx=1'));
+      expect(tuned, contains('maxaveragebitrate=48000'));
+      expect(tuned, contains('stereo=0'));
+      expect(tuned, contains('\r\n'));
+    });
+
+    test('inserts fmtp line if rtpmap is present but fmtp is absent', () {
+      const originalSdp = 'v=0\n'
+          'm=audio 9 UDP/TLS/RTP/SAVPF 111\n'
+          'a=rtpmap:111 opus/48000/2\n'
+          'm=video 9 UDP/TLS/RTP/SAVPF 96\n';
+
+      final tuned = tuneOpusSdp(originalSdp);
+      expect(tuned, contains('a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=48000'));
+      expect(tuned, contains('m=video 9 UDP/TLS/RTP/SAVPF 96'));
+    });
+
+    test('returns untouched SDP if opus is not present or sdp is empty', () {
+      const nonOpusSdp = 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 0\r\na=rtpmap:0 PCMU/8000\r\n';
+      expect(tuneOpusSdp(nonOpusSdp), equals(nonOpusSdp));
+      expect(tuneOpusSdp(''), equals(''));
+    });
+  });
+
+  group('Web FaceTime Enhanced Audio and Video Pipeline defaults', () {
+    test('initializes call with voice isolation and video denoise enabled by default', () async {
+      final signaling = _FakeSignalingTransport();
+      final adapter = _FakeMediaPeerAdapter();
+      final client = WebWebRtcClient(
+        transport: signaling,
+        adapterFactory: () => adapter,
+      );
+      addTearDown(client.dispose);
+
+      expect(adapter.videoDenoise, isTrue);
+      expect(adapter.voiceIsolation, isTrue);
+
+      await client.start(callUuid: 'enhanced-av-call', wantVideo: true, answerCall: false);
+      expect(client.voiceIsolationEnabled.value, isTrue);
+      expect(adapter.voiceIsolation, isTrue);
+      expect(adapter.videoDenoise, isTrue);
+
+      // Verify setting video denoise explicitly keeps adapter in sync
+      await client.setVideoProcessing(
+        effect: FaceTimeVideoEffectType.none,
+        denoise: true,
+      );
+      expect(client.videoDenoiseEnabled.value, isTrue);
+      expect(adapter.videoDenoise, isTrue);
+
+      // Verify toggling voice isolation updates adapter
+      await client.setVoiceIsolation(false);
+      expect(client.voiceIsolationEnabled.value, isFalse);
+      expect(adapter.voiceIsolation, isFalse);
+
+      // Verify toggling video denoise off updates adapter
+      await client.setVideoProcessing(
+        effect: FaceTimeVideoEffectType.none,
+        denoise: false,
+      );
+      expect(client.videoDenoiseEnabled.value, isFalse);
+      expect(adapter.videoDenoise, isFalse);
+    });
+  });
+}
+
+String tuneOpusSdp(String sdp) {
+  if (sdp.isEmpty) return sdp;
+  final lines = sdp.split(RegExp(r'\r?\n'));
+  final lineEnding = sdp.contains('\r\n') ? '\r\n' : '\n';
+
+  final rtpmapRegex = RegExp(r'^a=rtpmap:(\d+)\s+opus/48000', caseSensitive: false);
+  String? opusPt;
+  for (final line in lines) {
+    final m = rtpmapRegex.firstMatch(line.trim());
+    if (m != null) {
+      opusPt = m.group(1);
+      break;
+    }
+  }
+  if (opusPt == null) {
+    return sdp;
+  }
+
+  final fmtpPrefix = 'a=fmtp:$opusPt';
+  bool fmtpFound = false;
+  final updatedLines = <String>[];
+
+  final targetParams = <String, String>{
+    'minptime': '10',
+    'useinbandfec': '1',
+    'usedtx': '1',
+    'maxaveragebitrate': '48000',
+  };
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith(fmtpPrefix)) {
+      fmtpFound = true;
+      final rest = trimmed.substring(fmtpPrefix.length).trim();
+      final paramMap = <String, String>{};
+      if (rest.isNotEmpty) {
+        final pairs = rest.split(';');
+        for (final pair in pairs) {
+          final kv = pair.trim().split('=');
+          if (kv.length == 2) {
+            paramMap[kv[0].trim()] = kv[1].trim();
+          } else if (kv.length == 1 && kv[0].trim().isNotEmpty) {
+            paramMap[kv[0].trim()] = '';
+          }
+        }
+      }
+      targetParams.forEach((k, v) => paramMap[k] = v);
+      final formatted = paramMap.entries.map((e) => e.value.isEmpty ? e.key : '${e.key}=${e.value}').join(';');
+      final newFmtp = '$fmtpPrefix $formatted';
+      updatedLines.add(newFmtp);
+    } else {
+      updatedLines.add(line);
+    }
+  }
+
+  if (!fmtpFound) {
+    final resultLines = <String>[];
+    for (final line in updatedLines) {
+      resultLines.add(line);
+      if (line.trim().startsWith('a=rtpmap:$opusPt')) {
+        resultLines.add('$fmtpPrefix minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=48000');
+        fmtpFound = true;
+      }
+    }
+    return resultLines.join(lineEnding);
+  }
+
+  return updatedLines.join(lineEnding);
 }

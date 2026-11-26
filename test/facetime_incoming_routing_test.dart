@@ -68,6 +68,7 @@ class _FakeNotificationsService extends NotificationsService {
   final List<_FaceTimeNotifCall> calls = [];
   final List<_MissedFaceTimeNotifCall> missedCalls = [];
   final List<String> clearedUuids = [];
+  final List<String?> clearedMissedCallUuids = [];
 
   @override
   Future<bool> createIncomingFaceTimeNotification(
@@ -109,6 +110,11 @@ class _FakeNotificationsService extends NotificationsService {
       isTelephony: isTelephony,
       callerAddress: callerAddress,
     ));
+  }
+
+  @override
+  Future<void> clearMissedFaceTimeNotification(String? callUuid) async {
+    clearedMissedCallUuids.add(callUuid);
   }
 }
 
@@ -352,5 +358,91 @@ void main() {
     expect(ActiveCallController.instance.state.callUuid, 'ft-dup-1');
     expect(identical(faceTimeIncomingActions['ft-dup-1'], initialActions), isTrue);
     expect(faceTimeOverlays.containsKey('ft-dup-1'), isTrue);
+  });
+
+  test('calls answered or declined elsewhere do not post missed-call notifications', () async {
+    final handler = ActionHandler();
+    for (final payload in [
+      {
+        'uuid': 'ft-elsewhere-1',
+        'status_id': 6,
+        'is_outgoing': false,
+        'ended_reason': 'answered_elsewhere',
+        'handle': {'address': '+15551234567'},
+      },
+      {
+        'uuid': 'ft-elsewhere-2',
+        'status_id': 6,
+        'is_outgoing': false,
+        'ended_reason': 'declined_elsewhere',
+        'handle': {'address': '+15551234567'},
+      },
+      {
+        'uuid': 'ft-elsewhere-3',
+        'status_id': 6,
+        'is_outgoing': false,
+        'ended_reason': 'missed',
+        'disconnected_reason': 17,
+        'handle': {'address': '+15551234567'},
+      },
+      {
+        'uuid': 'ft-elsewhere-4',
+        'status_id': 6,
+        'is_outgoing': false,
+        'ended_reason': 'missed',
+        'disconnected_reason': 18,
+        'handle': {'address': '+15551234567'},
+      },
+    ]) {
+      await handler.handleFaceTimeStatusChange(payload);
+    }
+    expect(notifications.missedCalls, isEmpty);
+  });
+
+  test('calls answered via answered_at or prior status_id=1 do not post missed-call notifications', () async {
+    final handler = ActionHandler();
+    await handler.handleFaceTimeStatusChange({
+      'uuid': 'ft-answered-at-1',
+      'status_id': 6,
+      'is_outgoing': false,
+      'ended_reason': 'missed',
+      'answered_at': 1700000000000,
+      'handle': {'address': '+15551234567'},
+    });
+    await handler.handleFaceTimeStatusChange({
+      'uuid': 'ft-answered-uuid-1',
+      'status_id': 1,
+      'is_outgoing': false,
+      'handle': {'address': '+15551234567'},
+    });
+    await handler.handleFaceTimeStatusChange({
+      'uuid': 'ft-answered-uuid-1',
+      'status_id': 6,
+      'is_outgoing': false,
+      'ended_reason': 'missed',
+      'handle': {'address': '+15551234567'},
+    });
+    expect(notifications.missedCalls, isEmpty);
+  });
+
+  test('late status_id=1 for same caller address clears just-posted missed-call notification', () async {
+    final handler = ActionHandler();
+    await handler.handleFaceTimeStatusChange({
+      'uuid': 'ft-ringing-uuid',
+      'status_id': 6,
+      'is_outgoing': false,
+      'ended_reason': 'missed',
+      'handle': {'address': '+15551234567'},
+    });
+    expect(notifications.missedCalls, hasLength(1));
+    expect(notifications.missedCalls.single.callUuid, 'ft-ringing-uuid');
+
+    await handler.handleFaceTimeStatusChange({
+      'uuid': 'ft-answered-other-uuid',
+      'status_id': 1,
+      'is_outgoing': false,
+      'handle': {'address': '5551234567'},
+    });
+    expect(notifications.clearedMissedCallUuids, contains('ft-ringing-uuid'));
   });
 }

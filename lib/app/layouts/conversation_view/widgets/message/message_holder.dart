@@ -49,6 +49,7 @@ class MessageHolder extends StatefulWidget {
     required this.message,
     this.isReplyThread = false,
     this.replyPart,
+    this.highlightAnimation,
   }) : ms = MessagesSvc(cvController.chat.guid).getOrCreateState(message);
 
   final MessageState ms;
@@ -58,6 +59,7 @@ class MessageHolder extends StatefulWidget {
   final ConversationViewController cvController;
   final bool isReplyThread;
   final int? replyPart;
+  final Animation<double>? highlightAnimation;
 
   @override
   State<StatefulWidget> createState() => _MessageHolderState();
@@ -684,9 +686,27 @@ class _MessageHolderState extends State<MessageHolder> with AutomaticKeepAliveCl
                                                                                                   onComplete: completeEdit,
                                                                                                 ));
                                                                                     }),
-                                                                                ],
-                                                                              );
-                                                                              if (isCollection) return inner;
+                                                                                if (widget.highlightAnimation != null)
+                                                                                  Positioned.fill(
+                                                                                    child: IgnorePointer(
+                                                                                      child: FadeTransition(
+                                                                                        opacity: widget.highlightAnimation!,
+                                                                                        child: DecoratedBox(
+                                                                                          decoration: BoxDecoration(
+                                                                                            color: isFromMe
+                                                                                                ? Colors.white.withValues(alpha: 0.28)
+                                                                                                : (context.theme.brightness == Brightness.dark
+                                                                                                    ? Colors.white.withValues(alpha: 0.22)
+                                                                                                    : context.theme.colorScheme.primary.withValues(alpha: 0.22)),
+                                                                                            borderRadius: isCollection ? BorderRadius.circular(18) : null,
+                                                                                          ),
+                                                                                        ),
+                                                                                      ),
+                                                                                    ),
+                                                                                  ),
+                                                                              ],
+                                                                            );
+                                                                            if (isCollection) return inner;
                                                                               return ClipPath(
                                                                                 clipper: TailClipper(
                                                                                   isFromMe: message.isFromMe!,

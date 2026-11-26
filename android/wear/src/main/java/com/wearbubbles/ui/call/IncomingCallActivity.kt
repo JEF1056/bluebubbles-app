@@ -1,5 +1,6 @@
 package com.wearbubbles.ui.call
 
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.SystemClock
@@ -108,6 +109,14 @@ class IncomingCallActivity : ComponentActivity() {
                     IncomingCallScreen(state = state)
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (CallNotificationHelper.activeCallState.value == null) {
+            finish()
         }
     }
 }

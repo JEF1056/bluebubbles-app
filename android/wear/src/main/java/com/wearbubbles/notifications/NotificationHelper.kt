@@ -54,10 +54,17 @@ object NotificationHelper {
     const val ACTION_OPEN_ON_PHONE = "com.wearbubbles.ACTION_OPEN_ON_PHONE"
     const val ACTION_MARK_READ = "com.wearbubbles.ACTION_MARK_READ"
     const val ACTION_DISMISS = "com.wearbubbles.ACTION_DISMISS"
+    const val ACTION_QUICK_REACTION = "com.wearbubbles.ACTION_QUICK_REACTION"
+    const val EXTRA_MESSAGE_GUID = "extra_message_guid"
+    const val EXTRA_REACTION = "extra_reaction"
     val QUICK_REPLY_CHOICES = arrayOf("Yes", "No", "On my way", "Sounds good", "Thanks!")
 
     private val _activeChatGuid = MutableStateFlow<String?>(null)
     val activeChatGuid: StateFlow<String?> = _activeChatGuid.asStateFlow()
+
+    @Volatile
+    var phoneActiveChatGuid: String? = null
+        private set
 
     // Require MainActivity.onResume() (true) so early ViewModel init before lifecycle binding cannot mark read.
     private val _isAppResumed = MutableStateFlow<Boolean?>(null)
@@ -66,6 +73,7 @@ object NotificationHelper {
 
     private val messageHistory = ConcurrentHashMap<String, MutableList<NotificationCompat.MessagingStyle.Message>>()
     private val chatMetadata = ConcurrentHashMap<String, ChatNotifMeta>()
+    private val recentMessageGuids = ConcurrentHashMap<String, Long>()
     private val personIconCache = LruCache<String, IconCompat>(24)
 
     private data class ChatNotifMeta(
@@ -115,6 +123,17 @@ object NotificationHelper {
             updateBridgingExclusion(context, chatGuid)
         }
     }
+
+    fun setPhoneActiveChat(context: Context?, chatGuid: String?) {
+        val normalized = chatGuid?.takeIf { it.isNotBlank() }
+        phoneActiveChatGuid = normalized
+        if (normalized != null && context != null) {
+            cancelNotification(context, normalized)
+        }
+    }
+
+    internal fun shouldSuppressNotification(chatGuid: String): Boolean =
+        _activeChatGuid.value == chatGuid || phoneActiveChatGuid == chatGuid
 
     fun updateBridgingExclusion(context: Context, excludedChatGuid: String?) {
         try {
@@ -206,10 +225,18 @@ object NotificationHelper {
         senderAvatarPath: String? = null,
         isTapback: Boolean = false,
         attachmentPath: String? = null,
-        attachmentMimeType: String? = null
+        attachmentMimeType: String? = null,
+        onlyAlertOnce: Boolean? = null,
+        messageGuid: String? = null,
+        photoThumbB64: String? = null
     ) {
-        if (_activeChatGuid.value == chatGuid) return
+        if (shouldSuppressNotification(chatGuid)) return
         if (!canPostNotifications(context)) return
+        if (!messageGuid.isNullOrBlank()) {
+            val now = System.currentTimeMillis()
+            recentMessageGuids.entries.removeIf { now - it.value > 60_000L }
+            if (recentMessageGuids.putIfAbsent(messageGuid, now) != null) return
+        }
 
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val notificationId = chatGuid.hashCode()
@@ -230,10 +257,18 @@ object NotificationHelper {
             important = true
         )
 
+        val resolvedAttachmentPath = attachmentPath?.takeIf { it.isNotBlank() }
+            ?: saveNotificationPhotoThumb(context, photoThumbB64, messageGuid)
+        val resolvedAttachmentMimeType = if (attachmentPath.isNullOrBlank() && resolvedAttachmentPath != null) {
+            "image/jpeg"
+        } else {
+            attachmentMimeType
+        }
+
         val msg = NotificationCompat.MessagingStyle.Message(messageText, msgTime, senderPerson).apply {
-            if (!attachmentPath.isNullOrBlank() && attachmentMimeType?.startsWith("image/") == true) {
-                resolveAttachmentUri(context, attachmentPath)?.let { uri ->
-                    setData(attachmentMimeType, uri)
+            if (!resolvedAttachmentPath.isNullOrBlank() && resolvedAttachmentMimeType?.startsWith("image/") == true) {
+                resolveAttachmentUri(context, resolvedAttachmentPath)?.let { uri ->
+                    setData(resolvedAttachmentMimeType, uri)
                 }
             }
         }
@@ -251,7 +286,8 @@ object NotificationHelper {
             groupTitle = groupTitle,
             timestamp = msgTime,
             silent = !hapticEnabled,
-            onlyAlertOnce = isTapback
+            onlyAlertOnce = onlyAlertOnce ?: isTapback,
+            messageGuid = messageGuid
         )
     }
 
@@ -366,7 +402,8 @@ object NotificationHelper {
         groupTitle: String?,
         timestamp: Long,
         silent: Boolean,
-        onlyAlertOnce: Boolean
+        onlyAlertOnce: Boolean,
+        messageGuid: String? = null
     ) {
         val notificationId = chatGuid.hashCode()
         val style = NotificationCompat.MessagingStyle(mePerson)
@@ -500,6 +537,12 @@ object NotificationHelper {
             .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
             .setAllowSystemGeneratedContextualActions(true)
             .addAction(replyAction)
+            .apply {
+                if (!messageGuid.isNullOrBlank()) {
+                    addAction(buildQuickReactionAction(context, notificationId + 6000, chatGuid, messageGuid, "love", "Love"))
+                    addAction(buildQuickReactionAction(context, notificationId + 7000, chatGuid, messageGuid, "like", "Like"))
+                }
+            }
             .addAction(markReadAction)
             .addAction(openOnPhoneAction)
             .extend(
@@ -550,6 +593,7 @@ object NotificationHelper {
         chatMetadata.clear()
         personIconCache.evictAll()
         _activeChatGuid.value = null
+        phoneActiveChatGuid = null
         pendingLaunchChatGuid = null
         NotificationManagerCompat.from(context).cancelAll()
     }
@@ -647,6 +691,82 @@ object NotificationHelper {
         }
     }
 
+    private fun buildQuickReactionAction(
+        context: Context,
+        requestCode: Int,
+        chatGuid: String,
+        messageGuid: String,
+        reaction: String,
+        label: String
+    ): NotificationCompat.Action {
+        val encodedGuid = Uri.encode(chatGuid)
+        val intent = Intent(context, QuickReactionReceiver::class.java).apply {
+            action = ACTION_QUICK_REACTION
+            data = Uri.parse("wearbubbles://chat/$encodedGuid/react/$reaction")
+            putExtra(EXTRA_CHAT_GUID, chatGuid)
+            putExtra(EXTRA_MESSAGE_GUID, messageGuid)
+            putExtra(EXTRA_REACTION, reaction)
+        }
+        val pendingIntent = PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        return NotificationCompat.Action.Builder(
+            android.R.drawable.btn_star_big_on,
+            label,
+            pendingIntent
+        )
+            .setShowsUserInterface(false)
+            .build()
+    }
+
+    internal fun saveNotificationPhotoThumb(
+        context: Context,
+        photoThumbB64: String?,
+        messageGuid: String?,
+        maxFiles: Int = 20
+    ): String? {
+        if (photoThumbB64.isNullOrBlank()) return null
+        return try {
+            val bytes = android.util.Base64.decode(photoThumbB64, android.util.Base64.DEFAULT)
+            if (bytes.isEmpty()) return null
+            val dir = File(context.cacheDir, "notif_photos")
+            if (!dir.exists() && !dir.mkdirs()) return null
+            val safeName = (messageGuid?.takeIf { it.isNotBlank() } ?: "thumb_${System.currentTimeMillis()}")
+                .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            val file = File(dir, "$safeName.jpg")
+            file.writeBytes(bytes)
+            pruneNotifPhotos(dir, maxFiles = maxFiles)
+            file.absolutePath
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    internal fun pruneNotifPhotos(
+        dir: File,
+        maxFiles: Int = 20,
+        maxAgeMs: Long = 24L * 60L * 60L * 1000L,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
+        val files = dir.listFiles()?.filter { it.isFile } ?: return
+        val kept = mutableListOf<File>()
+        for (file in files) {
+            if (nowMs - file.lastModified() > maxAgeMs) {
+                file.delete()
+            } else {
+                kept.add(file)
+            }
+        }
+        if (kept.size > maxFiles) {
+            kept.sortedByDescending { it.lastModified() }
+                .drop(maxFiles)
+                .forEach { it.delete() }
+        }
+    }
+
     private fun resolveAttachmentUri(context: Context, attachmentPath: String): Uri? {
         return try {
             val file = File(attachmentPath)
@@ -656,13 +776,15 @@ object NotificationHelper {
                 "${context.packageName}.wear.fileprovider",
                 file
             )
-            try {
-                context.grantUriPermission(
-                    "com.android.systemui",
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: Exception) {
+            for (pkg in listOf("com.android.systemui", "com.google.android.wearable.app")) {
+                try {
+                    context.grantUriPermission(
+                        pkg,
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {
+                }
             }
             uri
         } catch (_: Exception) {

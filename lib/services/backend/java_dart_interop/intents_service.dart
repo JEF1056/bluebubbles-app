@@ -14,6 +14,7 @@ import 'package:bluebubbles/app/layouts/conversation_view/pages/conversation_vie
 import 'package:bluebubbles/database/models.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show WidgetsBinding;
 import 'package:get/get.dart';
 import 'package:bluebubbles/models/models.dart' show HandleLookupKey;
@@ -144,7 +145,8 @@ class IntentsService {
           }
         } else if (intent.extra?["chatGuid"] != null) {
           final guid = intent.extra!["chatGuid"]!;
-          await openChat(guid, isInitialIntent: isInitialIntent);
+          final draftText = intent.extra?["draftText"] ?? intent.extra?["text"];
+          await openChat(guid, text: draftText?.toString(), isInitialIntent: isInitialIntent);
         } else if (intent.extra?["callUuid"] != null) {
           if (!StartupTasks.uiReady.isCompleted) {
             await StartupTasks.waitForUI();
@@ -418,7 +420,11 @@ class IntentsService {
           }
 
           if (text != null && text.isNotEmpty) {
-            cvc(chat).textController.text = text;
+            final controller = cvc(chat);
+            controller.textController.text = text;
+            controller.textController.selection = TextSelection.fromPosition(
+              TextPosition(offset: text.length),
+            );
           }
         }
 

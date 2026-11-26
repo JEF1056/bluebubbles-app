@@ -251,13 +251,41 @@ class WebRtcAudioClientTest {
     fun `buildAudioConstraints toggles noise suppression and highpass filter with voice isolation`() {
         val enabled = WebRtcAudioClient.buildAudioConstraints(true)
         assertEquals("true", enabled.mandatory.first { it.key == "googNoiseSuppression" }.value)
+        assertEquals("true", enabled.mandatory.first { it.key == "googNoiseSuppression2" }.value)
         assertEquals("true", enabled.mandatory.first { it.key == "googHighpassFilter" }.value)
         assertEquals("true", enabled.mandatory.first { it.key == "googEchoCancellation" }.value)
+        assertEquals("true", enabled.mandatory.first { it.key == "googAutoGainControl2" }.value)
 
         val disabled = WebRtcAudioClient.buildAudioConstraints(false)
         assertEquals("false", disabled.mandatory.first { it.key == "googNoiseSuppression" }.value)
+        assertEquals("false", disabled.mandatory.first { it.key == "googNoiseSuppression2" }.value)
         assertEquals("false", disabled.mandatory.first { it.key == "googHighpassFilter" }.value)
         assertEquals("true", disabled.mandatory.first { it.key == "googEchoCancellation" }.value)
+        assertEquals("true", disabled.mandatory.first { it.key == "googAutoGainControl2" }.value)
+    }
+
+    @Test
+    fun `tuneOpusSdp configures FEC DTX bitrate and stereo for Opus and leaves non-Opus untouched`() {
+        val withFmtp = listOf(
+            "v=0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111 0",
+            "a=rtpmap:111 opus/48000/2",
+            "a=fmtp:111 minptime=20;useinbandfec=0;cbr=1",
+            "a=rtpmap:0 PCMU/8000"
+        ).joinToString("\r\n")
+        val tuned = WebRtcAudioClient.tuneOpusSdp(withFmtp)
+        assertTrue(tuned.contains("a=fmtp:111 minptime=10;useinbandfec=1;cbr=1;usedtx=1;maxaveragebitrate=48000;stereo=0"))
+
+        val withoutFmtp = listOf(
+            "v=0",
+            "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+            "a=rtpmap:111 opus/48000/2"
+        ).joinToString("\n")
+        val inserted = WebRtcAudioClient.tuneOpusSdp(withoutFmtp)
+        assertTrue(inserted.contains("a=rtpmap:111 opus/48000/2\na=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=48000;stereo=0"))
+
+        val noOpus = "v=0\r\nm=audio 9 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n"
+        assertEquals(noOpus, WebRtcAudioClient.tuneOpusSdp(noOpus))
     }
 
     @Test

@@ -749,6 +749,18 @@ object CallNotificationHelper {
         return buildOngoingCallNotification(context, state, useCallStyle = false)
     }
 
+    internal fun shouldAttachOngoingActivity(state: ActiveCallState): Boolean = !state.isTelephony
+
+    internal fun ongoingNotificationCategory(state: ActiveCallState, useCallStyle: Boolean): String =
+        if ((useCallStyle && !state.fromPhoneRelay) || !state.isTelephony) {
+            NotificationCompat.CATEGORY_CALL
+        } else {
+            NotificationCompat.CATEGORY_SERVICE
+        }
+
+    internal fun ongoingStatusTemplate(muted: Boolean): String =
+        if (muted) "Muted • #timer#" else "On call • #timer#"
+
     internal fun buildOngoingCallNotification(
         context: Context,
         state: ActiveCallState,
@@ -770,7 +782,7 @@ object CallNotificationHelper {
             .setContentText(ongoingNotificationText(state.isTelephony, state.muted, state.isVideo, state.isGroup))
             .addPerson(callerPerson)
             .setContentIntent(touchIntent)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setCategory(ongoingNotificationCategory(state, useCallStyle))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOngoing(true)
             .setSilent(true)
@@ -779,29 +791,36 @@ object CallNotificationHelper {
             .setWhen(wallClockStart(state.startedAtElapsedMs))
 
         val muteLabel = if (state.muted) "Unmute" else "Mute"
-        if (useCallStyle) {
+        // Phone-relayed calls omit CallStyle (Wear OS handles Bluetooth HFP call UI);
+        // all FaceTime calls (!isTelephony) keep CATEGORY_CALL + the OngoingActivity watch face pill.
+        if (useCallStyle && !state.fromPhoneRelay) {
             builder.setStyle(
                 NotificationCompat.CallStyle.forOngoingCall(callerPerson, endIntent)
                     .setIsVideo(state.isVideo)
             )
             builder.addAction(0, muteLabel, muteIntent)
         } else {
+            builder.setPriority(NotificationCompat.PRIORITY_LOW)
             builder.addAction(0, muteLabel, muteIntent)
             builder.addAction(0, "End call", endIntent)
         }
 
-        try {
-            val status = Status.Builder()
-                .addTemplate(if (state.muted) "Muted • #timer#" else "On call • #timer#")
-                .addPart("timer", Status.StopwatchPart(state.startedAtElapsedMs))
-                .build()
-            OngoingActivity.Builder(context, NotificationHelper.CALL_NOTIFICATION_ID, builder)
-                .setStaticIcon(R.drawable.ic_stat_icon)
-                .setTouchIntent(touchIntent)
-                .setStatus(status)
-                .build()
-                .apply(context)
-        } catch (_: Throwable) {
+        if (shouldAttachOngoingActivity(state)) {
+            try {
+                val status = Status.Builder()
+                    .addTemplate(ongoingStatusTemplate(state.muted))
+                    .addPart("timer", Status.StopwatchPart(state.startedAtElapsedMs))
+                    .build()
+                OngoingActivity.recoverOngoingActivity(context)?.update(context, status)
+                OngoingActivity.Builder(context, NotificationHelper.CALL_NOTIFICATION_ID, builder)
+                    .setStaticIcon(R.drawable.ic_stat_icon)
+                    .setTitle(state.callerName)
+                    .setTouchIntent(touchIntent)
+                    .setStatus(status)
+                    .build()
+                    .apply(context)
+            } catch (_: Throwable) {
+            }
         }
 
         return builder.build().apply {

@@ -16,19 +16,19 @@ import java.util.concurrent.TimeUnit
 object RemoteLauncher {
     private const val TAG = "RemoteLauncher"
 
-    fun openChatOnPhoneAsync(context: Context, chatGuid: String) {
+    fun openChatOnPhoneAsync(context: Context, chatGuid: String, draftText: String? = null) {
         val appContext = context.applicationContext
         val scope = (appContext as? WearBubblesApp)?.applicationScope ?: CoroutineScope(Dispatchers.IO)
         scope.launch {
-            openChatOnPhone(appContext, chatGuid)
+            openChatOnPhone(appContext, chatGuid, draftText)
         }
     }
 
-    suspend fun openChatOnPhone(context: Context, chatGuid: String) {
+    suspend fun openChatOnPhone(context: Context, chatGuid: String, draftText: String? = null) {
         val appContext = context.applicationContext
         val relay = (appContext as? WearBubblesApp)?.phoneRelayClient
         val openedViaPhone = if (relay != null && chatGuid.isNotBlank() && relay.refreshPhoneConnected()) {
-            relay.sendOpenChatAwait(chatGuid)
+            relay.sendOpenChatAwait(chatGuid, draftText)
         } else {
             false
         }

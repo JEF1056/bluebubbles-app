@@ -640,7 +640,14 @@ void main() {
     await tester.tap(find.byKey(const Key('in_app_call_video_effects')));
     await tester.pumpAndSettle();
     expect(find.text('Video effects'), findsOneWidget);
+    expect(find.text('Studio Video Enhancement'), findsOneWidget);
 
+    // Initial default is ON; tap toggles to false
+    await tester.tap(find.byKey(const Key('in_app_call_video_denoise_toggle')));
+    await tester.pump();
+    expect(denoiseSet, isFalse);
+
+    // Tap again toggles back to true
     await tester.tap(find.byKey(const Key('in_app_call_video_denoise_toggle')));
     await tester.pump();
     expect(denoiseSet, isTrue);
@@ -1129,6 +1136,12 @@ void main() {
     expect(find.text('Transfer to Watch'), findsOneWidget);
     expect(find.text('Open Link'), findsOneWidget);
 
+    // Initial default is ON; tap toggles to false
+    await tester.tap(find.byKey(const Key('in_app_call_video_denoise_toggle')));
+    await tester.pump();
+    expect(denoiseSet, isFalse);
+
+    // Tap again toggles back to true
     await tester.tap(find.byKey(const Key('in_app_call_video_denoise_toggle')));
     await tester.pump();
     expect(denoiseSet, isTrue);

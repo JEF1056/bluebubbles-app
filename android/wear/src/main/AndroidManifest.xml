@@ -94,6 +94,10 @@
             android:name=".notifications.CallActionReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".notifications.QuickReactionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.wear.fileprovider"

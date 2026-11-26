@@ -44,10 +44,6 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
   // constant so the animated bubble always lands where the permanent message is.
   double _textFieldSize = 0;
 
-  // Height of the focus-info widget (NotificationsSilencedBanner) above the text field.
-  double get focusInfoSize =>
-      (controller.focusInfoKey.currentContext?.findRenderObject() as RenderBox?)?.size.height ?? 0;
-
   // Extra vertical offset that differs between the iOS skin and Material/Samsung skins.
   double get _platformVerticalOffset => iOS ? -4.0 : 14.5;
 
@@ -77,12 +73,12 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
   // when the bubble is torn down. Null whenever no send is in flight.
   //
   // _textFieldSize already freezes the largest moving part of the offset, but the
-  // typing indicator and the focus-info banner are still measured live and both
-  // animate their height (AnimatedSize). The message list gate keeps *new* events
-  // from starting such a transition mid-flight, but it can't rewind one that was
-  // already running when the user hit send. Freezing the whole sum closes that
-  // window: once the flight begins the target is a constant, so AnimatedPositioned
-  // can never chase it regardless of what moves underneath.
+  // typing indicator is still measured live and animates its height (AnimatedSize).
+  // The message list gate keeps *new* events from starting such a transition
+  // mid-flight, but it can't rewind one that was already running when the user
+  // hit send. Freezing the whole sum closes that window: once the flight begins
+  // the target is a constant, so AnimatedPositioned can never chase it regardless
+  // of what moves underneath.
   double? _frozenBottomOffset;
 
   // Total bottom offset for the AnimatedPositioned — how far above the bottom
@@ -93,7 +89,6 @@ class _SendAnimationState extends CustomState<SendAnimation, SendData, Conversat
   // never changes during the animation, even while the field shrinks.
   double get _liveBottomOffset =>
       _textFieldSize +
-      focusInfoSize +
       _textFieldVerticalPadding +
       _typingIndicatorOffset +
       _pillRowOffset +

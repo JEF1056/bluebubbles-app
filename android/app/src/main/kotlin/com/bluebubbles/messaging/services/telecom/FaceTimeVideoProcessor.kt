@@ -13,11 +13,16 @@ import android.opengl.GLES20
 import android.opengl.GLUtils
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import com.bluebubbles.messaging.utils.PersistentLog
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.segmentation.Segmentation
-import com.google.mlkit.vision.segmentation.Segmenter
-import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.framework.image.ByteBufferExtractor
+import com.google.mediapipe.framework.image.MPImage
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenter
+import com.google.mediapipe.tasks.vision.imagesegmenter.ImageSegmenterResult
 import org.webrtc.EglBase
 import org.webrtc.RendererCommon
 import org.webrtc.ThreadUtils
@@ -53,8 +58,8 @@ enum class FaceTimeVideoEffect {
 /**
  * Meet-style lightweight VideoProcessor:
  * - Zero-copy passthrough when effect == NONE && !denoiseEnabled.
- * - Async drop-if-busy ML Kit Selfie Segmentation (256x256 STREAM_MODE) + EMA mask smoothing.
- * - OpenGL ES 2.0 shaders on WebRTC's shared EglBase.Context (bilateral denoise, Dual-Kawase blur, virtual bg).
+ * - Async drop-if-busy MediaPipe ImageSegmenter (256x256 LIVE_STREAM, GPU w/ CPU fallback) + EMA mask smoothing.
+ * - OpenGL ES 2.0 shaders on WebRTC's shared EglBase.Context (bilateral denoise, Auto-Exposure/CAS, Dual-Kawase blur, virtual bg).
  * - Zero-CPU-readback TextureBufferImpl output directly to HW MediaCodec H.264 encoder & local preview.
  */
 class FaceTimeVideoProcessor(
@@ -64,6 +69,7 @@ class FaceTimeVideoProcessor(
 
     companion object {
         private const val TAG = "FaceTimeVideoProcessor"
+        private const val SEGMENTER_MODEL_ASSET = "facetime/selfie_segmenter_landscape.tflite"
         private const val MASK_INPUT_SIZE = 256
         private const val MASK_EMA_ALPHA_MIN = 0.35f
         private const val MASK_EMA_ALPHA_MAX = 0.90f
@@ -301,16 +307,51 @@ class FaceTimeVideoProcessor(
             }
         """
 
+        private const val GLSL_ENHANCE_HELPERS = """
+            vec3 applyCasAndAutoExposure(sampler2D tex, vec2 uv, vec2 texelSize) {
+                vec3 c = texture2D(tex, uv).rgb;
+                vec3 n = texture2D(tex, uv + vec2(0.0, -texelSize.y)).rgb;
+                vec3 s = texture2D(tex, uv + vec2(0.0,  texelSize.y)).rgb;
+                vec3 w = texture2D(tex, uv + vec2(-texelSize.x, 0.0)).rgb;
+                vec3 e = texture2D(tex, uv + vec2( texelSize.x, 0.0)).rgb;
+                vec3 minRgb = min(c, min(min(n, s), min(w, e)));
+                vec3 maxRgb = max(c, max(max(n, s), max(w, e)));
+                vec3 amp = sqrt(clamp(min(minRgb, 1.0 - maxRgb) / max(maxRgb, vec3(0.0001)), 0.0, 1.0));
+                vec3 weight = amp * (-0.145);
+                vec3 sharp = clamp((c + (n + s + w + e) * weight) / (1.0 + 4.0 * weight), 0.0, 1.0);
+                float luma = dot(sharp, vec3(0.299, 0.587, 0.114));
+                float shadowLift = 1.0 + 0.32 * pow(1.0 - smoothstep(0.0, 0.55, luma), 1.6);
+                float highlightCompress = 1.0 - 0.08 * smoothstep(0.75, 1.0, luma);
+                return clamp(sharp * shadowLift * highlightCompress, 0.0, 1.0);
+            }
+        """
+
+        private const val FRAGMENT_ENHANCE_2D = """
+            $GLSL_HIGHP_HEADER
+            uniform sampler2D uTex;
+            uniform vec2 uTexelSize;
+            varying vec2 vTexCoord;
+            $GLSL_ENHANCE_HELPERS
+            void main() {
+                gl_FragColor = vec4(applyCasAndAutoExposure(uTex, vTexCoord, uTexelSize), 1.0);
+            }
+        """
+
         private const val FRAGMENT_COMPOSITE = """
-            precision mediump float;
+            $GLSL_HIGHP_HEADER
             uniform sampler2D uFgTex;
             uniform sampler2D uBgTex;
             uniform sampler2D uMaskTex;
+            uniform vec2 uTexelSize;
+            uniform float uEnhanceEnabled;
             uniform vec4 uBgUvTransform; // xy = scale, zw = offset (cover fit)
             uniform float uBgPremul;
             varying vec2 vTexCoord;
+            $GLSL_ENHANCE_HELPERS
             void main() {
-                vec3 fg = texture2D(uFgTex, vTexCoord).rgb;
+                vec3 fg = uEnhanceEnabled > 0.5
+                    ? applyCasAndAutoExposure(uFgTex, vTexCoord, uTexelSize)
+                    : texture2D(uFgTex, vTexCoord).rgb;
                 vec2 bgUv = vTexCoord * uBgUvTransform.xy + uBgUvTransform.zw;
                 vec4 bgSample = texture2D(uBgTex, clamp(bgUv, 0.0, 1.0));
                 vec3 bg = bgSample.rgb;
@@ -338,7 +379,7 @@ class FaceTimeVideoProcessor(
     private var effect: FaceTimeVideoEffect = FaceTimeVideoEffect.NONE
 
     @Volatile
-    private var denoiseEnabled: Boolean = false
+    private var denoiseEnabled: Boolean = true
 
     @Volatile
     private var pendingBgPath: String? = null
@@ -364,6 +405,7 @@ class FaceTimeVideoProcessor(
     private var bgMaskPrepProg = 0
     private var kawaseDownProg = 0
     private var kawaseUpProg = 0
+    private var enhance2dProg = 0
     private var compositeProg = 0
     private var programsReady = false
 
@@ -385,12 +427,13 @@ class FaceTimeVideoProcessor(
     private var poolWidth = 0
     private var poolHeight = 0
 
-    // ML Kit segmentation state
+    // MediaPipe segmentation state
     private val mlExecutor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "bb-mlkit-seg").apply { isDaemon = true }
+        Thread(r, "bb-mediapipe-seg").apply { isDaemon = true }
     }
     private val segmenterBusy = AtomicBoolean(false)
-    private var segmenter: Segmenter? = null
+    private var segmenter: ImageSegmenter? = null
+    private var lastSegTimestampMs = 0L
     private var maskTexId = 0
     private var virtualBgTexId = 0
     private var virtualBgWidth = 0
@@ -565,6 +608,7 @@ class FaceTimeVideoProcessor(
         bgMaskPrepProg = compileProgram(VERTEX_SHADER, FRAGMENT_BG_MASK_PREP)
         kawaseDownProg = compileProgram(VERTEX_SHADER, FRAGMENT_KAWASE_DOWN)
         kawaseUpProg = compileProgram(VERTEX_SHADER, FRAGMENT_KAWASE_UP)
+        enhance2dProg = compileProgram(VERTEX_SHADER, FRAGMENT_ENHANCE_2D)
         compositeProg = compileProgram(VERTEX_SHADER, FRAGMENT_COMPOSITE)
         programsReady = passthroughOesProg != 0 &&
             passthrough2dProg != 0 &&
@@ -575,6 +619,7 @@ class FaceTimeVideoProcessor(
             bgMaskPrepProg != 0 &&
             kawaseDownProg != 0 &&
             kawaseUpProg != 0 &&
+            enhance2dProg != 0 &&
             compositeProg != 0
     }
 
@@ -691,11 +736,13 @@ class FaceTimeVideoProcessor(
                     fbo = outSlot.fbo,
                     width = w,
                     height = h,
-                    prog = passthrough2dProg,
+                    prog = enhance2dProg,
                     texTarget = GLES20.GL_TEXTURE_2D,
                     texId = fgTex,
                     texMatrix = IDENTITY_MATRIX
-                ) {}
+                ) {
+                    GLES20.glUniform2f(GLES20.glGetUniformLocation(enhance2dProg, "uTexelSize"), 1f / w, 1f / h)
+                }
             } else {
                 // Kick async segmentation (15Hz adaptive cadence if thermal/low-res)
                 frameCounter++
@@ -793,6 +840,8 @@ class FaceTimeVideoProcessor(
                 GLES20.glUseProgram(compositeProg)
                 bindQuad(compositeProg)
                 GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(compositeProg, "uTexMatrix"), 1, false, IDENTITY_MATRIX, 0)
+                GLES20.glUniform2f(GLES20.glGetUniformLocation(compositeProg, "uTexelSize"), 1f / w, 1f / h)
+                GLES20.glUniform1f(GLES20.glGetUniformLocation(compositeProg, "uEnhanceEnabled"), if (currentDenoise) 1f else 0f)
                 GLES20.glUniform4f(GLES20.glGetUniformLocation(compositeProg, "uBgUvTransform"), bgScaleX, bgScaleY, bgOffX, bgOffY)
                 GLES20.glUniform1f(GLES20.glGetUniformLocation(compositeProg, "uBgPremul"), bgPremul)
 
@@ -870,53 +919,91 @@ class FaceTimeVideoProcessor(
                 return@execute
             }
             try {
-                val seg = segmenter ?: Segmentation.getClient(
-                    SelfieSegmenterOptions.Builder()
-                        .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
-                        .build()
-                ).also { segmenter = it }
+                val seg = segmenter ?: createImageSegmenter()?.also { segmenter = it }
+                if (seg == null) {
+                    segmenterBusy.set(false)
+                    return@execute
+                }
 
-                val input = InputImage.fromBitmap(bmp, rotation)
-                seg.process(input)
-                    .addOnSuccessListener(mlExecutor) { mask ->
-                        try {
-                            val mw = mask.width
-                            val mh = mask.height
-                            val count = mw * mh
-                            val fb = mask.buffer
-                            fb.rewind()
-                            val floatBuf = fb.asFloatBuffer()
-                            val isFirstMask = emaMask == null || emaMask?.size != count
-                            val ema = emaMask?.takeIf { it.size == count } ?: FloatArray(count).also { emaMask = it }
-                            val outBytes = ByteArray(count)
-                            for (i in 0 until count) {
-                                val raw = floatBuf.get().coerceIn(0f, 1f)
-                                val smoothed = if (isFirstMask) {
-                                    raw
-                                } else {
-                                    val prev = ema[i]
-                                    val delta = kotlin.math.abs(raw - prev)
-                                    val t = ((delta - 0.05f) / 0.25f).coerceIn(0f, 1f)
-                                    val alpha = MASK_EMA_ALPHA_MIN + t * (MASK_EMA_ALPHA_MAX - MASK_EMA_ALPHA_MIN)
-                                    alpha * raw + (1f - alpha) * prev
-                                }
-                                ema[i] = smoothed
-                                outBytes[i] = (smoothed * 255f).toInt().coerceIn(0, 255).toByte()
-                            }
-                            latestMaskW = mw
-                            latestMaskH = mh
-                            latestMaskBytes = outBytes
-                            maskTextureDirty = true
-                        } finally {
-                            segmenterBusy.set(false)
-                        }
-                    }
-                    .addOnFailureListener(mlExecutor) {
-                        segmenterBusy.set(false)
-                    }
+                val mpImage = BitmapImageBuilder(bmp).build()
+                val ts = maxOf(lastSegTimestampMs + 1L, SystemClock.uptimeMillis())
+                lastSegTimestampMs = ts
+                seg.segmentAsync(mpImage, ts)
             } catch (_: Exception) {
                 segmenterBusy.set(false)
             }
+        }
+    }
+
+    private fun createImageSegmenter(): ImageSegmenter? {
+        fun buildWithDelegate(delegate: Delegate): ImageSegmenter {
+            val baseOptions = BaseOptions.builder()
+                .setModelAssetPath(SEGMENTER_MODEL_ASSET)
+                .setDelegate(delegate)
+                .build()
+            val options = ImageSegmenter.ImageSegmenterOptions.builder()
+                .setBaseOptions(baseOptions)
+                .setRunningMode(RunningMode.LIVE_STREAM)
+                .setOutputConfidenceMasks(true)
+                .setOutputCategoryMask(false)
+                .setResultListener { result, _ ->
+                    handleSegmentationResult(result)
+                }
+                .setErrorListener { e ->
+                    PersistentLog.w(context, TAG, "MediaPipe segmentation error: ${e.message}")
+                    segmenterBusy.set(false)
+                }
+                .build()
+            return ImageSegmenter.createFromOptions(context, options)
+        }
+
+        return try {
+            buildWithDelegate(Delegate.GPU)
+        } catch (gpuErr: Throwable) {
+            PersistentLog.w(context, TAG, "MediaPipe GPU delegate unavailable, falling back to CPU: ${gpuErr.message}")
+            try {
+                buildWithDelegate(Delegate.CPU)
+            } catch (cpuErr: Throwable) {
+                PersistentLog.e(context, TAG, "MediaPipe ImageSegmenter init failed: ${cpuErr.message}")
+                null
+            }
+        }
+    }
+
+    private fun handleSegmentationResult(result: ImageSegmenterResult) {
+        try {
+            val masksOpt = result.confidenceMasks()
+            if (!masksOpt.isPresent || masksOpt.get().isEmpty()) return
+            val maskImage: MPImage = masksOpt.get()[0]
+            val mw = maskImage.width
+            val mh = maskImage.height
+            val count = mw * mh
+            val fb = ByteBufferExtractor.extract(maskImage)
+            fb.rewind()
+            val floatBuf = fb.asFloatBuffer()
+            val isFirstMask = emaMask == null || emaMask?.size != count
+            val ema = emaMask?.takeIf { it.size == count } ?: FloatArray(count).also { emaMask = it }
+            val outBytes = ByteArray(count)
+            for (i in 0 until count) {
+                val raw = floatBuf.get().coerceIn(0f, 1f)
+                val smoothed = if (isFirstMask) {
+                    raw
+                } else {
+                    val prev = ema[i]
+                    val delta = kotlin.math.abs(raw - prev)
+                    val t = ((delta - 0.05f) / 0.25f).coerceIn(0f, 1f)
+                    val alpha = MASK_EMA_ALPHA_MIN + t * (MASK_EMA_ALPHA_MAX - MASK_EMA_ALPHA_MIN)
+                    alpha * raw + (1f - alpha) * prev
+                }
+                ema[i] = smoothed
+                outBytes[i] = (smoothed * 255f).toInt().coerceIn(0, 255).toByte()
+            }
+            latestMaskW = mw
+            latestMaskH = mh
+            latestMaskBytes = outBytes
+            maskTextureDirty = true
+        } finally {
+            segmenterBusy.set(false)
         }
     }
 
@@ -1178,7 +1265,7 @@ class FaceTimeVideoProcessor(
             listOf(
                 passthroughOesProg, passthrough2dProg, bilateralOesProg,
                 bilateral2dProg, temporalDenoiseProg, maskRefineProg, bgMaskPrepProg,
-                kawaseDownProg, kawaseUpProg, compositeProg
+                kawaseDownProg, kawaseUpProg, enhance2dProg, compositeProg
             ).filter { it != 0 }.forEach { GLES20.glDeleteProgram(it) }
             yuvConverter?.release()
             yuvConverter = null

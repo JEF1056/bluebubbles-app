@@ -27,13 +27,14 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
   web.MediaStreamAudioSourceNode? _audioSourceNode;
   web.BiquadFilterNode? _highPassNode;
   web.AudioWorkletNode? _workletNode;
+  web.DynamicsCompressorNode? _compressorNode;
   web.MediaStreamAudioDestinationNode? _audioDestNode;
   bool _rnnoiseActive = false;
 
   JSObject? _videoProcessorSession;
   Future<void>? _videoProcessorScriptFuture;
   FaceTimeVideoEffectType _videoEffect = FaceTimeVideoEffectType.none;
-  bool _videoDenoise = false;
+  bool _videoDenoise = true;
   String? _backgroundId;
   String? _backgroundPath;
 
@@ -404,20 +405,33 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
     final source = _audioSourceNode;
     final worklet = _workletNode;
     final hpf = _highPassNode;
+    final compressor = _compressorNode;
+    final dest = _audioDestNode;
     if (source == null || worklet == null) return;
     try {
       source.disconnect();
       hpf?.disconnect();
+      worklet.disconnect();
+      compressor?.disconnect();
       if (_voiceIsolationEnabled && _rnnoiseActive && hpf != null) {
         source.connect(hpf);
         hpf.connect(worklet);
       } else {
         source.connect(worklet);
       }
+      if (compressor != null && dest != null) {
+        worklet.connect(compressor);
+        compressor.connect(dest);
+      } else if (dest != null) {
+        worklet.connect(dest);
+      }
     } catch (_) {}
   }
 
   Future<void> _disposeAudioPipeline(web.AudioContext? ctx) async {
+    try {
+      _workletNode?.port.postMessage(<String, dynamic>{'type': 'dispose'}.jsify());
+    } catch (_) {}
     try {
       _audioSourceNode?.disconnect();
     } catch (_) {}
@@ -428,6 +442,9 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
       _workletNode?.disconnect();
     } catch (_) {}
     try {
+      _compressorNode?.disconnect();
+    } catch (_) {}
+    try {
       _audioDestNode?.disconnect();
     } catch (_) {}
     try {
@@ -436,6 +453,7 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
     _audioSourceNode = null;
     _highPassNode = null;
     _workletNode = null;
+    _compressorNode = null;
     _audioDestNode = null;
     _processedAudioTrack = null;
     if (identical(_audioContext, ctx)) {
@@ -549,8 +567,15 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
       final dest = ctx.createMediaStreamDestination();
       _audioDestNode = dest;
 
+      final compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -18;
+      compressor.knee.value = 12;
+      compressor.ratio.value = 3;
+      compressor.attack.value = 0.005;
+      compressor.release.value = 0.15;
+      _compressorNode = compressor;
+
       _rewireAudioGraph();
-      worklet.connect(dest);
 
       final outTracks = dest.stream.getAudioTracks().toDart;
       if (outTracks.isEmpty) {
@@ -1150,15 +1175,17 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
     if (offer == null || offer.sdp.isEmpty) {
       throw StateError('Failed to create WebRTC SDP offer');
     }
-    await pc.setLocalDescription(web.RTCLocalSessionDescriptionInit(type: offer.type, sdp: offer.sdp)).toDart;
-    return WebRtcSessionDescription(type: offer.type, sdp: offer.sdp);
+    final tunedSdp = tuneOpusSdp(offer.sdp);
+    await pc.setLocalDescription(web.RTCLocalSessionDescriptionInit(type: offer.type, sdp: tunedSdp)).toDart;
+    return WebRtcSessionDescription(type: offer.type, sdp: tunedSdp);
   }
 
   @override
   Future<void> setRemoteAnswer(String sdp, String type) async {
     final pc = _pc;
     if (pc == null) return;
-    await pc.setRemoteDescription(web.RTCSessionDescriptionInit(type: type, sdp: sdp)).toDart;
+    final tunedSdp = tuneOpusSdp(sdp);
+    await pc.setRemoteDescription(web.RTCSessionDescriptionInit(type: type, sdp: tunedSdp)).toDart;
   }
 
   @override
@@ -1403,6 +1430,7 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
         _audioSourceNode?.disconnect();
         _highPassNode?.disconnect();
         _workletNode?.disconnect();
+        _compressorNode?.disconnect();
         _audioDestNode?.disconnect();
         await _audioContext!.close().toDart;
       } catch (_) {}
@@ -1410,6 +1438,7 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
       _audioSourceNode = null;
       _highPassNode = null;
       _workletNode = null;
+      _compressorNode = null;
       _audioDestNode = null;
     }
 
@@ -1456,3 +1485,78 @@ class _WebBrowserRtcPeerAdapter implements WebRtcMediaPeerAdapter {
 }
 
 WebRtcPeerAdapter createPlatformWebRtcPeerAdapter() => _WebBrowserRtcPeerAdapter();
+
+/// Tunes Opus SDP parameters for WebRTC calls:
+/// - minptime=10: lowers audio packetization latency
+/// - useinbandfec=1: enables in-band forward error correction for packet loss recovery
+/// - usedtx=1: enables discontinuous transmission during silence
+/// - maxaveragebitrate=48000: sets studio-grade 48 kbps voice bitrate
+String tuneOpusSdp(String sdp) {
+  if (sdp.isEmpty) return sdp;
+  final lines = sdp.split(RegExp(r'\r?\n'));
+  final lineEnding = sdp.contains('\r\n') ? '\r\n' : '\n';
+
+  final rtpmapRegex = RegExp(r'^a=rtpmap:(\d+)\s+opus/48000', caseSensitive: false);
+  String? opusPt;
+  for (final line in lines) {
+    final m = rtpmapRegex.firstMatch(line.trim());
+    if (m != null) {
+      opusPt = m.group(1);
+      break;
+    }
+  }
+  if (opusPt == null) {
+    return sdp;
+  }
+
+  final fmtpPrefix = 'a=fmtp:$opusPt';
+  bool fmtpFound = false;
+  final updatedLines = <String>[];
+
+  final targetParams = <String, String>{
+    'minptime': '10',
+    'useinbandfec': '1',
+    'usedtx': '1',
+    'maxaveragebitrate': '48000',
+  };
+
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith(fmtpPrefix)) {
+      fmtpFound = true;
+      final rest = trimmed.substring(fmtpPrefix.length).trim();
+      final paramMap = <String, String>{};
+      if (rest.isNotEmpty) {
+        final pairs = rest.split(';');
+        for (final pair in pairs) {
+          final kv = pair.trim().split('=');
+          if (kv.length == 2) {
+            paramMap[kv[0].trim()] = kv[1].trim();
+          } else if (kv.length == 1 && kv[0].trim().isNotEmpty) {
+            paramMap[kv[0].trim()] = '';
+          }
+        }
+      }
+      targetParams.forEach((k, v) => paramMap[k] = v);
+      final formatted = paramMap.entries.map((e) => e.value.isEmpty ? e.key : '${e.key}=${e.value}').join(';');
+      final newFmtp = '$fmtpPrefix $formatted';
+      updatedLines.add(newFmtp);
+    } else {
+      updatedLines.add(line);
+    }
+  }
+
+  if (!fmtpFound) {
+    final resultLines = <String>[];
+    for (final line in updatedLines) {
+      resultLines.add(line);
+      if (line.trim().startsWith('a=rtpmap:$opusPt')) {
+        resultLines.add('$fmtpPrefix minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=48000');
+        fmtpFound = true;
+      }
+    }
+    return resultLines.join(lineEnding);
+  }
+
+  return updatedLines.join(lineEnding);
+}

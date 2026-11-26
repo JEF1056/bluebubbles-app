@@ -203,4 +203,19 @@ class PhoneRelayClientTest {
         assertEquals("ft-1", parsedFalse.get("callUuid").asString)
         assertFalse(parsedFalse.get("isTelephony").asBoolean)
     }
+
+    @Test
+    fun `buildOpenChatPayload includes chatGuid and optional draftText`() {
+        val payloadWithoutDraft = JsonParser.parseString(
+            String(PhoneRelayClient.buildOpenChatPayload("chat-123"))
+        ).asJsonObject
+        assertEquals("chat-123", payloadWithoutDraft.get("chatGuid").asString)
+        assertNull(payloadWithoutDraft.get("draftText"))
+
+        val payloadWithDraft = JsonParser.parseString(
+            String(PhoneRelayClient.buildOpenChatPayload("chat-456", "Draft message to send"))
+        ).asJsonObject
+        assertEquals("chat-456", payloadWithDraft.get("chatGuid").asString)
+        assertEquals("Draft message to send", payloadWithDraft.get("draftText").asString)
+    }
 }

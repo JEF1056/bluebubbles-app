@@ -1,5 +1,4 @@
 import 'package:bluebubbles/app/components/avatars/contact_avatar_widget.dart';
-import 'package:bluebubbles/app/components/wallpaper/wallpaper_contrast.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/message/typing/typing_indicator.dart';
 import 'package:bluebubbles/app/state/chat_state_scope.dart';
 import 'package:bluebubbles/database/models.dart';
@@ -48,102 +47,10 @@ class TypingIndicatorRow extends StatelessWidget {
   }
 }
 
-/// Extracted widget for notifications silenced banner
-class NotificationsSilencedBanner extends StatelessWidget {
-  const NotificationsSilencedBanner({
-    super.key,
-    required this.controller,
-    required this.latestMessage,
-  });
-
-  final ConversationViewController controller;
-  final Message? latestMessage;
-
-  @override
-  Widget build(BuildContext context) {
-    final chat = ChatStateScope.chatOf(context);
-    final hasBackground = ChatStateScope.maybeOf(context)?.hasCustomWallpaper ?? false;
-    const moonIcon = CupertinoIcons.moon_fill;
-    final textStyle = WallpaperContrast.unbubbledStyle(
-      context.theme.textTheme.bodyMedium!,
-      hasWallpaper: hasBackground,
-      fallbackColor: context.theme.colorScheme.tertiary,
-    );
-
-    return AnimatedSize(
-      key: controller.focusInfoKey,
-      duration: const Duration(milliseconds: 250),
-      child: Obx(() => controller.recipientNotifsSilenced.value
-          ? Padding(
-              padding: const EdgeInsets.all(10.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        String.fromCharCode(moonIcon.codePoint),
-                        style: TextStyle(
-                          fontFamily: moonIcon.fontFamily,
-                          package: moonIcon.fontPackage,
-                          fontSize: context.theme.textTheme.bodyMedium!.fontSize,
-                          color: textStyle.color,
-                          shadows: textStyle.shadows,
-                        ),
-                      ),
-                      Text(
-                        " ${chat.getTitle()} has notifications silenced",
-                        style: textStyle,
-                      ),
-                    ],
-                  ),
-                  _NotifyAnywayButton(latestMessage: latestMessage, hasBackground: hasBackground),
-                ],
-              ),
-            )
-          : const SizedBox.shrink()),
-    );
-  }
-}
-
-/// Nested widget for "Notify Anyway" button to further isolate rebuilds
-class _NotifyAnywayButton extends StatelessWidget {
-  const _NotifyAnywayButton({required this.latestMessage, required this.hasBackground});
-
-  final Message? latestMessage;
-  final bool hasBackground;
-
-  @override
-  Widget build(BuildContext context) {
-    // Check conditions for showing the button
-    if (latestMessage?.isFromMe == true &&
-        latestMessage?.dateRead == null &&
-        latestMessage?.wasDeliveredQuietly == true &&
-        latestMessage?.didNotifyRecipient == false) {
-      return TextButton(
-        child: Text(
-          "Notify Anyway",
-          style: WallpaperContrast.unbubbledStyle(
-            context.theme.textTheme.labelLarge!,
-            hasWallpaper: hasBackground,
-            fallbackColor: context.theme.colorScheme.tertiary,
-          ),
-        ),
-        onPressed: () async {
-          await HttpSvc.message.notify(latestMessage!.guid!);
-        },
-      );
-    }
-    return const SizedBox.shrink();
-  }
-}
-
 /// The row of pills above the text field. It shows two independent kinds:
 /// [smartReplies], ML suggestions that only exist when smart replies are enabled
 /// and are cleared on send, and [quickActions], the app's own shortcuts ("Attach
-/// recent photo", "Jump to oldest unread"), which show regardless of that setting
-/// and survive a send.
+/// recent photo"), which show regardless of that setting and survive a send.
 class ConversationPillsRow extends StatelessWidget {
   const ConversationPillsRow({
     super.key,

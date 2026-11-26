@@ -641,6 +641,9 @@ class FaceTimeConnection(
             audioManager?.isSpeakerphoneOn = speakerNow
         } catch (_: Exception) {}
         audioRouteManager.onCallAudioStateChanged()
+        if (state.route == CallAudioState.ROUTE_BLUETOOTH || answeredFromWatch) {
+            webRtcClient?.reapplyNoiseSuppression()
+        }
         if (answeredFromWatch && !watchAudioRouteRequested) {
             routeAudioToWatchIfAvailable(callAudioStateArg = state)
         }

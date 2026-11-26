@@ -18,4 +18,28 @@ extension NotificationsServiceFork on NotificationsService {
     _webUnreadWorker?.dispose();
     _webUnreadWorker = ever<int>(ChatsSvc.unreadCount, updateWebTitleAndBadge);
   }
+
+  Future<void> deleteNotification(
+    int notificationId, {
+    String? tag,
+    String? chatGuid,
+    int? readBefore,
+    String? callUuid,
+    bool keepBubble = false,
+  }) async {
+    if (kIsDesktop) {
+      final desktopKey = chatGuid ?? tag;
+      if (desktopKey != null) {
+        await clearDesktopNotificationsForChat(desktopKey, readBefore: readBefore);
+      }
+      return;
+    }
+    await MethodChannelSvc.actions.deleteNotification(
+      notificationId: notificationId,
+      tag: tag,
+      readBefore: readBefore,
+      callUuid: callUuid,
+      keepBubble: keepBubble,
+    );
+  }
 }

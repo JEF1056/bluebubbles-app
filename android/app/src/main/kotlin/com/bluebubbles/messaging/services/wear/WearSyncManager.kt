@@ -108,7 +108,43 @@ object WearSyncManager {
     const val PATH_TRANSFER_CALL_AUDIO = "/bb/transfer-call-audio"
     const val PATH_DECLINE_CALL = "/bb/decline-call"
     const val PATH_OPEN_CHAT = "/bb/open-chat"
+    const val PATH_MESSAGE_NOTIFICATION = "/bb/message-notification"
     const val PATH_TRANSLATE_MESSAGE = "/bb/translate-message"
+    const val PATH_PHONE_ACTIVE_CHAT = "/wearbubbles/phone_active_chat"
+
+    const val PHOTO_THUMB_MAX_DIM = 240
+    const val PHOTO_THUMB_QUALITY = 65
+    const val PHOTO_THUMB_MAX_BYTES = 20 * 1024
+
+    @Volatile
+    var phoneActiveChatGuid: String? = null
+        internal set
+
+    fun isPhoneActiveChat(chatGuid: String?): Boolean {
+        val current = phoneActiveChatGuid?.takeIf { it.isNotBlank() && it != "-1" } ?: return false
+        val target = chatGuid?.takeIf { it.isNotBlank() && it != "-1" } ?: return false
+        return current == target
+    }
+
+    internal fun buildPhoneActiveChatPayload(chatGuid: String?): String {
+        return JsonObject().apply {
+            addProperty("chatGuid", chatGuid?.takeIf { it.isNotBlank() && it != "-1" } ?: "")
+        }.toString()
+    }
+
+    @JvmStatic
+    fun setPhoneActiveChat(context: Context, chatGuid: String?) {
+        val normalized = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }
+        phoneActiveChatGuid = normalized
+        val appCtx = context.applicationContext ?: context
+        if (normalized != null) {
+            notifyDismissed(appCtx, normalized)
+        }
+        scope.launch {
+            val payload = buildPhoneActiveChatPayload(normalized)
+            sendMessageToWatchNodes(appCtx, PATH_PHONE_ACTIVE_CHAT, payload.toByteArray())
+        }
+    }
 
     internal data class IncomingCallMeta(
         val callerName: String,
@@ -407,6 +443,164 @@ object WearSyncManager {
     fun hasConnectedWatch(): Boolean = cachedHasConnectedWatch || cachedWatchNodeNames.isNotEmpty()
 
     @JvmStatic
+    fun hasConnectedWatch(context: Context): Boolean {
+        if (hasConnectedWatch()) return true
+        val persisted = context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_WATCH_CONNECTED, false)
+        if (persisted) cachedHasConnectedWatch = true
+        return persisted
+    }
+
+    internal fun encodeBase64String(bytes: ByteArray): String {
+        return try {
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (_: Throwable) {
+            java.util.Base64.getEncoder().encodeToString(bytes)
+        }
+    }
+
+    internal fun encodeBitmapToPhotoThumbnail(
+        bitmap: Bitmap,
+        maxDim: Int = PHOTO_THUMB_MAX_DIM,
+        quality: Int = PHOTO_THUMB_QUALITY,
+        maxBytes: Int = PHOTO_THUMB_MAX_BYTES
+    ): String? {
+        var current = if (bitmap.width > maxDim || bitmap.height > maxDim) {
+            val scale = maxDim.toFloat() / maxOf(bitmap.width, bitmap.height).toFloat()
+            val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+            val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(bitmap, w, h, true).also {
+                if (it !== bitmap) bitmap.recycle()
+            }
+        } else {
+            bitmap
+        }
+        val baos = ByteArrayOutputStream()
+        return try {
+            var q = quality
+            while (q >= 30) {
+                baos.reset()
+                current.compress(Bitmap.CompressFormat.JPEG, q, baos)
+                val bytes = baos.toByteArray()
+                if (bytes.isNotEmpty() && bytes.size <= maxBytes) {
+                    return encodeBase64String(bytes)
+                }
+                q -= 15
+            }
+            val fallbackDim = 160
+            if (current.width > fallbackDim || current.height > fallbackDim) {
+                val scale = fallbackDim.toFloat() / maxOf(current.width, current.height).toFloat()
+                val w = (current.width * scale).toInt().coerceAtLeast(1)
+                val h = (current.height * scale).toInt().coerceAtLeast(1)
+                val smaller = Bitmap.createScaledBitmap(current, w, h, true)
+                if (smaller !== current) current.recycle()
+                current = smaller
+                baos.reset()
+                current.compress(Bitmap.CompressFormat.JPEG, 50, baos)
+                val bytes = baos.toByteArray()
+                if (bytes.isNotEmpty() && bytes.size <= maxBytes) {
+                    return encodeBase64String(bytes)
+                }
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            current.recycle()
+        }
+    }
+
+    internal fun createNotificationPhotoThumbnail(
+        filePath: String,
+        maxDim: Int = PHOTO_THUMB_MAX_DIM,
+        quality: Int = PHOTO_THUMB_QUALITY,
+        maxBytes: Int = PHOTO_THUMB_MAX_BYTES
+    ): String? {
+        val file = File(filePath)
+        if (!file.exists() || !file.isFile || file.length() == 0L) return null
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(filePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            val decodeOpts = BitmapFactory.Options().apply {
+                inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxDim)
+            }
+            val decoded = BitmapFactory.decodeFile(filePath, decodeOpts) ?: return null
+            encodeBitmapToPhotoThumbnail(decoded, maxDim, quality, maxBytes)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    internal fun buildNotificationMessagePayload(
+        chatGuid: String,
+        senderName: String,
+        messageText: String,
+        isGroup: Boolean = false,
+        groupTitle: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
+        isTapback: Boolean = false,
+        onlyAlertOnce: Boolean = false,
+        senderAddress: String? = null,
+        messageGuid: String? = null,
+        photoThumbB64: String? = null
+    ): String {
+        return JsonObject().apply {
+            addProperty("chatGuid", chatGuid)
+            addProperty("senderName", senderName)
+            addProperty("messageText", messageText)
+            addProperty("isGroup", isGroup)
+            if (!groupTitle.isNullOrBlank()) addProperty("groupTitle", groupTitle)
+            addProperty("timestamp", timestamp)
+            addProperty("isTapback", isTapback)
+            addProperty("onlyAlertOnce", onlyAlertOnce)
+            if (!senderAddress.isNullOrBlank()) addProperty("senderAddress", senderAddress)
+            if (!messageGuid.isNullOrBlank()) addProperty("messageGuid", messageGuid)
+            if (!photoThumbB64.isNullOrBlank()) addProperty("photoThumbB64", photoThumbB64)
+        }.toString()
+    }
+
+    @JvmStatic
+    fun notifyMessageNotification(
+        context: Context,
+        chatGuid: String,
+        senderName: String,
+        messageText: String,
+        isGroup: Boolean = false,
+        groupTitle: String? = null,
+        timestamp: Long = System.currentTimeMillis(),
+        isTapback: Boolean = false,
+        onlyAlertOnce: Boolean = false,
+        senderAddress: String? = null,
+        messageGuid: String? = null,
+        attachmentPath: String? = null
+    ) {
+        if (chatGuid.isBlank()) return
+        if (isPhoneActiveChat(chatGuid)) return
+        val appCtx = context.applicationContext ?: context
+        scope.launch {
+            if (isPhoneActiveChat(chatGuid)) return@launch
+            val photoThumbB64 = attachmentPath?.let { createNotificationPhotoThumbnail(it) }
+            val payload = buildNotificationMessagePayload(
+                chatGuid = chatGuid,
+                senderName = senderName,
+                messageText = messageText,
+                isGroup = isGroup,
+                groupTitle = groupTitle,
+                timestamp = timestamp,
+                isTapback = isTapback,
+                onlyAlertOnce = onlyAlertOnce,
+                senderAddress = senderAddress,
+                messageGuid = messageGuid,
+                photoThumbB64 = photoThumbB64
+            )
+            val sent = sendMessageToWatchNodes(appCtx, PATH_MESSAGE_NOTIFICATION, payload.toByteArray())
+            updateWatchConnectedCache(appCtx, sent)
+        }
+    }
+
+    @JvmStatic
     fun refreshWatchNodeNamesAsync(context: Context) {
         val appContext = context.applicationContext ?: context
         scope.launch {
@@ -534,18 +728,41 @@ object WearSyncManager {
         }
     }
 
-    fun handleOpenChatFromWatch(context: Context, chatGuid: String) {
-        if (chatGuid.isBlank()) return
-        val launch = Intent(context, MainActivity::class.java).apply {
+    internal fun applyOpenChatIntentExtras(
+        chatGuid: String,
+        draftText: String? = null,
+        putString: (String, String) -> Unit,
+        putBoolean: (String, Boolean) -> Unit,
+        setType: (String) -> Unit
+    ) {
+        setType("OpenChat")
+        putString("chatGuid", chatGuid)
+        putBoolean("bubble", false)
+        if (!draftText.isNullOrBlank()) {
+            putString("text", draftText)
+        }
+    }
+
+    internal fun buildOpenChatIntent(context: Context, chatGuid: String, draftText: String? = null): Intent {
+        return Intent(context, MainActivity::class.java).apply {
             addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             )
-            putExtra("chatGuid", chatGuid)
-            putExtra("bubble", false)
-            type = "OpenChat"
+            applyOpenChatIntentExtras(
+                chatGuid = chatGuid,
+                draftText = draftText,
+                putString = { k, v -> putExtra(k, v) },
+                putBoolean = { k, v -> putExtra(k, v) },
+                setType = { type = it }
+            )
         }
+    }
+
+    fun handleOpenChatFromWatch(context: Context, chatGuid: String, draftText: String? = null) {
+        if (chatGuid.isBlank()) return
+        val launch = buildOpenChatIntent(context, chatGuid, draftText)
         launchActivityOrNotify(
             context = context,
             intent = launch,
@@ -1709,6 +1926,7 @@ object WearSyncManager {
 
     private suspend fun forwardMessageJsonToWatch(context: Context, rawJson: String, isUpdate: Boolean) {
         val (chatGuid, dto) = parseForwardableMessage(rawJson) ?: return
+        if (isPhoneActiveChat(chatGuid)) return
         val guid = dto.str("guid") ?: return
         val payloadStr = dto.toString()
         val dedupKey = if (isUpdate) "upd:$guid:${payloadStr.hashCode()}" else "new:$guid"
@@ -1741,6 +1959,8 @@ object WearSyncManager {
             else -> return
         }
         if (rawJson.isBlank()) return
+        val forwardable = parseForwardableMessage(rawJson) ?: return
+        if (isPhoneActiveChat(forwardable.first)) return
         val isUpdate = type == "updated-message"
         scope.launch {
             forwardMessageJsonToWatch(appCtx, rawJson, isUpdate)

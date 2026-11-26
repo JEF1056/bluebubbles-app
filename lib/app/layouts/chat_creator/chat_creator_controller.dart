@@ -689,7 +689,7 @@ class ChatCreatorController extends StatefulController {
     isHeaderVisible.value = false;
     // Null the active controller so the inline MessagesView is removed from the
     // tree before the new ConversationView mounts — prevents GlobalKey conflicts
-    // (the shared focusInfoKey on the CVC would otherwise appear in both trees).
+    // (the shared typingInfoKey on the CVC would otherwise appear in both trees).
     activeController.value = null;
 
     NavigationSvc.pushAndRemoveUntil(

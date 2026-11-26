@@ -466,7 +466,7 @@ class SetFaceTimeVideoProcessingHandler : MethodCallHandlerImpl() {
     ) {
         val callUuid = call.argument<String>("call_uuid")
         val effect = call.argument<String>("effect")
-        val denoise = call.argument<Boolean>("denoise") ?: false
+        val denoise = call.argument<Boolean>("denoise") ?: true
         val backgroundPath = call.argument<String>("background_path") ?: call.argument<String>("background_id")
         result.success(
             FaceTimeConnectionService.setCallVideoProcessing(
@@ -513,6 +513,21 @@ class TransferCallToWatchHandler : MethodCallHandlerImpl() {
             return
         }
         result.success(FaceTimeConnectionService.transferCallAudioToWatch(context, callUuid))
+    }
+}
+
+class TransferCallToPhoneHandler : MethodCallHandlerImpl() {
+    companion object {
+        const val tag = "transfer-call-to-phone"
+    }
+
+    override fun handleMethodCall(
+        call: MethodCall,
+        result: MethodChannel.Result,
+        context: Context
+    ) {
+        val callUuid = call.argument<String>("call_uuid")
+        result.success(FaceTimeConnectionService.transferCallAudioToPhone(callUuid))
     }
 }
 

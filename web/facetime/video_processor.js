@@ -3,10 +3,10 @@
 // with graceful fallback to CDN.
 // WebGL2 pipeline:
 // - Temporal denoise (motion-adaptive history blend)
-// - Spatial denoise (3x3 bilateral filter)
-// - Background-only Kawase blur (halo-free background extraction)
-// - Joint bilateral mask edge refinement
-// - Driven via requestVideoFrameCallback where supported.
+// - Spatial denoise (3x3 bilateral edge-preserving filter)
+// - Background-only Dual-Kawase pyramid blur (halo-free background extraction)
+// - Joint bilateral mask edge refinement + Auto-Exposure/Shadow-Lift + AMD FidelityFX CAS
+// - Driven via WebCodecs MediaStreamTrackProcessor/Generator with rVFC fallback + thermal governor.
 
 (function () {
   if (window.bbFaceTimeVideoProcessor) return;
@@ -223,22 +223,42 @@
         outColor = texture(uFg, bestUv);
       }`;
 
-    // Pass 3b: Kawase blur
-    const FS_KAWASE = `#version 300 es
+    // Pass 3b: Dual-Kawase Downsample (5-tap center + 4 half-pixel diagonal corners)
+    const FS_KAWASE_DOWN = `#version 300 es
       precision mediump float;
       uniform sampler2D uTex;
-      uniform vec2 uOffset;
+      uniform vec2 uHalfPixel;
       in vec2 vUv;
       out vec4 outColor;
       void main() {
-        vec4 c = texture(uTex, vUv + vec2(-uOffset.x, -uOffset.y))
-               + texture(uTex, vUv + vec2( uOffset.x, -uOffset.y))
-               + texture(uTex, vUv + vec2(-uOffset.x,  uOffset.y))
-               + texture(uTex, vUv + vec2( uOffset.x,  uOffset.y));
-        outColor = c * 0.25;
+        vec4 sum = texture(uTex, vUv) * 4.0;
+        sum += texture(uTex, vUv - uHalfPixel);
+        sum += texture(uTex, vUv + uHalfPixel);
+        sum += texture(uTex, vUv + vec2(uHalfPixel.x, -uHalfPixel.y));
+        sum += texture(uTex, vUv - vec2(uHalfPixel.x, -uHalfPixel.y));
+        outColor = sum * 0.125;
       }`;
 
-    // Pass 4: Final composite with Joint Bilateral Mask Edge Refinement
+    // Pass 3c: Dual-Kawase Upsample (8-tap tent filter)
+    const FS_KAWASE_UP = `#version 300 es
+      precision mediump float;
+      uniform sampler2D uTex;
+      uniform vec2 uHalfPixel;
+      in vec2 vUv;
+      out vec4 outColor;
+      void main() {
+        vec4 sum = texture(uTex, vUv + vec2(-uHalfPixel.x * 2.0, 0.0));
+        sum += texture(uTex, vUv + vec2(-uHalfPixel.x, uHalfPixel.y)) * 2.0;
+        sum += texture(uTex, vUv + vec2(0.0, uHalfPixel.y * 2.0));
+        sum += texture(uTex, vUv + vec2(uHalfPixel.x, uHalfPixel.y)) * 2.0;
+        sum += texture(uTex, vUv + vec2(uHalfPixel.x * 2.0, 0.0));
+        sum += texture(uTex, vUv + vec2(uHalfPixel.x, -uHalfPixel.y)) * 2.0;
+        sum += texture(uTex, vUv + vec2(0.0, -uHalfPixel.y * 2.0));
+        sum += texture(uTex, vUv + vec2(-uHalfPixel.x, -uHalfPixel.y)) * 2.0;
+        outColor = sum / 12.0;
+      }`;
+
+    // Pass 4: Final composite with AMD FidelityFX CAS + Auto-Exposure/Shadow-Lift + Joint Bilateral Mask Edge Refinement
     const FS_COMPOSITE = `#version 300 es
       precision mediump float;
       uniform sampler2D uFg;
@@ -248,10 +268,47 @@
       uniform float uHasMask;
       uniform vec2 uTexel;
       uniform vec2 uMaskTexel;
+      uniform float uEnhance;
+      uniform float uSharpness;
+      uniform float uExposureGain;
+      uniform float uShadowLift;
       in vec2 vUv;
       out vec4 outColor;
+
+      vec3 applyCas(vec3 c) {
+        vec3 a = texture(uFg, vUv + vec2(0.0, -uTexel.y)).rgb;
+        vec3 b = texture(uFg, vUv + vec2(-uTexel.x, 0.0)).rgb;
+        vec3 d = texture(uFg, vUv + vec2(uTexel.x, 0.0)).rgb;
+        vec3 e = texture(uFg, vUv + vec2(0.0, uTexel.y)).rgb;
+        vec3 mnRGB = min(min(a, b), min(d, e));
+        mnRGB = min(mnRGB, c);
+        vec3 mxRGB = max(max(a, b), max(d, e));
+        mxRGB = max(mxRGB, c);
+        vec3 rcpMRGB = 1.0 / max(mxRGB, vec3(1e-4));
+        vec3 ampRGB = clamp(min(mnRGB, 1.0 - mxRGB) * rcpMRGB, 0.0, 1.0);
+        ampRGB = sqrt(ampRGB);
+        float peak = -1.0 / mix(8.0, 5.0, uSharpness);
+        vec3 wRGB = ampRGB * peak;
+        return clamp((c + (a + b + d + e) * wRGB) / (1.0 + 4.0 * wRGB), 0.0, 1.0);
+      }
+
+      vec3 applyExposureAndShadowLift(vec3 rgb) {
+        vec3 lifted = rgb * uExposureGain;
+        // Soft highlight shoulder above 0.78 prevents clipping bright skin/windows
+        lifted = mix(lifted, 1.0 - exp(-lifted * 1.45), step(0.75, lifted) * 0.35);
+        float luma = dot(lifted, vec3(0.2126, 0.7152, 0.0722));
+        float shadowMask = (1.0 - smoothstep(0.0, 0.48, luma)) * uShadowLift;
+        return clamp(lifted + lifted * shadowMask * 0.85 + vec3(shadowMask * 0.03), 0.0, 1.0);
+      }
+
       void main() {
         vec4 fg = texture(uFg, vUv);
+        if (uEnhance > 0.5) {
+          if (uSharpness > 0.01) {
+            fg.rgb = applyCas(fg.rgb);
+          }
+          fg.rgb = applyExposureAndShadowLift(fg.rgb);
+        }
         if (uMode == 0) {
           outColor = fg;
           return;
@@ -304,7 +361,8 @@
       return s;
     }
 
-    function link(fsSrc) {
+    // Cache attribute & uniform locations once at link time to eliminate per-frame lookups
+    function link(fsSrc, uniformNames) {
       const p = gl.createProgram();
       const vs = compile(gl.VERTEX_SHADER, VS);
       const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
@@ -316,24 +374,44 @@
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
         throw new Error(gl.getProgramInfoLog(p) || 'Program link error');
       }
-      return p;
+      const uniforms = {};
+      for (const name of uniformNames) {
+        uniforms[name] = gl.getUniformLocation(p, name);
+      }
+      return {
+        prog: p,
+        aPos: gl.getAttribLocation(p, 'aPos'),
+        u: uniforms,
+      };
     }
 
-    const progTemporal = link(FS_TEMPORAL);
-    const progSpatial = link(FS_SPATIAL_DENOISE);
-    const progBgExtract = link(FS_BG_EXTRACT);
-    const progKawase = link(FS_KAWASE);
-    const progComposite = link(FS_COMPOSITE);
+    const pTemporal = link(FS_TEMPORAL, ['uTexCurrent', 'uTexHistory', 'uHasHistory', 'uDenoise']);
+    const pSpatial = link(FS_SPATIAL_DENOISE, ['uTex', 'uTexel', 'uDenoise']);
+    const pBgExtract = link(FS_BG_EXTRACT, ['uFg', 'uMask', 'uTexel', 'uHasMask']);
+    const pKawaseDown = link(FS_KAWASE_DOWN, ['uTex', 'uHalfPixel']);
+    const pKawaseUp = link(FS_KAWASE_UP, ['uTex', 'uHalfPixel']);
+    const pComposite = link(FS_COMPOSITE, [
+      'uFg',
+      'uBg',
+      'uMask',
+      'uMode',
+      'uHasMask',
+      'uTexel',
+      'uMaskTexel',
+      'uEnhance',
+      'uSharpness',
+      'uExposureGain',
+      'uShadowLift',
+    ]);
 
     const quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
 
-    function bindQuad(prog) {
-      const loc = gl.getAttribLocation(prog, 'aPos');
+    function bindQuad(shader) {
       gl.bindBuffer(gl.ARRAY_BUFFER, quad);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(shader.aPos);
+      gl.vertexAttribPointer(shader.aPos, 2, gl.FLOAT, false, 0, 0);
     }
 
     function makeTex(filter = gl.LINEAR) {
@@ -352,6 +430,7 @@
     const texHistory = makeTex();
     const texBlurA = makeTex();
     const texBlurB = makeTex();
+    const texBlurC = makeTex();
     const texVirtualBg = makeTex();
     const texMask = makeTex();
 
@@ -359,6 +438,7 @@
     const fboFg = gl.createFramebuffer();
     const fboBlurA = gl.createFramebuffer();
     const fboBlurB = gl.createFramebuffer();
+    const fboBlurC = gl.createFramebuffer();
 
     let allocW = 0;
     let allocH = 0;
@@ -366,40 +446,36 @@
     let maskH = 0;
     let hasHistory = false;
 
+    function allocColorTarget(tex, fbo, w, h) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    }
+
     function ensureTargets(w, h) {
       if (allocW === w && allocH === h) return;
       allocW = w;
       allocH = h;
       hasHistory = false;
-      const bw = Math.max(64, Math.floor(w / 4));
-      const bh = Math.max(64, Math.floor(h / 4));
 
-      // Temporal FBO
-      gl.bindTexture(gl.TEXTURE_2D, texTemporal);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fboTemporal);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texTemporal, 0);
+      const aw = Math.max(64, Math.floor(w / 4));
+      const ah = Math.max(64, Math.floor(h / 4));
+      const bw = Math.max(32, Math.floor(aw / 2));
+      const bh = Math.max(32, Math.floor(ah / 2));
+      const cw = Math.max(16, Math.floor(bw / 2));
+      const ch = Math.max(16, Math.floor(bh / 2));
 
-      // Foreground FBO
-      gl.bindTexture(gl.TEXTURE_2D, texFg);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.bindFramebuffer(gl.FRAMEBUFFER, fboFg);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texFg, 0);
+      allocColorTarget(texTemporal, fboTemporal, w, h);
+      allocColorTarget(texFg, fboFg, w, h);
 
-      // History texture
       gl.bindTexture(gl.TEXTURE_2D, texHistory);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 
-      // Blur FBOs
-      for (const [t, f] of [
-        [texBlurA, fboBlurA],
-        [texBlurB, fboBlurB],
-      ]) {
-        gl.bindTexture(gl.TEXTURE_2D, t);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, bw, bh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, f);
-        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
-      }
+      allocColorTarget(texBlurA, fboBlurA, aw, ah);
+      allocColorTarget(texBlurB, fboBlurB, bw, bh);
+      allocColorTarget(texBlurC, fboBlurC, cw, ch);
+
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
@@ -422,123 +498,160 @@
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     }
 
-    function render(video, w, h, opts, hasMask) {
+    function render(source, w, h, opts, hasMask, enhanceState) {
       ensureTargets(w, h);
 
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+
+      const useTemporal = !!opts.denoise;
+      const useSpatial = !!opts.denoise && enhanceState.spatialDenoise;
 
       // Pass 1: Temporal Denoise -> fboTemporal
       gl.bindFramebuffer(gl.FRAMEBUFFER, fboTemporal);
       gl.viewport(0, 0, w, h);
-      gl.useProgram(progTemporal);
-      bindQuad(progTemporal);
+      gl.useProgram(pTemporal.prog);
+      bindQuad(pTemporal);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texVideo);
-      gl.uniform1i(gl.getUniformLocation(progTemporal, 'uTexCurrent'), 0);
+      gl.uniform1i(pTemporal.u.uTexCurrent, 0);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, texHistory);
-      gl.uniform1i(gl.getUniformLocation(progTemporal, 'uTexHistory'), 1);
-      gl.uniform1f(gl.getUniformLocation(progTemporal, 'uHasHistory'), hasHistory ? 1.0 : 0.0);
-      gl.uniform1f(gl.getUniformLocation(progTemporal, 'uDenoise'), opts.denoise ? 1.0 : 0.0);
+      gl.uniform1i(pTemporal.u.uTexHistory, 1);
+      gl.uniform1f(pTemporal.u.uHasHistory, hasHistory ? 1.0 : 0.0);
+      gl.uniform1f(pTemporal.u.uDenoise, useTemporal ? 1.0 : 0.0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
       // Pass 2: Spatial Denoise -> fboFg
       gl.bindFramebuffer(gl.FRAMEBUFFER, fboFg);
       gl.viewport(0, 0, w, h);
-      gl.useProgram(progSpatial);
-      bindQuad(progSpatial);
+      gl.useProgram(pSpatial.prog);
+      bindQuad(pSpatial);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texTemporal);
-      gl.uniform1i(gl.getUniformLocation(progSpatial, 'uTex'), 0);
-      gl.uniform2f(gl.getUniformLocation(progSpatial, 'uTexel'), 1.0 / w, 1.0 / h);
-      gl.uniform1f(gl.getUniformLocation(progSpatial, 'uDenoise'), opts.denoise ? 1.0 : 0.0);
+      gl.uniform1i(pSpatial.u.uTex, 0);
+      gl.uniform2f(pSpatial.u.uTexel, 1.0 / w, 1.0 / h);
+      gl.uniform1f(pSpatial.u.uDenoise, useSpatial ? 1.0 : 0.0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-      // Update history texture from denoised foreground
+      // Update history texture from denoised foreground (kept in native exposure space)
       gl.bindTexture(gl.TEXTURE_2D, texHistory);
       gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
-      hasHistory = !!opts.denoise;
+      hasHistory = useTemporal;
 
       const isBlur = opts.effect === 'blurLight' || opts.effect === 'blurStrong';
       const isVirtualBg = opts.effect === 'virtualBackground';
 
       if (isBlur) {
-        const bw = Math.max(64, Math.floor(w / 4));
-        const bh = Math.max(64, Math.floor(h / 4));
-        const baseRadius = opts.effect === 'blurStrong' ? 4.0 : 2.0;
+        const aw = Math.max(64, Math.floor(w / 4));
+        const ah = Math.max(64, Math.floor(h / 4));
+        const bw = Math.max(32, Math.floor(aw / 2));
+        const bh = Math.max(32, Math.floor(ah / 2));
+        const cw = Math.max(16, Math.floor(bw / 2));
+        const ch = Math.max(16, Math.floor(bh / 2));
+        const strong = opts.effect === 'blurStrong';
+        const offsetScale = strong ? 1.6 : 1.0;
 
-        // Background extraction pass: extract halo-free background into fboBlurA
+        // Background extraction pass -> fboBlurA
         gl.bindFramebuffer(gl.FRAMEBUFFER, fboBlurA);
-        gl.viewport(0, 0, bw, bh);
-        gl.useProgram(progBgExtract);
-        bindQuad(progBgExtract);
+        gl.viewport(0, 0, aw, ah);
+        gl.useProgram(pBgExtract.prog);
+        bindQuad(pBgExtract);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texFg);
-        gl.uniform1i(gl.getUniformLocation(progBgExtract, 'uFg'), 0);
+        gl.uniform1i(pBgExtract.u.uFg, 0);
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, texMask);
-        gl.uniform1i(gl.getUniformLocation(progBgExtract, 'uMask'), 1);
-        gl.uniform2f(gl.getUniformLocation(progBgExtract, 'uTexel'), 1.0 / w, 1.0 / h);
-        gl.uniform1f(gl.getUniformLocation(progBgExtract, 'uHasMask'), hasMask ? 1.0 : 0.0);
+        gl.uniform1i(pBgExtract.u.uMask, 1);
+        gl.uniform2f(pBgExtract.u.uTexel, 1.0 / w, 1.0 / h);
+        gl.uniform1f(pBgExtract.u.uHasMask, hasMask ? 1.0 : 0.0);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        // 3-pass Kawase blur
-        gl.useProgram(progKawase);
-        bindQuad(progKawase);
+        // Dual-Kawase pyramid downsample: A -> B (-> C for blurStrong)
+        gl.useProgram(pKawaseDown.prog);
+        bindQuad(pKawaseDown);
 
-        // Level 1: fboBlurA -> fboBlurB
         gl.bindFramebuffer(gl.FRAMEBUFFER, fboBlurB);
+        gl.viewport(0, 0, bw, bh);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texBlurA);
-        gl.uniform1i(gl.getUniformLocation(progKawase, 'uTex'), 0);
-        gl.uniform2f(gl.getUniformLocation(progKawase, 'uOffset'), baseRadius / bw, baseRadius / bh);
+        gl.uniform1i(pKawaseDown.u.uTex, 0);
+        gl.uniform2f(pKawaseDown.u.uHalfPixel, offsetScale / aw, offsetScale / ah);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        // Level 2: fboBlurB -> fboBlurA
+        if (strong) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fboBlurC);
+          gl.viewport(0, 0, cw, ch);
+          gl.bindTexture(gl.TEXTURE_2D, texBlurB);
+          gl.uniform2f(pKawaseDown.u.uHalfPixel, offsetScale / bw, offsetScale / bh);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
+        // Dual-Kawase pyramid upsample: (C -> B ->) A
+        gl.useProgram(pKawaseUp.prog);
+        bindQuad(pKawaseUp);
+        gl.uniform1i(pKawaseUp.u.uTex, 0);
+
+        if (strong) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, fboBlurB);
+          gl.viewport(0, 0, bw, bh);
+          gl.bindTexture(gl.TEXTURE_2D, texBlurC);
+          gl.uniform2f(pKawaseUp.u.uHalfPixel, offsetScale / cw, offsetScale / ch);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+
         gl.bindFramebuffer(gl.FRAMEBUFFER, fboBlurA);
+        gl.viewport(0, 0, aw, ah);
         gl.bindTexture(gl.TEXTURE_2D, texBlurB);
-        gl.uniform2f(gl.getUniformLocation(progKawase, 'uOffset'), (baseRadius * 1.8) / bw, (baseRadius * 1.8) / bh);
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Level 3: fboBlurA -> fboBlurB
-        gl.bindFramebuffer(gl.FRAMEBUFFER, fboBlurB);
-        gl.bindTexture(gl.TEXTURE_2D, texBlurA);
-        gl.uniform2f(gl.getUniformLocation(progKawase, 'uOffset'), (baseRadius * 2.8) / bw, (baseRadius * 2.8) / bh);
+        gl.uniform2f(pKawaseUp.u.uHalfPixel, offsetScale / bw, offsetScale / bh);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       }
 
-      // Final composite with joint bilateral mask edge refinement -> canvas
+      // Final composite with CAS + Auto-Exposure/Shadow-Lift + joint bilateral edge refinement
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, w, h);
-      gl.useProgram(progComposite);
-      bindQuad(progComposite);
+      gl.useProgram(pComposite.prog);
+      bindQuad(pComposite);
 
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texFg);
-      gl.uniform1i(gl.getUniformLocation(progComposite, 'uFg'), 0);
+      gl.uniform1i(pComposite.u.uFg, 0);
 
       gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, isVirtualBg ? texVirtualBg : texBlurB);
-      gl.uniform1i(gl.getUniformLocation(progComposite, 'uBg'), 1);
+      gl.bindTexture(gl.TEXTURE_2D, isVirtualBg ? texVirtualBg : texBlurA);
+      gl.uniform1i(pComposite.u.uBg, 1);
 
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, texMask);
-      gl.uniform1i(gl.getUniformLocation(progComposite, 'uMask'), 2);
+      gl.uniform1i(pComposite.u.uMask, 2);
 
-      gl.uniform1i(gl.getUniformLocation(progComposite, 'uMode'), isBlur ? 1 : isVirtualBg ? 2 : 0);
-      gl.uniform1f(gl.getUniformLocation(progComposite, 'uHasMask'), hasMask ? 1.0 : 0.0);
-      gl.uniform2f(gl.getUniformLocation(progComposite, 'uTexel'), 1.0 / w, 1.0 / h);
-      gl.uniform2f(gl.getUniformLocation(progComposite, 'uMaskTexel'), 1.0 / (maskW || 256), 1.0 / (maskH || 144));
+      gl.uniform1i(pComposite.u.uMode, isBlur ? 1 : isVirtualBg ? 2 : 0);
+      gl.uniform1f(pComposite.u.uHasMask, hasMask ? 1.0 : 0.0);
+      gl.uniform2f(pComposite.u.uTexel, 1.0 / w, 1.0 / h);
+      gl.uniform2f(pComposite.u.uMaskTexel, 1.0 / (maskW || 256), 1.0 / (maskH || 144));
+      gl.uniform1f(pComposite.u.uEnhance, opts.denoise ? 1.0 : 0.0);
+      gl.uniform1f(pComposite.u.uSharpness, enhanceState.sharpness);
+      gl.uniform1f(pComposite.u.uExposureGain, enhanceState.exposureGain);
+      gl.uniform1f(pComposite.u.uShadowLift, enhanceState.shadowLift);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
     function dispose() {
-      [texVideo, texTemporal, texFg, texHistory, texBlurA, texBlurB, texVirtualBg, texMask].forEach((t) =>
-        gl.deleteTexture(t)
+      [
+        texVideo,
+        texTemporal,
+        texFg,
+        texHistory,
+        texBlurA,
+        texBlurB,
+        texBlurC,
+        texVirtualBg,
+        texMask,
+      ].forEach((t) => gl.deleteTexture(t));
+      [fboTemporal, fboFg, fboBlurA, fboBlurB, fboBlurC].forEach((f) => gl.deleteFramebuffer(f));
+      [pTemporal, pSpatial, pBgExtract, pKawaseDown, pKawaseUp, pComposite].forEach((s) =>
+        gl.deleteProgram(s.prog)
       );
-      [fboTemporal, fboFg, fboBlurA, fboBlurB].forEach((f) => gl.deleteFramebuffer(f));
-      [progTemporal, progSpatial, progBgExtract, progKawase, progComposite].forEach((p) => gl.deleteProgram(p));
       gl.deleteBuffer(quad);
       gl.getExtension('WEBGL_lose_context')?.loseContext();
       canvas.width = canvas.height = 0;
@@ -551,19 +664,13 @@
     const opts = Object.assign(
       {
         effect: 'none',
-        denoise: false,
+        denoise: true,
         backgroundId: null,
         backgroundPath: null,
         targetFps: 30,
       },
       initialOptions || {}
     );
-
-    const video = document.createElement('video');
-    video.muted = true;
-    video.playsInline = true;
-    video.autoplay = true;
-    video.srcObject = new MediaStream([rawTrack]);
 
     const canvas = document.createElement('canvas');
     const settings = (rawTrack.getSettings && rawTrack.getSettings()) || {};
@@ -572,6 +679,19 @@
 
     const webgl = createWebGL2Renderer(canvas);
     const ctx2d = webgl ? null : canvas.getContext('2d');
+
+    // Tiny 16x16 probe avoids gl.readPixels GPU-CPU stall while feeding Auto-Exposure
+    const lumaCanvas = document.createElement('canvas');
+    lumaCanvas.width = 16;
+    lumaCanvas.height = 16;
+    const lumaCtx = lumaCanvas.getContext('2d', { willReadFrequently: true });
+
+    const enhanceState = {
+      exposureGain: 1.0,
+      shadowLift: 0.15,
+      sharpness: 0.45,
+      spatialDenoise: true,
+    };
 
     let disposed = false;
     let segmenter = null;
@@ -582,10 +702,77 @@
     let hasMask = false;
     let bgSignature = '';
     let bgCanvas = null;
-    let frameCallbackId = null;
-    let fallbackTimerId = null;
     let lastSegmentAt = 0;
-    let lastFrameTime = performance.now();
+    let lastLumaAt = 0;
+    let smoothedLuma = 0.45;
+    let lastProcessedAt = 0;
+
+    // Adaptive thermal governor state
+    let avgProcessMs = 8;
+    let highLoadStreak = 0;
+    let lowLoadStreak = 0;
+    let governorTier = 0; // 0: full, 1: 24fps + 66ms seg, 2: 18fps + 100ms seg + no spatial
+
+    function updateExposureFromSource(source, nowMs) {
+      if (!opts.denoise || !lumaCtx || nowMs - lastLumaAt < 250) return;
+      lastLumaAt = nowMs;
+      try {
+        lumaCtx.drawImage(source, 0, 0, 16, 16);
+        const data = lumaCtx.getImageData(0, 0, 16, 16).data;
+        let sum = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+        }
+        const meanLuma = sum / (256 * 255);
+        smoothedLuma = smoothedLuma * 0.8 + meanLuma * 0.2;
+        // Target ~0.46 mid-tone luma; clamp gain to [0.92, 1.55] to avoid blowing highlights
+        const targetGain = Math.max(0.92, Math.min(1.55, 0.46 / Math.max(0.14, smoothedLuma)));
+        enhanceState.exposureGain = enhanceState.exposureGain * 0.8 + targetGain * 0.2;
+        const darkFactor = Math.max(0.0, Math.min(1.0, (0.42 - smoothedLuma) / 0.28));
+        enhanceState.shadowLift = 0.12 + darkFactor * 0.42;
+      } catch (_) {}
+    }
+
+    function updateGovernor(processMs) {
+      avgProcessMs = avgProcessMs * 0.85 + processMs * 0.15;
+      const baseFps = Math.max(15, Math.min(30, opts.targetFps || 30));
+      const budgetMs = 1000 / baseFps;
+
+      if (avgProcessMs > budgetMs * 0.72) {
+        highLoadStreak++;
+        lowLoadStreak = 0;
+        if (highLoadStreak >= 15 && governorTier < 2) {
+          governorTier++;
+          highLoadStreak = 0;
+        }
+      } else if (avgProcessMs < budgetMs * 0.4) {
+        lowLoadStreak++;
+        highLoadStreak = 0;
+        if (lowLoadStreak >= 45 && governorTier > 0) {
+          governorTier--;
+          lowLoadStreak = 0;
+        }
+      } else {
+        highLoadStreak = 0;
+        lowLoadStreak = 0;
+      }
+
+      enhanceState.spatialDenoise = governorTier < 2;
+      enhanceState.sharpness = governorTier >= 2 ? 0.25 : 0.45;
+    }
+
+    function effectiveFps() {
+      const baseFps = Math.max(15, Math.min(30, opts.targetFps || 30));
+      if (governorTier >= 2) return Math.min(baseFps, 18);
+      if (governorTier === 1) return Math.min(baseFps, 24);
+      return baseFps;
+    }
+
+    function segIntervalMs() {
+      if (governorTier >= 2) return 100;
+      if (governorTier === 1) return 66;
+      return 33;
+    }
 
     function refreshBackground() {
       if (opts.effect !== 'virtualBackground') return;
@@ -636,13 +823,18 @@
         });
     }
 
-    function processFrame(nowMs) {
-      if (disposed || video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
-      lastFrameTime = nowMs;
+    function renderFrame(source, srcW, srcH, nowMs) {
+      if (disposed || srcW <= 0 || srcH <= 0) return false;
+      const minFrameDelta = 1000 / effectiveFps();
+      if (lastProcessedAt > 0 && nowMs - lastProcessedAt < minFrameDelta * 0.85) {
+        return false;
+      }
+      lastProcessedAt = nowMs;
 
-      if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+      const t0 = performance.now();
+      if (canvas.width !== srcW || canvas.height !== srcH) {
+        canvas.width = srcW;
+        canvas.height = srcH;
         bgSignature = '';
       }
 
@@ -651,10 +843,12 @@
         ensureSegmenter();
       }
 
-      if (opts.effect !== 'none' && segmenter && nowMs - lastSegmentAt >= 33) {
+      updateExposureFromSource(source, nowMs);
+
+      if (opts.effect !== 'none' && segmenter && nowMs - lastSegmentAt >= segIntervalMs()) {
         lastSegmentAt = nowMs;
         try {
-          const res = segmenter.segmentForVideo(video, nowMs);
+          const res = segmenter.segmentForVideo(source, nowMs);
           const conf = res && res.confidenceMasks && res.confidenceMasks[0];
           if (conf) {
             const floatMask = conf.getAsFloat32Array();
@@ -666,7 +860,7 @@
             // EMA temporal smoothing prevents mask flicker on hair/edges
             for (let i = 0; i < floatMask.length; i++) {
               const target = Math.max(0, Math.min(255, Math.round(floatMask[i] * 255)));
-              maskBytes[i] = hasMask ? Math.round(maskBytes[i] * 0.30 + target * 0.70) : target;
+              maskBytes[i] = hasMask ? Math.round(maskBytes[i] * 0.3 + target * 0.7) : target;
             }
             maskW = mw;
             maskH = mh;
@@ -679,7 +873,7 @@
       }
 
       if (webgl) {
-        webgl.render(video, canvas.width, canvas.height, opts, hasMask);
+        webgl.render(source, canvas.width, canvas.height, opts, hasMask, enhanceState);
       } else if (ctx2d) {
         ctx2d.save();
         if (opts.effect === 'blurLight' || opts.effect === 'blurStrong') {
@@ -687,39 +881,112 @@
         } else {
           ctx2d.filter = 'none';
         }
-        ctx2d.drawImage(video, 0, 0, canvas.width, canvas.height);
+        ctx2d.drawImage(source, 0, 0, canvas.width, canvas.height);
         ctx2d.restore();
       }
+
+      updateGovernor(performance.now() - t0);
+      return true;
     }
 
-    function scheduleNext() {
-      if (disposed) return;
-      if (typeof video.requestVideoFrameCallback === 'function') {
-        frameCallbackId = video.requestVideoFrameCallback((now) => {
-          processFrame(now);
-          scheduleNext();
-        });
-      }
-    }
-
-    const fps = Math.max(15, Math.min(30, opts.targetFps || 30));
-    const outputStream = canvas.captureStream(fps);
-    const outputTrack = outputStream.getVideoTracks()[0];
-
-    video.play().catch(() => {});
     refreshBackground();
     if (opts.effect !== 'none') ensureSegmenter();
 
-    const hasRvfc = typeof video.requestVideoFrameCallback === 'function';
-    if (hasRvfc) {
-      scheduleNext();
-    }
-    fallbackTimerId = setInterval(() => {
-      const now = performance.now();
-      if (!hasRvfc || document.hidden || now - lastFrameTime > 200) {
-        processFrame(now);
+    const hasWebCodecs =
+      typeof MediaStreamTrackProcessor === 'function' &&
+      typeof MediaStreamTrackGenerator === 'function' &&
+      typeof VideoFrame === 'function';
+
+    let outputTrack = null;
+    let video = null;
+    let frameCallbackId = null;
+    let fallbackTimerId = null;
+    let wcReader = null;
+    let wcWriter = null;
+
+    function startRvfcFallback() {
+      video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      video.srcObject = new MediaStream([rawTrack]);
+      video.play().catch(() => {});
+
+      let lastRvfcAt = performance.now();
+      function processVideo(nowMs) {
+        if (disposed || video.readyState < 2) return;
+        lastRvfcAt = nowMs;
+        renderFrame(video, video.videoWidth, video.videoHeight, nowMs);
       }
-    }, Math.round(1000 / fps));
+
+      function scheduleNext() {
+        if (disposed) return;
+        if (typeof video.requestVideoFrameCallback === 'function') {
+          frameCallbackId = video.requestVideoFrameCallback((now) => {
+            processVideo(now);
+            scheduleNext();
+          });
+        }
+      }
+
+      const fps = Math.max(15, Math.min(30, opts.targetFps || 30));
+      const outputStream = canvas.captureStream(fps);
+      outputTrack = outputStream.getVideoTracks()[0];
+
+      const hasRvfc = typeof video.requestVideoFrameCallback === 'function';
+      if (hasRvfc) scheduleNext();
+      fallbackTimerId = setInterval(() => {
+        const now = performance.now();
+        if (!hasRvfc || document.hidden || now - lastRvfcAt > 200) {
+          processVideo(now);
+        }
+      }, Math.round(1000 / fps));
+    }
+
+    if (hasWebCodecs) {
+      try {
+        const processor = new MediaStreamTrackProcessor({ track: rawTrack });
+        const generator = new MediaStreamTrackGenerator({ kind: 'video' });
+        outputTrack = generator;
+        wcReader = processor.readable.getReader();
+        wcWriter = generator.writable.getWriter();
+
+        (async () => {
+          try {
+            while (!disposed) {
+              const { value: frame, done } = await wcReader.read();
+              if (done || !frame) break;
+              try {
+                if (!disposed) {
+                  const w = frame.displayWidth || frame.codedWidth;
+                  const h = frame.displayHeight || frame.codedHeight;
+                  const rendered = renderFrame(frame, w, h, performance.now());
+                  if (rendered) {
+                    const outFrame = new VideoFrame(canvas, {
+                      timestamp: frame.timestamp,
+                      duration: frame.duration,
+                    });
+                    try {
+                      await wcWriter.write(outFrame);
+                    } finally {
+                      outFrame.close();
+                    }
+                  }
+                }
+              } finally {
+                frame.close();
+              }
+            }
+          } catch (_) {
+            // Stream ended or track stopped during teardown
+          }
+        })();
+      } catch (_) {
+        startRvfcFallback();
+      }
+    } else {
+      startRvfcFallback();
+    }
 
     return {
       track: outputTrack,
@@ -736,7 +1003,15 @@
       dispose() {
         if (disposed) return;
         disposed = true;
-        if (frameCallbackId !== null && typeof video.cancelVideoFrameCallback === 'function') {
+        if (wcReader) {
+          wcReader.cancel().catch(() => {});
+          wcReader = null;
+        }
+        if (wcWriter) {
+          wcWriter.close().catch(() => {});
+          wcWriter = null;
+        }
+        if (frameCallbackId !== null && video && typeof video.cancelVideoFrameCallback === 'function') {
           try {
             video.cancelVideoFrameCallback(frameCallbackId);
           } catch (_) {}
@@ -746,7 +1021,10 @@
           clearInterval(fallbackTimerId);
           fallbackTimerId = null;
         }
-        video.srcObject = null;
+        if (video) {
+          video.srcObject = null;
+          video = null;
+        }
         if (outputTrack) {
           try {
             outputTrack.stop();

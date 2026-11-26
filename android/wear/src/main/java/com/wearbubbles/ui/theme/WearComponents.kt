@@ -441,12 +441,14 @@ fun WearRotaryFocusScope(
 @Composable
 fun WearDirectKeyboardInput(
     requestToken: Int,
+    initialText: String = "",
     hint: String = "Message",
     imeAction: Int = EditorInfo.IME_ACTION_SEND,
     inputType: Int = InputType.TYPE_CLASS_TEXT or
         InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
         InputType.TYPE_TEXT_FLAG_AUTO_CORRECT,
     onSubmit: (String) -> Unit,
+    onDismissWithDraft: (String) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     if (requestToken <= 0) return
@@ -458,6 +460,7 @@ fun WearDirectKeyboardInput(
     }
     val currentOnSubmit by rememberUpdatedState(onSubmit)
     val currentOnDismiss by rememberUpdatedState(onDismiss)
+    val currentOnDismissWithDraft by rememberUpdatedState(onDismissWithDraft)
 
     var editTextRef by remember { mutableStateOf<EditText?>(null) }
     var dismissedToken by remember { mutableIntStateOf(0) }
@@ -476,6 +479,8 @@ fun WearDirectKeyboardInput(
     fun dismiss(et: EditText?) {
         if (dismissedToken == requestToken) return
         dismissedToken = requestToken
+        val draft = et?.text?.toString().orEmpty()
+        currentOnDismissWithDraft(draft)
         et?.let {
             it.setText("")
             it.clearFocus()
@@ -501,6 +506,10 @@ fun WearDirectKeyboardInput(
 
     LaunchedEffect(editTextRef, requestToken) {
         val et = editTextRef ?: return@LaunchedEffect
+        if (initialText.isNotEmpty() && et.text?.toString() != initialText) {
+            et.setText(initialText)
+            et.setSelection(initialText.length)
+        }
         var shown = false
         // Wait briefly for window focus (e.g. while an overlay Dialog finishes dismissing).
         for (attempt in 0 until 24) {
@@ -545,6 +554,10 @@ fun WearDirectKeyboardInput(
                 this.inputType = inputType
                 maxLines = 1
                 imeOptions = imeAction
+                if (initialText.isNotEmpty()) {
+                    setText(initialText)
+                    setSelection(initialText.length)
+                }
                 setOnEditorActionListener { v, actionId, event ->
                     val isSubmitAction = actionId == imeAction ||
                         actionId == EditorInfo.IME_ACTION_SEND ||
@@ -555,7 +568,9 @@ fun WearDirectKeyboardInput(
                             event?.keyCode == KeyEvent.KEYCODE_ENTER &&
                             event.action == KeyEvent.ACTION_DOWN)
                     if (isSubmitAction) {
-                        submitDirectKeyboardText(v.text?.toString().orEmpty())?.let(currentOnSubmit)
+                        val text = submitDirectKeyboardText(v.text?.toString().orEmpty())
+                        text?.let(currentOnSubmit)
+                        v.setText("")
                         dismiss(this)
                         true
                     } else {

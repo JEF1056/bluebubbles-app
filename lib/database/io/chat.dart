@@ -476,13 +476,6 @@ class Chat {
 
     if (hasUnreadMessage == hasUnread && !force) return this;
     hasUnreadMessage = hasUnread;
-    final willSendRead = !hasUnread &&
-        privateMark &&
-        SettingsSvc.settings.enablePrivateAPI.value &&
-        (autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value);
-    if (willSendRead && Get.isRegistered<ConversationViewController>(tag: guid)) {
-      Get.find<ConversationViewController>(tag: guid).clearUnreadDivider();
-    }
     await saveAsync(updateHasUnreadMessage: true);
 
     try {

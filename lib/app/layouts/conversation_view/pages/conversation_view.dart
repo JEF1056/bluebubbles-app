@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:bluebubbles/app/components/wallpaper/wallpaper.dart';
@@ -14,6 +15,7 @@ import 'package:bluebubbles/helpers/ui/route_transition_helpers.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/pages/messages_view.dart';
 import 'package:bluebubbles/app/layouts/conversation_view/widgets/effects/screen_effects_widget.dart';
 import 'package:bluebubbles/database/models.dart';
+import 'package:bluebubbles/services/backend/interfaces/chat_interface.dart';
 import 'package:bluebubbles/services/services.dart';
 import 'package:bluebubbles/utils/logger/logger.dart';
 import 'package:flutter/foundation.dart';
@@ -219,7 +221,15 @@ class ConversationViewState extends State<ConversationView> with ThemeHelpers<Co
     controller.fromSearchResult = widget.initialScrollToGuid != null;
     controller.autoOpened = widget.autoOpened;
     controller.snapshotUnreadOnOpen();
-    ChatsSvc.setActiveChatSync(chat, clearNotifications: !widget.autoOpened);
+    ChatsSvc.setActiveChatSync(chat, clearNotifications: false);
+    if (!widget.autoOpened) {
+      if (kIsDesktop) {
+        unawaited(NotificationsSvc.clearDesktopNotificationsForChat(chat.guid));
+      } else if (chat.id != null) {
+        unawaited(ChatInterface.clearNotificationForChat(chatId: chat.id!, chatGuid: chat.guid));
+      }
+      controller.scheduleAutoMarkRead();
+    }
     _sectionWorker = ever(NavigationSvc.openSection, (_) => _updateCovered());
     _updateCovered();
     ChatsSvc.activeChat?.controller = controller;

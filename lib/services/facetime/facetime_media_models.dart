@@ -116,17 +116,35 @@ class FaceTimeBackgroundPreset {
     required this.id,
     required this.label,
     this.assetOrPath,
+    this.previewColors = const <int>[],
   });
 
   final String id;
   final String label;
   final String? assetOrPath;
+  final List<int> previewColors;
 
   static const List<FaceTimeBackgroundPreset> presets = <FaceTimeBackgroundPreset>[
-    FaceTimeBackgroundPreset(id: 'studio_warm', label: 'Warm Studio'),
-    FaceTimeBackgroundPreset(id: 'gradient_dusk', label: 'Dusk Gradient'),
-    FaceTimeBackgroundPreset(id: 'slate_minimal', label: 'Slate Minimal'),
-    FaceTimeBackgroundPreset(id: 'ocean_calm', label: 'Ocean Calm'),
+    FaceTimeBackgroundPreset(
+      id: 'studio_warm',
+      label: 'Warm Studio',
+      previewColors: <int>[0xFF3E2723, 0xFF212121],
+    ),
+    FaceTimeBackgroundPreset(
+      id: 'gradient_dusk',
+      label: 'Dusk Gradient',
+      previewColors: <int>[0xFF1A237E, 0xFF4A148C],
+    ),
+    FaceTimeBackgroundPreset(
+      id: 'slate_minimal',
+      label: 'Slate Minimal',
+      previewColors: <int>[0xFF20252C, 0xFF333B46],
+    ),
+    FaceTimeBackgroundPreset(
+      id: 'ocean_calm',
+      label: 'Ocean Calm',
+      previewColors: <int>[0xFF0D47A1, 0xFF00695C],
+    ),
   ];
 }
 

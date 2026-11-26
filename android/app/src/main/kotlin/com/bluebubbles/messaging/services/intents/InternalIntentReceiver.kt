@@ -407,14 +407,7 @@ class InternalIntentReceiver: BroadcastReceiver() {
         oldBuilder.setStyle(messagingStyle)
         oldBuilder.setOnlyAlertOnce(true)
         oldBuilder.setGroupAlertBehavior(Notification.GROUP_ALERT_CHILDREN)
-        if (succeeded && mediaMime == null && replyText.isNotBlank() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            val existingHistory = chatNotification.notification.extras
-                ?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
-                ?.toList()
-                ?: emptyList()
-            val updatedHistory = (listOf<CharSequence>(replyText) + existingHistory).take(5).toTypedArray()
-            oldBuilder.setRemoteInputHistory(updatedHistory)
-        }
+        // Do not also set RemoteInputHistory: on API 28+ SystemUI renders both MessagingStyle.Message and EXTRA_REMOTE_INPUT_HISTORY, duplicating the reply.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {

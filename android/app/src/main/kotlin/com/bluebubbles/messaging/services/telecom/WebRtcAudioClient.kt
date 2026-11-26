@@ -365,10 +365,82 @@ class WebRtcAudioClient(
                 val iso = voiceIsolationEnabled.toString()
                 mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "true"))
                 mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", iso))
+                mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression2", iso))
                 mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", iso))
                 mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "true"))
+                mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl2", "true"))
                 mandatory.add(MediaConstraints.KeyValuePair("googTypingNoiseDetection", iso))
             }
+
+        internal fun tuneOpusSdp(sdp: String): String {
+            if (sdp.isEmpty()) return sdp
+            val lineSep = if (sdp.contains("\r\n")) "\r\n" else "\n"
+            val lines = sdp.split(lineSep).toMutableList()
+            val opusPayloadTypes = linkedSetOf<String>()
+            val rtpmapRegex = Regex("^a=rtpmap:(\\d+)\\s+opus/48000(?:/\\d+)?\\s*$", RegexOption.IGNORE_CASE)
+            for (line in lines) {
+                val m = rtpmapRegex.matchEntire(line.trim())
+                if (m != null) {
+                    opusPayloadTypes.add(m.groupValues[1])
+                }
+            }
+            if (opusPayloadTypes.isEmpty()) return sdp
+
+            val desiredParams = listOf(
+                "minptime" to "10",
+                "useinbandfec" to "1",
+                "usedtx" to "1",
+                "maxaveragebitrate" to "48000",
+                "stereo" to "0"
+            )
+            val seenFmtp = mutableSetOf<String>()
+            for (i in lines.indices) {
+                val trimmed = lines[i].trim()
+                for (pt in opusPayloadTypes) {
+                    val prefix = "a=fmtp:$pt "
+                    if (trimmed.startsWith(prefix)) {
+                        seenFmtp.add(pt)
+                        val existingRaw = trimmed.substring(prefix.length)
+                        val params = linkedMapOf<String, String>()
+                        for (part in existingRaw.split(";")) {
+                            val kv = part.trim()
+                            if (kv.isEmpty()) continue
+                            val eq = kv.indexOf('=')
+                            if (eq > 0) {
+                                params[kv.substring(0, eq).trim()] = kv.substring(eq + 1).trim()
+                            } else {
+                                params[kv] = ""
+                            }
+                        }
+                        for ((k, v) in desiredParams) {
+                            params[k] = v
+                        }
+                        val encoded = params.entries.joinToString(";") { (k, v) ->
+                            if (v.isEmpty()) k else "$k=$v"
+                        }
+                        lines[i] = "$prefix$encoded"
+                    }
+                }
+            }
+
+            if (seenFmtp.size < opusPayloadTypes.size) {
+                val out = ArrayList<String>(lines.size + opusPayloadTypes.size)
+                val encodedDefault = desiredParams.joinToString(";") { (k, v) -> "$k=$v" }
+                for (line in lines) {
+                    out.add(line)
+                    val m = rtpmapRegex.matchEntire(line.trim())
+                    if (m != null) {
+                        val pt = m.groupValues[1]
+                        if (pt !in seenFmtp) {
+                            out.add("a=fmtp:$pt $encodedDefault")
+                        }
+                    }
+                }
+                return out.joinToString(lineSep)
+            }
+
+            return lines.joinToString(lineSep)
+        }
 
         internal fun parsePayload(arg: Any?): JSONObject? = when (arg) {
             is JSONObject -> arg
@@ -702,7 +774,7 @@ class WebRtcAudioClient(
     private var pendingVideoEffect: String? = null
 
     @Volatile
-    private var pendingVideoDenoise: Boolean = false
+    private var pendingVideoDenoise: Boolean = true
 
     @Volatile
     private var pendingVirtualBgPath: String? = null
@@ -999,6 +1071,19 @@ class WebRtcAudioClient(
     fun isFrontCamera(): Boolean = frontCamera
 
     fun canFlipCamera(): Boolean = hasLocalVideo && cameraCount >= 2
+
+    fun reapplyNoiseSuppression() {
+        val adm: JavaAudioDeviceModule?
+        val enabled: Boolean
+        synchronized(lock) {
+            if (stopped) return
+            adm = audioDeviceModule
+            enabled = voiceIsolationEnabled
+        }
+        try {
+            adm?.setNoiseSuppressorEnabled(enabled)
+        } catch (_: Exception) {}
+    }
 
     fun setVoiceIsolation(enabled: Boolean): Boolean {
         val adm: JavaAudioDeviceModule?
@@ -1538,9 +1623,18 @@ class WebRtcAudioClient(
         }
 
         val adm = JavaAudioDeviceModule.builder(context.applicationContext)
+            .setUseLowLatency(true)
+            .setSampleRate(48000)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
             .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
             .setUseHardwareAcousticEchoCanceler(JavaAudioDeviceModule.isBuiltInAcousticEchoCancelerSupported())
-            .setUseHardwareNoiseSuppressor(JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported())
+            // Rely on WebRTC M125 SW NS to avoid OEM double-NS voice muffling.
+            .setUseHardwareNoiseSuppressor(false)
             .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
                 override fun onWebRtcAudioRecordInitError(errorMessage: String?) {
                     PersistentLog.e(context, TAG, "[$TAG] AudioRecord init error: $errorMessage")
@@ -2348,10 +2442,11 @@ class WebRtcAudioClient(
         pc.createOffer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
                 if (desc == null || stopped) return
+                val tunedDesc = SessionDescription(desc.type, tuneOpusSdp(desc.description))
                 PersistentLog.d(
                     context,
                     Constants.logTag,
-                    "[$TAG] Offer SDP ($callUuid): wantVideo=$wantVideo hasH264=${sdpContainsH264(desc.description)}"
+                    "[$TAG] Offer SDP ($callUuid): wantVideo=$wantVideo hasH264=${sdpContainsH264(tunedDesc.description)}"
                 )
                 pc.setLocalDescription(object : SdpObserver {
                     override fun onSetSuccess() {
@@ -2360,7 +2455,7 @@ class WebRtcAudioClient(
                             "ft-bridge-offer",
                             buildOfferPayload(
                                 callUuid = callUuid,
-                                sdp = desc.description,
+                                sdp = tunedDesc.description,
                                 wantVideo = wantVideo,
                                 hasLocalVideo = hasLocalVideo,
                                 answerCall = answerCall
@@ -2376,7 +2471,7 @@ class WebRtcAudioClient(
 
                     override fun onCreateSuccess(p0: SessionDescription?) {}
                     override fun onCreateFailure(p0: String?) {}
-                }, desc)
+                }, tunedDesc)
             }
 
             override fun onCreateFailure(error: String?) {
@@ -2391,7 +2486,7 @@ class WebRtcAudioClient(
     }
 
     private fun handleRemoteAnswer(sdp: String) {
-        val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
+        val answer = SessionDescription(SessionDescription.Type.ANSWER, tuneOpusSdp(sdp))
         val observer = object : SdpObserver {
             override fun onSetSuccess() {
                 val activePc: PeerConnection

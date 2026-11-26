@@ -353,6 +353,7 @@ class PhoneRelayClient(private val context: Context) {
         const val PATH_DISMISS_NOTIFICATION = "/bb/dismiss-notification"
         const val PATH_WATCH_ACTIVE = "/bb/watch-active"
         const val PATH_OPEN_CHAT = "/bb/open-chat"
+        const val PATH_MESSAGE_NOTIFICATION = "/bb/message-notification"
         const val PATH_TRANSLATE_MESSAGE = "/bb/translate-message"
         const val PATH_INCOMING_CALL = "/bb/incoming-call"
         const val PATH_CALL_ENDED = "/bb/call-ended"
@@ -370,6 +371,16 @@ class PhoneRelayClient(private val context: Context) {
         ): ByteArray = JsonObject().apply {
             addProperty("callUuid", callUuid)
             addProperty("target", target)
+        }.toString().toByteArray()
+
+        internal fun buildOpenChatPayload(
+            chatGuid: String,
+            draftText: String? = null
+        ): ByteArray = JsonObject().apply {
+            addProperty("chatGuid", chatGuid)
+            if (!draftText.isNullOrBlank()) {
+                addProperty("draftText", draftText)
+            }
         }.toString().toByteArray()
 
         internal fun buildAnswerCallAudioPayload(
@@ -833,8 +844,8 @@ class PhoneRelayClient(private val context: Context) {
     suspend fun sendDismissNotificationAwait(chatGuid: String): Boolean =
         sendJsonField(PATH_DISMISS_NOTIFICATION, "chatGuid", chatGuid)
 
-    suspend fun sendOpenChatAwait(chatGuid: String): Boolean =
-        sendJsonField(PATH_OPEN_CHAT, "chatGuid", chatGuid)
+    suspend fun sendOpenChatAwait(chatGuid: String, draftText: String? = null): Boolean =
+        sendToPhone(PATH_OPEN_CHAT, buildOpenChatPayload(chatGuid, draftText))
 
     suspend fun sendAnswerCallAudioAwait(
         callUuid: String,

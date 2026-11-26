@@ -64,6 +64,7 @@ import com.bluebubbles.messaging.services.telecom.SetFaceTimeSpeakerHandler
 import com.bluebubbles.messaging.services.telecom.SetFaceTimeVideoProcessingHandler
 import com.bluebubbles.messaging.services.telecom.SetFaceTimeVoiceIsolationHandler
 import com.bluebubbles.messaging.services.telecom.ToggleFaceTimeSpeakerHandler
+import com.bluebubbles.messaging.services.telecom.TransferCallToPhoneHandler
 import com.bluebubbles.messaging.services.telecom.TransferCallToWatchHandler
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -205,14 +206,12 @@ class MethodCallHandler {
             SetFaceTimeVideoProcessingHandler.tag -> SetFaceTimeVideoProcessingHandler().handleMethodCall(call, result, context)
             IsWearWatchConnectedHandler.tag -> IsWearWatchConnectedHandler().handleMethodCall(call, result, context)
             TransferCallToWatchHandler.tag -> TransferCallToWatchHandler().handleMethodCall(call, result, context)
+            TransferCallToPhoneHandler.tag -> TransferCallToPhoneHandler().handleMethodCall(call, result, context)
             SetCallToneHandler.tag -> SetCallToneHandler().handleMethodCall(call, result, context)
             AppSoundPlayer.tag -> AppSoundPlayer.handleMethodCall(call, result, context)
             "set-locus-context" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && context is Activity) {
-                    val chatGuid = call.argument<String>("chat_guid")
-                    val locusId = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }?.let(::LocusId)
-                    context.setLocusContext(locusId, null)
-                }
+                val chatGuid = call.argument<String>("chat_guid")
+                (context as? MainActivity)?.updateLocusContext(chatGuid)
                 result.success(null)
             }
             else -> {

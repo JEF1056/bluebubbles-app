@@ -215,6 +215,30 @@ void main() {
       controller.initUnreadDivider(msgs);
       expect(controller.unreadDividerGuid.value, 'm-new');
     });
+
+    test('scheduleAutoMarkRead clears unread divider after delay or on user interaction', () async {
+      final chat = Chat(guid: 'iMessage;-;+15550005555', hasUnreadMessage: true, lastReadAt: 1000);
+      final controller = ConversationViewController(chat);
+      final msgs = [_msg('m2', 2000), _msg('m1', 1000, isFromMe: true)];
+      controller.initUnreadDivider(msgs);
+      expect(controller.unreadDividerGuid.value, 'm2');
+
+      // Delay clears unread divider once elapsed.
+      controller.scheduleAutoMarkRead(delay: const Duration(milliseconds: 30));
+      expect(controller.unreadDividerGuid.value, 'm2');
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      expect(controller.unreadDividerGuid.value, isNull);
+
+      // User interaction within the delay window also clears it immediately.
+      final chat2 = Chat(guid: 'iMessage;-;+15550006666', hasUnreadMessage: true, lastReadAt: 1000);
+      final controller2 = ConversationViewController(chat2);
+      controller2.initUnreadDivider(msgs);
+      expect(controller2.unreadDividerGuid.value, 'm2');
+      controller2.scheduleAutoMarkRead(delay: const Duration(seconds: 10));
+      controller2.onUserChatInteraction(immediate: true);
+      expect(controller2.unreadDividerGuid.value, isNull);
+      controller2.onClose();
+    });
   });
 
   group('UnreadSeparator widget', () {

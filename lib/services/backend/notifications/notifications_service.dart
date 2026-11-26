@@ -541,6 +541,18 @@ class NotificationsService {
     );
   }
 
+  Future<void> clearMissedFaceTimeNotification(String? callUuid) async {
+    if (kIsWeb) {
+      if (callUuid != null && callUuid.isNotEmpty) {
+        closeWebNotificationsByTag('missed-$callUuid');
+      }
+      return;
+    }
+    if (Platform.isAndroid) {
+      await flnp.cancel(id: missedFaceTimeNotificationId(callUuid));
+    }
+  }
+
   double _effectiveFaceTimeRingtoneVolume() {
     if (GetIt.I.isRegistered<SettingsService>()) {
       return (SettingsSvc.settings.soundVolume.value / 100.0).clamp(0.0, 1.0);

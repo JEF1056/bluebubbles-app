@@ -236,18 +236,6 @@ class _ConversationPanelState extends State<ConversationPanel> with ThemeHelpers
                     ),
                   const SettingsDivider(padding: EdgeInsets.only(left: 16.0)),
                   Obx(() => SettingsSwitch(
-                        onChanged: (bool val) async {
-                          SettingsSvc.settings.scrollToLastUnread.value = val;
-                          await SettingsSvc.settings.saveOneAsync('scrollToLastUnread');
-                        },
-                        initialVal: SettingsSvc.settings.scrollToLastUnread.value,
-                        title: "Store Last Read Message",
-                        subtitle:
-                            "Remembers the last opened message and allows automatically scrolling back to it if out of view",
-                        backgroundColor: tileColor,
-                        isThreeLine: true,
-                      )),
-                  Obx(() => SettingsSwitch(
                         onChanged: (bool val) {
                           SettingsSvc.settings.hideNamesForReactions.value = val;
                           SettingsSvc.settings.saveOneAsync("hideNamesForReactions");

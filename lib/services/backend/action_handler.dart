@@ -21,6 +21,18 @@ class ActionHandler extends GetxService {
   /// `new-message` processing is skipped (the updated-message will handle it).
   final List<String> outOfOrderTempGuids = [];
   final Set<String> _notifiedMissedCallUuids = <String>{};
+  final Set<String> _answeredCallUuids = <String>{};
+  final Map<String, ({String? callUuid, DateTime at})> _recentMissedByAddress =
+      <String, ({String? callUuid, DateTime at})>{};
+
+  static String? _normalizeCallAddress(String? raw) {
+    final trimmed = raw?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    if (trimmed.contains('@')) return trimmed.toLowerCase();
+    final digits = trimmed.replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return null;
+    return digits.length > 10 ? digits.substring(digits.length - 10) : digits;
+  }
 
   /// Extracts `readAt` (epoch ms) or legacy `lastReadMessageTimestamp` from a
   /// `chat-read-status-changed` payload, treating non-positive values as unset.
@@ -118,12 +130,51 @@ class ActionHandler extends GetxService {
 
     final bool isOutgoing = enriched["is_outgoing"] == true;
     final String? endedReason = _nonEmptyString(enriched["ended_reason"])?.toLowerCase();
+    final String? normalizedAddress = _normalizeCallAddress(address);
+    final int? disconnectedReason =
+        enriched["disconnected_reason"] is num ? (enriched["disconnected_reason"] as num).toInt() : null;
+
+    if (statusId == 1) {
+      if (callUuid != null) {
+        if (_answeredCallUuids.length >= 100) _answeredCallUuids.clear();
+        _answeredCallUuids.add(callUuid);
+        if (_notifiedMissedCallUuids.contains(callUuid) && GetIt.I.isRegistered<NotificationsService>()) {
+          unawaited(NotificationsSvc.clearMissedFaceTimeNotification(callUuid));
+        }
+      }
+      if (normalizedAddress != null) {
+        final recent = _recentMissedByAddress[normalizedAddress];
+        if (recent != null && DateTime.now().difference(recent.at).inSeconds <= 15) {
+          _recentMissedByAddress.remove(normalizedAddress);
+          if (GetIt.I.isRegistered<NotificationsService>()) {
+            unawaited(NotificationsSvc.clearMissedFaceTimeNotification(recent.callUuid));
+          }
+        }
+      }
+    }
+
     if (statusId == 6 && !isOutgoing && endedReason == "missed") {
+      final bool wasAnswered =
+          enriched["answered_at"] != null || (callUuid != null && _answeredCallUuids.contains(callUuid));
+      final bool endedElsewhere = disconnectedReason == 17 || disconnectedReason == 18;
+      final activeState = ActiveCallController.instance.state;
+      final bool activeMatchesCaller =
+          (activeState.phase == ActiveCallPhase.ongoing || activeState.phase == ActiveCallPhase.connecting) &&
+              normalizedAddress != null &&
+              _normalizeCallAddress(activeState.callerAddress) == normalizedAddress;
       final bool alreadyNotified = callUuid != null && _notifiedMissedCallUuids.contains(callUuid);
-      if (!alreadyNotified && GetIt.I.isRegistered<NotificationsService>()) {
+      if (!wasAnswered &&
+          !endedElsewhere &&
+          !activeMatchesCaller &&
+          !alreadyNotified &&
+          GetIt.I.isRegistered<NotificationsService>()) {
         if (callUuid != null) {
           if (_notifiedMissedCallUuids.length >= 100) _notifiedMissedCallUuids.clear();
           _notifiedMissedCallUuids.add(callUuid);
+        }
+        if (normalizedAddress != null) {
+          if (_recentMissedByAddress.length >= 50) _recentMissedByAddress.clear();
+          _recentMissedByAddress[normalizedAddress] = (callUuid: callUuid, at: DateTime.now());
         }
         String caller = _nonEmptyString(enriched["display_name"]) ??
             _nonEmptyString(address) ??

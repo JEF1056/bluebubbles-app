@@ -361,6 +361,9 @@ void main() {
       expect(outDev.isActive, isTrue);
 
       expect(FaceTimeBackgroundPreset.presets.length, greaterThanOrEqualTo(4));
+      for (final preset in FaceTimeBackgroundPreset.presets) {
+        expect(preset.previewColors, isNotEmpty);
+      }
     });
   });
 
@@ -435,7 +438,11 @@ void main() {
       expect(controller.voiceIsolationEnabled.value, isFalse);
       expect(adapter.lastVoiceIsolation, isFalse);
 
-      // Video denoise + effects
+      // Video denoise + effects (default ON, toggling to false then true)
+      expect(controller.videoDenoiseEnabled.value, isTrue);
+      expect(await controller.setVideoDenoise(false), isTrue);
+      expect(controller.videoDenoiseEnabled.value, isFalse);
+      expect(adapter.lastDenoise, isFalse);
       expect(await controller.setVideoDenoise(true), isTrue);
       expect(controller.videoDenoiseEnabled.value, isTrue);
       expect(adapter.lastDenoise, isTrue);
@@ -480,7 +487,7 @@ void main() {
       expect(controller.callQualityStats.value, isNull);
       expect(controller.audioOutputs, isEmpty);
       expect(controller.videoEffect.value, FaceTimeVideoEffectType.none);
-      expect(controller.videoDenoiseEnabled.value, isFalse);
+      expect(controller.videoDenoiseEnabled.value, isTrue);
     });
 
     test('handles Android audio-devices state events in handleFacetimeCallState', () async {

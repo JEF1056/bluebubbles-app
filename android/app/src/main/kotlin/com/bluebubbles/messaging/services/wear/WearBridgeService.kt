@@ -139,8 +139,10 @@ class WearBridgeService : WearableListenerService() {
                 FaceTimeConnectionService.setCallMuted(callUuid, muted)
             }
             WearSyncManager.PATH_OPEN_CHAT -> {
-                val chatGuid = parseJson(dataStr)?.str("chatGuid") ?: return
-                WearSyncManager.handleOpenChatFromWatch(applicationContext, chatGuid)
+                val obj = parseJson(dataStr) ?: return
+                val chatGuid = obj.str("chatGuid") ?: return
+                val draftText = obj.str("draftText")
+                WearSyncManager.handleOpenChatFromWatch(applicationContext, chatGuid, draftText)
             }
             WearSyncManager.PATH_TRANSLATE_MESSAGE -> {
                 val obj = parseJson(dataStr) ?: return

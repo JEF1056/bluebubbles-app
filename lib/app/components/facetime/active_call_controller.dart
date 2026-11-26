@@ -387,8 +387,8 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
 
   static String? failureMessageFor({String? endedReason, String? endedError}) {
     final reason = endedReason?.trim().toLowerCase();
-    // Missed calls are reported as missed-call notifications, never error banners.
-    if (reason == 'missed') return null;
+    // Missed and remotely-handled calls are never error banners.
+    if (reason == 'missed' || reason == 'answered_elsewhere' || reason == 'declined_elsewhere') return null;
     final err = endedError?.trim();
     final hasFailureReason = reason != null && _failureEndedReasons.contains(reason);
     final hasEndedError = err != null && err.isNotEmpty;
@@ -608,7 +608,8 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
   final RxBool isSpeakerOn = false.obs;
   final RxBool isReconnecting = false.obs;
   final RxBool voiceIsolationEnabled = true.obs;
-  final RxBool videoDenoiseEnabled = false.obs;
+  final RxBool videoDenoiseEnabled = true.obs;
+  final RxBool audioOnWatch = false.obs;
   final Rx<FaceTimeVideoEffectType> videoEffect = FaceTimeVideoEffectType.none.obs;
   final RxnString virtualBackgroundId = RxnString();
   final RxnString virtualBackgroundPath = RxnString();
@@ -896,14 +897,14 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<bool> transferCallToWatch() async {
     final callUuid = _state.callUuid;
+    bool ok = false;
     if (_onTransferCallToWatch != null) {
       try {
-        return await _onTransferCallToWatch(callUuid ?? '');
+        ok = await _onTransferCallToWatch(callUuid ?? '');
       } catch (_) {
-        return false;
+        ok = false;
       }
-    }
-    if (!_isWeb &&
+    } else if (!_isWeb &&
         Platform.isAndroid &&
         GetIt.I.isRegistered<MethodChannelService>() &&
         callUuid != null &&
@@ -913,12 +914,41 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
           'transfer-call-to-watch',
           <String, dynamic>{'call_uuid': callUuid},
         );
-        return res ?? false;
+        ok = res ?? false;
       } catch (_) {
-        return false;
+        ok = false;
       }
     }
-    return false;
+    if (ok && !_disposed) {
+      audioOnWatch.value = true;
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  Future<bool> transferCallToPhone() async {
+    final callUuid = _state.callUuid;
+    bool ok = false;
+    if (!_isWeb &&
+        Platform.isAndroid &&
+        GetIt.I.isRegistered<MethodChannelService>() &&
+        callUuid != null &&
+        callUuid.isNotEmpty) {
+      try {
+        final res = await MethodChannelSvc.channel.invokeMethod<bool>(
+          'transfer-call-to-phone',
+          <String, dynamic>{'call_uuid': callUuid},
+        );
+        ok = res ?? false;
+      } catch (_) {
+        ok = false;
+      }
+    }
+    if (ok && !_disposed) {
+      audioOnWatch.value = false;
+      notifyListeners();
+    }
+    return ok;
   }
 
   Future<void> refreshAudioDevices() async {
@@ -989,6 +1019,9 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
       final selected = audioOutputs.firstWhereOrNull((d) => d.id == deviceId);
       if (selected != null) {
         isSpeakerOn.value = selected.kind == FaceTimeAudioDeviceKind.speaker;
+        if (selected.kind != FaceTimeAudioDeviceKind.bluetooth) {
+          audioOnWatch.value = false;
+        }
       }
       notifyListeners();
     }
@@ -1207,7 +1240,8 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
     activeAudioInputId.value = null;
     canSelectAudioOutput.value = false;
     videoEffect.value = FaceTimeVideoEffectType.none;
-    videoDenoiseEnabled.value = false;
+    videoDenoiseEnabled.value = true;
+    audioOnWatch.value = false;
     virtualBackgroundId.value = null;
     virtualBackgroundPath.value = null;
   }
@@ -3618,6 +3652,7 @@ class ActiveCallController extends ChangeNotifier with WidgetsBindingObserver {
     isReconnecting.close();
     voiceIsolationEnabled.close();
     videoDenoiseEnabled.close();
+    audioOnWatch.close();
     videoEffect.close();
     virtualBackgroundId.close();
     virtualBackgroundPath.close();

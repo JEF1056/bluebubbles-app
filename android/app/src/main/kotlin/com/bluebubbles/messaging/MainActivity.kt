@@ -16,6 +16,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.annotation.RequiresApi
 import androidx.core.view.WindowCompat
 import com.bluebubbles.messaging.services.backend_ui_interop.MethodCallHandler
 import com.bluebubbles.messaging.services.camera.GmsgCameraHost
@@ -25,6 +26,7 @@ import com.bluebubbles.messaging.services.foreground.ForegroundServiceBroadcastR
 import com.bluebubbles.messaging.services.notifications.CreateIncomingFaceTimeNotification
 import com.bluebubbles.messaging.services.telecom.CallTonePlayer
 import com.bluebubbles.messaging.services.telecom.FaceTimeConnectionService
+import com.bluebubbles.messaging.services.wear.WearSyncManager
 import com.bluebubbles.messaging.Constants
 import com.bluebubbles.messaging.utils.PersistentLog
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -227,9 +229,9 @@ class MainActivity : FlutterFragmentActivity() {
         updateLockScreenFlagsForIntent(intent)
         dismissIncomingFaceTimeNotificationIfAnswering(intent)
         handleAnswerFaceTimeIntent(intent)
+        updateLocusContext(intent?.getStringExtra("chatGuid"))
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
 
-        updateLocusContext(intent?.getStringExtra("chatGuid"))
         window.decorView.setWindowInsetsAnimationCallback(
             object : WindowInsetsAnimation.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                 override fun onProgress(
@@ -347,10 +349,17 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     fun updateLocusContext(chatGuid: String?) {
+        val normalized = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val locusId = chatGuid?.takeIf { it.isNotBlank() && it != "-1" }?.let(::LocusId)
+            val locusId = normalized?.let(::LocusId)
             setLocusContext(locusId, null)
         }
+        WearSyncManager.setPhoneActiveChat(applicationContext, normalized)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        WearSyncManager.setPhoneActiveChat(applicationContext, null)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

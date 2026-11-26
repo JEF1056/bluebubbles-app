@@ -149,6 +149,9 @@ import com.wearbubbles.ui.theme.centeredTextStyle
 import com.wearbubbles.ui.theme.rememberSpeechInputLauncher
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+
+private val pendingChatDrafts = ConcurrentHashMap<String, String>()
 
 internal fun shouldAutoScrollOnMessageUpdate(
     previousLatestGuid: String?,
@@ -359,6 +362,9 @@ fun MessageDetailScreen(
     }
 
     var keyboardRequestToken by remember { mutableIntStateOf(0) }
+    var pendingDraft by remember(chatGuid) {
+        mutableStateOf(pendingChatDrafts[chatGuid].orEmpty())
+    }
 
     val launchKeyboardReply = {
         keyboardRequestToken = if (keyboardRequestToken <= 0) 1 else keyboardRequestToken + 1
@@ -633,11 +639,29 @@ fun MessageDetailScreen(
                 )
             }
 
+            if (pendingDraft.isNotBlank()) {
+                item(key = "action_continue_on_phone") {
+                    MoreActionPill(
+                        label = "Continue on Phone",
+                        icon = Icons.AutoMirrored.Rounded.SendToMobile,
+                        onClick = {
+                            RemoteLauncher.openChatOnPhoneAsync(context, chatGuid, pendingDraft)
+                            pendingDraft = ""
+                            pendingChatDrafts.remove(chatGuid)
+                        },
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                }
+            }
+
             item(key = "action_open_on_phone") {
                 MoreActionPill(
                     label = "Open on phone",
                     icon = Icons.AutoMirrored.Rounded.SendToMobile,
-                    onClick = { RemoteLauncher.openChatOnPhoneAsync(context, chatGuid) },
+                    onClick = {
+                        val draft = pendingDraft.takeIf { it.isNotBlank() }
+                        RemoteLauncher.openChatOnPhoneAsync(context, chatGuid, draft)
+                    },
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
@@ -712,9 +736,22 @@ fun MessageDetailScreen(
 
     WearDirectKeyboardInput(
         requestToken = keyboardRequestToken,
+        initialText = pendingDraft,
         hint = "Reply",
         imeAction = EditorInfo.IME_ACTION_SEND,
-        onSubmit = { text -> viewModel.sendMessage(text) },
+        onSubmit = { text ->
+            pendingDraft = ""
+            pendingChatDrafts.remove(chatGuid)
+            viewModel.sendMessage(text)
+        },
+        onDismissWithDraft = { draft ->
+            pendingDraft = draft
+            if (draft.isNotBlank()) {
+                pendingChatDrafts[chatGuid] = draft
+            } else {
+                pendingChatDrafts.remove(chatGuid)
+            }
+        },
         onDismiss = { keyboardRequestToken = 0 }
     )
 

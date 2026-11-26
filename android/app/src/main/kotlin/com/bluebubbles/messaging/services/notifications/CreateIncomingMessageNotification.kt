@@ -383,10 +383,11 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                 .setNumber(unreadMessageCount)
                 .build()
 
-            // Build the notification
-            // Keep bridged to Wear OS when paired (localOnly=false); Wear's MessageListenerService
-            // only posts standalone notifications when disconnected from the phone.
+            // When the Wear OS companion app is connected, deliver the notification directly to the
+            // watch so tapping it opens the watch app to that conversation, and keep the phone copy local-only.
+            val hasConnectedWatch = WearSyncManager.hasConnectedWatch(context)
             val notificationBuilder = NotificationCompat.Builder(context, targetChannelId)
+                .setLocalOnly(hasConnectedWatch)
                 .setSmallIcon(R.mipmap.ic_stat_icon)
                 .setGroup(Constants.notificationGroupKey)
                 .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
@@ -419,11 +420,6 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                     p["uri"] as? String
                 ) ?: (p["uri"] as? String)
                 notificationBuilder.addPerson(buildPerson(pName, null, pUri, pKey, true))
-            }
-
-            val existingHistory = chatNotification?.notification?.extras?.getCharSequenceArray(Notification.EXTRA_REMOTE_INPUT_HISTORY)
-            if (!existingHistory.isNullOrEmpty()) {
-                notificationBuilder.setRemoteInputHistory(existingHistory)
             }
 
             // Keep 3 phone actions: Like when reactions enabled, Mute as 3rd phone action only when reactions disabled.
@@ -512,6 +508,7 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
                 .build()
 
             val summaryNotificationBuilder = NotificationCompat.Builder(context, channelId)
+                .setLocalOnly(hasConnectedWatch)
                 .setSmallIcon(R.mipmap.ic_stat_icon)
                 .setGroup(Constants.notificationGroupKey)
                 .setGroupSummary(true)
@@ -530,6 +527,25 @@ class CreateIncomingMessageNotification: MethodCallHandlerImpl() {
             // Post child notification first so heads-up and Wear OS native bridge trigger immediately.
             notificationManager.notify(Constants.newMessageNotificationTag, notificationId, notificationBuilder.build())
             notificationManager.notify(Constants.newMessageNotificationTag, 0, summaryNotificationBuilder.build())
+            if (hasConnectedWatch && !messageIsFromMe) {
+                val imageAttachmentPath = attachmentPath?.takeIf { path ->
+                    (attachmentMime == null || attachmentMime.startsWith("image/")) && File(path).exists()
+                }
+                WearSyncManager.notifyMessageNotification(
+                    context = context,
+                    chatGuid = chatGuid,
+                    senderName = contactName,
+                    messageText = messageText,
+                    isGroup = chatIsGroup,
+                    groupTitle = if (chatIsGroup) chatTitle else null,
+                    timestamp = messageDate,
+                    isTapback = isReaction,
+                    onlyAlertOnce = onlyAlertOnce,
+                    senderAddress = contactKey,
+                    messageGuid = messageGuid,
+                    attachmentPath = imageAttachmentPath
+                )
+            }
             result.success(null)
         }
     }

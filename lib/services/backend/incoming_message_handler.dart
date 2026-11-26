@@ -577,6 +577,7 @@ class IncomingMessageHandler {
 
     // 5. Persist the GUID swap / field update.
     final wasReaction = existing.isReaction;
+    final wasNotifiedBefore = existing.didNotifyRecipient;
     final existingGuid = tempGuid ?? existing.guid!;
     final written = await _replaceMessage(c, existingGuid, existing, m);
     // A full copy that adds nothing to the stored one leaves it as complete as written
@@ -597,6 +598,54 @@ class IncomingMessageHandler {
 
       // 8. Refresh chat-list ordering and subtitle (only if this message is the latest).
       refreshLatestMessageOnUpdate(c, persisted, wasReaction: wasReaction, tempGuid: tempGuid);
+
+      // 9. Notify if sender tapped "Notify Anyway" on a silently delivered incoming message.
+      if (!(persisted.isFromMe ?? false) &&
+          !wasNotifiedBefore &&
+          persisted.didNotifyRecipient &&
+          persisted.dateRead == null) {
+        unawaited(_playReceiveSound());
+        if (GetIt.I.isRegistered<NotificationsService>()) {
+          await GetIt.I.isReady<NotificationsService>();
+          await NotificationsSvc.tryCreateNewMessageNotification(persisted, c);
+        }
+      }
+
+      // Dismiss notifications if unread incoming message becomes read
+      if (!(persisted.isFromMe ?? false) &&
+          existing.dateRead == null &&
+          persisted.dateRead != null &&
+          c.id != null) {
+        if (GetIt.I.isRegistered<NotificationsService>()) {
+          await GetIt.I.isReady<NotificationsService>();
+          await NotificationsSvc.deleteNotification(
+            c.id!,
+            tag: NotificationsService.NEW_MESSAGE_TAG,
+            chatGuid: c.guid,
+            readBefore: persisted.dateRead?.millisecondsSinceEpoch,
+            keepBubble: true,
+          );
+        }
+      }
+    } else if (!(m.isFromMe ?? false) && !wasNotifiedBefore && m.didNotifyRecipient && m.dateRead == null) {
+      if (GetIt.I.isRegistered<NotificationsService>()) {
+        await GetIt.I.isReady<NotificationsService>();
+        await NotificationsSvc.tryCreateNewMessageNotification(m, c);
+      }
+    } else if (!(m.isFromMe ?? false) &&
+        existing.dateRead == null &&
+        m.dateRead != null &&
+        c.id != null) {
+      if (GetIt.I.isRegistered<NotificationsService>()) {
+        await GetIt.I.isReady<NotificationsService>();
+        await NotificationsSvc.deleteNotification(
+          c.id!,
+          tag: NotificationsService.NEW_MESSAGE_TAG,
+          chatGuid: c.guid,
+          readBefore: m.dateRead?.millisecondsSinceEpoch,
+          keepBubble: true,
+        );
+      }
     }
   }
 

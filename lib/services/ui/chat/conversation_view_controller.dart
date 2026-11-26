@@ -184,9 +184,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
   final RxBool inSelectMode = false.obs;
   final RxList<Message> selected = <Message>[].obs;
   final RxList<MessageEditEntry> editing = <MessageEditEntry>[].obs;
-  final GlobalKey focusInfoKey = GlobalKey();
   final GlobalKey typingInfoKey = GlobalKey();
-  final RxBool recipientNotifsSilenced = false.obs;
   final RxBool showPillRow = false.obs;
   final RxDouble pillRowHeight = 0.0.obs;
 
@@ -210,9 +208,21 @@ class ConversationViewController extends StatefulController with GetSingleTicker
 
   /// True while any route is pushed on top of the conversation view route (e.g.
   /// ConversationDetails). Used by onAppResume to skip keyboard auto-focus on mobile.
+  static const Duration autoReadDelay = Duration(seconds: 10);
+
   bool showingSubRoute = false;
   Timer? _interactionDebounce;
+  Timer? _autoReadTimer;
   bool _subjectWasLastFocused = false; // If this is false, then message field was last focused (default)
+
+  /// Schedules marking the chat read (and dismissing the unread bar) after [delay]
+  /// if the user hasn't already interacted with the conversation.
+  void scheduleAutoMarkRead({Duration delay = autoReadDelay}) {
+    _autoReadTimer?.cancel();
+    _autoReadTimer = null;
+    if (isClosed || !_computeCurrentUnread()) return;
+    _autoReadTimer = Timer(delay, _markChatReadOnInteraction);
+  }
 
   /// Marks the active chat read on explicit user interaction (gesture, scroll, typing)
   /// when the UI is interactive and not obscured by a sub-route.
@@ -221,10 +231,7 @@ class ConversationViewController extends StatefulController with GetSingleTicker
     if (GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isUiInteractive) return;
     if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.isChatActive(chat.guid)) return;
 
-    final hasUnread = chat.hasUnreadMessage == true ||
-        (GetIt.I.isRegistered<ChatsService>() &&
-            (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
-    if (!hasUnread) return;
+    if (!_computeCurrentUnread()) return;
 
     _interactionDebounce?.cancel();
     if (immediate) {
@@ -236,23 +243,18 @@ class ConversationViewController extends StatefulController with GetSingleTicker
 
   void _markChatReadOnInteraction() {
     _interactionDebounce = null;
+    _autoReadTimer?.cancel();
+    _autoReadTimer = null;
     if (isClosed || showingSubRoute) return;
     if (GetIt.I.isRegistered<LifecycleService>() && !LifecycleSvc.isUiInteractive) return;
     if (GetIt.I.isRegistered<ChatsService>() && !ChatsSvc.isChatActive(chat.guid)) return;
 
-    final hasUnread = chat.hasUnreadMessage == true ||
-        (GetIt.I.isRegistered<ChatsService>() &&
-            (ChatsSvc.getChatState(chat.guid)?.hasUnreadMessage.value ?? false));
-    if (!hasUnread) return;
+    if (!_computeCurrentUnread()) return;
 
-    final willSendRead = SettingsSvc.settings.enablePrivateAPI.value &&
-        (chat.autoSendReadReceipts ?? SettingsSvc.settings.privateMarkChatAsRead.value);
-    if (willSendRead) {
-      clearUnreadDivider();
-    }
+    clearUnreadDivider();
     if (GetIt.I.isRegistered<ChatsService>()) {
       unawaited(ChatsSvc.setChatHasUnread(chat, false, privateMark: true));
-    } else {
+    } else if (GetIt.I.isRegistered<SettingsService>()) {
       unawaited(chat.toggleHasUnreadAsync(false, privateMark: true));
     }
   }
@@ -423,6 +425,8 @@ class ConversationViewController extends StatefulController with GetSingleTicker
     _scrollDownDebounce = null;
     _interactionDebounce?.cancel();
     _interactionDebounce = null;
+    _autoReadTimer?.cancel();
+    _autoReadTimer = null;
     messageListGate.dispose();
     updatePillRowLayout(visible: false, height: 0);
     for (PlayerController a in audioPlayers.values) {
